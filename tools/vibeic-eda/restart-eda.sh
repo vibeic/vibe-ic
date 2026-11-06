@@ -77,7 +77,7 @@ fi
 # PRECEDENCE, and nothing here overrides an operator: an explicit IMAGE_REPO
 # still wins (it is this script's documented knob), then the fleet's own
 # VIBEIC_EDA_IMAGE_REPO -- the SAME variable the resolver and
-# `run_suite_in_eda_image.sh` read, so a host configured once is configured for
+# the container helpers read, so a host configured once is configured for
 # all three -- and only then the resolver's default. A full reference passed as
 # the argument is still honoured as-is and never touched.
 IMAGE_REPO="${IMAGE_REPO:-${VIBEIC_EDA_IMAGE_REPO:-ghcr.io/vibeic/vibeic-eda}}"

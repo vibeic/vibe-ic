@@ -280,7 +280,7 @@ def test_program_version_dict_field_skipped(tmp_path):
     # own report-schema version, not a plugin claim.
     _make_plugin_json(tmp_path, "0.2.27")
     cp = _run(tmp_path, _diff(
-        "vibe-ic-marketplace/plugins/vibe-ic/programs/gds_topcell_name_check.py",
+        "vibe-ic-marketplace/plugins/vibe-ic/programs/report_schema_fixture.py",
         '        "version": "1.0.0",'))
     assert cp.returncode == 0, cp.stdout + cp.stderr
 

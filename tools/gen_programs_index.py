@@ -113,7 +113,7 @@ def _title(docstring: str, fallback_name: str) -> str:
     # here wrap it across two or three lines before the first blank, and taking
     # only line 0 truncated them mid-phrase in the index:
     #
-    #   "agent_report_sha256_attestation_check.py — verify the project's"
+    #   "Verify the project's"
     #   "final report attests every canonical chip / FPGA artefact with a"
     #   "SHA256 hash."
     #        indexed as:  verify the project's

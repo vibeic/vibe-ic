@@ -140,8 +140,6 @@ def _parent_chain(class_path: str, class_tree: Dict[str, Any]) -> List[str]:
       3. `auto_fill` stops filling a required list-typed fact with `[]`;
       4. the class actually assigned to a design is correct (#495 Stage 1).
 
-    Pinned, both halves, by
-    `programs/tests/test_v1_7_72_issue495_parent_chain_switch_cost.py`.
     """
     # Flatten tree: child -> parent.
     parent_of: Dict[str, Optional[str]] = {}
@@ -477,8 +475,8 @@ def detect_gaps(
 # ---------------------------------------------------------------------------
 # Sentinel detection — emit protocol_present / regmap_present stubs when
 # the class chain doesn't declare those layers (e.g. processor, analog,
-# memory-controller ICs). Matches the v0.59 sentinel contract read by
-# phase1_doc_presence_check / _phase1_sentinel.py.
+# memory-controller ICs). The explicit false value records that the class
+# has no requirement for that layer.
 # ---------------------------------------------------------------------------
 def _apply_sentinels(
     graph: FactGraph,
@@ -511,7 +509,7 @@ def _apply_sentinels(
                 origin="sentinel:no_L3_requirements",
                 confidence=1.0,
                 reasoning="class chain has no L3 requirements; emitting "
-                          "protocol_present:false sentinel (see _phase1_sentinel.py)",
+                          "protocol_present:false sentinel",
             )
             added += 1
         if not graph.by_path("L3.protocol_present"):

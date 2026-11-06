@@ -49,10 +49,8 @@ and label change would go unreported for as long as the condition
 lasts, and nothing in the output would say so.
 
 GraphQL keeps working through the same condition (that is what
-`gh issue list` uses, and it is the authority the repo's other polling
-programs already use — see `open_organic_issue_count.py` for vibe-ic#554
-and `org_open_work_poll.py` for the org-level sibling). So the
-enumeration is GraphQL, and a query that CANNOT be answered exits 2
+`gh issue list` uses). Enumeration is GraphQL, and a query that
+CANNOT be answered exits 2
 with an `error` on stdout instead of an empty event list, because
 "I could not look" must not arrive at the cron as "nothing changed".
 """

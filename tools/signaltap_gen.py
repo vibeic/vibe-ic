@@ -340,11 +340,8 @@ def main():
     # only ATTACHES the .stp to the project database — it does not re-map,
     # re-fit or re-assemble, so following the instruction as written produced
     # the previous SOF, unchanged, with no logic analyzer in it. You then
-    # program the board, run the BIST, and SignalTap shows nothing: the exact
-    # ~30-minute-round-trip defect that
-    # programs/signaltap_recompile_sequence_check.py exists to catch, emitted
-    # by this repo's own generator. Piping this program's real stdout into that
-    # gate returned rc=1 with 3 x STAGE_MISSING (map, fit, asm).
+    # program the board, run the BIST, and SignalTap shows nothing. The
+    # generated instructions must name all stages.
     #
     # skills/fpga-signaltap/SKILL.md lines 65-68 already declared the full
     # sequence; only this block disagreed with it.

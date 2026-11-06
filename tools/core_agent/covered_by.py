@@ -198,10 +198,7 @@ def measure(prs: Sequence[int], node: str, checkout: Callable[[int], Optional[st
     # arm, never a clean one. What changes is that one hanging test now costs
     # the arm's 1800 s ceiling instead of the plugin's 180 s per-test one; what
     # also changes is that the other arms are measured at all, which they were
-    # not. The repo retired this idiom repo-wide (see
-    # `programs/pytest_per_file_junit.py`: "There is deliberately no
-    # pytest-timeout guard on the landing path"), and
-    # `programs/retired_pytest_plugin_request_check.py` now keeps it retired.
+    # not. Keep the runner independent of optional pytest plugins.
     runner = runner or (lambda wt, n: _run(
         [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", n],
         cwd=wt))

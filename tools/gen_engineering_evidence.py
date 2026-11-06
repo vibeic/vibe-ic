@@ -19,11 +19,9 @@ from a dashboard, not from any produced number. That is lie-shape #12 from this
 repo's own catalogue — measuring a proxy rather than the property — turned on
 our own reporting.
 
-Landing is the gate, and that is why `main` is the legal denominator: the
-gatekeeper pushes only with a `gatekeeper-land.sh` stamp and `pre-push` refuses
-a commit that has none, so "reachable from `main`" *is* "passed the full gate".
-No separate ledger is consulted, because a ledger is a thing someone can write
-into.
+`main` is the denominator because this report measures changes that landed.
+Reachability records that event; it does not prove which validation ran.
+No separate landing ledger is consulted.
 
 A TRUNCATED HISTORY IS A REFUSAL, NOT A SMALLER NUMBER
 ======================================================
@@ -207,9 +205,8 @@ def render(anchor_full: str, v: Dict[str, int], au: Dict[str, int],
     w("## The denominator, and why it is the only legal one")
     w("")
     w("Every velocity figure below counts changes that **landed on `main`**.")
-    w("Landing is the gate: the gatekeeper pushes only with a")
-    w("`gatekeeper-land.sh` stamp and `pre-push` refuses a commit that has")
-    w("none, so *reachable from `main`* is *passed the full gate*.")
+    w("Reachability records that a change landed; it does not prove which")
+    w("validation ran for that change.")
     w("")
     w("On 2026-08-12 authoring was scaled to 23 agents; ~25 PRs opened within")
     w("a few hours, open PR count went 31 -> 46, and two versions landed.")
