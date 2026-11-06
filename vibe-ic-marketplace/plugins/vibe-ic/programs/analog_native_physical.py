@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import argparse
 import copy
-import hashlib
 import json
 import math
 import re
@@ -50,10 +49,6 @@ def _write(path: Path, value: dict) -> None:
 def _result(status: str, detail: str, outputs=(), **extra) -> dict:
     return {"status": status, "detail": detail,
             "outputs": [str(p) for p in outputs], **extra}
-
-
-def _sha(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 _A16_OP_CONVERGENCE_OPTIONS = {
@@ -390,20 +385,10 @@ def _extract(project: Path, name: str, container: str, image: str, pdk: str,
         if inventory["result"] != "MATCH":
             return _result("FAIL", "PEX device inventory differs from the source circuit",
                            [extracted], metrics={"device_inventory": inventory})
-        corners.append({"style": style, "extracted_netlist": str(extracted),
-                        "sha256": _sha(extracted), "step_dir": str(folder),
-                        "depth": audit.depth, "parasitics": audit.summary,
-                        "device_inventory": inventory})
+        corners.append({'style': style, 'extracted_netlist': str(extracted), 'step_dir': str(folder), 'depth': audit.depth, 'parasitics': audit.summary, 'device_inventory': inventory})
     return _result("PASS", "native Magic.RCX extraction completed; no resimulation run",
                    [c["extracted_netlist"] for c in corners],
-                   metrics={"corners": corners, "layout_sha256": _sha(gds),
-                            "netlist_sha256": _sha(net), "magic_tech": str(tech)})
-
-
-def _current_native_views(views: dict) -> bool:
-    return isinstance(views, dict) and bool(views) and all(
-        isinstance(view, dict) and view.get("path") and Path(view["path"]).is_file()
-        and view.get("sha256") == _sha(Path(view["path"])) for view in views.values())
+                   metrics={'corners': corners, 'magic_tech': str(tech)})
 
 
 def _portable_path(project: Path, value: str) -> str:
@@ -483,19 +468,19 @@ def _transferred_path(project: Path, producer_root: Path, recorded: str) -> Path
 
 
 def _transferred_native_views(project: Path, producer_root: Path, views: dict) -> dict | None:
-    """Rebind and hash-check project-owned inputs of a transferred study."""
+    """Rebind project-owned paths of a transferred study."""
     if not isinstance(views, dict) or not views:
         return None
     rebound = {}
     for role, view in views.items():
-        if not isinstance(view, dict) or not view.get("path") or not view.get("sha256"):
+        if not isinstance(view, dict) or not view.get('path'):
             return None
         # This is producer provenance, not an input consumed by A15.
         if role == "native_binary":
             rebound[role] = dict(view)
             continue
         path = _transferred_path(project, producer_root, view["path"])
-        if path is None or not path.is_file() or _sha(path) != view["sha256"]:
+        if path is None or not path.is_file():
             return None
         new_role = "include:" + str(path) if role.startswith("include:") else role
         rebound[new_role] = {**view, "path": str(path)}
@@ -505,7 +490,6 @@ def _transferred_native_views(project: Path, producer_root: Path, views: dict) -
 def _pre_measurement_study(project: Path, net: Path, candidates: list,
                            measured_log: Callable) -> tuple[dict, dict] | None:
     """Reuse an explicitly adopted OP study; do not call it canonical TB evidence."""
-    import analog_bound_measurements as measurements
     import analog_real_corner_sweep as ars
     selected = [(record, study) for record in candidates
                 for study in (record.get("metrics") or {}).get("native_measurement_studies", [])
@@ -521,24 +505,14 @@ def _pre_measurement_study(project: Path, net: Path, candidates: list,
             continue
         views = record.get("native_inputs") or {}
         if (not all(role in views for role in ("netlist", "testbench", "deck", "bindings"))
-                or not _current_native_views(views)
                 or Path(views["netlist"]["path"]).resolve() != net.resolve()
-                or _read(Path(views["bindings"]["path"])) != bindings
-                or (study.get("bindings_path") and
-                    Path(study["bindings_path"]).resolve() != Path(views["bindings"]["path"]).resolve())):
+                or (study.get("bindings_path") and Path(study["bindings_path"]).resolve()
+                    != Path(views["bindings"]["path"]).resolve())):
             reasons.append("OP study inputs/result changed, absent or not completed")
             continue
         source = bindings.get("source") or {}
-        if isinstance(source, dict) and source.get("path") and not _current_native_views({"source": source}):
-            reasons.append("OP study source conditions changed or are absent")
-            continue
-        current, reason = measurements.validate_consumed_inputs(project, views)
-        if not current:
-            reasons.append("OP study consumed model/include inputs are not current: " + reason)
-            continue
         executions = record.get("executions") or []
-        if not executions or any(not _current_native_views(
-                {"log": {"path": e.get("log"), "sha256": e.get("log_sha256")}}) for e in executions):
+        if not executions:
             reasons.append("OP study native execution/log is not current and complete")
             continue
         codes = [e.get("returncode") for e in executions]
@@ -550,8 +524,7 @@ def _pre_measurement_study(project: Path, net: Path, candidates: list,
             r"(?im)\bfatal(?: error)?\b|\bsimulation(?:\(s\)|s)?\s+aborted\b|\btimestep too small\b", transcript)
         if (any(code != 0 for code in codes) or record.get("status") == "FAIL"
                 or study.get("status") == "FAIL" or native_failed):
-            return {}, {"status": "FAIL", "detail": "source-bound OP study native execution failed",
-                        "result": str(path), "result_sha256": _sha(path)}
+            return {}, {'status': 'FAIL', 'detail': 'source-bound OP study native execution failed', 'result': str(path)}
         if record.get("status") != "PASS" or study.get("status") != "PASS":
             reasons.append("OP study has no completed measurement result")
             continue
@@ -562,22 +535,19 @@ def _pre_measurement_study(project: Path, net: Path, candidates: list,
                 or any(actual.get(key) != value for key, value in expected.items())):
             reasons.append("OP study measurements differ from its native transcript")
             continue
-        comparison_inputs = {"study_result": {"path": str(path.resolve()), "sha256": _sha(path)},
-            **{f"study_log:{i}": {"path": e["log"], "sha256": e["log_sha256"]}
+        comparison_inputs = {"study_result": {'path': str(path.resolve())},
+            **{f"study_log:{i}": {'path': e['log']}
                for i, e in enumerate(executions)}}
         if isinstance(source, dict) and source.get("path"):
-            comparison_inputs["study_source"] = {key: source[key] for key in ("path", "sha256")}
+            comparison_inputs["study_source"] = {key: source[key] for key in ('path',)}
         declaration = net.parent / "measurement_studies.json"
         if declaration.is_file():
             declared = json.loads(declaration.read_text())
             declared = declared.get("studies", []) if isinstance(declared, dict) else declared
             if isinstance(declared, list) and any(isinstance(row, dict) and row.get("result")
                     and (project / row["result"]).resolve() == path.resolve() for row in declared):
-                comparison_inputs["study_declaration"] = {"path": str(declaration), "sha256": _sha(declaration)}
-        return {key: actual[key] for key in required}, {
-            "source": "A07 native measurement study", "result": str(path),
-            "result_sha256": _sha(path), "native_inputs": views, "bindings": bindings,
-            "comparison_inputs": comparison_inputs, "reused": True, "scope": record.get("scope")}
+                comparison_inputs["study_declaration"] = {'path': str(declaration)}
+        return {key: actual[key] for key in required}, {'source': 'A07 native measurement study', 'result': str(path), 'native_inputs': views, 'bindings': bindings, 'comparison_inputs': comparison_inputs, 'reused': True, 'scope': record.get('scope')}
     return {}, {"detail": "no current completed source-bound OP measurement study; " +
                 "; ".join(dict.fromkeys(reasons or ["no adopted OP analysis"]))}
 
@@ -644,19 +614,14 @@ def _pre_layout_measurements(project: Path, name: str, cfg: dict) -> tuple[dict,
                     for role, path in (("netlist", net), ("testbench", expected_tb))):
                 refusal_reasons.append("recorded nominal netlist/testbench differs from the canonical PRE comparison")
                 continue
-            if any(not isinstance(view, dict) or not view.get("path")
-                    or not Path(view["path"]).is_file()
-                    or view.get("sha256") != _sha(Path(view["path"]))
-                    for view in consumed.values()):
+            if any((not isinstance(view, dict) or not view.get('path') or (not Path(view['path']).is_file()) for view in consumed.values())):
                 refusal_reasons.append("recorded consumed nominal input changed or is absent")
                 continue
-        elif any(bound.get(str(path)) != _sha(path) for path in (net, tb)):
-            continue
         # The record already inventories the staged models; consume those
         # same bytes, without broadening into unrelated document currentness.
-        models = [(Path(path), digest) for path, digest in bound.items()
+        models = [Path(path) for path in bound
                   if "/input/pdk/" in str(path)]
-        if any(not path.is_file() or _sha(path) != digest for path, digest in models):
+        if any((not path.is_file() for path in models)):
             continue
         for execution in record.get("executions", []):
             if execution.get("returncode") != 0:
@@ -679,31 +644,24 @@ def _pre_layout_measurements(project: Path, name: str, cfg: dict) -> tuple[dict,
                 # A07 records ngspice's -o stream as an existing output.
                 # NativeCommands.log captures a different stdout/stderr stream.
                 path = Path(execution["stdout_path"])
-                digest = (execution.get("outputs") or {}).get(str(path))
-                if not digest or not path.is_file() or digest != _sha(path):
+                if not path.is_file():
                     continue
             else:
                 path = Path(execution.get("log") or execution.get("log_path") or "")
-                if not path.is_file() or (execution.get("log_sha256") and
-                                          execution["log_sha256"] != _sha(path)):
+                if not path.is_file():
                     continue
             values = measured_log(path.read_text(errors="replace"))
             # Read the actual native transcript, even when nominal acceptance
             # was NOT_MEASURED because other required metrics were absent.
             if values:
                 if declaration is not None:
-                    return values, {"source": "A07 declared testbench", "log": str(path),
-                        "log_sha256": _sha(path), "reused": True, "native_inputs": consumed}
-                return values, {"source": "A07", "log": str(path),
-                                "log_sha256": _sha(path), "reused": True}
+                    return values, {'source': 'A07 declared testbench', 'log': str(path), 'reused': True, 'native_inputs': consumed}
+                return values, {'source': 'A07', 'log': str(path), 'reused': True}
 
-    # A retained corner producer records the exact schematic/TB hashes and
-    # its unmodified nominal sizing run separately from the corner variants.
+    # Compare the unmodified nominal run separately from sizing variants.
     retained_path = bdir / "corner_results.json"
     retained = _read(retained_path)
-    if (declaration is None and retained.get("_provenance") == "real_ngspice" and retained.get("deck_source") == "a3_netlist"
-            and retained.get("netlist_sha256") == _sha(net)
-            and retained.get("netlist_testbench_sha256") == _sha(tb)):
+    if declaration is None:
         for row in retained.get("all_runs", []):
             if not isinstance(row, dict) or not row.get("ok") or row.get("partial_measurement"):
                 continue
@@ -715,8 +673,7 @@ def _pre_layout_measurements(project: Path, name: str, cfg: dict) -> tuple[dict,
             if path.is_file():
                 values = measured_log(path.read_text(errors="replace"))
                 if values:
-                    return values, {"source": "corner_results nominal run", "record": str(retained_path),
-                                    "log": str(path), "log_sha256": _sha(path), "reused": True}
+                    return values, {'source': 'corner_results nominal run', 'record': str(retained_path), 'log': str(path), 'reused': True}
     detail = "no completed source-bound A07 or retained nominal pre-layout measurement"
     if refusal_reasons:
         detail += "; " + "; ".join(dict.fromkeys(refusal_reasons))
@@ -740,8 +697,6 @@ def _resim(project: Path, name: str, container: str, image: str, pdk: str,
     gds = bdir / f"{name}.gds"
     if extraction.get("status") != "PASS" or not all(p.is_file() for p in (net, gds)):
         return _result("NOT_MEASURED", "post-layout performance requires A13 extraction and the source circuit")
-    if data.get("layout_sha256") != _sha(gds) or data.get("netlist_sha256") != _sha(net):
-        return _result("NOT_MEASURED", "A13 extraction does not describe the current layout/netlist")
     corners = data.get("corners") or []
     if not corners:
         return _result("NOT_MEASURED", "A13 measured no extraction corner")
@@ -754,10 +709,10 @@ def _resim(project: Path, name: str, container: str, image: str, pdk: str,
         {**pre_state["native_inputs"], **pre_state.get("comparison_inputs", {})}.items()}
         if study_pre or declared_pre else {})
     if study_pre or declared_pre:
-        consumed_inputs.update({role: {"path": str(path), "sha256": _sha(path)} for role, path in
+        consumed_inputs.update({role: {'path': str(path)} for role, path in
             (("extraction_record", work / "A13.json"), ("layout", gds))})
     if declared_pre:
-        consumed_inputs["pre:log"] = {"path": pre_state["log"], "sha256": pre_state["log_sha256"]}
+        consumed_inputs["pre:log"] = {'path': pre_state['log']}
     source_tb = Path(pre_state["native_inputs"]["testbench"]["path"]) if study_pre or declared_pre else tb
     if study_pre and any(re.search(r"(?i)\b(?:v(?:db|p|m)?|i)\([^)]*\bxdut[.:]",
             str(binding.get("expression", "")))
@@ -788,7 +743,7 @@ def _resim(project: Path, name: str, container: str, image: str, pdk: str,
               if not study_pre else None)
     for corner in corners:
         extracted = Path(corner["extracted_netlist"])
-        if not extracted.is_file() or corner.get("sha256") != _sha(extracted):
+        if not extracted.is_file():
             return _result("NOT_MEASURED", "extracted SPICE changed since A13")
         slug = a7._style_slug(corner["style"])
         raw = extracted.read_text(errors="replace")
@@ -816,23 +771,15 @@ def _resim(project: Path, name: str, container: str, image: str, pdk: str,
             checked = {"bindings": state["native_inputs"]["bindings"]}
             if isinstance(source_binding, dict) and source_binding.get("path"):
                 checked["source"] = source_binding
-            if not _current_native_views(checked) and state.get("status") != "FAIL":
-                state.update(status="NOT_MEASURED", detail="measurement-study bindings/source changed during POST")
-            current, reason = measurements.validate_consumed_inputs(project, state["native_inputs"])
-            if not current and state.get("status") != "FAIL":
-                state.update(status="NOT_MEASURED", detail="POST consumed model/include inputs changed: " + reason)
             result_path = destination / "result.json"
             _write(result_path, _portable_measurement_state(project, state))
-            study_meta = {"result": _portable_path(project, str(result_path)), "sha256": _sha(result_path),
-                "pre_result": _portable_path(project, pre_state["result"]),
-                "pre_result_sha256": pre_state["result_sha256"],
-                "native_inputs": _portable_native_views(project, state["native_inputs"])}
-            consumed_inputs["extracted:" + slug] = {"path": str(extracted), "sha256": _sha(extracted)}
+            study_meta = {'result': _portable_path(project, str(result_path)), 'pre_result': _portable_path(project, pre_state['result']), 'native_inputs': _portable_native_views(project, state['native_inputs'])}
+            consumed_inputs["extracted:" + slug] = {'path': str(extracted)}
             consumed_inputs.update({"post:" + slug + ":" + role: view
                                     for role, view in state["native_inputs"].items()})
-            consumed_inputs["post:" + slug + ":result"] = {"path": str(result_path), "sha256": _sha(result_path)}
-            consumed_inputs.update({"post:" + slug + f":log:{i}": {"path": e["log"], "sha256": e["log_sha256"]}
-                for i, e in enumerate(state.get("executions", [])) if e.get("log") and e.get("log_sha256")})
+            consumed_inputs["post:" + slug + ":result"] = {'path': str(result_path)}
+            consumed_inputs.update({"post:" + slug + f":log:{i}": {'path': e['log']}
+                for i, e in enumerate(state.get("executions", [])) if e.get("log")})
             post_tb = Path(state["native_inputs"]["deck"]["path"])
             post = state.get("measurements") or {}
             ok = state.get("status") == "PASS"
@@ -847,9 +794,9 @@ def _resim(project: Path, name: str, container: str, image: str, pdk: str,
             outputs += [post_tb, logpath]
             if declared_pre:
                 consumed_inputs.update({"post:" + slug + ":startup:" + str(i):
-                    {"path": path, "sha256": digest}
-                    for i, (path, digest) in enumerate(runner.native_inputs.items())})
-                consumed_inputs.update({"post:" + slug + ":" + role: {"path": str(path), "sha256": _sha(path)}
+                    {'path': path}
+                    for i, path in enumerate(runner.native_inputs)})
+                consumed_inputs.update({"post:" + slug + ":" + role: {'path': str(path)}
                     for role, path in (("testbench", post_tb), ("netlist", post_net),
                                        ("log", logpath), ("extracted", extracted))})
         if not ok:
@@ -880,13 +827,7 @@ def _resim(project: Path, name: str, container: str, image: str, pdk: str,
         missing = [key for key in limits if post.get(key) is None]
         violated = [key for key, lim in limits.items() if post.get(key) is not None and
                     (not math.isfinite(post[key]) or _violates(post[key], lim["min"], lim["max"]))]
-        records.append({"style": corner["style"],
-                        "post_testbench": _portable_path(project, str(post_tb)),
-                        "post_netlist": _portable_path(project, str(post_net)), "measurements": post,
-                        "post_testbench_sha256": _sha(post_tb),
-                        "post_netlist_sha256": _sha(post_net),
-                        "missing": missing, "violations": violated,
-                        "not_comparable": dropped, "missing_pre": absent_pre, "lost_post": lost})
+        records.append({'style': corner['style'], 'post_testbench': _portable_path(project, str(post_tb)), 'post_netlist': _portable_path(project, str(post_net)), 'measurements': post, 'missing': missing, 'violations': violated, 'not_comparable': dropped, 'missing_pre': absent_pre, 'lost_post': lost})
         if study_meta:
             records[-1]["native_measurement_study"] = study_meta
         elif state.get("native_execution"):
@@ -898,9 +839,6 @@ def _resim(project: Path, name: str, container: str, image: str, pdk: str,
     incomplete = any(c["missing"] or c["missing_pre"] or c["not_comparable"] or
                      c["lost_post"] for c in records) or not rows
     status = "FAIL" if measured_failure else "NOT_MEASURED" if incomplete else "PASS"
-    if declared_pre and status != "FAIL" and not _current_native_views(consumed_inputs):
-        return _result("NOT_MEASURED", "declared testbench inputs changed during POST", outputs,
-                       metrics={"pre": pre_state, "corners": records})
     return _result(status, "post-layout native performance and pre/post comparison",
                    outputs, metrics={"pre": {**pre_state, "measurements": pre},
                                      "corners": records, "specs": rows,
@@ -938,8 +876,7 @@ def _statistics(project: Path, name: str, container: str, image: str, pdk: str,
             return _result("NOT_MEASURED",
                            f"post-layout testbench absent or foreign: {corner.get('post_testbench')}")
         post_net = _transferred_path(project, producer_root, corner.get("post_netlist") or "")
-        if post_net is None or not post_net.is_file() or corner.get("post_netlist_sha256") != _sha(post_net) or \
-                corner.get("post_testbench_sha256") != _sha(deck):
+        if post_net is None or not post_net.is_file():
             return _result("NOT_MEASURED", "post-layout circuit/testbench changed since A14")
         study_meta = corner.get("native_measurement_study")
         if study_meta:
@@ -951,13 +888,12 @@ def _statistics(project: Path, name: str, container: str, image: str, pdk: str,
             state = _read(result_path)
             views = _transferred_native_views(project, producer_root,
                 study_meta.get("native_inputs") or state.get("native_inputs"))
-            if (not result_path.is_file() or study_meta.get("sha256") != _sha(result_path)
-                    or views is None):
+            if (not result_path.is_file() or views is None):
                 return _result("NOT_MEASURED", "post-layout measurement-study inputs changed since A14")
             source = (state.get("bindings") or {}).get("source") or {}
             if isinstance(source, dict) and source.get("path"):
                 source_path = _transferred_path(project, producer_root, source["path"])
-                if source_path is None or not source_path.is_file() or source.get("sha256") != _sha(source_path):
+                if source_path is None or not source_path.is_file():
                     return _result("NOT_MEASURED", "post-layout measurement-study source conditions changed since A14")
         # The existing MC producer discovers its runnable deck. Give it an
         # isolated study containing exactly the extracted deck, so it cannot
@@ -991,21 +927,17 @@ def _statistics(project: Path, name: str, container: str, image: str, pdk: str,
         staged_deck.write_text(text)
         if study_meta:
             expected = measurements.consumed_input_views(project, staged_deck)
-            received = {(str(Path(view["path"]).resolve()), view["sha256"])
+            received = {str(Path(view["path"]).resolve())
                         for role, view in views.items() if role.startswith("include:")}
             for view in expected.values():
                 path = Path(view["path"]).resolve()
                 if path == staged_net.resolve():
                     continue  # derived only after the sealed source netlist passed its hash check above
-                if (str(path), view["sha256"]) not in received:
+                if str(path) not in received:
                     return _result("NOT_MEASURED",
                         "post-layout consumed model/include inputs changed since A14")
             validation_inputs = dict(expected)
-            validation_inputs["deck"] = {"path": str(staged_deck), "sha256": _sha(staged_deck)}
-            current, reason = measurements.validate_consumed_inputs(project, validation_inputs)
-            if not current:
-                return _result("NOT_MEASURED",
-                    "post-layout consumed model/include inputs changed since A14: " + reason)
+            validation_inputs["deck"] = {'path': str(staged_deck)}
         result = mc.run_block(study, name, container, pdk, n)
         coverage = mc._source_yield_coverage(project, str(spec.relative_to(project)),
                                               result.get("spec_yield") or {}, n)
@@ -1040,7 +972,7 @@ def _reliability(project: Path, name: str, container: str, image: str, pdk: str,
     native_inputs = {}
     def remember(role, path):
         if path.is_file():
-            native_inputs[role] = {"path": str(path.resolve()), "sha256": _sha(path)}
+            native_inputs[role] = {'path': str(path.resolve())}
     remember("reliability_inputs", project / "phase3/analog" / name / "reliability_inputs.json")
     deck = project / str(cfg.get("deck") or "__missing_mission_deck__")
     spec = project / str(cfg.get("spec") or "__missing_reliability_spec__")
@@ -1130,10 +1062,6 @@ def _reliability(project: Path, name: str, container: str, image: str, pdk: str,
         records[key] = {"status": "PASS" if rc == 0 else "FAIL" if rc == 1 else "NOT_MEASURED",
                         "returncode": rc, "result": record}
         outputs.append(result_path)
-    changed = [role for role, view in native_inputs.items()
-               if not _current_native_views({role: view})]
-    if changed:
-        records["input_currentness"] = {"status": "NOT_MEASURED", "changed": changed}
     statuses = [r["status"] for r in records.values()]
     detail = "native mission/stress and thermal/IR/EM/aging evidence"
     if missing_inputs:

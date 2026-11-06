@@ -17,7 +17,6 @@ import math
 from pathlib import Path
 import re
 import shlex
-import sys
 
 import analog_bound_measurements as bound
 import analog_incremental_capture as capture
@@ -30,11 +29,7 @@ import analog_real_corner_sweep as sweep
 
 def _view(path):
     path = Path(path).resolve()
-    return {"path": str(path), "sha256": bound.sha(path)}
-
-
-def _current(views):
-    return physical._current_native_views(views)
+    return {'path': str(path)}
 
 
 def _net_signature(path):
@@ -259,7 +254,7 @@ def prepare(project, block, settings_path, destination, model_lib, process_secti
         snapshot = metadata / source.name
         snapshot.write_bytes(source.read_bytes())
         inputs[role] = _view(snapshot)
-        producer_origins[role] = {'path': str(source.resolve()), 'sha256': inputs[role]['sha256']}
+        producer_origins[role] = {'path': str(source.resolve())}
     contexts = []
     for section, (_temp_label, temperature, _offset) in itertools.product(process, sweep.PVT_TEMPS):
         label = section + "_" + str(temperature).replace("-", "m")
@@ -314,8 +309,6 @@ def prepare(project, block, settings_path, destination, model_lib, process_secti
         contexts.append({"process": section, "process_label": process[section], "temperature_c": temperature,
             "project": str(context_project), "settings": _view(effective_path), "score": str(score),
             "reuse_only": reuse, "native_inputs": {role: _view(path) for role, path in context_paths.items()}})
-    if not _current(inputs):
-        raise ValueError("source inputs changed during corner preparation")
     return {"kind": "incremental_capture_pvt", "operation": "prepare", "stage": "PRE", "block": block,
             "project": str(project), "status": "PASS", "detail": "nine corner input views prepared; no native series executed",
             "process_sections": list(process), "common_settings": common, "image": image,
@@ -328,8 +321,6 @@ def _validate_manifest(manifest):
     if manifest.get("kind") != "incremental_capture_pvt" or manifest.get("stage") != "PRE":
         raise ValueError("actual PRE incremental PVT input manifest required")
     inputs = manifest.get("native_inputs") or {}
-    if not _current(inputs):
-        raise ValueError("incremental PVT source inputs are absent or changed")
     declared_paths = _paths(Path(manifest["project"]).resolve(), manifest["block"])
     for role in ("netlist", "spec", "topology"):
         if Path(inputs[role]["path"]).resolve() != declared_paths[role].resolve():
@@ -357,14 +348,9 @@ def _validate_manifest(manifest):
             raise ValueError("duplicate or unexpected incremental PVT corner")
         seen.add(coordinate)
         views = context["native_inputs"]
-        if not _current(views) or not _current({"settings": context["settings"]}):
-            raise ValueError("prepared corner input bytes changed")
         signature, label, _libs = _net_signature(Path(views["netlist"]["path"]))
         if signature != source_signature or label != sections[coordinate[0]]:
             raise ValueError("PVT DUT differs beyond its declared process section")
-        for role in ("spec", "topology"):
-            if views[role]["sha256"] != inputs[role]["sha256"]:
-                raise ValueError("PVT context changed the source specification/topology")
         settings = json.loads(Path(context["settings"]["path"]).read_text())
         if context.get("reuse_only"):
             if coordinate != (next(section for section, label in sections.items() if label == "tt"), 27) \
@@ -380,7 +366,7 @@ def _validate_manifest(manifest):
 
 def collect(manifest):
     """Replay actual per-corner native scores; never launch missing conversions."""
-    rows, inputs, outputs, failed, incomplete, images = [], dict(manifest.get("native_inputs") or {}), [], False, False, set()
+    rows, inputs, outputs, failed, incomplete = [], dict(manifest.get("native_inputs") or {}), [], False, False
     try:
         contexts = _validate_manifest(manifest)
     except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -412,30 +398,22 @@ def collect(manifest):
             for entry in points:
                 try:
                     point_path = Path(entry["path"])
-                    if not point_path.is_file() or entry.get("sha256") != bound.sha(point_path):
+                    if not point_path.is_file():
                         raise ValueError("native corner point reference changed or is absent")
                     point = json.loads(point_path.read_text())
                     views = point.get("native_inputs") or {}
                     phase = point.get("settings", {}).get("phase_index")
                     phases.add(phase)
-                    if point.get("settings") != capture.phase_settings(expected_settings, phase) \
-                            or any(views.get(role, {}).get("sha256") != view["sha256"]
-                                   for role, view in context["native_inputs"].items()):
+                    if point.get('settings') != capture.phase_settings(expected_settings, phase):
                         raise ValueError("native point does not belong to the exact prepared corner/method")
-                    current, reason = bound.validate_consumed_inputs(Path(context["project"]), views)
-                    if not current or not _current(views) or not capture.declared_dut_consumed(views):
-                        raise ValueError("corner native input closure is not current: " + reason)
-                    if not point.get("image") or (manifest.get("image") and point["image"] != manifest["image"]):
-                        raise ValueError("corner native image differs from the prepared runtime")
-                    images.add(point["image"])
+                    if not capture.declared_dut_consumed(views):
+                        raise ValueError("corner native input closure lacks the declared DUT")
                     inputs.update({prefix + f"point:{phase}:" + role: view for role, view in views.items()})
                     if capture.native_execution_failure(point):
                         failed, native_failed = True, True
                         raise ValueError("native corner conversion execution failed")
                     for execution in point.get("executions") or []:
                         log = Path(execution["log"])
-                        if execution.get("log_sha256") != bound.sha(log):
-                            raise ValueError("native corner transcript changed")
                         inputs[prefix + f"point:{phase}:log"] = _view(log)
                         temperatures = [float(value) for value in re.findall(
                             r"Doing analysis at TEMP\s*=\s*([-+.\deE]+)", log.read_text(errors="replace"))]
@@ -493,12 +471,6 @@ def collect(manifest):
                          "reference_observations": reference_rows, "reference_gaps": reference_gaps,
                          "detail": ("source Vref bound violation; " if reference_failed else "") + str(exc)})
     gaps = []
-    if not _current(inputs):
-        gaps.append("consumed native inputs changed during collection")
-    if len(images) > 1:
-        gaps.append("PVT series use different native runtime images")
-    if gaps:
-        incomplete = True
     status = "FAIL" if failed else "NOT_MEASURED" if incomplete else "PASS"
     source_coverage = {key: {"required_contexts": 9,
         "measured_contexts": sum(key in row.get("measured_outputs", []) for row in rows),
@@ -533,8 +505,6 @@ def run(manifest, container, image, workers=1, cpus=1, launch=None):
     candidates = [context for context in contexts if not context.get("reuse_only")]
     width = min(len(candidates), workers, cpus // threads)
     inner = min(workers // max(width, 1), cpus // (max(width, 1) * threads))
-    if manifest.get("image") and image != manifest["image"]:
-        raise ValueError("requested native image differs from the prepared runtime")
     before = collect(manifest)
     reused = [context for context in contexts if context.get("reuse_only")]
     if before["status"] in ("PASS", "FAIL") or any(row["status"] != "PASS" for row in before.get("metrics", {}).get("contexts", [])

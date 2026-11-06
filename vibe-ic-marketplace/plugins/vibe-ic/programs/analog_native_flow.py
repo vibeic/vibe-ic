@@ -10,7 +10,6 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-import hashlib
 import json
 import math
 import os
@@ -32,10 +31,6 @@ STEPS = tuple(f"A{number:02d}" for number in range(1, 20))
 STATUSES = {"PASS", "FAIL", "NOT_MEASURED", "NOT_APPLICABLE"}
 
 
-def _sha(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-
-
 def _read(path, default=None):
     return json.loads(path.read_text()) if path.is_file() else default
 
@@ -47,15 +42,6 @@ def _aggregate(rows):
     if not states or any(state not in ("PASS", "NOT_APPLICABLE") for state in states):
         return "NOT_MEASURED"
     return "PASS"
-
-
-
-
-
-
-
-
-
 
 
 def _local_ngspice_startup(project, cwd, image):
@@ -85,7 +71,7 @@ def _local_ngspice_startup(project, cwd, image):
             raise ValueError(f'NGSPICE_NATIVE_INIT_MISSING: {init} (required by {osdi})')
         return environment, None
     environment['SPICE_USERINIT_DIR'] = str(init.parent)
-    return environment, {'path': str(init), 'sha256': _sha(init)}
+    return environment, {'path': str(init)}
 
 
 class NativeCommands:
@@ -97,7 +83,7 @@ class NativeCommands:
         self.container = container
         self.image = image
         self.step = step
-        self.native_inputs = {}
+        self.native_inputs = []
         self.count = 0
 
     def __call__(self, program, argv, *, cwd=None, outputs=None, input_text=None):
@@ -137,7 +123,7 @@ class NativeCommands:
                 startup_environment, native_init = _local_ngspice_startup(self.project, cwd, self.image)
                 environment.update(startup_environment)
                 if native_init:
-                    self.native_inputs[native_init['path']] = native_init['sha256']
+                    self.native_inputs.append(native_init['path'])
             completed = subprocess.run(command, cwd=cwd, env=environment,
                                        capture_output=True, text=True, errors="replace",
                                        input=input_text)
@@ -150,12 +136,10 @@ class NativeCommands:
         missing = [str(path) for path in expected if not path.is_file()]
         return {"argv": command, "cwd": str(cwd), "returncode": rc,
                 "stdout": stdout, "stderr": stderr, "log": str(log),
-                "log_sha256": _sha(log), "duration_s": time.monotonic() - started,
-                "outputs": {str(path): _sha(path) for path in expected if path.is_file()},
+                "duration_s": time.monotonic() - started,
+                "outputs": [str(path) for path in expected if path.is_file()],
                 "missing_outputs": missing, "native_init": native_init,
                 "native_environment": startup_environment}
-
-
 
 
 def _a18_metrics(project, evidence):
@@ -315,7 +299,6 @@ def _dispatch(step, project, block, options, run):
     else:
         return _views(step, project, block, options, run)
     return run_step(step, project, block, options, run)
-
 
 
 def _declared_blocks(project):

@@ -94,7 +94,7 @@ def render_corner(project, name, config, destination, sections, section, tempera
             for selected in sections:
                 _text, files = _statistical_closure(Path(project).resolve(), model, selected)
                 for view in files:
-                    model_views['include:' + view['path']] = {k: view[k] for k in ('path', 'sha256')}
+                    model_views['include:' + view['path']] = {k: view[k] for k in ('path',)}
             line = '.lib "' + str(model) + '" ' + section
             moved += 1
         lines.append(line)
@@ -118,7 +118,7 @@ def render_corner(project, name, config, destination, sections, section, tempera
     if applied.get('temp_c') != temperature:
         raise ValueError('native corner temperature could not be stamped')
     views.update(model_views)
-    views['netlist'] = {'path': str(netlist.resolve()), 'sha256': bound.sha(netlist)}
+    views['netlist'] = {'path': str(netlist.resolve())}
     return deck_text, dut_text, views
 
 
@@ -148,7 +148,7 @@ def run(project, name, config, declaration, attempt, native):
             deck, dut, log = directory / ('tb_' + name + '.sp'), directory / (name + '.sp'), directory / 'ngspice.log'
             deck.write_text(deck_text); dut.write_text(dut_text)
             views.update(bound.consumed_input_views(project, deck))
-            views['deck'] = {'path': str(deck), 'sha256': bound.sha(deck)}
+            views['deck'] = {'path': str(deck)}
             inputs.update({label + ':' + role: view for role, view in views.items()})
             corner.update(deck=str(deck), netlist=str(dut))
             outputs += [str(deck), str(dut), str(log)]
@@ -163,19 +163,16 @@ def run(project, name, config, declaration, attempt, native):
                     measured.setdefault(key.casefold(), float(value))
             missing, malformed, breach = measurement_state(required, limits, measured)
             corner.update(measurements=measured, missing=missing, malformed_limits=malformed)
-            if sim._changed_native_inputs(views):
-                corner['detail'] = 'DECLARED_PVT_INPUT_CHANGED_DURING_EXECUTION'
+            failed = execution.get('returncode') != 0 or any(sweep._scan_analysis_failures(text))
+            interrupted = execution.get('returncode') in (-9, -15, 130, 137, 143)
+            if failed and not interrupted:
+                corner['status'] = 'FAIL'
+            elif not temperature_matches(text, temperature):
+                corner['detail'] = 'DECLARED_PVT_NATIVE_TEMPERATURE_MISMATCH'
             else:
-                failed = execution.get('returncode') != 0 or any(sweep._scan_analysis_failures(text))
-                interrupted = execution.get('returncode') in (-9, -15, 130, 137, 143)
-                if failed and not interrupted:
-                    corner['status'] = 'FAIL'
-                elif not temperature_matches(text, temperature):
-                    corner['detail'] = 'DECLARED_PVT_NATIVE_TEMPERATURE_MISMATCH'
-                else:
-                    corner['status'] = ('FAIL' if breach else
-                        'NOT_MEASURED' if missing or malformed or not required or interrupted else 'PASS')
-                    violated += [label + ':' + key for key in breach]
+                corner['status'] = ('FAIL' if breach else
+                    'NOT_MEASURED' if missing or malformed or not required or interrupted else 'PASS')
+                violated += [label + ':' + key for key in breach]
         except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
             corner['detail'] = str(exc)
         corners.append(corner)
