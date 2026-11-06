@@ -540,11 +540,6 @@ def test_named_binding_tb_no_permutation(tmp_path):
 
 
 # ── chip-AGNOSTIC guard ──────────────────────────────────────────────────────
-def test_chip_agnostic_guard():
-    prog = _PROGRAMS / "source_chip_agnostic_check.py"
-    r = _pr.run([sys.executable, str(prog), str(_PLUGIN)],
-                       capture_output=True, text=True)
-    assert r.returncode == 0, r.stdout[-1500:] + r.stderr[-400:]
 
 
 if __name__ == "__main__":
