@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1480
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1480)
+- **Total programs (excluding helpers / shims):** 1481
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1481)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1471 |
+| `any` | 1472 |
 
 ## Alphabetical listing
 
@@ -547,6 +547,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow_engine_frontend` | any | — | flow_engine_frontend |
 | `flow_engine_report` | any | — | Render measured engine results and an integration guide for exported views. |
 | `flow_engine_timing` | any | — | Plain totals of the recorded row durations. |
+| `flow_explore` | any | — | Compare public native runs on copies; adopt the best passing native override. |
 | `flow_gate_enforcement_audit` | any | — | which flow gates can actually STOP a run, and which only get to complain afterwards (#306). |
 | `flow_gate_grid` | any | — | recompute the flow-gate grid, and say which cells cannot be. |
 | `flow_ic_checks` | any | — | flow_ic_checks |
@@ -1552,7 +1553,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1471 programs)
+### `any` (1472 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `accumulate_synth` — deterministic SOLVER for the CVDP sequential ACCUMULATOR / running-op family:
@@ -2071,6 +2072,7 @@ _(no programs in this group)_
 - `flow_engine_frontend` — flow_engine_frontend
 - `flow_engine_report` — Render measured engine results and an integration guide for exported views.
 - `flow_engine_timing` — Plain totals of the recorded row durations.
+- `flow_explore` — Compare public native runs on copies; adopt the best passing native override.
 - `flow_gate_enforcement_audit` — which flow gates can actually STOP a run, and which only get to complain afterwards (#306).
 - `flow_gate_grid` — recompute the flow-gate grid, and say which cells cannot be.
 - `flow_ic_checks` — flow_ic_checks
