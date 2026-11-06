@@ -19,6 +19,14 @@ SETTING_ALIASES = {
     "FP_PDN_HOFFSET": "PDN_HOFFSET",
     "FP_PDN_SKIPTRIM": "PDN_SKIPTRIM",
 }
+PPA_SETTINGS = {
+    "EXTRA_EXCLUDED_CELLS", "PL_RESIZER_SETUP_MAX_UTIL_PCT",
+    "PL_RESIZER_HOLD_MAX_UTIL_PCT", "PL_RESIZER_SETUP_REPAIR_TNS_PCT",
+    "GRT_RESIZER_SETUP_MAX_UTIL_PCT", "GRT_RESIZER_HOLD_MAX_UTIL_PCT",
+    "GRT_RESIZER_SETUP_REPAIR_TNS_PCT", "VIBEIC_PRR_RECOVER_POWER_PCT",
+    "VIBEIC_PRR_MAX_UTIL_PCT", "VIBEIC_PRR_LIMIT_SIZING_AREA",
+    "VIBEIC_PRR_LIMIT_SIZING_LEAKAGE",
+}
 SETTINGS = {
     "SYNTH_STRATEGY",
     "MAX_FANOUT_CONSTRAINT", "MAX_TRANSITION_CONSTRAINT",
@@ -26,6 +34,7 @@ SETTINGS = {
     "PDN_VOFFSET", "PDN_HOFFSET", "PDN_SKIPTRIM", "PDN_CORE_RING",
     "PDN_CORE_RING_CONNECT_TO_PADS", "PDN_VWIDTH", "PDN_HWIDTH",
     "PDN_VPITCH", "PDN_HPITCH", "PDN_VSPACING", "PDN_HSPACING",
+    *PPA_SETTINGS,
 }
 IMPLEMENTATION_SETTINGS = {"RUN_POST_GRT_RESIZER_TIMING", "RUN_POST_GRT_DESIGN_REPAIR",
                            "CLOCK_PORT", "FP_DEF_TEMPLATE", "FALLBACK_SDC", "PNR_SDC_FILE", "SIGNOFF_SDC_FILE",
@@ -33,7 +42,8 @@ IMPLEMENTATION_SETTINGS = {"RUN_POST_GRT_RESIZER_TIMING", "RUN_POST_GRT_DESIGN_R
 
 
 def implementation_setting(key: str) -> bool:
-    return key in IMPLEMENTATION_SETTINGS or key.startswith(("CTS_", "PDN_", "GRT_DESIGN_REPAIR_"))
+    return key in IMPLEMENTATION_SETTINGS or key in PPA_SETTINGS or key.startswith(
+        ("CTS_", "PDN_", "GRT_DESIGN_REPAIR_"))
 
 
 def native_excluded_cells(config):
@@ -132,7 +142,14 @@ def _settings(fields: dict, pdk: str) -> dict:
                           or pdk.lower().startswith(str(scope).lower().rstrip("*_"))):
             continue
         value = row.get("value")
-        value = (str(value).strip() if value is not None else None) if key == "SYNTH_STRATEGY" else _value(value)
+        if value is None:
+            continue
+        if key == "EXTRA_EXCLUDED_CELLS":
+            if not isinstance(value, list):
+                text = str(value).strip()
+                value = json.loads(text) if text.startswith("[") else [text]
+        else:
+            value = (str(value).strip() if value is not None else None) if key == "SYNTH_STRATEGY" else _value(value)
         if value is None:
             continue
         if token == "PL_TARGET_DENSITY":
