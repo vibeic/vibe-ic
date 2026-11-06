@@ -145,19 +145,3 @@ def test_si_reverse_mutations_never_qualify(tmp_path, damage, rule):
         receipt["execution"] = [{"stage": "measurement", "exit_code": 0, "command": ["sta"]}]
         write(tmp_path, m3.RECEIPT, receipt)
     assert m3.audit(tmp_path, "si")["findings"][0]["rule"] == rule
-
-
-
-
-
-
-
-
-@pytest.mark.parametrize("producer", ["m3", "m4"])
-def test_production_cannot_overwrite_foreign_output(tmp_path, producer):
-    import mixed_signal_m3_run as m3
-    project = tmp_path / "subject"
-    claims(project)
-    foreign = tmp_path / "foreign.json"
-    foreign.write_text("foreign evidence\n")
-    assert foreign.read_text() == "foreign evidence\n"

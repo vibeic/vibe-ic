@@ -308,6 +308,17 @@ def extract(text, rec):
 
 
 
+def test_a_NEW_polarity_blind_extractor_FAILS(tmp_path):
+    root = _tree(tmp_path, "")
+    prog = str(PROGRAMS / "prose_polarity_consulted_check.py")
+    assert _pr.run([sys.executable, prog, "--root", str(root),
+                           "--write-baseline"], capture_output=True,
+                          text=True).returncode == 0
+    (root / "programs" / "some_extract.py").write_text(_BLIND)
+    r = _pr.run([sys.executable, prog, "--root", str(root)],
+                       capture_output=True, text=True)
+    assert r.returncode == 1
+    assert "some_extract::extract" in r.stdout
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +337,10 @@ def test_an_exemption_removes_the_name_without_touching_the_baseline(tmp_path):
     count with the exempted name taken OUT, not a bigger baseline."""
     root = _tree(tmp_path, "")
     (root / "programs" / "some_extract.py").write_text(_BLIND)
+    prog = str(PROGRAMS / "prose_polarity_consulted_check.py")
+    assert _pr.run([sys.executable, prog, "--root", str(root),
+                           "--write-baseline"], capture_output=True,
+                          text=True).returncode == 0
     before = json.loads((root / "programs"
                          / "prose_polarity_baseline.json").read_text())
     assert before["known"] == ["some_extract::extract"]

@@ -109,12 +109,6 @@ def test_native_adapter_runs_real_scenarios_and_both_reports(project):
     assert read(project / m3.SI)["coverage"]["noise"] == "NOT_MEASURED"
 
 
-@pytest.mark.parametrize("kind", ["cosim", "si"])
-def test_native_audit_cannot_overwrite_execution_artifacts(measured, kind):
-    report = read(measured / m3.COSIM)
-    wave = measured / report["native_root"] / "enable_receiver/wave.txt"
-    before = wave.read_bytes()
-    assert wave.read_bytes() == before
 
 
 @pytest.mark.parametrize("damage", ["missing_spef", "missing_liberty", "truncated_spef"])

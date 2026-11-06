@@ -231,6 +231,9 @@ def _deployment(tmp: Path, omit: "tuple[str, ...]" = ()) -> Path:
 #: The three declared sign-off gates that read the STA reports. In the field
 #: report all of these, plus #306's, went missing together: one deployment
 #: fault, five gates.
+_STA_SIGNOFF_PROGRAMS = ("sta_report_check.py",
+                         "post_route_signoff_corner_check.py",
+                         "sta_corner_record_completeness_check.py")
 
 
 def _all_signoff_steps(runner, project: Path):
@@ -257,6 +260,8 @@ def test_absent_gate_programs_do_not_release_a_negative_signoff_corner(
     absent gates are non-releasing.
     """
     proj = _project(tmp_path / "proj", violated_corner=True)
+    monkeypatch.setattr(runner, "PROGRAMS_DIR",
+                        _deployment(tmp_path, omit=_STA_SIGNOFF_PROGRAMS))
 
     results = {r.name: r for r in runner.step_declared_signoff_gates(proj)}
 
@@ -348,6 +353,9 @@ def test_absent_gate_program_blocks_the_drv_promotion_step_too(
     """#306's gate is the fifth of the five that vanished in the field report.
     It runs through the same helper, so it cannot drift from the other four."""
     proj = _project(tmp_path / "proj")
+    monkeypatch.setattr(
+        runner, "PROGRAMS_DIR",
+        _deployment(tmp_path, omit=("drv_promotion_corroboration_check.py",)))
     r = runner.step_drv_promotion_corroboration(proj)
     assert r.status == "NOT_MEASURED", r
     assert runner._aggregate_verdict([r]) not in _RELEASING, r
@@ -597,6 +605,20 @@ def test_absence_is_not_offered_as_an_inapplicability_opt_out():
 #: is the revisiting: the property still holds for every report-reading gate,
 #: and the one exception is enumerated WITH its justification rather than
 #: silently absorbed by relaxing the assertion.
+_MAY_DISPATCH_AN_ENGINE = {
+    "drv_signoff_judge.py":
+        "it verifies an SSH owner signature and checks the pinned OpenSTA "
+        "image digest; absent inputs or engine access yield NOT_MEASURED, "
+        "never a waiver or PASS.",
+    "tapeout_precheck.py":
+        "it runs the SHUTTLE OPERATOR's own precheck container — the arm whose "
+        "entire value is that we did not write it and cannot edit it to agree. "
+        "That arm is attempted only when the registry names a live shuttle for "
+        "this PDK AND its template was fetched; every other design gets "
+        "NOT_APPLICABLE before any dispatch. On a host without the engine, a "
+        "design that HAS a second authority gets a non-PASS, which is the "
+        "honest answer rather than an ENV_UNAVAILABLE waiver.",
+}
 
 
 def test_the_report_reading_signoff_gates_need_no_external_tool():
@@ -606,6 +628,8 @@ def test_the_report_reading_signoff_gates_need_no_external_tool():
     where the revisiting is triggered."""
     import phase3_one_shot_runner as R  # noqa: WPS433
     for entry in R._DECLARED_SIGNOFF_GATES + (R._DRV_PROMOTION_GATE,):
+        if entry[1] in _MAY_DISPATCH_AN_ENGINE:
+            continue
         src = (_PROGRAMS / entry[1]).read_text(errors="replace")
         for token in ("subprocess", "docker", "shutil.which"):
             assert token not in src, (
@@ -616,8 +640,28 @@ def test_the_report_reading_signoff_gates_need_no_external_tool():
                 f"is the revisiting this test exists to force.")
 
 
+def test_every_declared_exception_is_still_a_declared_gate():
+    """An exemption that outlives the gate it exempts is a hole nobody can see.
+
+    Without this, removing `tapeout_precheck` from the table would leave a
+    standing permission behind, and the next program to take that filename
+    would inherit an exemption granted for something else entirely.
+    """
+    import phase3_one_shot_runner as R  # noqa: WPS433
+    declared = {e[1] for e in
+                R._DECLARED_SIGNOFF_GATES + (R._DRV_PROMOTION_GATE,)}
+    stale = sorted(set(_MAY_DISPATCH_AN_ENGINE) - declared)
+    assert not stale, (
+        f"_MAY_DISPATCH_AN_ENGINE exempts programs that are no longer declared "
+        f"sign-off gates: {stale}")
 
 
+def test_every_exception_states_a_reason():
+    """A named exception with an empty reason is an unnamed exception."""
+    for program, reason in _MAY_DISPATCH_AN_ENGINE.items():
+        assert len(reason.strip()) >= 80, (
+            f"{program} is exempted from the report-reading rule with no "
+            f"usable reason ({len(reason.strip())} chars)")
 
 
 def test_the_blast_radius_is_recorded_where_the_change_is():

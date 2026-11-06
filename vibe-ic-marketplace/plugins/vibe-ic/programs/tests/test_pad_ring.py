@@ -749,6 +749,14 @@ def test_the_gate_the_flow_names_resolves_to_a_program_that_exists():
 # --------------------------------------------------------------------------- #
 # chip-agnosticism
 # --------------------------------------------------------------------------- #
+_OURS = ("_pad_ring.py", "pad_ring_gen.py", "pad_ring_check.py",
+         # The author of this step's own input (vibe-ic#1410/cpath). It reads
+         # an operator slot file and a tape-out declaration and writes the
+         # config `pad_ring_gen` consumes, so it is subject to exactly the
+         # same rule as the three above.
+         "pad_assignment_gen.py",
+         "tests/test_pad_ring.py",
+         "tests/test_pad_and_seal_ring_on_the_chip_path.py")
 
 
 
@@ -761,6 +769,10 @@ def test_no_installed_pdk_tree_name_appears_in_these_programs():
         pytest.skip("no PDK_ROOT on this host")
     names = [p.name for p in Path(root).iterdir() if p.is_dir()]
     assert names, "PDK_ROOT holds no tree; this test would prove nothing"
+    for rel in _OURS:
+        text = (PROGRAMS / rel).read_text().lower()
+        for n in names:
+            assert n.lower() not in text, f"{rel} names the PDK tree {n!r}"
 
 
 # --------------------------------------------------------------------------- #

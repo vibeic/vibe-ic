@@ -188,6 +188,8 @@ def test_step14_sibling_template_gate_untouched(tmp_path):
 # ===========================================================================
 # step 11 / dim 5 — docstring must state the rc the code actually returns
 # ===========================================================================
+_DFT_GATES = ("dft_atpg_coverage_check.py", "bsdl_emit.py",
+              "dft_signoff_check.py")
 
 
 def _dft_project(tmp_path: Path, *, disclosed: bool) -> Path:
@@ -205,8 +207,40 @@ def _dft_project(tmp_path: Path, *, disclosed: bool) -> Path:
     return tmp_path
 
 
+@pytest.mark.parametrize("prog", _DFT_GATES)
+def test_dft_gate_docstring_matches_its_disclosed_skip_behaviour(tmp_path, prog):
+    """DISCRIMINATOR (documentation-vs-code consistency, both directions).
+
+    Run the gate on genuinely-absent evidence plus the disclosed sentinel and
+    observe the exit code; the module docstring must describe THAT outcome.
+    A tree that keeps the rc=2 disclosed-skip must document it; a tree that
+    removes the skip path must not promise one. Before this change all three
+    docstrings said the opposite of what the code did ("There is no SKIP
+    path" / "never a vacuous pass on absence")."""
+    proj = _dft_project(tmp_path, disclosed=True)
+    r = _run(prog, str(proj))
+    doc = (PROGRAMS / prog).read_text(encoding="utf-8").split('"""')[1]
+    if r.returncode == 2:
+        assert "SKIPPED-CONDITION" in doc, (
+            f"{prog} exits 2 / SKIPPED-CONDITION on a disclosed absence but "
+            f"its docstring never says so")
+        assert "rc=2" in doc, (
+            f"{prog} exits 2 on this input; the docstring must state that rc")
+    elif r.returncode == 1:
+        assert "SKIPPED-CONDITION" not in doc, (
+            f"{prog} FAILs on a disclosed absence; the docstring must not "
+            f"promise a SKIPPED-CONDITION path it does not have")
 
 
+@pytest.mark.parametrize("prog", _DFT_GATES)
+def test_dft_gate_undisclosed_absence_still_fails(tmp_path, prog):
+    """DIRECTION-1. The narrow rule the code really enforces: absence ALONE is
+    never enough. With no sentinel, absent stuck-at evidence must still FAIL."""
+    proj = _dft_project(tmp_path, disclosed=False)
+    r = _run(prog, str(proj))
+    assert r.returncode == 1, (
+        f"{prog} rc={r.returncode} on an UNDISCLOSED absence — expected an "
+        f"honest FAIL\n{r.stdout}\n{r.stderr}")
 
 
 def test_step11_flow_gate_comment_does_not_deny_the_disclosed_skip(tmp_path):
@@ -215,6 +249,7 @@ def test_step11_flow_gate_comment_does_not_deny_the_disclosed_skip(tmp_path):
     the same observation: run the gates, see what they return, then require the
     file that DECLARES them to describe that outcome."""
     proj = _dft_project(tmp_path, disclosed=True)
+    codes = {p: _run(p, str(proj)).returncode for p in _DFT_GATES}
 
     step11 = _flow_steps()["11"]
     text = FLOW_YAML.read_text(encoding="utf-8")
@@ -224,6 +259,15 @@ def test_step11_flow_gate_comment_does_not_deny_the_disclosed_skip(tmp_path):
     assert "dft_atpg_coverage_check" in block, "wrong block extracted"
     assert step11.get("gate"), "step 11 must still have a gate"
 
+    if any(c == 2 for c in codes.values()):
+        assert "SKIPPED-CONDITION" in block, (
+            f"step 11's gate programs return {codes} on a disclosed absence; "
+            f"the yaml comments must name that outcome instead of asserting "
+            f"the gate never passes on absence")
+    else:
+        assert "SKIPPED-CONDITION" not in block, (
+            f"no step-11 gate takes a disclosed-skip path ({codes}); the yaml "
+            f"must not describe one")
 
 
 # ===========================================================================

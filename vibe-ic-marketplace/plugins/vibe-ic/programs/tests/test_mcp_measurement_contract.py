@@ -174,6 +174,15 @@ def _prov_project(tmp_path: Path, measurement) -> Path:
     return proj
 
 
+def _prov_gate(proj: Path, require: bool):
+    cmd = [sys.executable, str(PROGRAMS / "provenance_check.py"), ".",
+           "--output", "phase2/stage2/synth/netlist.v",
+           "--tool", "yosys,yosys-abc"]
+    if require:
+        cmd.append("--require-measured")
+    r = subprocess.run(cmd, cwd=proj, capture_output=True, text=True,
+                       env=ENV, timeout=120)
+    return r.returncode, r.stdout
 
 
 def _m(measured, cls=None, reason=""):
@@ -182,12 +191,56 @@ def _m(measured, cls=None, reason=""):
             "read": [], "wrote": [], "tool": "yosys"}
 
 
+def test_a_run_that_states_it_measured_nothing_fails_the_binding(tmp_path):
+    proj = _prov_project(tmp_path, _m(False, "UNPARSEABLE",
+                                      "yosys completed but its stat block "
+                                      "yielded no cell count"))
+    rc, out = _prov_gate(proj, require=True)
+    assert rc == 1
+    assert "UNPARSEABLE" in out and "measured\n" not in out.split("Overall")[1]
+    # THE OTHER POLE: the artefact, the tool name, the exit code and the hash
+    # are all exactly as before, so without the flag this binding still passes.
+    # That is the measurement of what the flag adds, and of what was missing.
+    assert _prov_gate(proj, require=False)[0] == 0
 
 
+def test_a_run_that_states_it_measured_passes(tmp_path):
+    proj = _prov_project(tmp_path, _m(True))
+    assert _prov_gate(proj, require=True)[0] == 0
+    assert _prov_gate(proj, require=False)[0] == 0
 
 
+def test_nothing_to_measure_is_not_a_refusal(tmp_path):
+    """A legitimately zero-cell design measured perfectly well."""
+    proj = _prov_project(tmp_path, _m(False, "NOTHING_TO_MEASURE",
+                                      "the design synthesises to zero cells"))
+    rc, out = _prov_gate(proj, require=True)
+    assert rc == 0
 
 
+def test_an_undeclared_run_is_INCOMPLETE_not_PASS_and_not_FAIL(tmp_path):
+    """The third state, rendered as itself.
+
+    rc 0 -- because treating "nobody stated this" as a failure converts an
+    unmeasured thing into a bad result. NOT a pass either: the `INCOMPLETE:`
+    line is the token `flow_compliance_check._stdout_signals_token` reads to
+    disposition the whole step into the INCOMPLETE tier, which is counted and
+    rendered separately and never enters `pass_count`.
+    """
+    proj = _prov_project(tmp_path, None)
+    rc, out = _prov_gate(proj, require=True)
+    assert rc == 0
+    assert "[UNMEASURED" in out
+    assert any(line.startswith("INCOMPLETE:") for line in out.splitlines())
+    # The sentinel must survive the consumer's tail cut: `output_snippet` keeps
+    # only the LAST 300 characters of stdout and then requires the token to
+    # start a line. A disclosure a path length can delete is not a disclosure.
+    assert any(line.lstrip().startswith("INCOMPLETE:")
+               for line in out[-300:].splitlines())
+    # Without the flag, this same project is an ordinary PASS -- which is
+    # exactly the gap: the artefact is bound to an exit-0 run by the right
+    # tool, and nothing anywhere says whether that run did any work.
+    assert _prov_gate(proj, require=False)[0] == 0
 
 
 # =========================================================================

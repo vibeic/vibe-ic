@@ -156,6 +156,18 @@ endmodule
 """
 
 
+def test_tristate_now_examines_a_bus_driven_through_a_dir_register(tmp_path):
+    """THE #496 witness. #492 recorded this gate as `inout_ports: []` on all
+    107; it actually collects 24 across 4 of them and then drops every one at
+    an output-enable lookup that knew a single spelling. This shape — an inout
+    driven through `<name>_dir` and tapped raw — is in the tracked tree."""
+    rtl = _rtl(tmp_path, gpio__v=_GPIO_DIR_BUS)
+    summary = _summary("tristate_self_rx_mask_check", rtl)
+    assert summary["inout_ports"] == ["gpio"]
+    assert summary["checked"] == 1, (
+        f"the driven bus was skipped again: {summary}")
+    assert summary["oe_companions"]["gpio"] == "gpio_dir"
+    assert summary[GD.DENOMINATOR_KEY]["examined"] == 1
 
 
 
@@ -259,6 +271,14 @@ def test_bit_count_now_sees_an_assembler_that_does_not_say_byte_valid(tmp_path):
 
 
 
+def test_bit_count_passes_once_the_alignment_test_is_added(tmp_path):
+    """The positive half — the gate must be answering the question, not just
+    reacting to the file. Adding the octet-boundary test is the whole fix."""
+    fixed = _HDLC_SHAPED_ASSEMBLER.replace(
+        "      frame_valid <= 1'b1;\n",
+        "      frame_valid <= (rx_bit_cnt == 3'd0);\n")
+    assert fixed != _HDLC_SHAPED_ASSEMBLER
+    rtl = _rtl(tmp_path, rx__v=fixed)
 
 
 def test_bit_count_reason_points_at_the_conjunct_that_rejected(tmp_path):

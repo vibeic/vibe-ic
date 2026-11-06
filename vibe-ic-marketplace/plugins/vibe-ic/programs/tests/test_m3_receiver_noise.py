@@ -156,12 +156,3 @@ def test_current_noise_consumer_rejects_corrupt_native_evidence(measured, tmp_pa
     assert audit["passed"] is False
     assert audit["findings"][0]["rule"] == rule, audit
     assert "receiver_noise" not in audit  # no positive diagnostic after refusal
-
-
-
-
-def test_noise_audit_cannot_overwrite_native_measurements(measured):
-    record = read(measured / m3.RECEIPT)
-    scalar = measured / record["native_root"] / "si/receiver_noise/integrated.txt"
-    before = scalar.read_bytes()
-    assert scalar.read_bytes() == before

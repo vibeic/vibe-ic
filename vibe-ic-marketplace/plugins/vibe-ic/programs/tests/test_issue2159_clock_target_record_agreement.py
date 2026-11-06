@@ -37,6 +37,7 @@ sys.path.insert(0, str(PROGRAMS))
 import clock_target_provenance as ctp                      # noqa: E402
 import l19_constraint_token_emit as l19e                   # noqa: E402
 
+GATE_PROGRAM = "clock_target_record_agreement_check.py"
 GATE_STEP = "clock_target_agreement"
 GATE_OUT_REL = "reports/phase3/clock_target_record_agreement.json"
 
@@ -84,6 +85,16 @@ _PDK_TABLE = (
 # ===========================================================================
 
 
+def test_the_measured_disagreement_exits_one(tmp_path):
+    proj = _project(tmp_path, "measured_cli")
+    _run_record(proj, pdk="gf180mcuD", period_ns=20.0,
+                tier="declared_pdk_table", assumed=False, cite="doc.md:34")
+    _l19(proj, clock_target={"status": "DECLARED", "period_ns": 20.0,
+                             "pdk": "sky130", "tier": "l8_declared"})
+    r = subprocess.run([sys.executable, str(PROGRAMS / GATE_PROGRAM),
+                        str(proj)], capture_output=True, text=True)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "sky130" in r.stdout and "gf180mcuD" in r.stdout
 
 
 # ===========================================================================
@@ -111,12 +122,42 @@ _PDK_TABLE = (
 # ===========================================================================
 # (4) ABSENT vs UNREADABLE — two different verdicts, deliberately
 # ===========================================================================
+def test_a_run_that_publishes_no_run_record_is_not_applicable(tmp_path):
+    """No run record is no second claim to contradict — and reporting NOT
+    CHECKED here would block every Phase-3-only / analog run for the shape of
+    the project rather than for anything about the design."""
+    proj = _project(tmp_path, "no_run")
+    _l19(proj, clock_target={"status": "DECLARED", "period_ns": 20.0,
+                             "pdk": "sky130", "tier": "l8_declared"})
+    r = subprocess.run([sys.executable, str(PROGRAMS / GATE_PROGRAM),
+                        str(proj)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout
 
 
 
 
 
 
+def test_an_unreadable_record_that_exists_is_not_checked(tmp_path):
+    """The #1140 case, and the one it really is: the subject is PRESENT and
+    this gate could not read it. 'Could not read it' is never 'read it and it
+    agreed', and it must never exit 0."""
+    proj = _project(tmp_path, "unreadable")
+    _run_record(proj, pdk="gf180mcuD", period_ns=20.0,
+                tier="declared_pdk_table", assumed=False)
+    (proj / "phase1" / "generated_docs").mkdir(parents=True)
+    (proj / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json").write_text(
+        "{ this is not json")
+    r = subprocess.run([sys.executable, str(PROGRAMS / GATE_PROGRAM),
+                        str(proj)], capture_output=True, text=True)
+    assert r.returncode == 2, r.stdout
+
+    proj2 = _project(tmp_path, "unreadable_run")
+    d = proj2 / "reports" / "phase3"
+    d.mkdir(parents=True)
+    (d / "clock_target_provenance.json").write_text("{ nope")
+    _l19(proj2, clock_target={"status": "DECLARED", "period_ns": 20.0,
+                              "pdk": "sky130", "tier": "l8_declared"})
 
 
 # ===========================================================================
@@ -205,6 +246,13 @@ def test_a_run_with_no_declared_period_keeps_assumed_and_its_disclosure(tmp_path
 # ===========================================================================
 # (7) DECLARED — in both of the flow's declaration surfaces, by name
 # ===========================================================================
+def test_the_runner_table_declares_the_gate_by_name():
+    import phase3_one_shot_runner as R
+    rows = [g for g in R._DECLARED_SIGNOFF_GATES if g[1] == GATE_PROGRAM]
+    assert len(rows) == 1, rows
+    name, program, out_rel, extra_argv = rows[0]
+    assert name == GATE_STEP and out_rel == GATE_OUT_REL, rows[0]
+    assert tuple(extra_argv) == (), extra_argv
 
 
 def test_the_flow_yaml_declares_the_same_invocation():

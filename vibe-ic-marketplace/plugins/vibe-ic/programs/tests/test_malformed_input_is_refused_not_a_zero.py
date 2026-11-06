@@ -50,6 +50,7 @@ def _run(prog: str, *args: str) -> subprocess.CompletedProcess:
 # Absent `versions` and a `versions` object carrying two real rows produced
 # byte-identical stdout, exit code and JSON report: `[PASS]`, rc 0.
 # ===========================================================================
+_L14 = "l14_protocol_versioning_contract_check.py"
 
 # The dominant real shape in this repo's own corpus (122 of 197 shipped L14
 # docs). It is what makes the coerced zero dangerous: it is indistinguishable
@@ -75,17 +76,30 @@ def _l14_project(tmp_path: Path, fields: dict) -> Path:
 def test_l14_a_malformed_row_container_is_not_a_pass(tmp_path):
     d = _l14_project(tmp_path, {"versions": _L14_ROWS_AS_OBJECT})
     rep = tmp_path / "r.json"
+    p = _run(_L14, str(d), "--json", str(rep))
     body = json.loads(rep.read_text())
     # LITERALS FIRST. On origin/main this is `assert 'PASS' != 'PASS'`.
     assert body.get("verdict") != "PASS", body
+    assert p.returncode != 0, p.stdout
     assert body["pass"] is False
+    assert "[PASS]" not in p.stdout
 
 
+def test_l14_b_malformed_and_absent_do_not_produce_the_same_answer(tmp_path):
+    absent = _l14_project(tmp_path / "a", {})
+    malformed = _l14_project(tmp_path / "m", {"versions": _L14_ROWS_AS_OBJECT})
+    a = _run(_L14, str(absent))
+    m = _run(_L14, str(malformed))
+    # On origin/main both are `[PASS] ...\n` with rc 0 — byte-identical.
+    assert (a.returncode, a.stdout) != (m.returncode, m.stdout)
+    assert a.returncode == 0
+    assert m.returncode != 0
 
 
 def test_l14_c_the_refusal_names_what_arrived(tmp_path):
     d = _l14_project(tmp_path, {"versions": _L14_ROWS_AS_OBJECT})
     rep = tmp_path / "r.json"
+    _run(_L14, str(d), "--json", str(rep))
     body = json.loads(rep.read_text())
     refused = body.get("refused_containers") or []
     assert [r["field"] for r in refused] == ["versions"], body
@@ -109,18 +123,37 @@ def test_l14_d_a_row_rule_does_not_report_content_it_never_read(tmp_path):
         json.dumps({"doc_class": "L14", "extraction_status": "EXTRACTED",
                     "fields": {"versions": _L14_ROWS_AS_OBJECT}}))
     rep = tmp_path / "r.json"
+    _run(_L14, str(d), "--json", str(rep))
     rules = [f["rule"] for f in json.loads(rep.read_text())["findings"]]
     assert "l14_status_matches_content" not in rules, rules
     assert "l14_row_container_shape" in rules
 
 
+def test_l14_e_every_verdict_line_discloses_its_denominator(tmp_path):
+    """House rule: `gate_discloses_denominator_check` — a PASS must say how
+    much it looked at. On origin/main the pass line is the bare
+    `[PASS] l14_protocol_versioning_contract_check`."""
+    d = _l14_project(tmp_path, {"versions": []})
+    p = _run(_L14, str(d))
+    assert p.returncode == 0
+    assert "examined 0 row(s)" in p.stdout, p.stdout
 
 
+def test_l14_f_an_absent_container_still_passes_unchanged(tmp_path):
+    """PASSES IN BOTH ARMS. A zero denominator over a layer that WAS READ and
+    is honestly empty stays a pass — 122 of the 197 shipped L14 docs are
+    exactly this, and refusing them would replace one silent pass with a wall
+    of false findings."""
+    d = _l14_project(tmp_path, {})
+    p = _run(_L14, str(d))
+    assert p.returncode == 0
+    assert "[PASS]" in p.stdout
 
 
 # ===========================================================================
 # l17_channel_catalog_consumer_contract_check
 # ===========================================================================
+_L17 = "l17_channel_catalog_consumer_contract_check.py"
 
 _L17_CHANNELS_AS_OBJECT = {
     "ing": {"name": "ing", "direction_master": "in", "purpose": "inbound",
@@ -138,18 +171,55 @@ def _l17_project(tmp_path: Path, doc: dict) -> Path:
     return d
 
 
+def test_l17_a_a_malformed_catalog_container_is_not_a_pass(tmp_path):
+    d = _l17_project(tmp_path, {"doc_class": "L17",
+                                "extraction_status": "EXTRACTION_FOUND_NOTHING",
+                                "channels": _L17_CHANNELS_AS_OBJECT})
+    p = _run(_L17, str(d))
+    body = json.loads(p.stdout)
+    # On origin/main: `{'pass': True, 'error_count': 0, ...}`, rc 0.
+    assert body["summary"]["pass"] is not True, body["summary"]
+    assert p.returncode != 0
+    assert "CATALOG_CONTAINER_SHAPE_UNREADABLE" in [
+        f["category"] for f in body["findings"]]
 
 
+def test_l17_b_malformed_and_absent_do_not_produce_the_same_report(tmp_path):
+    base = {"doc_class": "L17", "extraction_status": "EXTRACTION_FOUND_NOTHING"}
+    a = _run(_L17, str(_l17_project(tmp_path / "a", dict(base))))
+    m = _run(_L17, str(_l17_project(
+        tmp_path / "m", dict(base, channels=_L17_CHANNELS_AS_OBJECT))))
+    assert (a.returncode, a.stdout) != (m.returncode, m.stdout)
+    assert a.returncode == 0 and m.returncode != 0
 
 
+def test_l17_c_the_refusal_names_the_entries_it_did_not_examine(tmp_path):
+    d = _l17_project(tmp_path, {"doc_class": "L17",
+                                "extraction_status": "EXTRACTION_FOUND_NOTHING",
+                                "channels": _L17_CHANNELS_AS_OBJECT})
+    body = json.loads(_run(_L17, str(d)).stdout)
+    info = body["info"]
+    assert info["catalog_containers_refused"] == ["channels"], info
+    assert info["catalog_entries_not_examined"] == 2
+    assert info["catalog_entries_examined"] == 0
+    msg = " ".join(f["message"] for f in body["findings"])
+    assert "egr" in msg and "ing" in msg
 
 
+def test_l17_d_an_absent_catalog_still_passes_unchanged(tmp_path):
+    """PASSES IN BOTH ARMS."""
+    p = _run(_L17, str(_l17_project(
+        tmp_path, {"doc_class": "L17",
+                   "extraction_status": "EXTRACTION_FOUND_NOTHING"})))
+    assert p.returncode == 0
+    assert json.loads(p.stdout)["summary"]["pass"] is True
 
 
 # ===========================================================================
 # analog_sigma_delta_gain_floor_check — the sharpest measured flip:
 # a real FAIL (rc 1) became `[SKIP]` (rc 0).
 # ===========================================================================
+_ASD = "analog_sigma_delta_gain_floor_check.py"
 
 _SPECS_AS_LIST = [{"name": "converter_type", "value": "sigma-delta modulator"},
                   {"name": "osr", "target": 64}]
@@ -174,17 +244,26 @@ def _asd_project(tmp_path: Path, name: str, specs) -> Path:
 def test_analog_a_an_unreadable_spec_is_not_not_applicable(tmp_path):
     d = _asd_project(tmp_path, "m", _SPECS_AS_OBJECT)
     rep = tmp_path / "r.json"
+    p = _run(_ASD, str(d), "--json", str(rep))
     verdict = json.loads(rep.read_text())["verdict"]
     # On origin/main: `assert 'SKIP' != 'SKIP'` and `assert 0 != 0`.
     assert verdict != "SKIP", verdict
+    assert p.returncode != 0, p.stdout
     assert verdict == "UNMEASURED"
+    assert p.returncode == 2
 
 
+def test_analog_b_malformed_and_absent_do_not_produce_the_same_answer(tmp_path):
+    a = _run(_ASD, str(_asd_project(tmp_path, "a", None)))
+    m = _run(_ASD, str(_asd_project(tmp_path, "m", _SPECS_AS_OBJECT)))
+    assert (a.returncode, a.stdout) != (m.returncode, m.stdout)
+    assert a.returncode == 0 and m.returncode == 2
 
 
 def test_analog_c_the_refusal_says_applicability_is_undecided(tmp_path):
     d = _asd_project(tmp_path, "m", _SPECS_AS_OBJECT)
     rep = tmp_path / "r.json"
+    _run(_ASD, str(d), "--json", str(rep))
     blocks = json.loads(rep.read_text())["blocks"]
     assert [b["reason"] for b in blocks] == ["spec_container_unreadable"], blocks
     assert blocks[0]["refused"]["keys"] == ["converter_type", "osr"]
@@ -197,6 +276,8 @@ def test_analog_d_a_well_formed_violation_still_fails_unchanged(tmp_path):
     its refusal by breaking the readable path."""
     d = _asd_project(tmp_path, "w", _SPECS_AS_LIST)
     rep = tmp_path / "r.json"
+    p = _run(_ASD, str(d), "--json", str(rep))
+    assert p.returncode == 1
     assert json.loads(rep.read_text())["verdict"] == "FAIL"
 
 
@@ -296,16 +377,45 @@ _PLAN = [{"name": n, "status": "PASS"} for n in ("a", "b", "c")] + \
 # refuses a non-list, so absent and malformed BOTH exit 1. Only the sentence
 # was wrong.
 # ===========================================================================
+_BL = "bit_level_full_stack_tb_oracle_check.py"
 
 
+def _bl(tmp_path: Path, name: str, per_vector, present: bool):
+    d = tmp_path / name
+    d.mkdir(parents=True)
+    body = {"vectors_total": 16, "vectors_passed": 16, "vectors_failed": 0}
+    if present:
+        body["per_vector"] = per_vector
+    r = d / "results.json"
+    r.write_text(json.dumps(body))
+    rep = d / "rep.json"
+    p = _run(_BL, str(d), "--results-json", str(r), "--json", str(rep))
+    return p, json.loads(rep.read_text())
 
 
 _VECTORS = {f"v{i}": {"name": f"v{i}", "verdict": "PASS",
                       "expected_bytes": [1, i, 0]} for i in range(16)}
 
 
+def test_bitlevel_a_a_present_but_unreadable_vector_set_is_not_called_missing(
+        tmp_path):
+    p, body = _bl(tmp_path, "m", _VECTORS, True)
+    rules = [f["rule"] for f in body["findings"]]
+    # On origin/main: `assert 'PER_VECTOR_MISSING' not in [...]` — it says the
+    # results lack the array, over a file carrying 16 vectors.
+    assert "PER_VECTOR_MISSING" not in rules, rules
+    assert "PER_VECTOR_SHAPE_UNREADABLE" in rules
+    msg = next(f["message"] for f in body["findings"]
+               if f["rule"] == "PER_VECTOR_SHAPE_UNREADABLE")
+    assert "16 key(s)" in msg
 
 
+def test_bitlevel_b_an_absent_vector_set_still_says_missing_unchanged(tmp_path):
+    """PASSES IN BOTH ARMS — and it is the control that keeps the two states
+    distinguishable in the OTHER direction."""
+    p, body = _bl(tmp_path, "a", None, False)
+    assert p.returncode == 1
+    assert "PER_VECTOR_MISSING" in [f["rule"] for f in body["findings"]]
 
 
 # ===========================================================================

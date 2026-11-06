@@ -56,6 +56,13 @@ OUT_OF_LAYER = {"A6", "A7", "A8"}
 #: its population comes from. Every entry must be used by exactly one site in
 #: the census, and an unresolvable call no entry names is unresolved -- so a
 #: new dynamic call anywhere, even beside a listed one, fails the census.
+DYNAMIC_SITES = {
+    ("librelane_pv_signoff.py", "state_metric", "step"): "STATE_KEYS",
+    # obligation/finished_layout and precheck/state_metric callers use these steps.
+    ("librelane_signoff_evidence.py", "tool_selected", "step"): ("26", "31", "34", "37"),
+    ("phase3_one_shot_runner.py", "atpg_librelane_views", "step"): ("DT2", "DT3"),
+    ("flow_compliance_check.py", "_output_not_owed", "selection"): "OUTPUT_CONDITIONS",
+}
 
 
 def _output_condition_steps():
@@ -232,6 +239,14 @@ def call_sites(root: Path = PROGRAMS, used: dict | None = None):
                                  if isinstance(p, (ast.FunctionDef, ast.AsyncFunctionDef))),
                                 None)
                             key = (path.name, enclosing, arg.id)
+                            source = DYNAMIC_SITES.get(key)
+                            if source is not None and used is not None:
+                                used[key] = used.get(key, 0) + 1
+                            if isinstance(source, str):
+                                table = getattr(__import__(path.stem), source)
+                                steps = tuple(sorted({v[0] for v in table.values()}))
+                            else:
+                                steps = source
                     elif (isinstance(arg, ast.Call) and isinstance(arg.func, ast.Name)
                           and arg.func.id == "str" and len(arg.args) == 1
                           and not arg.keywords):
@@ -248,6 +263,11 @@ def call_sites(root: Path = PROGRAMS, used: dict | None = None):
                                  if isinstance(p, (ast.FunctionDef, ast.AsyncFunctionDef))),
                                 None)
                             key = (path.name, enclosing, selection.func.value.id)
+                            if DYNAMIC_SITES.get(key) == "OUTPUT_CONDITIONS":
+                                if used is not None:
+                                    used[key] = used.get(key, 0) + 1
+                                steps = _output_condition_steps()
+                sites.append((str(rel), node.lineno, steps))
             for child in ast.iter_child_nodes(node):
                 walk(child, parents + [node])
 
@@ -275,6 +295,7 @@ def test_every_call_site_is_enumerated_and_resolved():
     # none silently covers a second call.
     used: dict = {}
     call_sites(used=used)
+    assert used == {key: 1 for key in DYNAMIC_SITES}, used
 
 
 def test_the_contract_carries_the_ruled_layer():
@@ -527,6 +548,7 @@ def test_a_second_call_inside_the_listed_function_is_counted_twice(tmp_path):
         "    return a, _ll.selected_mode(project, step)\n"))
     used: dict = {}
     call_sites(root, used)
+    assert used != {key: 1 for key in DYNAMIC_SITES}
     assert used[("phase3_one_shot_runner.py", "atpg_librelane_views", "step")] == 2
 
 
@@ -538,5 +560,28 @@ _OUTPUT_CONDITION_BODY = (
 
 
 def test_an_unlisted_output_condition_site_remains_unresolved(tmp_path):
+    root = _scratch_named(tmp_path, "flow_compliance_check.py", (
+        _OUTPUT_CONDITION_BODY.replace("_output_not_owed", "a_new_output_condition")))
     used: dict = {}
+    assert call_sites(root, used) == [("flow_compliance_check.py", 3, None)]
     assert used == {}
+
+
+def test_output_condition_context_cannot_resolve_a_missing_or_unknown_step(
+        tmp_path, monkeypatch):
+    root = _scratch_named(tmp_path, "flow_compliance_check.py", _OUTPUT_CONDITION_BODY)
+    flow = tmp_path / "flow.yaml"
+    monkeypatch.setitem(globals(), "FLOW_OUTPUT_CONDITIONS_PATH", flow)
+    contexts = (
+        None,                        # absent canonical context
+        "[malformed",               # unreadable canonical context
+        "steps: []\n",               # no finite population
+        "steps:\n- id: '23'\n  output_conditions:\n    record:\n"
+        "      librelane_step_mode: {}\n",  # missing selection step
+        "steps:\n- id: '23'\n  output_conditions:\n    record:\n"
+        "      librelane_step_mode: {step: UNKNOWN}\n",
+    )
+    for context in contexts:
+        if context is not None:
+            flow.write_text(context)
+        assert call_sites(root) == [("flow_compliance_check.py", 3, None)], context

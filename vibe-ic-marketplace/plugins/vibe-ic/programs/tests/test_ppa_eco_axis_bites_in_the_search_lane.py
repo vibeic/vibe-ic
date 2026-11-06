@@ -230,6 +230,45 @@ def test_finding_the_route_alone_also_flips_it_without_any_declaration():
     assert F.set_exit_code([routed]) == F.RC_UNDETERMINED
 
 
+def test_all_three_ppa_clis_can_resolve_the_route(tmp_path):
+    """The gap this file was written to measure, closed.
+
+    `ppa_feasibility_check.py` and `ppa_pnr_search_space.py` already took
+    `--project` and let the flow's own router decide. `ppa_search_run.py` did
+    not, so a campaign's only lever was whatever the policy document happened
+    to say -- and the shipped campaign's said nothing. Measured against each
+    CLI's own help text rather than asserted, so it goes red if any of them
+    loses the flag again.
+    """
+    progs = ( "ppa_pnr_search_space.py",
+             "ppa_search_run.py")
+    # THE DENOMINATOR, AGAINST THE POPULATION AND NOT AGAINST ITSELF.
+    # This row used to read `len(progs) == 3`, which compares a literal to its
+    # own size: it passes for free, on every tree, forever, and "all three
+    # CLIs" was never checked against how many there are. The population is
+    # DISCOVERED instead -- every `ppa_*` CLI whose source reaches the flow's
+    # own delivery-path router, which is what "can resolve the route" means --
+    # and the comparison is set equality in both directions, so a fourth CLI
+    # joining the lane and a name dropped from this row are each red.
+    routed = {q.name for q in _PROGRAMS.glob("ppa_*.py")
+              if "delivery_path" in q.read_text(encoding="utf-8")}
+    assert routed == set(progs), (
+        f"on the route and not named here: {sorted(routed - set(progs))}; "
+        f"named here and no longer on the route: {sorted(set(progs) - routed)}")
+    for prog in progs:
+        out = subprocess.run([sys.executable, str(_PROGRAMS / prog), "--help"],
+                             capture_output=True, text=True,
+                             cwd=str(tmp_path))
+        # The EXIT CODE is deliberately not asserted here.
+        # `ppa_feasibility_check.py --help` exits 3 rather than 0; that is a
+        # separate, already-recorded defect
+        # (`test_bad_invocation_help_is_0_on_the_feasibility_cli_too` is
+        # xfail), and folding it into this row would make this test go green
+        # or red for a reason that has nothing to do with the route.
+        assert "--project" in out.stdout, (
+            f"{prog} cannot be told which design tree its inputs came from, "
+            f"so it cannot resolve a delivery path and an absent "
+            f"design-for-ECO declaration stays a non-finding")
 
 
 def test_finding_the_shipped_campaign_contracts_declare_neither_key():
