@@ -1118,6 +1118,7 @@ def native_project(em_path: Path) -> Optional[Path]:
 
 def validate_primary_ir(project: Path) -> Dict[str, Any]:
     """Read the native static IR result against the original five-percent limit."""
+    coverage_errors = []
     try:
         native = json.loads((project / "reports/phase3/ir_drop.json").read_text())
         if not isinstance(native, dict):
@@ -1138,17 +1139,23 @@ def validate_primary_ir(project: Path) -> Dict[str, Any]:
         if (native.get("native_rc", 0) != 0 or native.get("verdict") not in ("PASS", "FAIL")
                 or isinstance(worst_value, bool) or isinstance(supply_value, bool)
                 or worst is None or not math.isfinite(worst) or worst < 0
-                or supply is None or not math.isfinite(supply) or supply <= 0
-                or native.get("nets_analysis_failed") or native.get("unconnected_supply_pins")):
+                or supply is None or not math.isfinite(supply) or supply <= 0):
             raise ValueError("native IR measurement or supply coverage unavailable")
         from signoff_ladder_run import _STATIC_IR_BUDGET_PCT
         budget = _STATIC_IR_BUDGET_PCT / 100.0 * supply * 1e6
         verdict = "FAIL" if worst > budget or native["verdict"] == "FAIL" else "PASS"
+        if native.get("nets_analysis_failed"):
+            coverage_errors.append("native supply-net analysis is incomplete")
+        if native.get("unconnected_supply_pins"):
+            coverage_errors.append("native supply pins are unconnected")
+        if coverage_errors and verdict != "FAIL":
+            raise ValueError("; ".join(coverage_errors))
         return {"valid": True, "verdict": verdict, "worst_ir_uv": worst,
-                "supply_v": supply, "budget_uv": budget}
+                "supply_v": supply, "budget_uv": budget,
+                "coverage_errors": coverage_errors}
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         return {"valid": False, "verdict": "NOT_MEASURED", "reason": str(exc),
-                "rule": "IR_NATIVE_RESULT_UNAVAILABLE"}
+                "rule": "IR_NATIVE_RESULT_UNAVAILABLE", "coverage_errors": coverage_errors}
 
 
 def validate_native_density(project: Path, margin: float = _DEFAULT_MARGIN,
@@ -1174,86 +1181,102 @@ def validate_native_density(project: Path, margin: float = _DEFAULT_MARGIN,
             raise ValueError("native PSM invocation did not succeed")
         basis = doc.get("power_basis", subject.get("power_basis", {}))
         coverage = {}
+        coverage_errors = []
         for net in doc["nets"]:
-            csv_path = rpt / f"em_openroad_density_{net}.csv"
-            rows = list(csv.DictReader(csv_path.open(newline="")))
-            psm = list(csv.DictReader((rpt / f"em_segments_{net}.csv").open(newline="")))
-            if not rows or len(rows) != len(psm):
-                raise ValueError(f"native segment coverage disagrees: {net}")
-            counts = {"checked": 0, "no_limit": 0, "violated": 0,
-                      "psm_segments": len(psm), "worst_ratio": None}
-            for row, psm_row in zip(rows, psm):
-                layer = table.get(row["Layer"].lower(), {})
-                status = row["Status"]
-                if ((segment_geometry is not None or row["Basis"] == "PER_CUT") and layer
-                        and status in ("OK", "VIOLATED") and row["Basis"] in ("AREAL", "PER_CUT")):
-                    l0, l1 = (psm_row[name] for name in ("Node0 Layer", "Node1 Layer"))
-                    points = tuple(tuple(float(psm_row[f"Node{node} {axis} location"])
-                                         for axis in ("X", "Y")) for node in (0, 1))
-                    current = abs(float(psm_row["Current"]))
-                    if row["Basis"] == "PER_CUT" and l0.lower() == l1.lower():
-                        raise ValueError("per-cut density has no routing-to-cut topology")
-                    if (any(float(row[f"Node{node} {axis}"]) != points[node][axis_index]
-                            for node in (0, 1) for axis_index, axis in enumerate(("X", "Y")))
-                            or abs(float(row["Current(A)"])) != current):
-                        raise ValueError("native density row differs from its PSM segment")
-                    if (l0.lower() != l1.lower()
-                            or points[0][0] != points[1][0] and points[0][1] != points[1][1]):
-                        pair = tuple(sorted((l0.lower(), l1.lower())))
-                        if (layer["kind"] == "cut" and pair not in layer.get("routing_pairs", ())
-                                or layer["kind"] == "routing" and
-                                not l0.lower() == l1.lower() == row["Layer"].lower()):
-                            raise ValueError("native density layer disagrees with VIA topology")
-                        area = float(row["Area(um^2)"])
-                        cuts = int(row["Cuts"])
-                        per_cut = row["Basis"] == "PER_CUT"
-                        divisor = float(cuts) if per_cut else area
-                        if (not math.isfinite(area) or area <= 0
-                                or not math.isfinite(current)
-                                or layer["kind"] == "cut" and cuts <= 0
-                                or per_cut and (layer["kind"] != "cut"
-                                    or not layer.get("jmax_per_cut_A")
-                                    or not math.isclose(area / cuts,
-                                        math.prod(layer["cut_size_um"]), rel_tol=0.0001))
-                                or not _native_density_roundtrip_matches(
-                                    current, divisor, float(row["J(A/um^2)"]),
-                                    exact_divisor=per_cut)):
-                            raise ValueError("native conductor cross section is unproven")
-                        key = _segment_geometry_key(net, l0, l1, points, current)
-                        geometry = {"native_area_um2": area, "native_cuts": cuts,
-                                    "native_layer": row["Layer"].lower(),
-                                    "native_basis": row["Basis"]}
-                        if segment_geometry is not None:
-                            if key in segment_geometry and segment_geometry[key] != geometry:
-                                raise ValueError("ambiguous native segment cross section")
-                            segment_geometry[key] = geometry
-                if status == "NO_LIMIT":
-                    counts["no_limit"] += 1
-                    continue
-                expected_basis = "PER_CUT" if layer.get("jmax_per_cut_A") is not None else "AREAL"
-                if status not in ("OK", "VIOLATED") or layer.get("kind") not in ("routing", "cut") or row["Basis"] != expected_basis:
-                    raise ValueError("wire-to-via substitution or invalid native status")
-                expected = layer["jmax_per_cut_A" if expected_basis == "PER_CUT" else "jmax_areal_A_per_um2"] * (1 - margin)
-                if not math.isclose(float(row["Jlimit(A/um^2)"]), expected, rel_tol=0.0006):
-                    raise ValueError("native CSV Jmax differs from PDK authority")
-                ratio = float(row["Ratio"])
-                if not math.isfinite(ratio) or ratio < 0:
-                    raise ValueError("invalid native density ratio")
-                counts["checked"] += 1
-                counts["violated"] += status == "VIOLATED"
-                counts["worst_ratio"] = max(counts["worst_ratio"] or 0, ratio)
-            coverage[net] = counts
-        if not coverage or set(coverage) != set(subject["nets_analysed"]):
-            raise ValueError("native density omitted a supply net")
+            counts = None
+            try:
+                csv_path = rpt / f"em_openroad_density_{net}.csv"
+                rows = list(csv.DictReader(csv_path.open(newline="")))
+                psm = list(csv.DictReader((rpt / f"em_segments_{net}.csv").open(newline="")))
+                if not rows or len(rows) != len(psm):
+                    raise ValueError(f"native segment coverage disagrees: {net}")
+                counts = {"checked": 0, "no_limit": 0, "violated": 0,
+                          "psm_segments": len(psm), "worst_ratio": None}
+                for row, psm_row in zip(rows, psm):
+                    layer = table.get(row["Layer"].lower(), {})
+                    status = row["Status"]
+                    if ((segment_geometry is not None or row["Basis"] == "PER_CUT") and layer
+                            and status in ("OK", "VIOLATED") and row["Basis"] in ("AREAL", "PER_CUT")):
+                        l0, l1 = (psm_row[name] for name in ("Node0 Layer", "Node1 Layer"))
+                        points = tuple(tuple(float(psm_row[f"Node{node} {axis} location"])
+                                             for axis in ("X", "Y")) for node in (0, 1))
+                        current = abs(float(psm_row["Current"]))
+                        if row["Basis"] == "PER_CUT" and l0.lower() == l1.lower():
+                            raise ValueError("per-cut density has no routing-to-cut topology")
+                        if (any(float(row[f"Node{node} {axis}"]) != points[node][axis_index]
+                                for node in (0, 1) for axis_index, axis in enumerate(("X", "Y")))
+                                or abs(float(row["Current(A)"])) != current):
+                            raise ValueError("native density row differs from its PSM segment")
+                        if (l0.lower() != l1.lower()
+                                or points[0][0] != points[1][0] and points[0][1] != points[1][1]):
+                            pair = tuple(sorted((l0.lower(), l1.lower())))
+                            if (layer["kind"] == "cut" and pair not in layer.get("routing_pairs", ())
+                                    or layer["kind"] == "routing" and
+                                    not l0.lower() == l1.lower() == row["Layer"].lower()):
+                                raise ValueError("native density layer disagrees with VIA topology")
+                            area = float(row["Area(um^2)"])
+                            cuts = int(row["Cuts"])
+                            per_cut = row["Basis"] == "PER_CUT"
+                            divisor = float(cuts) if per_cut else area
+                            if (not math.isfinite(area) or area <= 0
+                                    or not math.isfinite(current)
+                                    or layer["kind"] == "cut" and cuts <= 0
+                                    or per_cut and (layer["kind"] != "cut"
+                                        or not layer.get("jmax_per_cut_A")
+                                        or not math.isclose(area / cuts,
+                                            math.prod(layer["cut_size_um"]), rel_tol=0.0001))
+                                    or not _native_density_roundtrip_matches(
+                                        current, divisor, float(row["J(A/um^2)"]),
+                                        exact_divisor=per_cut)):
+                                raise ValueError("native conductor cross section is unproven")
+                            key = _segment_geometry_key(net, l0, l1, points, current)
+                            geometry = {"native_area_um2": area, "native_cuts": cuts,
+                                        "native_layer": row["Layer"].lower(),
+                                        "native_basis": row["Basis"]}
+                            if segment_geometry is not None:
+                                if key in segment_geometry and segment_geometry[key] != geometry:
+                                    raise ValueError("ambiguous native segment cross section")
+                                segment_geometry[key] = geometry
+                    if status == "NO_LIMIT":
+                        counts["no_limit"] += 1
+                        continue
+                    expected_basis = "PER_CUT" if layer.get("jmax_per_cut_A") is not None else "AREAL"
+                    if status not in ("OK", "VIOLATED") or layer.get("kind") not in ("routing", "cut") or row["Basis"] != expected_basis:
+                        raise ValueError("wire-to-via substitution or invalid native status")
+                    expected = layer["jmax_per_cut_A" if expected_basis == "PER_CUT" else "jmax_areal_A_per_um2"] * (1 - margin)
+                    if not math.isclose(float(row["Jlimit(A/um^2)"]), expected, rel_tol=0.0006):
+                        raise ValueError("native CSV Jmax differs from PDK authority")
+                    ratio = float(row["Ratio"])
+                    if not math.isfinite(ratio) or ratio < 0:
+                        raise ValueError("invalid native density ratio")
+                    counts["checked"] += 1
+                    counts["violated"] += status == "VIOLATED"
+                    counts["worst_ratio"] = max(counts["worst_ratio"] or 0, ratio)
+                coverage[net] = counts
+            except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+                coverage_errors.append(f"{net}: {exc}")
+                if counts is not None and counts["checked"]:
+                    coverage[net] = counts
+        expected_nets = subject.get("nets_analysed")
+        if (not coverage or not isinstance(expected_nets, (list, tuple, dict))
+                or any(not isinstance(net, str) for net in expected_nets)
+                or set(coverage) != set(expected_nets)):
+            coverage_errors.append("native density omitted a supply net")
         violations = sum(x["violated"] for x in coverage.values())
         missing = sum(x["no_limit"] for x in coverage.values())
-        verdict = ("FAIL" if violations or doc.get("verdict") == "FAIL" or subject.get("verdict") == "FAIL" else "NOT_MEASURED" if missing or not basis.get("complete")
-                   else "PASS")
+        measured_failure = violations or (any(row["checked"] for row in coverage.values())
+            and (doc.get("verdict") == "FAIL" or subject.get("verdict") == "FAIL"))
+        if coverage_errors and not measured_failure:
+            return {"valid": False, "verdict": "NOT_MEASURED", "nets": coverage,
+                    "coverage_errors": coverage_errors, "reason": "; ".join(coverage_errors),
+                    "rule": "EM_NATIVE_RESULT_UNAVAILABLE"}
+        power_complete = isinstance(basis, dict) and bool(basis.get("complete"))
+        verdict = "FAIL" if measured_failure else "NOT_MEASURED" if missing or not power_complete else "PASS"
         return {"valid": True, "verdict": verdict, "authority": str(authority),
                 "pdk": doc["pdk"],
                 "nets": coverage, "violations": violations,
-                "unmeasured_segments": missing, "power_basis_complete": bool(basis.get("complete")),
-                "per_cut_authority": per_cut_authority}
+                "unmeasured_segments": missing, "power_basis_complete": power_complete,
+                "coverage_errors": coverage_errors, "per_cut_authority": per_cut_authority}
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         return {"valid": False, "verdict": "NOT_MEASURED",
                 "reason": str(exc), "rule": "EM_NATIVE_RESULT_UNAVAILABLE"}
@@ -1319,6 +1342,11 @@ def evaluate(em_path: Optional[Path], jmax_path: Optional[Path],
 
     # (3) parse segments
     segs, serr = iter_segments(em_path, net_hint)
+    if serr is not None and native and native["verdict"] == "FAIL":
+        rep.update(verdict="FAIL", **{"pass": False}, coverage_errors=[serr])
+        rep["findings"].append({"severity": "ERROR", "rule": "EM_NATIVE_CURRENT_DENSITY_OVER_JMAX",
+                                "message": "native EM failed; aggregate segment report is unavailable"})
+        return "FAIL", rep
     if serr is not None:
         rep["verdict"] = "SKIPPED"
         rep["pass"] = False
