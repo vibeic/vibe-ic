@@ -97,6 +97,19 @@ def native_excluded_cells(config):
     return list(dict.fromkeys(excluded))
 
 
+def create_native_flow(kind, config, **kwargs):
+    """Compile the stock flow with the variables of our routed sizing step."""
+    from librelane.flows import Flow
+    from librelane_plugins.librelane_plugin_vibeic.postroute_sizing import PostRouteSizing
+
+    base = Flow.factory.get(kind)
+
+    class NativeFlow(base):
+        config_vars = base.config_vars + PostRouteSizing.config_vars
+
+    return NativeFlow(config, **kwargs)
+
+
 def native_defaults(config):
     """Apply platform defaults, then the project's explicit native overrides."""
     from flow_clock_geometry import cts_settings

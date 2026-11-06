@@ -1,11 +1,48 @@
 import json
 from pathlib import Path
+import sys
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
 import flow_engine
 import flow_engine_frontend as frontend
 import flow_explore
+from flow_config import create_native_flow
+
+
+@pytest.mark.parametrize("kind", ["Classic", "Chip"])
+def test_native_owner_compiles_downstream_knobs_before_running_tools(monkeypatch, kind):
+    stock_var = SimpleNamespace(name="CLOCK_PERIOD")
+    custom_var = SimpleNamespace(name="VIBEIC_PRR_RECOVER_POWER_PCT")
+
+    class StockFlow:
+        config_vars = [stock_var]
+
+        @classmethod
+        def get_all_config_variables(cls):
+            return list({var.name: var for var in cls.config_vars}.values())
+
+        def __init__(self, config, **kwargs):
+            names = {var.name for var in self.get_all_config_variables()}
+            unknown = set(config) - names
+            if unknown:
+                raise ValueError(f"Unknown native configuration: {sorted(unknown)}")
+            self.config = config
+
+    flows = ModuleType("librelane.flows")
+    flows.Flow = SimpleNamespace(factory=SimpleNamespace(get=lambda name: StockFlow))
+    sizing = ModuleType("librelane_plugins.librelane_plugin_vibeic.postroute_sizing")
+    sizing.PostRouteSizing = SimpleNamespace(config_vars=[stock_var, custom_var])
+    monkeypatch.setitem(sys.modules, "librelane.flows", flows)
+    monkeypatch.setitem(sys.modules, sizing.__name__, sizing)
+    config = {"CLOCK_PERIOD": 10, "VIBEIC_PRR_RECOVER_POWER_PCT": 50}
+    owner = create_native_flow(kind, config)
+    assert owner.config == config
+    assert [var.name for var in owner.get_all_config_variables()] == list(config)
+    assert StockFlow.config_vars == [stock_var]
+    with pytest.raises(ValueError, match="UNSUPPORTED_SETTING"):
+        create_native_flow(kind, {**config, "UNSUPPORTED_SETTING": 1})
 
 
 @pytest.mark.parametrize("arguments,expected", [([], 2), (["--ppa-level", "1"], 1), (["--ppa"], 3)])
