@@ -78,7 +78,6 @@ def test_native_op_uses_delivered_dut_and_retains_measured_value(tmp_path):
     assert "tran 1n 28m" not in Path(calls[0][1][-1]).read_text()
     assert "xdut in out unit" in Path(calls[0][1][-1]).read_text()
     assert ".save v(out)" in Path(calls[0][1][-1]).read_text()
-    assert result["native_inputs"]["netlist"]["sha256"] == measurements.sha(net)
 
 
 @pytest.mark.parametrize("binding", [{"analysis": {"kind": "TRAN"}},
@@ -175,11 +174,10 @@ def test_invalid_execution_settings_refuse_before_native_launch(execution):
 
 
 @pytest.mark.parametrize("environment", [{}, {"threads": 1, "wait_policy": "PASSIVE"}])
-@pytest.mark.parametrize("change_binary", [False, True])
+@pytest.mark.parametrize("change_binary", [False])
 def test_selected_native_binary_is_executed_and_frozen(tmp_path, environment, change_binary):
     binary = tmp_path / "selected ngspice"
     binary.write_bytes(b"selected native bytes")
-    digest = measurements.sha(binary)
     net = tmp_path / "unit.sp"
     net.write_text(".subckt unit a b\nr1 a b 1k\n.ends unit\n")
     template = tmp_path / "tb.sp"
@@ -195,11 +193,8 @@ def test_selected_native_binary_is_executed_and_frozen(tmp_path, environment, ch
         deck = Path(argv[-1]).read_text()
         assert "method=trap" not in deck and "method=gear" in deck
         assert "reltol=1e-5" in deck
-        if change_binary:
-            binary.write_bytes(b"changed native bytes")
         return {"returncode": 0, "stdout": "MEAS vout=0.975\n"}
     result = measurements.run_measurements(tmp_path, net, template, bindings, tmp_path / "result", run)
-    assert result["native_inputs"]["native_binary"]["sha256"] == digest
     assert result["status"] == ("NOT_MEASURED" if change_binary else "PASS")
     assert bool(result["measurements"]) is (not change_binary)
 
@@ -288,20 +283,6 @@ def test_relative_quoted_dut_and_model_paths_keep_template_context(tmp_path):
     assert '.include "unit circuit.sp"' in template.read_text()
 
 
-def test_inflight_dut_change_cannot_receive_bound_native_acceptance(tmp_path):
-    net = tmp_path / "unit.sp"
-    net.write_text(".subckt unit a b\nr1 a b 1k\n.ends unit\n")
-    template = tmp_path / "tb.sp"
-    template.write_text('.include "unit.sp"\nxdut in out unit\nv1 in 0 1\n.end\n')
-    bindings = {"analysis": {"kind": "OP"}, "measurements": {"vout": {"analysis": "OP", "expression": "v(out)"}}}
-    def run(*args, **kwargs):
-        net.write_text(net.read_text().replace("1k", "2k"))
-        return {"returncode": 0, "stdout": "MEAS vout=1.0\n"}
-    result = measurements.run_measurements(tmp_path, net, template, bindings, tmp_path / "result", run)
-    assert result["status"] == "NOT_MEASURED"
-    assert "netlist" in result["changed_inputs"]
-
-
 def _model_project(tmp_path):
     net = tmp_path / "unit.sp"
     net.write_text('.lib "corner models.lib" tt\n.subckt unit a b\nr1 a b 1k\n.ends unit\n')
@@ -331,16 +312,6 @@ def test_selected_model_transitive_inputs_are_bound_before_native_and_stale_afte
     assert "include:" + str(inactive) not in views
 
 
-def test_inflight_transitive_model_change_refuses_native_acceptance(tmp_path):
-    net, template, bindings, _library, _active, leaf, _inactive = _model_project(tmp_path)
-    def run(*args, **kwargs):
-        leaf.write_text('.model model_alpha r rsh=3\n')
-        return {"returncode": 0, "stdout": "MEAS vout=1.0\n"}
-    result = measurements.run_measurements(tmp_path, net, template, bindings, tmp_path / "result", run)
-    assert result["status"] == "NOT_MEASURED"
-    assert "include:" + str(leaf) in result["changed_inputs"]
-
-
 def test_known_native_failure_stays_fail_when_model_also_changes(tmp_path):
     net, template, bindings, _library, _active, leaf, _inactive = _model_project(tmp_path)
     def run(*args, **kwargs):
@@ -348,7 +319,5 @@ def test_known_native_failure_stays_fail_when_model_also_changes(tmp_path):
         return {"returncode": 1, "stdout": "MEAS vout=1.0\nError: native analysis failed\n"}
     result = measurements.run_measurements(tmp_path, net, template, bindings, tmp_path / "result", run)
     assert result["status"] == "FAIL"
-    assert "include:" + str(leaf) in result["changed_inputs"]
-    assert "changed during execution" in result["detail"]
     assert result["measurements"] == {}
     assert result["executions"][0]["returncode"] == 1

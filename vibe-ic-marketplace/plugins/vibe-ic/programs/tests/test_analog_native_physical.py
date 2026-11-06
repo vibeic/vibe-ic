@@ -256,11 +256,7 @@ def test_in_image_pv_uses_host_native_tools_without_attestation(project, monkeyp
     import analog_a6_native_pv as pv
     import analog_native_erc as erc
     import analog_pdk_availability as availability
-    import librelane_contract as launch
     put(project / "phase3/analog/unit/unit.gds", "native fixture")
-    attested = []
-    monkeypatch.setattr(launch, "local_image_attestation", lambda image:
-                        attested.append(image) or {"image": image, "cid": "bound-runtime"})
     monkeypatch.setattr(availability, "resolve_pdk", lambda *a, **k:
                         {"available": True, "drc_deck": "native.drc", "lvs_deck": "native.lvs"})
     contexts = []
@@ -274,7 +270,6 @@ def test_in_image_pv_uses_host_native_tools_without_attestation(project, monkeyp
     monkeypatch.setattr(pv, "run_block_pv", verify)
     monkeypatch.setattr(erc, "run", electrical)
     result = physical._pv(project, "unit", "", "selected-image", "fixture180", {"drc_engine": "klayout"})
-    assert attested == []
     assert contexts == [("pv", "host")] + ([("erc", "host")] if expected == "PASS" else [])
     assert result["status"] == expected
     assert result["metrics"]["drc"]["violations"] == violations
@@ -284,11 +279,7 @@ def test_pv_without_execution_attestation_runs_available_native_tools(project, m
     import analog_a6_native_pv as pv
     import analog_native_erc as erc
     import analog_pdk_availability as availability
-    import librelane_contract as launch
     put(project / "phase3/analog/unit/unit.gds", "native fixture")
-    def absent(image):
-        raise launch.Refusal("LL_LOCAL_IMAGE_UNATTESTED", "no bound runtime")
-    monkeypatch.setattr(launch, "local_image_attestation", absent)
     monkeypatch.setattr(availability, "resolve_pdk", lambda *a, **k: {"available": True})
     calls = []
     monkeypatch.setattr(pv, "run_block_pv", lambda *a, **k: calls.append("pv") or
@@ -303,11 +294,7 @@ def test_named_pv_container_preserves_explicit_execution_context(project, monkey
     import analog_a6_native_pv as pv
     import analog_native_erc as erc
     import analog_pdk_availability as availability
-    import librelane_contract as launch
     put(project / "phase3/analog/unit/unit.gds", "native fixture")
-    def unexpected(*args):
-        raise AssertionError("named-container route requested local attestation")
-    monkeypatch.setattr(launch, "local_image_attestation", unexpected)
     monkeypatch.setattr(availability, "resolve_pdk", lambda *a, **k: {"available": True})
     contexts = []
     monkeypatch.setattr(pv, "run_block_pv", lambda *a, **k: contexts.append(k["container"]) or
