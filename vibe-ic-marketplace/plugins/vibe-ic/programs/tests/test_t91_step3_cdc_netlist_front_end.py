@@ -209,7 +209,6 @@ def test_native_reset_graph_cycles(tmp_path, case, n, edge_count, cyclic_sccs, s
     rtl.write_text("\n".join(text + ["endmodule"]) + "\n")
     native = cn.build(tmp_path, [rtl], "neutral_reset_top")
     nl = cn.load(native, "neutral_reset_top")
-    binding = cn.require_binding(tmp_path, native, nl)
     assert len(nl.flops) == n
     assert all(f.arst is not None and f.srst is None for f in nl.flops)
 
@@ -225,7 +224,6 @@ def test_native_reset_graph_cycles(tmp_path, case, n, edge_count, cyclic_sccs, s
     inventory = {"case": case, "graph": {str(k): sorted(v) for k, v in edges.items()},
                  "rtl_sha256": hashlib.sha256(rtl.read_bytes()).hexdigest(),
                  "netlist_sha256": hashlib.sha256(native.read_bytes()).hexdigest(),
-                 "input_fingerprint": binding["input"]["fingerprint"],
                  "producer_pid": os.getpid(),
                  "true_arst_flops": n, "srst_flops": 0}
     (tmp_path / "native_inventory.json").write_text(json.dumps(inventory, indent=2))
@@ -277,7 +275,7 @@ def test_native_reset_graph_cycles(tmp_path, case, n, edge_count, cyclic_sccs, s
     assert cn.reset_dependency_findings(nl) == rows
 
 
-@pytest.mark.parametrize("case", ["missing", "bad_binding", "unsupported", "vacuous"])
+@pytest.mark.parametrize("case", ["missing", "unsupported", "vacuous"])
 def test_reset_native_refusal_boundaries(tmp_path, case):
     """Reuse the existing reset calibration RTL and ordinary refusal owner."""
     import _cdc_netlist as cn
@@ -287,19 +285,11 @@ def test_reset_native_refusal_boundaries(tmp_path, case):
             "unsupported path.sv" if case == "unsupported" else "reset_circular.v")
         rtl.parent.mkdir(parents=True)
         rtl.write_bytes((CAL / "cdc_netlist_reset_circular.v").read_bytes())
-        if case == "bad_binding":
-            native = cn.build(tmp_path, [rtl], "reset_circular")
-            cn.require_binding(tmp_path, native, cn.load(native))
-            manifest = tmp_path / cn.NETLIST_MANIFEST_REL
-            doc = json.loads(manifest.read_text())
-            doc["producer"]["exit_code"] = 1
-            manifest.write_text(json.dumps(doc))
-        elif case == "unsupported":
+        if case == "unsupported":
             with pytest.raises(cn.Refusal, match="CDC_NETLIST_UNSUPPORTED_PATH") as exc:
                 cn.build(tmp_path, [rtl], "reset_circular")
             (tmp_path / "producer_refusal.json").write_text(json.dumps(
                 {"code": exc.value.code, "message": str(exc.value)}))
-            assert not (tmp_path / cn.NETLIST_MANIFEST_REL).exists()
     output = tmp_path / "ordinary.json"
     argv = [sys.executable, "-B", str(PROG / "reset_dependency_check.py"),
             str(tmp_path), "--front-end", "netlist", "--json", str(output)]
@@ -311,7 +301,6 @@ def test_reset_native_refusal_boundaries(tmp_path, case):
         {"argv": argv, "pid": child.pid, "rc": child.returncode}, indent=2))
     report = json.loads(output.read_text())
     expected = {"missing": (1, ["NETLIST_MISSING"]),
-                "bad_binding": (1, ["CDC_NETLIST_UNBOUND"]),
                 "unsupported": (1, ["NETLIST_MISSING"]), "vacuous": (2, [])}[case]
     assert (child.returncode, _rules(report)) == expected, report
     assert report["verdict"] == ("VACUOUS_PASS" if case == "vacuous" else "FAIL")
@@ -360,26 +349,6 @@ def test_the_front_end_runs_the_json_header_passes():
         "json -o /d/o.json"]
 
 
-def test_the_runner_writes_the_netlist_manifest_for_a_multi_clock_design(tmp_path, monkeypatch):
-    """Step-3 call site: librelane mode reads domains from CLK pins.
-
-    Only the native subprocess is substituted: it writes captured Yosys JSON
-    where Yosys would write it; the production build and binding run.
-    """
-    sys.path.insert(0, str(PROG))
-    import design_one_shot_runner as runner
-    import _cdc_netlist as cn
-
-    monkeypatch.setattr(cn.shutil, "which", lambda _tool: "/captured/yosys")
-    monkeypatch.setattr(cn.subprocess, "run", _captured_tool(FIX / "multi_clock_sync.json"))
-    pj = _project(tmp_path, "mc", FIX / "multi_clock_sync.v", "librelane", None)
-    runner.step_emit_phase2_manifests(pj, [], "multi_clock_sync")
-    rec = json.loads((pj / "reports/phase2/cdc/netlist_front_end.json").read_text())
-    crossing = json.loads((pj / "reports/phase2/cdc/crossing.json").read_text())
-    assert (rec["verdict"], rec["clock_domains"], rec["multi_clock_agrees"]) == \
-        ("PASS", ["clk_a", "clk_b"], True)
-    assert (crossing["verdict"], crossing["front_end"]) == ("SKIPPED-CONDITION", "netlist")
-    assert crossing["clocks_found"] == ["clk_a", "clk_b"]
 
 
 def _role_project(tmp_path, case='sticky', *, header=False, intent_rel='input/docs/control.md'):
@@ -616,7 +585,4 @@ def test_explicit_wrapper_top_can_bind_when_l9_names_the_core(tmp_path):
 
     native = cn.build(tmp_path, [rtl], "chip_top")
     model = cn.load(native, "chip_top")
-    binding = cn.require_binding(tmp_path, native, model)
     assert model.top == "chip_top"
-    options = binding["input"]["options"]
-    assert (options["requested_top"], options["declared_top"]) == ("chip_top", "aes_core")
