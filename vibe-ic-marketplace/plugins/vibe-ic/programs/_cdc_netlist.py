@@ -219,13 +219,13 @@ def _load_latched_clock_gates(nl: "Netlist") -> None:
                 nl.clock_parents[output] = clock
 
 
-def _load_clock_gates(project: Path, nl: "Netlist") -> None:
+def _load_clock_gates(project: Path, nl: "Netlist") -> dict:
     """Use the native JsonHeader library configuration for clock-only ancestry."""
     import fnmatch
     config = project / "phase3/librelane/step2/header_resolved.json"
     nl.clock_parents.clear()
     if not config.is_file():
-        return
+        return {}
     cfg = json.loads(config.read_text())
     libraries = cfg.get("LIB", {})
     paths = [p for pattern, group in libraries.items()
@@ -246,6 +246,61 @@ def _load_clock_gates(project: Path, nl: "Netlist") -> None:
                         for output in outputs:
                             if len(conn.get(output, [])) == 1:
                                 nl.clock_parents[conn[output][0]] = conn[clock[0]][0]
+    return cfg
+
+
+def _load_combinational_clock_gates(project: Path, nl: "Netlist", config: dict) -> None:
+    """Clock gating preserves the source domain, independently of gate hazards."""
+    from l_doc_consumer_contract import load_l_doc, l_doc_fields
+
+    timing = l_doc_fields(load_l_doc(project, "L8")[1])
+    clocks = config.get("CLOCK_PORT") or []
+    clocks = [clocks] if isinstance(clocks, str) else list(clocks)
+    for row in timing.get("clock_domains") or []:
+        if isinstance(row, dict) and isinstance(row.get("source_pin"), str):
+            clocks.append(row["source_pin"])
+    nl.clock_boundaries = {bit for group in timing.get("clock_groups") or []
+        if isinstance(group, dict) and group.get("relationship") == "asynchronous"
+        for name in group.get("clocks") or [] for bit in nl.named_bits.get(name, [])}
+    clock_bits = {flop.clk for flop in nl.flops}
+    clock_bits.update(bit for name in clocks for bit in nl.named_bits.get(name, []))
+    _load_latched_clock_gates(nl)
+    seeds = {nl.root(bit, clock=True) for bit in clock_bits}
+    resolved, active, parents = {}, set(), {}
+
+    def origin(bit):
+        if nl.is_const(bit) or bit in nl.ambiguous_drivers:
+            return set()
+        if bit in nl.clock_boundaries or bit in active:
+            return {bit}
+        if bit in resolved:
+            return resolved[bit]
+        active.add(bit)
+        driver = nl.drivers.get(bit)
+        cell = nl.cells[driver[0]] if driver else {}
+        pins, kind = cell.get("connections", {}), cell.get("type")
+        result = {bit} if bit in seeds else set()
+        if bit in nl.clock_parents:
+            result = origin(nl.clock_parents[bit])
+        elif kind in _TRANSPARENT:
+            result = origin(pins["A"][0])
+        elif (kind in {"$and", "$or", "$logic_and", "$logic_or", "$_AND_", "$_OR_", "$mux", "$_MUX_"}
+              and all(len(pins.get(pin, [])) == 1 for pin in ("A", "B", "Y"))):
+            candidates = [(pins[pin][0], origin(pins[pin][0])) for pin in ("A", "B")]
+            sources = set().union(*(sources for _input, sources in candidates))
+            if len(sources) == 1 and bit not in sources:
+                parents[bit] = next(input_bit for input_bit, sources in candidates if sources)
+                result = sources
+            elif sources:
+                # A gate combining unrelated clocks is its own clock source.
+                result = {bit}
+        active.remove(bit)
+        resolved[bit] = result
+        return result
+
+    for bit in clock_bits:
+        origin(bit)
+    nl.clock_parents.update(parents)
 
 
 def build(project: Path, rtl_files: List[Path], top: Optional[str],
@@ -358,6 +413,8 @@ class Netlist:
     memories: int = 0
     ambiguous_drivers: Set[int] = field(default_factory=set)
     clock_parents: Dict[object, object] = field(default_factory=dict)
+    clock_boundaries: Set[object] = field(default_factory=set)
+    named_bits: Dict[str, List[object]] = field(default_factory=dict)
 
     @property
     def port_bits(self) -> Dict[object, str]:
@@ -373,6 +430,8 @@ class Netlist:
     def root(self, bit, limit: int = 32, *, clock: bool = False) -> object:
         """Follow a net back through single-input buffers/inverters."""
         for _ in range(limit):
+            if clock and bit in self.clock_boundaries:
+                return bit
             if clock and bit in self.clock_parents:
                 bit = self.clock_parents[bit]
                 continue
@@ -416,6 +475,8 @@ class Netlist:
         bit = flop.clk
         edge = flop.clk_pol
         for _ in range(32):
+            if bit in self.clock_boundaries:
+                break
             if bit in self.clock_parents:
                 bit = self.clock_parents[bit]
                 continue
@@ -579,6 +640,15 @@ def load(path: Path, top: Optional[str] = None) -> Netlist:
                 width = len(net.get("bits", []))
                 names[b] = n if width == 1 else f"{n}[{i}]"
     nl = Netlist(top=top, ports=ports, cells=mod.get("cells", {}), names=names)
+    nl.named_bits = {name: list(net.get("bits", [])) for name, net in mod.get("netnames", {}).items()}
+    for name, net in mod.get("netnames", {}).items():
+        width = len(net.get("bits", []))
+        if width > 1:
+            for index, bit in enumerate(net["bits"]):
+                index = net.get("offset", 0) + (width - 1 - index if net.get("upto") else index)
+                nl.named_bits[f"{name}[{index}]"] = [bit]
+    for name, (_direction, bits) in ports.items():
+        nl.named_bits.setdefault(name, bits)
     port_labels = {b: n for n, (_d, bits) in ports.items() for b in bits}
     ambiguous_drivers: Set[int] = set()
     for cname, cell in nl.cells.items():
@@ -1276,7 +1346,8 @@ def apply_front_end(project: Path, mode: str, netlist_arg: Optional[str],
                  "netlist": str(netlist_arg or NETLIST_REL), "netlist_read": False})
     try:
         nl = load(path)
-        _load_clock_gates(project, nl)
+        config = _load_clock_gates(project, nl)
+        _load_combinational_clock_gates(project, nl, config)
         analysis: dict = {}
         roles = None
         if rule == "reset_dependency" and reset_role_candidates(nl):
