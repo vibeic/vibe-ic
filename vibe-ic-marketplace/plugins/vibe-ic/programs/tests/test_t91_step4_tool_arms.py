@@ -64,7 +64,9 @@ def _fake_tools(dats_by_top, info_src):
             shutil.copy(info_src, argv[argv.index("--write-info") + 1])
             return 0, "", ""
         top = Path(argv[0]).read_text()
-        shutil.copy(dats_by_top[top], Path(cwd) / "coverage.dat")
+        output = next(arg.removeprefix("+verilator+coverage+file+") for arg in argv[1:]
+                      if arg.startswith("+verilator+coverage+file+"))
+        shutil.copy(dats_by_top[top], output)
         return 0, "", ""
     return _exec
 
