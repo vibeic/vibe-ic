@@ -43,7 +43,7 @@ spec_floor:
   L9_top_level_port_count_min: 6       # txd + rxd + clock + reset + bus + irq
 
 # -----------------------------------------------------------------------------
-# sequence_naming — per-class strip_suffixes for l12_tb_coverage_check.py
+# sequence_naming — per-class strip_suffixes for the L12-to-testbench sequence coverage review
 # -----------------------------------------------------------------------------
 # Added v0.56 C2 — every class with L12_required_sequence_categories
 # now ships its own strip_suffixes list, so the L12-tb-coverage gate

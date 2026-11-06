@@ -142,7 +142,7 @@
           "7"
         ],
         "status": "gap",
-        "note": "SDC + PVT authoring. sdc_gen.py and pvt_matrix_check.py exist as programs but step 7 declares NO programs and NO mcp_tools, so this ghost was its only declared executor. No shipped skill covers constraint authoring."
+        "note": "SDC + PVT authoring. The former constraint-gen skill was never shipped. Use the current step 7 native executor and sdc_gen.py where the current flow declares it; the historical skill name is not an executable."
       },
       "sdc-validator": {
         "stages": [
@@ -152,7 +152,7 @@
           "8"
         ],
         "status": "gap",
-        "note": "Ported to a program of the same name: sdc_validator_check.py, already declared and wired on step 8. The skill half was never authored."
+        "note": "The sdc-validator skill was never authored. Step 8 now uses its current native SDC validation executor; follow flow/steps.json rather than invoking the historical skill name."
       },
       "dft-insert": {
         "stages": [
@@ -397,7 +397,7 @@
     }
   },
   "stage_axis": {
-    "_comment": "WHERE IN THE FLOW EACH SKILL APPLIES. The axis is the flow's own `stage:` field -- the eight values declared in flow/phase1_phase2_phase3.yaml -- plus two values that are NOT flow stages and must never be added to the flow's `stages[]`: `stage_all` and `off_flow`. NO FOURTH MAPPING: a skill NAMED BY A STEP (in that step's `skills:` or its stage's `on_pass_review:`) inherits that step's stage by DERIVATION and MUST NOT be listed here -- listing it would be the second declaration that flow_stage_membership_single_declaration_check exists to prevent. This block declares ONLY skills no step names. Enforced by programs/skill_stage_membership_check.py.",
+    "_comment": "WHERE IN THE FLOW EACH SKILL APPLIES. The axis is the flow's own `stage:` field -- the eight values declared in flow/phase1_phase2_phase3.yaml -- plus two values that are NOT flow stages and must never be added to the flow's `stages[]`: `stage_all` and `off_flow`. NO FOURTH MAPPING: a skill NAMED BY A STEP (in that step's `skills:` or its stage's `on_pass_review:`) inherits that step's stage by DERIVATION and MUST NOT be listed here -- listing it would duplicate the flow's own declaration. This block declares ONLY skills no step names. Derive memberships from the current flow declarations when inspecting this inventory.",
     "stage_all_is_a_claim_not_a_bucket": "`stage_all` asserts a skill is worth invoking at EVERY stage -- stage1 AND stage3 AND stage5_manufacturing AND stage_analog. Multi-stage is NOT all-stage: a skill that applies at four of eight is listed at those four. A skill that cannot be placed is UNDECIDED and must be reported as such, never parked in stage_all.",
     "off_flow_is_also_a_claim": "`off_flow` asserts the skill's SUBJECT is the plugin, the repository, the CI or the benchmark programme -- not a design passing through the flow. It is falsifiable by reading what the skill reads and writes: if it operates on a design's artefacts it is not off_flow. This value exists because the 41 did NOT split cleanly into stage/stage_all, and forcing a repo-maintenance loop into stage_all would have made that value meaningless -- the same reasoning that produced `unbuilt_skills`.",
     "stages": {

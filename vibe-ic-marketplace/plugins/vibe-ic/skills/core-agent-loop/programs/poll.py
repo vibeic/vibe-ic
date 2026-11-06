@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""programs/poll.py — deterministic core-agent poll
+"""skills/core-agent-loop/programs/poll.py — deterministic core-agent poll
 (part of the vibe-ic:core-agent-loop skill).
 
 The core-agent calls this FIRST at every cron wake-up. The rule is
@@ -17,16 +17,16 @@ reopens any it finds inadequate. A reopened issue is just an open
 issue again — so it is actionable by the same predicate, with no
 special-casing.
 
-Usage
------
+Usage (from the repository root)
+--------------------------------
     # default — print actionable issue numbers, one per line.
-    python3 plugins/vibe-ic/skills/core-agent-loop/programs/poll.py
+    python3 vibe-ic-marketplace/plugins/vibe-ic/skills/core-agent-loop/programs/poll.py
 
     # json output for machine consumption.
-    python3 plugins/vibe-ic/skills/core-agent-loop/programs/poll.py --json
+    python3 vibe-ic-marketplace/plugins/vibe-ic/skills/core-agent-loop/programs/poll.py --json
 
     # different repo (default: vibeic/vibe-ic).
-    python3 plugins/vibe-ic/skills/core-agent-loop/programs/poll.py --repo owner/name
+    python3 vibe-ic-marketplace/plugins/vibe-ic/skills/core-agent-loop/programs/poll.py --repo owner/name
 
 Exit codes
 ----------
@@ -97,8 +97,8 @@ Why the enumeration is GraphQL (vibe-ic#1645)
 
     A 200 with `[]` cannot be refused by looking at it, so the fix is not
     a better refusal: it is asking the source that answers correctly.
-    GraphQL is what `gh issue list` uses, and it is already the authority
-    for `open_organic_issue_count.py` (#554) and `org_open_work_poll.py`.
+    GraphQL is what `gh issue list` uses; query the actual open-issue
+    connection instead of treating an inconsistent REST/search zero as idle.
     Truncation is still refused rather than paged over silently.
 """
 from __future__ import annotations

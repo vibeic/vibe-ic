@@ -1011,56 +1011,24 @@ block captures the **pattern**; the specifics stay with the specific IC.
 
 ---
 
-## External plugin sources (v0.85+)
+## External plugin sources
 
-`class_reference.yaml` is the **core** K3 source. Starting v0.85, additional
-K3 entries can be installed from third-party plugins under
-`~/.vibe-ic/plugins/<namespace>/<plugin_id>/<version>/k3/*.yaml`.
+Use `agents/defaults/class_reference.yaml` as the shipped core K3 source.
+Read the matching class reference and `agents/class_kb/templates/` entry,
+then apply the user's supplied facts before filling any unspecified default.
 
-When the companion `vibe-ic-d` plugin is installed, use its unified view from
-`vibe-ic-marketplace/plugins/vibe-ic-d/programs/k3_view_resolve.py`
-(or call the same logic in-process). It walks core + every installed
-`L_exp` plugin and returns the merged view with full provenance.
+A separately installed plugin may supply additional class knowledge. Consult
+that installed plugin's actual documentation and interface before consuming
+it; the core plugin does not ship a merged external-source resolver. If no
+such interface is installed, continue with the core references and disclose
+any missing class knowledge rather than inventing a command or default.
 
-**Conflict policy** (per roadmap § 6.3):
-
-- Core entry wins on a tie. The community entry, if any, appears in the
-  returned dict under `_alternatives:` so the user can see what was
-  available.
-- When NO core entry exists, multiple community entries on the same key
-  are returned as a ranked list under `_ranked_alternatives:` (sorted
-  by `trust_tier` weight). Default to the highest-weight entry.
-- Trust-tier weights:
-    `core` = 1.0
-    `vendor-verified` = 1.0
-    `community-trusted` = 0.8
-    `community` = 0.5
-    `experimental` = 0.3
-    `quarantined` = 0.0  (never consumed)
-
-**Provenance trace**: when you fill a default value from K3, your "where
-did this come from?" trace MUST cite the source from `_provenance` (e.g.
-`example-org/spi-peripheral-experience@0.1.0`). Never present a community
-entry as if it were core.
-
-**Manual override** (operator-side): user can add `--trust-allow @org`
-or `--trust-block @org` flags at the CLI to override tier weights for
-a session. Recorded in provenance.
-
-The following commands require that separately installed companion plugin.
-For the core-only flow, read the current core class references directly.
-
-Companion CLI for inspecting the merged view:
-
-```bash
-# What does the agent see for class spi-peripheral right now?
-python3 vibe-ic-marketplace/plugins/vibe-ic-d/programs/k3_view_resolve.py \
-    --class spi-peripheral
-
-# All visible classes
-python3 vibe-ic-marketplace/plugins/vibe-ic-d/programs/k3_view_resolve.py \
-    --list
-```
+When sources disagree, show the differing values and their applicable design
+conditions. Prefer the current task's explicit source facts; use core craft
+as the default when it applies, and ask for a design decision when the facts
+do not settle the conflict. Cite the actual source file or installed plugin
+and version for an external default. Keep alternative advice visible and
+never present external advice as if it came from the core references.
 
 ## Captured by benchmark-enhancement-capture (anonymized close-loop sweeps, 2026-05-28)
 

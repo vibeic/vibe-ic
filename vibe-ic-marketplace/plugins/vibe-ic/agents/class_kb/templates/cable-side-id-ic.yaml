@@ -59,7 +59,7 @@ facts:
     - {path: opcode_mask_lo,                            type: string, required: false}
 
 # -----------------------------------------------------------------------------
-# spec_floor — quantitative minimums enforced by phase1_quality_parity_check.py
+# spec_floor — quantitative reference minimums for the Phase 1 completeness review
 # -----------------------------------------------------------------------------
 # Rationale: when a vague / non-technical user leaves Phase-1 under-specified,
 # the IC Expert MUST lift the design to these floors using documented defaults
@@ -110,15 +110,15 @@ spec_floor:
                                        # exceed this comfortably
 
 # -----------------------------------------------------------------------------
-# sequence_naming — used by l12_tb_coverage_check.py to derive testbench
-# filename candidates from L12 sequence ids. Each suffix listed here is
+# sequence_naming — conventions for matching L12 sequences to testbench
+# filename candidates, stimulus and assertions. Each suffix listed here is
 # stripped from the lower-cased sequence id when generating tb_*.v candidate
 # names, so e.g. `TEST_MODE_ENTRY` → also tries `tb_test_mode.v` and
 # `tb_testmode.v`. Without this list, only literal-snake_case and flat
 # variants are tried.
 #
 # Added v0.54 (2026-04-24) to remove the IC-A-specific suffix list that
-# was hard-coded in l12_tb_coverage_check.py prior to v0.53. Each IC class
+# was hard-coded in the earlier sequence coverage checker. Each IC class
 # template now declares its own naming conventions.
 # -----------------------------------------------------------------------------
 sequence_naming:

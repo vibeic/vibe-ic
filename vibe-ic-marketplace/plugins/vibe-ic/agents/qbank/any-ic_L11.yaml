@@ -2,8 +2,8 @@ class: any-ic
 layer: L11
 # L11 CALIBRATION — platform-specific tuning tables (FPGA counter windows,
 # XOR-trim masks, OTP burn pulses, oscillator scale factors). Every entry
-# MUST declare domain_clock + source_clock + scale_factor so
-# `clock_scale_consistency_check.py` can verify µs↔cycle conversions.
+# MUST declare domain_clock + source_clock + scale_factor so the author
+# and timing review can recompute µs↔cycle conversions from the actual clocks.
 # Path convention: L11.tables[i].{name, domain_clock, source_clock, scale_factor, entries}
 qbank:
   tables[0].name:
