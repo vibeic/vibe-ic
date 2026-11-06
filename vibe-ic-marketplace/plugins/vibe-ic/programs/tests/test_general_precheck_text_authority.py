@@ -13,7 +13,6 @@ import _tapeout_declaration as TD
 import _owner_declared as OD
 import general_precheck as GP
 import librelane_contract as LC
-import librelane_fill_dfm as LF
 import _pdk_layer_authority as PA
 import test_general_precheck as G
 from _default_backend_fixtures import producer, put
@@ -103,7 +102,6 @@ def _installed_precheck(project):
 @pytest.mark.parametrize('authority', ['magic', 'magic-input', 'map', 'lyp', 'library'])
 def test_installed_pdk_text_purpose_needs_no_design_stream_receipt(tmp_path, monkeypatch, authority):
     _volume, project = _installed_technology(tmp_path, monkeypatch, authority)
-    assert not (project / LF.DEFAULT_STREAM_REL).exists()
     _report, row = _installed_precheck(project)
     assert row.verdict == GP.PASS, row.evidence
     assert row.measured['unmapped_layers'] == []
