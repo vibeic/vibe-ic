@@ -73,7 +73,8 @@ def eqy_script(top: str, rtl: list[Path], netlist: Path, liberty: str,
         observable_matchpoint_names(top).rstrip(), "",
         "[match *]", "gold-nomatch /^_[0-9]+_$/",
         "gate-nomatch /^_[0-9]+_$/", "",
-        *(["[collect *]", "group *", "", "[partition *]", "amend *", ""] if group_all else []),
+        *(["[collect *]", "group *", ""] if group_all else []),
+        "[partition *]", "amend *", "",
         "[strategy sat]", "use sat", "depth 5", *budget, "",
         "[strategy pdr]", "use sby", "engine abc pdr -rfi", *budget, ""])
 
