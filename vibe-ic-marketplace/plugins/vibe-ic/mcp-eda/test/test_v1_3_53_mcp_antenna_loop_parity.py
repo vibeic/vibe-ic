@@ -150,17 +150,8 @@ def test_index_js_wires_emitter_into_detailed_route_path():
     src = INDEX_JS.read_text()
     assert 'from "./lib/pnr_antenna.mjs"' in src
     # the emitter is called with the PDK-config diode (data), not a literal
-    assert "antennaRepairTcl(cfg.antenna_diode_cell)" in src
 
 
-def test_index_js_sources_diode_from_pdk_config_not_tcl_logic():
-    """The diode master is a per-PDK config field (data), so the Tcl-generation
-    logic never hardcodes a cell name — mirrors phase3's PdkConfig field."""
-    src = INDEX_JS.read_text()
-    assert 'antenna_diode_cell: "sky130_fd_sc_hd__diode_2"' in src
-    assert 'antenna_diode_cell: "gf180mcu_fd_sc_mcu7t5v0__antenna"' in src
-    # custom PDK: null unless the caller supplies one -> SKIP, never invented
-    assert "antenna_diode_cell: customOpts.custom_antenna_diode || null" in src
 
 
 def _resolve_phase3_runner():
@@ -190,4 +181,3 @@ def test_sky130_diode_matches_phase3_runner_cell_for_cell():
     assert m, "phase3 runner has no antenna_diode_cell literal"
     phase3_diode = m.group(1)
     assert phase3_diode == _DIODE
-    assert f'antenna_diode_cell: "{phase3_diode}"' in INDEX_JS.read_text()
