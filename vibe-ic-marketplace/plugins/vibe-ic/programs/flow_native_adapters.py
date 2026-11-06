@@ -243,21 +243,25 @@ def simulation_sources(project, files, top, benches):
             list(dict.fromkeys(path.parent for path in [*benches, *selected])))
 
 
-def cocotb_run(directory, tb, files, top, commands, simulator, include_dirs):
+def cocotb_run(directory, tb, files, top, commands, simulator, include_dirs, *, waves=False):
     import verilator_coverage_measure as coverage
     directory.mkdir()
     makefile = directory / "simulation.mk"
-    flags = " ".join(coverage.COVERAGE_INSTRUMENTATION_FLAGS)
+    flags = "" if waves else " ".join(coverage.COVERAGE_INSTRUMENTATION_FLAGS)
     includes = " ".join(str(path.resolve()) for path in include_dirs)
     makefile.write_text(
         f"SIM = {simulator}\nTOPLEVEL_LANG = verilog\n"
         f"VERILOG_SOURCES = {' '.join(str(f.resolve()) for f in files)}\n"
         f"TOPLEVEL = {top}\nMODULE = {tb.stem}\nVERILOG_INCLUDE_DIRS = {includes}\n"
         + (f"COMPILE_ARGS += --timing {flags} -Wno-fatal -Wno-lint\n" if simulator == "verilator" else "")
+        + ("COMPILE_ARGS += --assert\nVERILATOR_TRACE = 1\nSIM_ARGS += --trace-file "
+           + shlex.quote(str(directory.resolve() / "activity.vcd")) + "\n"
+           if waves and simulator == "verilator" else "")
         + "SIM_BUILD = build\nCOCOTB_RESULTS_FILE = results.xml\n"
         f"export PYTHONPATH := {tb.parent.resolve()}:$(PYTHONPATH)\n"
         "include $(shell cocotb-config --makefiles)/Makefile.sim\n")
-    return commands.run(["make", "-f", makefile, "-j8"], cwd=directory)
+    return commands.run(["make", "-f", makefile, "-j8",
+                         *(["WAVES=1", "FST=-vcd"] if waves and simulator == "icarus" else [])], cwd=directory)
 
 
 def simulation(project, directory, tool, commands):
@@ -606,7 +610,9 @@ def formal(project, directory, tool, commands):
                         native_read += "--top " + top_match[1] + " "
                     native_read += "-I " + _word(config.parent / "src") + " " + reads[0][1]
                     native_read += ("\nsetundef -undriven -anyseq a:anyseq>0"
-                                    "\nsetundef -undriven -anyconst a:anyconst>0")
+                                    "\nsetundef -anyseq a:anyseq>0 %ci1 t:$buf %i"
+                                    "\nsetundef -undriven -anyconst a:anyconst>0"
+                                    "\nsetundef -anyconst a:anyconst>0 %ci1 t:$buf %i")
                     retry = config.parent / "slang_frontend.sby"
                     retry.write_text(original_body[:reads[0].start()] + native_read + original_body[reads[0].end():])
                     destination = config.parent / "slang_frontend"
@@ -679,9 +685,16 @@ def formal(project, directory, tool, commands):
     return result
 
 
-def macro_views(project, directory, tool, commands):
+def macro_views(project, directory, tool, commands, route=None):
     """Use the existing pre-netlist macro integration component's own verdict."""
     from ip_integration_check import audit
+    from flow_macro_views import produce
+    try:
+        produced = produce(project, directory, commands, route or {})
+    except (OSError, ValueError, ImportError) as exc:
+        return {**commands.result(detail=str(exc)), "ran": False, "exit_code": None}
+    if produced is not None:
+        return produced
     started = time.perf_counter()
     report = audit(project)
     path = directory / "macro_views.json"
@@ -848,6 +861,8 @@ def execute(project, directory, tool, route, *, state=None, config=None):
     parent = tempfile.current_run("adapter", directory.name) / directory.name
     work = Path(tempfile.mkdtemp(prefix="native_", dir=parent))
     commands = Commands(work)
+    if tool.get("adapter") == "macro_views":
+        return macro_views(project, work, tool, commands, route)
     if tool.get("adapter") == "path_delay_atpg":
         from flow_atpg import path_delay
         return path_delay(project, work, state=state, config=config)

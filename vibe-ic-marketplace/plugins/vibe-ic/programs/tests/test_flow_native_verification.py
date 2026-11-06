@@ -236,7 +236,7 @@ def test_native_formal_retries_enum_methods_with_original_assertions(tmp_path, c
 
 @pytest.mark.parametrize("kind", ["anyseq", "anyconst"])
 @pytest.mark.parametrize("different", [False, True])
-@pytest.mark.parametrize("declaration", ["wire", "variable", "fixed"])
+@pytest.mark.parametrize("declaration", ["wire", "variable", "fixed", "partial"])
 def test_slang_formal_preserves_declared_free_inputs(tmp_path, kind, different, declaration):
     if not all(shutil.which(name) for name in ("sby", "yosys", "sv2v", "yices-smt2")):
         pytest.skip("Native formal tools are required")
@@ -248,6 +248,8 @@ def test_slang_formal_preserves_declared_free_inputs(tmp_path, kind, different, 
     harness.write_text("module proof import types::*; (input clk);\n"
         f"(* {kind} *) {'wire ' if declaration == 'wire' else ''}state_t state;\n"
         + ("assign state=S0;\n" if declaration == "fixed" else "")
+        + ("assign state=state_t'(2'b0x);\n" if declaration == "partial" else "")
+        + "(* keep *) wire unrelated_x=1'bx;\n"
         + "function automatic bit outside_table(state_t sig);\n"
         "state_t value; return sig!=value.first(); endfunction\n"
         "reg valid=0; always @(posedge clk) begin valid<=1;\n"
@@ -261,15 +263,20 @@ def test_slang_formal_preserves_declared_free_inputs(tmp_path, kind, different, 
     output.mkdir()
     result = formal(tmp_path,output,{"top":"proof","properties":[str(deck)]},Commands(output))
     rows = [r for r in result["native_steps"] if r["name"] in {"SymbiYosys.prove","SymbiYosys.bmc"}]
-    expected = "NOT_MEASURED" if declaration != "wire" else "FAIL" if different else "PASS"
+    expected = "NOT_MEASURED" if declaration in {"fixed","partial"} else "FAIL" if different else "PASS"
     assert len(rows)==2 and {r["status"] for r in rows}=={expected},result
-    if declaration != "wire":
+    models = list(output.rglob("model/cover_inputs.json"))
+    assert len(models)==2
+    for model in models:
+        modules = json.loads(model.read_text())["modules"]
+        assert any(m["netnames"].get("unrelated_x",{}).get("bits")==["x"] for m in modules.values())
+    if declaration in {"fixed","partial"}:
         assert kind in result["detail"] and "free" in result["detail"],result
+        if declaration == "partial":
+            assert "1/2" in result["detail"],result
         assert "unproved_required_properties" not in result["metrics"],result
         assert {p:p.read_bytes() for p in originals}==originals
         return
-    models = list(output.rglob("model/cover_inputs.json"))
-    assert len(models)==2
     for model in models:
         modules = json.loads(model.read_text())["modules"]
         drivers = [cell for module in modules.values() for cell in module["cells"].values()
@@ -968,6 +975,41 @@ def test_chip_eqy_preserves_mapped_state_alias_matchpoints(tmp_path, different):
         assert "u_core.stored" in module["netnames"], side
     matched = (tmp_path / "scratch/matched.ids").read_text()
     assert "u_core.stored[0]" in matched
+
+
+@pytest.mark.parametrize("different", [False, True])
+def test_chip_eqy_partitions_independent_matched_state_cones(tmp_path, different):
+    if not shutil.which("eqy"):
+        pytest.skip("Native EQY is required")
+    reset_docs(tmp_path)
+    gold,gate,cells,pads = [tmp_path/n for n in ("gold.v","gate.v","cells.lib","pads.v")]
+    wrapper = ("module unit(input clk,rst_n,a,b,output qa,qb); wire ic,ir,ia,ib,oa,ob;\n"
+        "INPAD pc(.PAD(clk),.Y(ic));\nINPAD pr(.PAD(rst_n),.Y(ir));\n"
+        "INPAD pa(.PAD(a),.Y(ia));\nINPAD pb(.PAD(b),.Y(ib));\n"
+        "OUTPAD pqa(.A(oa),.PAD(qa));\nOUTPAD pqb(.A(ob),.PAD(qb));\n")
+    gold.write_text(wrapper+"core u_core(ic,ir,ia,ib,oa,ob); endmodule\n"
+        "module core(input clk,rst_n,a,b,output qa,qb); reg [7:0] left,right;\n"
+        "always @(posedge clk) if(!rst_n) begin left<=0;right<=0;end\n"
+        "else begin left<={left[6:0],a};right<={right[6:0],b};end\n"
+        "assign qa=left[7];assign qb=right[7];endmodule\n")
+    gate.write_text(wrapper+"reg [7:0] left_g,right_g;\n"
+        "wire [7:0] \\u_core.left , \\u_core.right ;\n"
+        "assign \\u_core.left =left_g;assign \\u_core.right =right_g;\n"
+        "always @(posedge ic) if(!ir) begin left_g<=0;right_g<=0;end\n"
+        f"else begin left_g<={{left_g[6:0],{'~ia' if different else 'ia'}}};right_g<={{right_g[6:0],ib}};end\n"
+        "assign oa=left_g[7];assign ob=right_g[7];endmodule\n")
+    cells.write_text("library(neutral) {}\n")
+    pads.write_text("(* blackbox *) module INPAD(inout PAD,output Y); endmodule\n"
+                   "(* blackbox *) module OUTPAD(input A,inout PAD); endmodule\n")
+    config={"DESIGN_NAME":"unit","VERILOG_FILES":[str(gold)],"DEFAULT_CORNER":"typical",
+            "LIB":{"typical":[str(cells)]},"PAD_VERILOG_MODELS":[str(pads)]}
+    result=eqy(tmp_path,tmp_path,{},Commands(tmp_path),state={"nl":str(gate)},config=config)
+    rows={r["name"]:r["status"] for r in result["native_steps"]}
+    assert rows["Yosys.Wrapper"]=="PASS",result
+    assert rows["Yosys.EQY.Core"]==("FAIL" if different else "PASS"),result
+    assert len(list((tmp_path/"scratch/partitions").glob("*.json")))>1
+    matched=(tmp_path/"scratch/matched.ids").read_text()
+    assert "u_core.left[0]" in matched and "u_core.right[0]" in matched
 
 
 @pytest.mark.parametrize("direct_output", [False, True])

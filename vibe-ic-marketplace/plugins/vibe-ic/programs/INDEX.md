@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 671
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 1 (of 671)
+- **Total programs (excluding helpers / shims):** 672
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 1 (of 672)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 0 |
-| `any` | 670 |
+| `any` | 671 |
 
 ## Alphabetical listing
 
@@ -270,6 +270,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow_explore` | any | — | Compare public native runs on copies; adopt the best passing native override. |
 | `flow_ic_checks` | any | — | flow_ic_checks |
 | `flow_ir_corners` | any | — | flow_ir_corners |
+| `flow_macro_views` | any | — | Produce declared child macros through the public IP entry, then use native views. |
 | `flow_native_adapters` | any | — | flow_native_adapters |
 | `flow_native_analog` | any | — | Connect the native analog producers to the current flow's command runner. |
 | `flow_native_analog_die` | any | — | Connect analog physical rows to native State and earlier tool products. |
@@ -723,7 +724,7 @@ _(no programs in this group)_
 
 _(no programs in this group)_
 
-### `any` (670 programs)
+### `any` (671 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `accumulate_synth` — deterministic SOLVER for the CVDP sequential ACCUMULATOR / running-op family:
@@ -969,6 +970,7 @@ _(no programs in this group)_
 - `flow_explore` — Compare public native runs on copies; adopt the best passing native override.
 - `flow_ic_checks` — flow_ic_checks
 - `flow_ir_corners` — flow_ir_corners
+- `flow_macro_views` — Produce declared child macros through the public IP entry, then use native views.
 - `flow_native_adapters` — flow_native_adapters
 - `flow_native_analog` — Connect the native analog producers to the current flow's command runner.
 - `flow_native_analog_die` — Connect analog physical rows to native State and earlier tool products.

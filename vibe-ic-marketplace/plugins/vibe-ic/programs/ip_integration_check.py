@@ -83,8 +83,8 @@ def _l21_supplies(project: Path):
     return supplies or None
 
 
-def audit(project: Path, *, roots=None) -> dict:
-    macros = _macro_roots(project, roots)
+def audit(project: Path, *, roots=None, packages=None) -> dict:
+    macros = packages if packages is not None else _macro_roots(project, roots)
     if not macros:
         return {"verdict": "SKIP", "rc": 2,
                 "reason": ("no hard macros under input/pdk_local/ or "

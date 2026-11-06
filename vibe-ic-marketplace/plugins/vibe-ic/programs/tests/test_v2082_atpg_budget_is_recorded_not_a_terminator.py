@@ -58,6 +58,7 @@ sys.path.insert(0, str(_PROGRAMS))
 import fault_atpg_run as F          # noqa: E402
 import _docker_watchdog as DWD      # noqa: E402
 import _watchdog as W               # noqa: E402
+import _eda_pin                    # noqa: E402
 
 
 # ── 1. THE LAUNCH SITE CARRIES NO TERMINATING DEADLINE ──────────────────────
@@ -149,6 +150,11 @@ class _Rec:
 
 
 def _force_container_route(monkeypatch):
+    # Resolve before the test replaces subprocess.run with an argv recorder.
+    try:
+        F.docker_image()
+    except _eda_pin.ImageNotResolvable as exc:
+        pytest.skip(f"NOT_MEASURED: container launch image unavailable: {exc}")
     monkeypatch.setattr(F._CE, "no_container_route", lambda: False)
 
 
