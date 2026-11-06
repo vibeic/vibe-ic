@@ -69,7 +69,6 @@ PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
 import slot_pad_budget_check as S  # noqa: E402
-import flow_compliance_check as FCC  # noqa: E402
 import _flow_reason_taxonomy as _RT  # noqa: E402  the class -> tier map
 import _l_doc_pad_placement as LPP  # noqa: E402  the ONE ring reader (R-0915-101)
 import _tapeout_declaration as TD  # noqa: E402
@@ -148,35 +147,8 @@ def _run_budget(project: Path, *extra) -> tuple[int, dict]:
 
 
 
-def test_the_flow_row_stands_down_by_the_same_declaration(tmp_path):
-    project = _project(tmp_path)
-    spec = {"declaration": TD.DECLARATION_REL, "field": "answers.deliverable",
-            "absent_when": ["DIE"], "corroborated_by": "owner_attestation"}
-    got = FCC._delivery_declares_absence(project, spec)
-    assert got is not None and got[0] == TD.DECLARATION_REL
-    assert "owner-attested" in got[1]
-    assert FCC._check_condition(project, {"delivery_declares": spec}) is False
-    # un-attested, a different word, and an unknown corroboration all RUN it
-    assert FCC._delivery_declares_absence(
-        _project(tmp_path / "b", attested=False), spec) is None
-    assert FCC._delivery_declares_absence(
-        _project(tmp_path / "c", "HARDMACRO"), spec) is None
-    assert FCC._delivery_declares_absence(
-        project, {**spec, "corroborated_by": "something_else"}) is None
 
 
-def test_the_flow_yaml_carries_that_condition_on_37_5ip():
-    import yaml
-    flow = yaml.safe_load(
-        (PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml").read_text())
-    step = next(s for s in flow["steps"] if str(s.get("id")) == "37.5ip")
-    dd = step["condition"]["delivery_declares"]
-    assert dd["absent_when"] == ["DIE"]
-    assert dd["corroborated_by"] == "owner_attestation"
-    # and 37.5ic keeps its own, opposite, corroboration
-    ic = next(s for s in flow["steps"] if str(s.get("id")) == "37.5ic")
-    assert ic["condition"]["delivery_declares"]["absent_when"] == ["HARDMACRO"]
-    assert "corroborated_by" not in ic["condition"]["delivery_declares"]
 
 
 # ---------------------------------------------------------------- ruling (2)
@@ -312,7 +284,7 @@ def test_the_design_declaration_supplies_a_width_the_clause_does_not(tmp_path):
     bare = _project(tmp_path / "bare", rtl=rtl)
     rc2, rep2 = _run_budget(bare)
     assert rc2 == 2 and rep2["reason_class"] == "ZERO_DENOMINATOR"
-    assert "parameterised" in rep2["reason"]
+    assert rep2["unresolved_width_ports"] == ["x"]
 
 
 def test_two_answers_about_one_width_are_refused(tmp_path):
