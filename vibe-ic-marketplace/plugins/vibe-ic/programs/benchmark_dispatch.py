@@ -4045,7 +4045,7 @@ def _run_verification_challenge(candidate: dict, challenge: dict) -> dict:
             receipt["identity_after_" + stage] = actual
             if why:
                 raise ValueError(why)
-            if _challenge_exec.image_refusal(cp) or cp.returncode in {124, 126, 127}:
+            if cp.returncode in {124, 126, 127}:
                 raise ValueError(f"native {stage} unavailable: rc={cp.returncode}: {cp.stderr}")
             if (cp.returncode != 0
                     and (cp.stderr or "").startswith("Error response from daemon:")):
@@ -4071,7 +4071,7 @@ def _run_verification_challenge(candidate: dict, challenge: dict) -> dict:
     except subprocess.TimeoutExpired:
         return finish({"status": "UNAVAILABLE",
                        "reasons": ["challenge tool version probe timed out"]})
-    except (OSError, ValueError, subprocess.SubprocessError, _challenge_exec.ContainerImageMismatch) as exc:
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
         return finish({"status": "UNAVAILABLE", "reasons": [f"challenge backend unavailable: {exc}"]})
     rtl_paths = [str(Path(p)) for p in candidate.get("rtl_paths") or []]
     # ARGUMENT ORDER IS NOT A VERDICT INPUT. `timescale is a compiler
@@ -4167,7 +4167,7 @@ def _run_verification_challenge(candidate: dict, challenge: dict) -> dict:
                  *[mapped(p) for p in rtl_paths], mapped(test_path)], cwd=td)
         except subprocess.TimeoutExpired:
             return finish({"status": "UNAVAILABLE" if native else "INVALID", "reasons": ["challenge compile timed out"]})
-        except (OSError, ValueError, _challenge_exec.ContainerImageMismatch) as exc:
+        except (OSError, ValueError) as exc:
             return finish({"status": "UNAVAILABLE", "reasons": [f"challenge backend unavailable: {exc}"]})
         if comp.returncode != 0:
             errors = comp.stderr or comp.stdout or ""
@@ -4236,7 +4236,7 @@ def _run_verification_challenge(candidate: dict, challenge: dict) -> dict:
         except subprocess.TimeoutExpired:
             return finish({"status": "UNAVAILABLE" if native else "INVALID", "returncode": None,
                     "reasons": ["challenge simulation timed out"]})
-        except (OSError, ValueError, _challenge_exec.ContainerImageMismatch) as exc:
+        except (OSError, ValueError) as exc:
             return finish({"status": "UNAVAILABLE", "reasons": [f"challenge backend unavailable: {exc}"]})
     output = (sim.stdout or "") + (sim.stderr or "")
     # The challenge contract requires printing the FAIL marker, not exiting

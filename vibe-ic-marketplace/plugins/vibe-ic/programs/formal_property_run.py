@@ -3294,28 +3294,6 @@ def _write_report(formal_dir: Path, results: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# vibe-ic#562 — RE-ADJUDICATION RULES for this gate's published records.
-#
-# A published record can describe a state that no longer exists. For a formal
-# run the dangerous drift is the PROOF STRENGTH: `unbounded_proved` means "holds
-# for all reachable states", while a bounded BMC result only means "no
-# counterexample within the bound". A record carrying PASS on the strength of a
-# bounded proof is a record whose verdict a reader will over-trust, and the
-# distinction is exactly what `assert_bound_honesty` guards at run time.
-#
-# `_STRENGTH_HONESTY` re-derives that one question from what the record itself
-# publishes, so an old record is judged by today's rule rather than by the words
-# it was written with.
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import _progress_run as _pr  # noqa: E402
-
-
-
-
-
-
-
 def reachability_plan(project: Path, results: dict) -> dict:
     """Map the existing declaration denominator to source predicates or closures.
 

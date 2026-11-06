@@ -1071,17 +1071,6 @@ def build_report(findings: List[Finding], stats: dict, project_dir: str) -> dict
     }
 
 
-# ── re-adjudicating THIS gate's already-published records (#510) ────────────
-# A landed rule changes what this gate certifies from now on and does nothing
-# to the records already committed. `published_record_staleness_check` asks
-# every gate that appears in the corpus which of its published verdicts it
-# would still issue, decided FROM THE RECORD ALONE — the original SPEFs are
-# gone (#506), so re-running is not available and never will be for old cells.
-
-
-
-
-
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         description="GATE: verify the MCF-bounded SI-aware STA fold is genuinely "
