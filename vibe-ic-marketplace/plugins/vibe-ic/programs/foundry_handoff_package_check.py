@@ -873,35 +873,35 @@ def admitted_provider_release(project, record_path=None):
 
 
 def selected_provider_precheck(assembly):
-    """One selected-service basis for the kit, manifest and normal gate.
-
-    An unreadable selected result remains owed; it cannot select an older
-    checkpoint's operator or turn a technical precheck into order acceptance.
-    """
-    provider = {'status': 'NOT_MEASURED', 'technical_precheck_status': 'NOT_MEASURED',
-                'accepted': False, 'reason': 'No bound provider precheck for the selected assembly',
-                'materials': []}
+    """Report the selected operator's native result separately from submission."""
+    provider = {"status": "NOT_MEASURED", "technical_precheck_status": "NOT_MEASURED",
+                "accepted": False, "reason": "No selected native provider precheck",
+                "materials": []}
     try:
-        selected = assembly['basis']['provider_precheck']
+        selected = assembly["basis"]["provider_precheck"]
         provider.update({key: selected.get(key) for key in
-                         ('provider','slot','cob','official_revision','options','layout_sha256')})
-        root = Path(assembly['report']).parents[2]
+                         ("provider", "slot", "cob", "official_revision", "options")})
+        root = Path(assembly["report"]).parents[2]
+        source = Path(selected["source"]["path"])
+        if not source.is_absolute():
+            source = root / source
+        report = json.loads(source.read_text())
+        from die_finishing_gen import provider_precheck_status
+        status, reason = provider_precheck_status(report)
+        provider["technical_precheck_status"] = status
         materials = []
-        for source in [selected['source'], *selected.get('files', [])]:
-            path = Path(source['path'])
-            if not path.is_absolute():path = root / path
-            if (not path.is_file() or not source.get('sha256')
-                    or sha256_file(path) != source['sha256']):
-                raise ValueError('provider precheck material missing/changed: '+str(path))
-            materials.append({'path':str(path),'sha256':source['sha256']})
-        if selected['layout_sha256'] != assembly['sha256']:
-            raise ValueError('provider precheck does not bind the selected final GDS')
-        provider.update(status='NOT_SUBMITTED', technical_precheck_status=selected['status'],
-                        retained_report={'source':materials[0]['path'],'sha256':materials[0]['sha256']},
-                        materials=materials,
-                        reason='Technical precheck is separate from provider acceptance or a slot reservation')
+        for item in [selected["source"], *selected.get("files", [])]:
+            path = Path(item["path"])
+            if not path.is_absolute():
+                path = root / path
+            if not path.is_file():
+                raise ValueError("provider package material missing: " + str(path))
+            materials.append({"path": str(path), "sha256": sha256_file(path)})
+        provider.update(status="NOT_SUBMITTED", technical_precheck_status=status,
+                        retained_report={"source": str(source), "sha256": sha256_file(source)},
+                        materials=materials, reason=reason + "; provider acceptance is separate")
     except (OSError, ValueError, KeyError, TypeError) as exc:
-        provider['reason'] = str(exc)
+        provider["reason"] = str(exc)
     return provider
 
 

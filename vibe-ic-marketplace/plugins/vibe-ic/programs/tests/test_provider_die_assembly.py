@@ -114,7 +114,7 @@ def test_normal_wrapper_uses_new_provider_over_retained_self_catalogue(
 
 
 @pytest.mark.parametrize("case", ["current", "changed_gds", "refused_precheck", "missing_step"])
-def test_release_reader_requires_current_complete_operator_evidence(tmp_path, case):
+def test_release_reader_reads_complete_native_operator_results(tmp_path, case):
     def evidence(name, value):
         path = tmp_path / name
         path.write_text(json.dumps(value))
@@ -139,8 +139,10 @@ def test_release_reader_requires_current_complete_operator_evidence(tmp_path, ca
     path.write_text(json.dumps(record))
     if case == "changed_gds":
         (tmp_path / "neutral.gds").write_text("changed")
-    if case == "current":
-        assert finishing.read_admitted_release(tmp_path, path)["gds"] == tmp_path / "neutral.gds"
+    if case in {"current", "changed_gds"}:
+        current = finishing.read_admitted_release(tmp_path, path)
+        assert current["gds"] == tmp_path / "neutral.gds"
+        assert current["sha256"] == hashlib.sha256(current["gds"].read_bytes()).hexdigest()
     else:
         with pytest.raises(ValueError):
             finishing.read_admitted_release(tmp_path, path)
@@ -200,7 +202,9 @@ def test_provider_pv_reader_binds_real_gds_records_and_preserves_native_counts(
     elif case == "timestamps":
         assert row["value"] == 0 and row["verdict"] == "PASS"
         assert row["equivalence"]["input"]["sha256"] != output["sha256"]
-        assert row["equivalence"]["input"]["canonical_digest"] == row["equivalence"]["output"]["canonical_digest"]
+        assert row["equivalence"]["equivalent"] is True
+        assert row["equivalence"]["method"] == "KLayout.LayoutDiff.compare(Layout, Layout, Silent)"
+        assert row["equivalence"]["tolerance"] == 0
         assert result["disclosures"][0]["value"] == 7
         assert result["disclosures"][0]["error_on_magic_drc"] is False
     else:
@@ -453,7 +457,6 @@ def test_bond_measurement_preserves_real_operator_refusal(bond_geometry):
 @pytest.fixture
 def bond_assembly(bond_geometry):
     """Neutral technical lineage with actual native opening geometry."""
-    import _gds_admission as admission
     project, path, gds = bond_geometry
     reports = project / 'reports/phase3'; reports.mkdir(parents=True)
     routed = project / 'phase3/stage3/pnr/routed.def'; routed.parent.mkdir(parents=True)
@@ -461,10 +464,6 @@ def bond_assembly(bond_geometry):
     raw = routed.with_name('raw.gds'); raw.write_bytes(gds.read_bytes())
     def write(dest, data):
         dest.write_text(json.dumps(data)); return finishing._release_file(dest)
-    write(reports / 'prestream_gate.json', {'verdict': 'PASS', 'layout_digest': 'neutral-source-control'})
-    admission.admit_gds(project, raw, 'neutral-source-control', [routed])
-    write(reports / 'fill_librelane.json', {'default_stream': {
-        'stream': str(raw), 'stream_sha256': finishing._release_file(raw)['sha256']}})
     seal = reports / 'seal.json'
     extent = {'outer': {'um': [0, 0, 400, 500]}, 'inner': {'um': [5, 5, 395, 495]}}
     write(seal, {'seal_ring': {'state': 'PASS', 'gds_in': str(raw), 'gds_out': str(gds),

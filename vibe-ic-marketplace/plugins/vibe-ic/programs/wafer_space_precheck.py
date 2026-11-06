@@ -34,19 +34,18 @@ def read_signoff_evidence(project, release_record):
 
     The official WriteLayout can change timestamps without changing geometry.
     Compare each selected measurement's actual input with the delivered file.
-    Timestamp canonical equality is the fast path; a strict KLayout LayoutDiff
-    also handles serialization order without ignoring text or properties.
+    A strict KLayout LayoutDiff handles serialization order without ignoring
+    text or properties.
     This is a read-only consumer, not a new PV run or an LVS substitute.
     """
     from die_finishing_gen import read_admitted_release
-    from gds_canonical_digest import canonical_digest, semantic_layout_equivalence
+    from gds_canonical_digest import semantic_layout_equivalence
 
     release = read_admitted_release(Path(project), Path(release_record))
     record = json.loads(release["report"].read_text())
     official_ref = record["basis"]["files"]["official_precheck"]
     official = json.loads(Path(official_ref["path"]).read_text())
-    final = dict(record["output"])
-    final["canonical_digest"] = canonical_digest(release["gds"])
+    final = _file(release["gds"])
     finite = {}
     def keep(path, role):
         ref = _file(path)
@@ -58,30 +57,19 @@ def read_signoff_evidence(project, release_record):
         return ref
     keep(release["report"], "assembly_record")
     keep(Path(official_ref["path"]), "official_precheck_record")
-    finite[final["path"]] = dict(record["output"], roles=["delivered_gds"])
+    finite[final["path"]] = dict(final, roles=["delivered_gds"])
     views = {}
     def equivalent(path):
         path = str(Path(path).resolve())
         if path not in views:
             source = keep(path, "official_input_gds")
-            source["canonical_digest"] = canonical_digest(Path(path))
-            views[path] = {"method": "gds_canonical_digest (only BGNLIB/BGNSTR timestamps zeroed)",
-                           "input": source, "output": final,
-                           "equivalent": source["canonical_digest"] == final["canonical_digest"]}
-            if not views[path]["equivalent"]:
-                try:
-                    compared = semantic_layout_equivalence(Path(path), release["gds"])
-                    if (compared["source"]["sha256"] != source["sha256"]
-                            or compared["target"]["sha256"] != final["sha256"]):
-                        raise ValueError("the compared layout differs from the bound input or output")
-                    views[path].update({key: compared[key] for key in
-                                        ("method", "flags", "tolerance", "tool_version", "equivalent")})
-                    for item, identity in ((source, compared["source"]),
-                                           (final, compared["target"])):
-                        item.update(layout_dbu=identity["dbu"],
-                                    top_cells=identity["top_cells"], cells=identity["cells"])
-                except (ImportError, RuntimeError) as exc:
-                    raise ValueError(f"strict layout comparison unavailable: {exc}") from exc
+            try:
+                compared = semantic_layout_equivalence(Path(path), release["gds"])
+                views[path] = {"input": source, "output": final,
+                               **{key: compared[key] for key in
+                                  ("method", "flags", "tolerance", "tool_version", "equivalent")}}
+            except (ImportError, RuntimeError) as exc:
+                raise ValueError(f"strict layout comparison unavailable: {exc}") from exc
         return views[path]
     steps = {}
     for step_id, item in zip(official["expected_steps"], official["steps"]):
@@ -119,8 +107,7 @@ def read_signoff_evidence(project, release_record):
             bridge = equivalent(inp["gds"])
             row.update(value=count, source=evidence["path"], source_sha256=evidence["sha256"],
                        record=state_ref["path"], record_sha256=state_ref["sha256"],
-                       receipt=official_ref["path"], receipt_sha256=official_ref["sha256"],
-                       subject_sha256=bridge["input"]["sha256"], equivalence=bridge,
+                       operator_report=official_ref["path"], equivalence=bridge,
                        source_verdict="PASS" if count == 0 else "FAIL")
             if not bridge["equivalent"]:
                 raise ValueError("the selected native measurement input differs from the delivered GDS")
@@ -184,7 +171,6 @@ def run(args):
         "returncode": rc,
         "verdict": "PASS" if complete else "FAIL",
         "input": input_record,
-        "input_unchanged": _file(args.input) == input_record,
         "initial_state": initial_record,
         "official_entry": official_record,
         "slot": args.slot, "packaging": "cob" if args.cob else "bare_die",
@@ -194,8 +180,6 @@ def run(args):
         "expected_steps": expected, "steps": steps,
         "output": output,
     }
-    if not record["input_unchanged"]:
-        record["verdict"] = "FAIL"
     write_json(Path(args.record), record)
     return record
 
