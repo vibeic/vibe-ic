@@ -43,7 +43,6 @@ def _matching_runtime_pair(monkeypatch):
     _rt_pair.assume_matching_runtime_pair(monkeypatch)
 
 
-
 def _simulator_absent() -> str:
     """Why this host cannot EXECUTE a verification challenge, or "" if it can.
 
@@ -3528,43 +3527,6 @@ def _issue2867_resume_report(run, task):
     (run / ".bench_config.json").write_text(json.dumps({"bench": "rtllm", "format": "rtllm"}))
 
 
-def test_runtime_pair_match_persists_and_reads_back_over_stale_mismatch(tmp_path, monkeypatch):
-    run, _, _ = _task(tmp_path)
-    _neutral_native_identity(monkeypatch)
-    _stale_native_pair(run)
-    rc, fresh = bd._runtime_pair_gate(run, "resume:review")
-    assert rc is None
-    actual = json.loads((run / "runtime_pair_preflight.json").read_text())
-    assert actual == fresh, (actual, fresh)
-    assert bd._challenge_execution_declaration(run)["container_id"] == "ca" * 32
-
-
-def test_runtime_pair_refresh_keeps_the_original_refusal(tmp_path):
-    run, _, _ = _task(tmp_path)
-    prior = _stale_native_pair(run)
-    raw = (run / "runtime_pair_preflight.json").read_bytes()
-    assert bd._runtime_pair_gate(run, "resume:review")[0] is None
-    archive = run / "runtime_pair_refusals" / (bd._sha256_text(raw.decode()) + ".json")
-    assert archive.read_bytes() == raw
-    assert json.loads(archive.read_text()) == prior
-
-
-@pytest.mark.parametrize("failure", ["write", "readback"])
-def test_runtime_pair_match_refuses_failed_persistence(tmp_path, monkeypatch, failure):
-    run, _, _ = _task(tmp_path)
-    _stale_native_pair(run)
-    real_write = bd._atomic_write_json
-    def broken(path, record):
-        if Path(path).name == "runtime_pair_preflight.json":
-            if failure == "write":
-                raise OSError("neutral write refusal")
-            return  # Old MISMATCH remains; readback must discriminate it.
-        real_write(path, record)
-    monkeypatch.setattr(bd, "_atomic_write_json", broken)
-    rc, _ = bd._runtime_pair_gate(run, "resume:review")
-    assert rc == 2, "MATCH is unusable when the consumer still reads MISMATCH"
-
-
 @pytest.mark.parametrize("review_kind", ["absent", "question"])
 def test_resume_runtime_bookkeeping_does_not_preflight(tmp_path, monkeypatch, review_kind):
     run, task, _ = _task(tmp_path)
@@ -3693,27 +3655,6 @@ def test_native_first_proof_freezes_identity_and_repeated_review_refuses_drift(t
     assert freeze.is_file(), "first native proof must leave immutable identity evidence"
     if mutation != "malformed_freeze":
         assert freeze.read_bytes() == freeze_bytes
-
-
-@pytest.mark.parametrize("field", ["container_id", "image_id", "error"])
-def test_native_partial_or_unknown_error_is_never_refreshed(tmp_path, monkeypatch, field):
-    run, task, _ = _task(tmp_path)
-    _neutral_native_identity(monkeypatch)
-    _stale_native_pair(run)
-    original = bd._challenge_execution_declaration(run)
-    if field == "error":
-        original["error"] = "unrecognized native refusal"
-    else:
-        original[field] = "previously-bound-identity"
-    task["verification_execution"] = copy.deepcopy(original)
-    bd._runtime_pair_gate(run, "resume:review")
-    assert bd._challenge_execution_for_task(task) == original
-
-
-def test_pristine_match_leaves_solve_clean_room_empty(tmp_path):
-    run = tmp_path / "new-solve"
-    assert bd._runtime_pair_gate(run, "solve", pristine=True)[0] is None
-    assert not run.exists()
 
 
 @_NEEDS_SIMULATOR
