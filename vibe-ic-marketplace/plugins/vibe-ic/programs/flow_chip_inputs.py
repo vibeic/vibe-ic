@@ -679,20 +679,20 @@ def _sdc(project: Path, config: dict, ports: list[dict], input_masters: set[str]
     periods = _clock_periods(project, config)
     if any(clock not in directions or directions[clock] != "input" for clock in clocks):
         raise ValueError("CLOCK_PORT must name an elaborated core input")
-    lines = ["set_units -time ns"]
+    lines = []
     for index, clock in enumerate(clocks):
         period = float(periods.get(clock) or _required(config, "CLOCK_PERIOD"))
         budget = period * float(delay) / 100
-        lines.append(f"create_clock -name core_clock_{index} -period {period:g} {collection([clock])}")
+        lines.append(f"create_clock -name core_clock_{index} -period [sta::time_sta_ui [expr {{{period:g} * 1e-9}}]] {collection([clock])}")
         for key, command in (("CLOCK_UNCERTAINTY_CONSTRAINT", "set_clock_uncertainty"),
                              ("CLOCK_TRANSITION_CONSTRAINT", "set_clock_transition")):
             if config.get(key) is not None:
-                lines.append(f"{command} {float(config[key]):g} [get_clocks core_clock_{index}]")
+                lines.append(f"{command} [sta::time_sta_ui [expr {{{float(config[key]):g} * 1e-9}}]] [get_clocks core_clock_{index}]")
         for direction, command in (("input", "set_input_delay"), ("output", "set_output_delay")):
             names = [bit for bit, value in directions.items() if value == direction and bit not in clocks]
             if names:
                 additive = " -add_delay" if index else ""
-                lines.append(f"{command} {budget:g} -clock core_clock_{index}{additive} {collection(names)}")
+                lines.append(f"{command} [sta::time_sta_ui [expr {{{budget:g} * 1e-9}}]] -clock core_clock_{index}{additive} {collection(names)}")
     lines.extend(_electrical_sdc(config))
     if config.get("TIME_DERATING_CONSTRAINT") is not None:
         fraction = float(config["TIME_DERATING_CONSTRAINT"]) / 100
@@ -700,7 +700,7 @@ def _sdc(project: Path, config: dict, ports: list[dict], input_masters: set[str]
                       f"set_timing_derate -late {1 + fraction:.17g}"))
     outputs = [bit for bit, value in directions.items() if value == "output"]
     if outputs and config.get("OUTPUT_CAP_LOAD") is not None:
-        lines.append(f"set_load {float(config['OUTPUT_CAP_LOAD']) / 1000:g} {collection(outputs)}")
+        lines.append(f"set_load [sta::capacitance_sta_ui [expr {{{float(config['OUTPUT_CAP_LOAD']):g} * 1e-15}}]] {collection(outputs)}")
     if input_masters:
         from sdc_environment import _io_pad_view
         views = [_io_pad_view(path.read_text(), input_masters) for path in _paths(config.get("PAD_LIBS"))]
@@ -725,8 +725,8 @@ def _sdc(project: Path, config: dict, ports: list[dict], input_masters: set[str]
             "  set _chip_pad_min [lindex [lsort -real -decreasing [lmap v $_chip_pad_linked {lindex $v 2}]] 0]",
             "}"])
         inputs = collection([bit for bit, value in directions.items() if value == "input"])
-        lines.extend((f"set_input_transition -max $_chip_pad_max {inputs}",
-                      f"set_input_transition -min $_chip_pad_min {inputs}"))
+        lines.extend((f"set_input_transition -max [sta::time_sta_ui [expr {{$_chip_pad_max * 1e-9}}]] {inputs}",
+                      f"set_input_transition -min [sta::time_sta_ui [expr {{$_chip_pad_min * 1e-9}}]] {inputs}"))
     return "\n".join(lines) + "\n"
 
 
