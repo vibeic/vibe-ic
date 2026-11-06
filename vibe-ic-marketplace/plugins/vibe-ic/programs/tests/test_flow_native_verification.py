@@ -654,9 +654,12 @@ def test_chip_eqy_separates_pad_wrapper_from_resettable_core(tmp_path, change, p
 
 @pytest.mark.parametrize("change", ["none", "core", "signal", "rail", "missing_pad", "no_power_view", "rail_logic",
                                     "rail_state", "paired_rail_state"])
-def test_chip_eqy_uses_native_power_view_and_keeps_supply_checks(tmp_path, change):
+@pytest.mark.parametrize("slang", [False, True])
+def test_chip_eqy_uses_native_power_view_and_keeps_supply_checks(tmp_path, change, slang):
     if not shutil.which("eqy"):
         pytest.skip("Native EQY is required")
+    if slang and not shutil.which("slang"):
+        pytest.skip("Native Slang is required")
     models, gold, gate, power, liberty, lef = [tmp_path / name for name in
         ("pads.v", "gold.v", "gate.v", "power.v", "cells.lib", "pads.lef")]
     models.write_text("(* blackbox *) module INPAD(input PAD,PD,PU,output Y,inout VP,VN); endmodule\n"
@@ -702,7 +705,7 @@ def test_chip_eqy_uses_native_power_view_and_keeps_supply_checks(tmp_path, chang
         state["pnl"] = str(power)
     config = {"DESIGN_NAME": "unit", "VERILOG_FILES": [str(gold)],
               "DEFAULT_CORNER": "typical", "LIB": {"typical": [str(liberty)]},
-              "PAD_VERILOG_MODELS": [str(models)], "PAD_LEFS": [str(lef)]}
+              "PAD_VERILOG_MODELS": [str(models)], "PAD_LEFS": [str(lef)], "USE_SLANG": slang}
     result = eqy(tmp_path, tmp_path, {}, Commands(tmp_path), state=state, config=config)
     rows = {row["name"]: row["status"] for row in result.get("native_steps", [])}
     assert rows.get("Yosys.Wrapper") == ("PASS" if change in {"none", "rail_state", "paired_rail_state"} else "FAIL"), result
