@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import sys
 import tarfile
 import uuid
@@ -57,7 +58,7 @@ def publish(project, outbox, variant, *, cpus, flow_args, level, image):
             "cpus": cpus, "ppa_level": level, "image": image}, indent=2) + "\n")
         (staging / "job.json").write_text(json.dumps({
             "cpus": cpus, "label": "Native PPA trial " + name, "container": job,
-            "priority": 0, "keep_run": False}, indent=2) + "\n")
+            "priority": 10 if name == "reference" else 0, "keep_run": False}, indent=2) + "\n")
         script = RUN_SCRIPT.replace("CPU_COUNT", str(cpus)).replace("MEMORY", str(cpus * 4))
         (staging / "run.sh").write_text(script)
         (staging / "run.sh").chmod(0o755)
@@ -141,7 +142,12 @@ def collect(job, results, destination):
             continue
         after = vibeic_temp.relocate(before, mapping)
         if after != before:
-            path.write_text(json.dumps(after, indent=2) + "\n")
+            mode = stat.S_IMODE(path.stat().st_mode)
+            path.chmod(mode | stat.S_IWUSR)
+            try:
+                path.write_text(json.dumps(after, indent=2) + "\n")
+            finally:
+                path.chmod(mode)
     row = vibeic_temp.relocate(row, mapping)
     row.update(exit_code=code, all_pass=bool(row.get("all_pass")) and code == 0,
                spool_job=job, spool_result=str(result))
