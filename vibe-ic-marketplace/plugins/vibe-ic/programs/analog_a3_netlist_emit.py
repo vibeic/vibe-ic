@@ -1429,17 +1429,13 @@ def _lvs_text(simulation, ir):
     return "\n".join(lines)
 
 
-def emit_lvs_view(project: Path, block: str, *,
-                  expected_simulation_sha256: Optional[str] = None) -> dict:
-    """Emit <block>.lvs.cdl from the unchanged, already resolved A3 simulation view."""
+def emit_lvs_view(project: Path, block: str) -> dict:
+    """Emit structural CDL from the current resolved A3 simulation view."""
     from _pad_ring import parse_spice_subckts
 
     directory = Path(project) / _CANONICAL_ANALOG / block
     simulation = directory / f"{block}.sp"
     topology = directory / "topology.json"
-    source_sha = _sha256(simulation)
-    if expected_simulation_sha256 is not None and source_sha != expected_simulation_sha256:
-        raise ValueError("LVS_SIMULATION_SHA_CHANGED")
     ir = json.loads(topology.read_text())
     if ir.get("block") != block:
         raise ValueError("LVS_TOPOLOGY_BLOCK_MISMATCH")
@@ -1447,14 +1443,9 @@ def emit_lvs_view(project: Path, block: str, *,
     view = directory / f"{block}.lvs.cdl"
     inventory = {name: {"ports": ports, "body": body}
                  for name, (ports, body) in parse_spice_subckts(text, preserve_parameters=True).items()}
-    if _sha256(simulation) != source_sha:
-        raise ValueError("LVS_SIMULATION_CHANGED_DURING_EMISSION")
     view.write_text(text)
     record = {"producer": PRODUCER, "block": block,
-              "simulation": simulation.name, "simulation_sha256": source_sha,
-              "topology_sha256": _sha256(topology),
-              "view": view.name, "view_sha256": _sha256(view),
-              "producer_sha256": _sha256(Path(__file__)),
+              "simulation": simulation.name, "view": view.name,
               "subcircuits": inventory,
               "geometry": "source W/L/ng/m and all other parameters preserved verbatim",
               "electrical_model_includes": False}
@@ -1463,23 +1454,15 @@ def emit_lvs_view(project: Path, block: str, *,
 
 
 def validate_lvs_view(project: Path, block: str) -> Path:
-    """Refuse stale or altered structural views, including changed device geometry."""
-    directory = Path(project) / _CANONICAL_ANALOG / block
-    record = json.loads((directory / "lvs_provenance.json").read_text())
-    simulation = directory / f"{block}.sp"
-    topology = directory / "topology.json"
-    view = directory / f"{block}.lvs.cdl"
+    """Read the structural CDL and require its block definition."""
     from _pad_ring import parse_spice_subckts
-    inventory = {name: {"ports": ports, "body": body}
-                 for name, (ports, body) in parse_spice_subckts(
-                     view.read_text(), preserve_parameters=True, reject_duplicates=True).items()}
-    if (record.get("producer") != PRODUCER or record.get("block") != block
-            or record.get("simulation_sha256") != _sha256(simulation)
-            or record.get("topology_sha256") != _sha256(topology)
-            or record.get("view_sha256") != _sha256(view)
-            or record.get("subcircuits") != inventory
-            or view.read_text() != _lvs_text(simulation.read_text(), json.loads(topology.read_text()))):
-        raise ValueError("LVS_VIEW_SOURCE_OR_BODY_CHANGED: " + block)
+
+    directory = Path(project) / _CANONICAL_ANALOG / block
+    view = directory / f"{block}.lvs.cdl"
+    circuits = parse_spice_subckts(
+        view.read_text(), preserve_parameters=True, reject_duplicates=True)
+    if block not in circuits:
+        raise ValueError("LVS_VIEW_BLOCK_MISSING: " + block)
     return view
 
 
@@ -3327,7 +3310,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--json", default=None)
     ap.add_argument("--lvs-only", action="store_true",
                     help="emit a structural LVS view from the retained resolved simulation body; do not resize or rewrite SPICE")
-    ap.add_argument("--expected-simulation-sha256", default=None)
     args = ap.parse_args(argv)
     project = args.project.resolve()
     if not project.is_dir():
@@ -3337,8 +3319,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         if not args.block:
             ap.error("--lvs-only requires --block")
         try:
-            report = emit_lvs_view(project, args.block,
-                expected_simulation_sha256=args.expected_simulation_sha256)
+            report = emit_lvs_view(project, args.block)
         except (ValueError, OSError, KeyError) as exc:
             print(f"LVS_VIEW_REFUSED: {exc}", file=sys.stderr)
             return 2

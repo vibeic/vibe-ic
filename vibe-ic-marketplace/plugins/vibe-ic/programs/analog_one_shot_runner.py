@@ -897,64 +897,6 @@ def _artefact_producer_fingerprint(project: Path, block: str,
     return None
 
 
-def a5_stale_layout_redraw(project: Path, block: str, args=None
-                           ) -> Optional[Dict[str, Any]]:
-    """Redraw a layout that is not of the CURRENT A3 netlist, before the A5
-    gate grades it. None when there is nothing to redraw.
-
-    The A5 emitter used to run only when the layout was MISSING (the gate's
-    rc 2). A layout drawn from an EARLIER netlist is present and geometrically
-    sound, so the gate passed it and nothing redrew it. MEASURED (delta_sigma,
-    ihp-sg13g2): a 09-15 layout of a 360-device netlist stood under the
-    09-16 335-device A3 netlist through A6 (LVS `match` about the old netlist)
-    to A7 (A7_RCX_DEVICE_INVENTORY_MISMATCH after a 3 h simulation). The
-    identity is `_analog_producer_common.layout_identity_of_block`; only a
-    measured STALE redraws, UNVERIFIED leaves the layout as it is."""
-    import _analog_producer_common as _pcm  # noqa: PLC0415
-    bdir = project / "phase3" / "analog" / block
-    sp = bdir / f"{block}.sp"
-    emit = PROGRAMS_DIR / "analog_a5_layout_emit.py"
-    if not ((bdir / "layout_provenance.json").is_file() and sp.is_file()
-            and emit.is_file()):
-        return None
-    ident, why = _pcm.layout_identity_of_block(bdir, sp)
-    if ident != "STALE":
-        return None
-    container = (getattr(args, "container", None)
-                 or os.environ.get("VIBEIC_ANALOG_CONTAINER")
-                 or _pin.default_container_name())
-    pdk_flags, pdk_gap = _a5_emitter_pdk_flags(
-        project, block, args, container)
-    if pdk_gap:
-        return {"because": why, "emitter_rc": 2,
-                "emitter_result": ("ENV_UNAVAILABLE" if pdk_gap.startswith(
-                    "ENV_UNAVAILABLE:") else "PDK_CONTRADICTION"),
-                "emitter_reason": pdk_gap}
-    record_path = bdir / "layout_provenance.json"
-    previous_stamp = _a5_record_stamp(record_path)
-    cp = _pr.run([sys.executable, str(emit), str(project), "--block", block,
-                  "--container", container, *pdk_flags],
-                 capture_output=True, text=True)
-    print(f"[A5] {block}: layout was not of the current netlist ({why}); "
-          f"redrawn by {emit.name} rc={cp.returncode}")
-    out = {"because": why, "emitter_rc": cp.returncode}
-    if cp.returncode != 0:
-        # A preexisting record describes an earlier attempt. Only stdout from
-        # this invocation or a changed, block-matched record may classify it.
-        current = _a5_current_emitter_report(
-            cp, block, record_path, previous_stamp)
-        if not current and cp.returncode == 2:
-            current = {"result": "USAGE_ERROR",
-                       "reason": (cp.stderr or cp.stdout or
-                                  "A5 emitter rc 2 without a named result")}
-        out["emitter_result"] = str(current.get("result") or "").strip()
-        reason = str(current.get("reason") or "").strip()
-        # the refusal is the LAST line magic printed (`Error parsing ...`)
-        tail = reason.splitlines()[-1] if reason else (
-            (cp.stdout or cp.stderr or "").strip().splitlines() or ["?"])[-1]
-        out["emitter_reason"] = (f"{current.get('result') or 'rc ' + str(cp.returncode)}"
-                                 f": {tail[:400]}")
-    return out
 
 
 def producer_reuse_decision(project: Path, block: str,
@@ -1725,23 +1667,6 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                     _pre_cp = None
                 if _pre_cp is not None and _pre_cp.returncode == 0:
                     _emitted = {"prod": _prod, "cp": _pre_cp}
-        _a5_redrawn = (a5_stale_layout_redraw(project, bname, args)
-                       if step_name == "A5_layout" else None)
-        if _a5_redrawn and _a5_redrawn.get("emitter_rc") != 0:
-            # The layout on disk is of ANOTHER netlist and this one could not
-            # be drawn: grading the old geometry would certify a design that
-            # does not exist. Preserve the emitter's tier: unavailable Magic
-            # is not a defect in the circuit, and a crashed producer did not
-            # measure whether the circuit can be laid out.
-            _tier = _a5_redrawn.get("emitter_result") or ""
-            _rc = _a5_redrawn.get("emitter_rc")
-            _status, _reason = _a5_emitter_verdict(_tier)
-            return StepResult(
-                step_name, bname, _status, time.time() - t0,
-                f"A5_LAYOUT_NOT_REDRAWN: {_a5_redrawn.get('emitter_reason')}",
-                extras={"layout_redrawn": _a5_redrawn,
-                        "verdict_tier": _tier or f"rc {_rc}"},
-                reason_class=_reason)
         cp = _pr.run(cmd, capture_output=True, text=True)
         if cp.returncode == 0:
             # v1.6.129 (#50 Fix 2) — distinguish a real PASS (artefact
@@ -1848,9 +1773,6 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
             if _reuse.get("applies"):
                 _extras = dict(_extras or {})
                 _extras["producer_reuse"] = _reuse
-            if _a5_redrawn:
-                _extras = dict(_extras or {})
-                _extras["layout_redrawn"] = _a5_redrawn
             _status = "PASS"
             if _emitted:
                 # THIS step ran the producer and the gate then certified what

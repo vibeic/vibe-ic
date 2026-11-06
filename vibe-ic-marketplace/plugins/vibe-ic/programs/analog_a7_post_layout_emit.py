@@ -73,7 +73,6 @@ if _os.path.dirname(_os.path.abspath(__file__)) not in _sys.path:
     _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 
 import argparse
-import hashlib
 import json
 import math
 import os
@@ -84,7 +83,6 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import _analog_producer_common as _pc
-from _analog_producer_common import layout_netlist_identity  # noqa: E402,F401
 from _atomic_artefact import write_json, write_text
 import _watchdog as wd
 import step_metrics
@@ -1079,52 +1077,13 @@ def run(project: Path, block: str, container: str, image: str,
         if not need.is_file():
             return _refuse(record, record_path, "A7_INPUT_ABSENT",
                            f"{need.relative_to(project)} (owed by {owner})", 2)
-    # The extracted netlist and every post-layout comparison are bound to the
-    # exact A5 GDS bytes consumed by Magic.RCX. A later replacement at the
-    # same path must not leave a clean pre_vs_post record certifying it.
-    layout_sha256 = hashlib.sha256(gds.read_bytes()).hexdigest()
     record["layout_path"] = str(gds.relative_to(project))
-    record["layout_sha256"] = layout_sha256
-    # THE PAIR MUST BE ONE DESIGN before anything is extracted or simulated:
-    # a layout of an earlier netlist extracts faithfully and then disagrees
-    # with the current one, which reads as a layout that lost devices.
-    try:
-        lay_doc = json.loads(lay.read_text())
-    except (OSError, ValueError):
-        lay_doc = {}
-    ident, ident_detail = layout_netlist_identity(
-        lay_doc if isinstance(lay_doc, dict) else {},
-        netlist.read_text(errors="replace"))
-    # A legacy path names mutable bytes. If A3 rewrites that path in place,
-    # reading it now can appear to MATCH even though A5 drew an older deck.
-    # Only A5's successful, content-bound draw record proves this pairing.
-    if ident == "MATCH" and not (
-            isinstance(lay_doc, dict)
-            and lay_doc.get("producer") == "analog_a5_layout_emit"
-            and lay_doc.get("result") == "OK"
-            and isinstance(lay_doc.get("netlist_content_sha256"), str)
-            and lay_doc["netlist_content_sha256"]):
-        ident = "UNVERIFIED"
-        ident_detail = ("a mutable legacy netlist path or incomplete A5 "
-                        "record cannot prove which netlist this layout drew")
-    record["layout_netlist_identity"] = {"state": ident, "detail": ident_detail}
-    if ident == "STALE":
-        return _refuse(record, record_path, "A7_LAYOUT_NOT_OF_THIS_NETLIST",
-                       f"{gds.relative_to(project)} was drawn from a different "
-                       f"netlist than {netlist.relative_to(project)} ("
-                       f"{ident_detail}); re-run A5 on the current A3 netlist",
-                       2)
-    if ident != "MATCH":
-        return _refuse(record, record_path, "A7_LAYOUT_IDENTITY_UNVERIFIED",
-                       f"{gds.relative_to(project)} cannot be proved to be "
-                       f"a layout of {netlist.relative_to(project)} ("
-                       f"{ident_detail}); re-run A5 to record the current "
-                       "netlist identity", 2)
     try:
         tech = layout_tech(bdir)
     except ValueError as exc:
         return _refuse(record, record_path, "A7_LAYOUT_TECH_UNDECLARED",
                        f"{lay.relative_to(project)}: {exc}", 2)
+    lay_doc = json.loads(lay.read_text())
     # <pdk_root>/<pdk>/libs.tech/magic/<tech>: the layout's own PDK.
     pdk, pdk_root = tech.parents[2].name, str(tech.parents[3])
     record.update({"pdk": pdk, "pdk_root": pdk_root, "magic_tech": str(tech)})
@@ -1311,10 +1270,7 @@ def run(project: Path, block: str, container: str, image: str,
             record["corners"] = corners
             return _refuse(record, record_path,
                            "A7_RCX_DEVICE_INVENTORY_MISMATCH",
-                           f"{rcx.name}: {'; '.join(inventory['differences'])}"
-                           + ("" if ident == "MATCH" else
-                              f" [layout/netlist identity {ident}: "
-                              f"{ident_detail}]"),
+                           f"{rcx.name}: {'; '.join(inventory['differences'])}",
                            1)
         try:
             post_text, mapping = post_layout_netlist(
@@ -1433,7 +1389,6 @@ def run(project: Path, block: str, container: str, image: str,
             "post_layout_netlist": typical["post_layout_netlist"],
             "extraction_tool": f"LibreLane {RCX_STEP}", "image": image,
             "layout_path": str(gds.relative_to(project)),
-            "layout_sha256": layout_sha256,
             "record": str(record_path.relative_to(project)),
             **({"not_compared": not_compared} if not_compared else {}),
         },

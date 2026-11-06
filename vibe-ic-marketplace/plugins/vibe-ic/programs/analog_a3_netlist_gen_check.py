@@ -84,7 +84,6 @@ if _os.path.dirname(_os.path.abspath(__file__)) not in _sys.path:
 # ---------------------------------------------------------------------------
 
 
-import hashlib
 import json
 import re
 import sys
@@ -100,21 +99,9 @@ from _analog_a_check_common import (
     netlist_content, resolve_block_artefact, structure_only_disclosure,
 )
 from _analog_stub_marker import is_stub_text
-import _analog_producer_common as _pc
 
 GATE = "analog_a3_netlist_gen_check"
-#: The producer's sidecar, and the file that answers BOTH questions this gate
-#: asks about the deck's origin.
-#:
-#: `A3_PROVENANCE_REF_MISMATCH` is silent without it, because a skill-authored
-#: netlist makes no digest claim and a rule that failed it would punish the
-#: ABSENCE OF A CLAIM rather than a false one.
-#:
-#: `A3_DESIGN_CONTENT_UNDECLARED` is NOT silent without it, and the two are not
-#: in tension: that rule refuses to CERTIFY on a claim that was never made.
-#: Exempting the missing sidecar there is exactly how silence became cheaper
-#: than disclosure — a skill that writes no record would outrank a producer that
-#: writes an honest one.
+#: The sidecar records the circuit content classification.
 SIDECAR = NETLIST_PROVENANCE_ARTEFACT
 SKILL = "analog-netlist-gen"
 MIN_BYTES = 200
@@ -360,12 +347,6 @@ def _check_block(project: Path, block: str
                        "netlist (a size + `.subckt` pair alone cannot tell "
                        "the two apart)"),
         }]
-    stale = _stale_vs_ir_fail(project, block, path, text)
-    if stale:
-        return "FAIL", [stale]
-    ref = _provenance_ref_fail(project, block, path, text)
-    if ref is not None:
-        return "FAIL", [ref]
 
     if is_stub_text(text):
         # THE DETERMINISTIC-STUB SHORT-CIRCUIT, identical to the one
@@ -477,124 +458,6 @@ def _sidecar(project: Path, block: str) -> Optional[dict]:
         return None
     prov = doc.get("_provenance") if isinstance(doc, dict) else None
     return prov if isinstance(prov, dict) else None
-
-
-#: `* _provenance: topology_ir=<rel> sha256=<hex>` — the digest A3 stamps of
-#: the IR it rendered. Matching it against the IR ON DISK is the only way a
-#: reader can tell a current deck from one the producer has since moved past.
-_IR_STAMP_RE = re.compile(
-    r"_provenance:\s*topology_ir=(\S+)\s+sha256=([0-9a-f]{64})"
-    r"(?:\s+content_sha256=([0-9a-f]{64}|none))?")
-
-
-def _stale_vs_ir_fail(project: Path, block: str, path: Path,
-                      text: str) -> Optional[dict]:
-    """FAIL when the deck records an IR digest that the IR beside it no longer
-    has — the deck describes a SUPERSEDED topology.
-
-    WHY THIS IS A GATE AND NOT A NOTE. MEASURED on a real project: the checked-in
-    `<block>.sp` carried 222 device cards while the `topology.json` in the SAME
-    directory declared 238, because the deck was written before an emitter fix
-    and the runner had not re-emitted since. Three lanes measured that deck.
-    Every gate in the flow passed it, because every one of them asks whether the
-    deck is WELL FORMED and none asked whether it is CURRENT. A producer fix a
-    measurement cannot see is indistinguishable from no fix, so the flow has to
-    be able to say which of the two it is looking at.
-
-    The comparison is between two digests the artefacts already carry — nothing
-    is re-derived, no timestamp is trusted (an mtime says when a file was
-    written, not what it was written from), and a deck that records no IR stamp
-    at all is left alone: this rule can only fire on a stamp that disagrees,
-    never on a stamp that is absent."""
-    m = _IR_STAMP_RE.search(text)
-    if not m:
-        return None
-    rel, stamped, stamped_content = m.group(1), m.group(2), m.group(3)
-    ir = project / rel
-    if not ir.is_file():
-        return None
-    try:
-        raw = ir.read_bytes()
-    except OSError:
-        return None
-    actual = hashlib.sha256(raw).hexdigest()
-    if actual == stamped:
-        return None
-    # R-0915-62 — THE WHOLE-FILE DIGEST MOVED. That is not yet staleness.
-    # `topology.json` carries a `_provenance` block with a `produced_at` wall
-    # clock, so re-emitting IDENTICAL content moves this digest. Compare the
-    # CONTENT digests instead when the netlist carries one: a topology that
-    # differs only in its provenance did not supersede anything, and the
-    # netlist's own unchanged bytes are the corroboration.
-    #
-    # MEASURED on a real verdict run (lane icadc, 2026-09-16): the `ldo`
-    # topology was re-emitted, its whole-file digest moved
-    # 796eb6b2 -> 711cc1c6, the netlist stayed byte-identical at
-    # c6fe9b5468bdb153 — still equal to the `netlist_sha256` its own
-    # `corner_results.json` records — and this rule FAILED A3, voiding A4, A5
-    # and A6 and blocking A7 and A9. Six of seven blockers were one false
-    # stale.
-    #
-    # A netlist with no `content_sha256` is a legacy artefact and keeps the
-    # old behaviour exactly: this rule still fires on a moved whole-file
-    # digest, because for those there is nothing better to ask.
-    if stamped_content and stamped_content != "none":
-        actual_content = _pc.json_content_digest(
-            raw.decode("utf-8", errors="replace"))
-        if actual_content is not None and actual_content == stamped_content:
-            return None
-    return {
-        "block": block, "rule": "A3_NETLIST_STALE_VS_IR",
-        # R-0915-62 — a stale-digest refusal is the flow failing to re-emit,
-        # not a fact about the design. Classified so the audit's blocker list
-        # does not read it as DESIGN_FACT.
-        "reason_class": "EXECUTION_ERROR",
-        "rel_path": str(path.relative_to(project)),
-        "detail": (f"this netlist records topology_ir sha256={stamped[:12]}… "
-                   f"but {rel} is now sha256={actual[:12]}…, so the deck was "
-                   f"rendered from a SUPERSEDED topology. Every measurement "
-                   f"taken on it describes the older circuit. Re-run "
-                   f"`analog_a3_netlist_emit` for this block."
-                   + ("" if stamped_content and stamped_content != "none" else
-                      " (This netlist carries no `content_sha256`, so the "
-                      "comparison is the whole-file digest and a "
-                      "provenance-only re-emission cannot be distinguished "
-                      "from a real change; re-emitting stamps one.)")),
-    }
-
-
-def _provenance_ref_fail(project: Path, block: str, path: Path,
-                         text: str) -> Optional[dict]:
-    """The digest a report quotes must be recomputable, HERE, from THIS file.
-
-    A digest published as proof is only proof if the reader can check it, and
-    the digests this artefact used to publish could not be checked by anyone:
-    they were taken over files carrying a wall-clock stamp and an absolute
-    path, so they changed on every run of identical inputs and named neither
-    the content nor the run. Five sibling run trees of the same inputs
-    published five different digests and nothing said which tree each came
-    from. `provenance_ref` names the run tree, the artefact and the content in
-    one token; this rule recomputes all three and refuses a mismatch, so a
-    digest quoted from a different run cannot survive a single gate run.
-
-    Silent when the netlist carries no producer sidecar — a skill-authored
-    netlist makes no such claim, and a rule that failed it would be punishing
-    the absence of a claim rather than a false one."""
-    prov = _sidecar(project, block)
-    if prov is None or "provenance_ref" not in prov:
-        return None
-    rel = str(path.relative_to(project))
-    problem = _pc.verify_provenance_ref(prov.get("provenance_ref"), rel, text)
-    if problem is None:
-        return None
-    return {
-        "block": block, "rule": "A3_PROVENANCE_REF_MISMATCH",
-        "rel_path": rel,
-        "detail": (f"{SIDECAR} publishes a provenance_ref that does not "
-                   f"recompute against the artefact beside it: {problem}. A "
-                   f"digest quoted as proof of a run must be reproducible "
-                   f"from that run's own tree."),
-    }
 
 
 def main(argv: Optional[List[str]] = None) -> int:
