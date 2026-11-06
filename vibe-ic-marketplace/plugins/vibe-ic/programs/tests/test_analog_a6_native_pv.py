@@ -139,17 +139,8 @@ def test_runner_receives_resolved_deck_and_gds():
     import tempfile
     with tempfile.TemporaryDirectory() as td:
         p = _mk_project(Path(td))
-        try:
-            st = PV.run_block_pv(p, "u_ldo", _res(),
-                                 drc_runner=drc_runner, lvs_runner=lvs_runner)
-        except _ce.ContainerImageMismatch as exc:
-            pytest.fail(
-                f"{_pin.CONTAINER_IMAGE_MISMATCH}: the container this producer "
-                f"selected, {selected}, exists on this host and runs bytes "
-                f"other than the pinned ones, so nothing was measured about "
-                f"the deck or the GDS. This is a fact about the host, not "
-                f"about the producer — remove or re-create that container. "
-                f"The refusal, verbatim: {exc}")
+        st = PV.run_block_pv(p, "u_ldo", _res(),
+                             drc_runner=drc_runner, lvs_runner=lvs_runner)
     assert st["ran"] is True
     # NOT VACUOUS: the DRC and LVS paths both have to have reached a runner.
     assert set(seen) == {"drc", "lvs"}, (

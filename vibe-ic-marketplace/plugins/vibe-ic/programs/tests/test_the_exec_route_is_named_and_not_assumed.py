@@ -85,8 +85,6 @@ def route(monkeypatch):
             P3.shutil, "which",
             lambda n, *a, **k: (docker_path if n == "docker"
                                 else real_which(n, *a, **k)))
-        monkeypatch.setattr(_PIN, "container_pin_state",
-                            lambda container, env=None: pin_state)
         if eda_container is None:
             monkeypatch.delenv("EDA_CONTAINER", raising=False)
         else:
@@ -114,22 +112,6 @@ def test_container_route_is_byte_identical_when_docker_exists(route):
     assert P3._exec_argv("some_other_name", "true")[:2] == ["docker", "exec"]
 
 
-def test_the_container_route_refuses_a_container_holding_other_bytes(route):
-    """THE OTHER DIRECTION of the staging above, so nothing is lost by it.
-
-    A name is a label whichever process got there first is holding.  When the
-    container under that name PROVABLY runs bytes other than the pinned ones,
-    the seam must not assemble an argv at all — it must raise, naming both
-    digests, before anything is executed in it.  (An UNREADABLE digest is
-    deliberately NOT a mismatch and is left to docker to report; that split
-    lives in `_eda_pin.container_pin_state` and is pinned there.)"""
-    why = ("CONTAINER_IMAGE_MISMATCH: container vibeic-eda runs sha256:"
-           + "0" * 64 + ", but the pinned runtime is <repo>@" + _PIN.IMAGE_DIGEST)
-    route(docker_path="/usr/bin/docker", eda_container=None,
-          pin_state=("MISMATCH", why))
-    with pytest.raises(_CEX.ContainerImageMismatch) as excinfo:
-        P3._exec_argv("vibeic-eda", "true")
-    assert _PIN.IMAGE_DIGEST in str(excinfo.value)
 
 
 def test_an_unreadable_container_digest_is_not_a_refusal(route):

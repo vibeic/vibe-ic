@@ -135,17 +135,6 @@ def test_unreadable_pdk_is_disclosed_not_fabricated(tmp_path):
     assert not any(line.startswith("set_") for line in text.splitlines())
 
 
-def test_wrong_pinned_image_is_not_read(tmp_path, monkeypatch):
-    assert env is not None
-
-    def refuse(*_args):
-        raise p3._cex.ContainerImageMismatch("image identity differs")
-
-    monkeypatch.setattr(p3._cex, "docker_exec_argv", refuse)
-    liberty = "/pdk/family/libs.ref/quartz_sc/lib/slow.lib"
-    values, unread = p3._sdc_environment_pdk_values(liberty, "wrong-eda")
-    assert values == {}
-    assert unread and all(item.startswith("NOT_READ:") for item in unread)
 
 
 

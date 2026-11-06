@@ -47,18 +47,3 @@ def test_unreadable_image_is_not_read_not_a_number(tmp_path):
     value, source = p3._flow_default_core_util(tmp_path)
     assert value is None
     assert source.startswith("NOT_READ:")
-
-
-def test_wrong_pinned_image_is_disclosed_not_read(tmp_path, monkeypatch):
-    reports = tmp_path / "reports"
-    reports.mkdir()
-    (reports / "container_image.json").write_text(json.dumps({"container": "wrong-eda"}))
-
-    def refuse(*_args):
-        raise p3._cex.ContainerImageMismatch("image identity differs")
-
-    monkeypatch.setattr(p3._cex, "docker_exec_argv", refuse)
-    monkeypatch.setattr(p3._cex, "local_exec_mode", lambda _tag: False)
-    value, source = p3._flow_default_core_util(tmp_path)
-    assert value is None
-    assert source.startswith("NOT_READ:")

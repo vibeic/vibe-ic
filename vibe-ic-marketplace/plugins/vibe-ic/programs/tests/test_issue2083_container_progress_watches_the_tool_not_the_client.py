@@ -177,7 +177,6 @@ def test_run_in_container_hands_the_container_channel_to_the_supervisor(
         seen["cmd"] = cmd
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
-    monkeypatch.setattr(ce._pin, "container_attach_refusal", lambda _c: None)
     monkeypatch.setattr(ce._pr, "run", fake_run)
     ce.run_in_container("some-container", "true", deadline_s=5)
     assert seen.get("progress_probe") is not None, (

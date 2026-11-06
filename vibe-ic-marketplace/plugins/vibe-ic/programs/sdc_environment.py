@@ -105,8 +105,7 @@ def _sdc_environment_pdk_values(liberty_path: str, container: str,
                     continue
                 body = run.stdout
                 source = str(config_c)
-        except (OSError, subprocess.TimeoutExpired,
-                _cex.ContainerImageMismatch):
+        except (OSError, subprocess.TimeoutExpired):
             unread.append(f"NOT_READ: pinned PDK config {config_c}")
             continue
         for line in body.splitlines():
@@ -432,7 +431,7 @@ def _read_pdk_file(path: str, container: str,
                                  capture_output=True, text=True, timeout=120)
             if run.returncode == 0:
                 return run.stdout, f"container {container}"
-        except (OSError, subprocess.TimeoutExpired, _cex.ContainerImageMismatch):
+        except (OSError, subprocess.TimeoutExpired):
             pass
     try:
         return Path(path).read_text(errors="replace"), "host"

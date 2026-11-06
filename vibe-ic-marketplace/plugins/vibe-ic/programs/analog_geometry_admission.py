@@ -151,8 +151,6 @@ def read_source(key, runtime):
             raise ValueError("GEOMETRY_ADMISSION_SOURCE_CHANGED: " + key)
         return source.read_bytes()
     except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
-        if isinstance(exc, _ce.ContainerImageMismatch):
-            raise
         raise ValueError("GEOMETRY_ADMISSION_SOURCE_CHANGED: " + key) from exc
 
 
@@ -228,7 +226,7 @@ def main(argv=None):
                 temporary.replace(output)
             finally:
                 temporary.unlink(missing_ok=True)
-    except (_ce.ContainerImageMismatch, ValueError, OSError) as exc:
+    except (ValueError, OSError) as exc:
         print(str(exc) if isinstance(exc, ValueError) else "GEOMETRY_ADMISSION_PUBLICATION_REFUSED")
         return 2
     print("GEOMETRY_ADMISSION_MIGRATED")

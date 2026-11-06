@@ -88,21 +88,3 @@ def test_an_injected_resolution_is_preserved(tmp_path, monkeypatch):
     assert context["status"] == "OK", context
     assert context["family"] == "injectedprocess"
     assert context["role_models"] == DEVICES
-
-
-def test_resolver_image_mismatch_keeps_its_original_exception(tmp_path, monkeypatch):
-    import _container_exec as container_exec
-
-    project = staged_project(tmp_path, declared="declared_process")
-    refusal = container_exec.ContainerImageMismatch("original resolver image refusal")
-
-    def refused_resolution(*args, **kwargs):
-        raise refusal
-
-    monkeypatch.setattr(availability, "resolve_pdk", refused_resolution)
-    try:
-        A3.resolve_pdk_context(project, "declared_process", "", ROLES)
-    except container_exec.ContainerImageMismatch as actual:
-        assert actual is refusal
-    else:
-        raise AssertionError("resolver image refusal was converted into a model outcome")

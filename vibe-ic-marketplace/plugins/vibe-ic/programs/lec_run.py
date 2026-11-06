@@ -3224,14 +3224,6 @@ def _docker_exec3(container: str, cmd: str):
 def _container_available(container: str) -> bool:
     """Can this process run anything in `container`?
 
-    `ContainerImageMismatch` IS DELIBERATELY NOT CAUGHT HERE (vibe-ic#2173).
-    It is not an availability answer: the container is right there, yosys is
-    right there, and what was refused is the RIGHT to use bytes this repo does
-    not pin. Answering `False` would report it as the "container not available
-    — runner should disclosed-skip" case one line below, which is a capability
-    gap this flow deliberately carries and a completely different sentence.
-    `main`'s door guard below catches it and reports the refusal in its own
-    tier; `entry` is the backstop for the container touches further down.
     """
     try:
         return _docker(container, "true", timeout=30).returncode == 0
@@ -3286,8 +3278,6 @@ def _container_dir_writable(container: str, path: str) -> Tuple[bool, str]:
     return False, (f"the container cannot write into {path} ({detail}) — "
                    "checkpointing disabled for this run; the recipe is the "
                    "un-checkpointed one")
-
-
 
 
 def _yosys_version(container: str) -> Optional[str]:
@@ -3352,8 +3342,6 @@ def build_proof_identity(*, project: Path, gold_files: List[str],
         "yosys": {"version": yosys_version},
         "container": {"image_digest": image_digest},
     }
-
-
 
 
 def _strip_login_banner(text: str) -> str:
@@ -3493,36 +3481,6 @@ def build_scan_wrappers(top: str, rtl_ports: List[Tuple[str, str, str]],
     return gate, gold
 
 
-#: R-0915-97 — EQUIV_MAKE PAIRS BY NAME, AND A MAPPED MEMORY HAS TWO NAMES.
-#:
-#: MEASURED, sha256 x sky130A, lane icsha2, run17's own RTL+netlist pair. The
-#: gold side runs `memory_map`, which splits each memory into WORDS and names
-#: them `\h_reg[0]` .. `\h_reg[7]`, `\w_reg[0]` .. `\w_reg[15]`. The GATE
-#: netlist carries the same storage as ONE WIDE VECTOR under the memory's base
-#: name -- `wire [255:0] \h_reg[0]` (netlist.v:32063) and
-#: `wire [511:0] \w_reg[0]` (:32105). So `h_reg[1..7]` and `w_reg[1..15]` exist
-#: on the gold side and NOWHERE on the gate side: 672 bits of state that
-#: `equiv_make` leaves unpaired, i.e. FREE and unrelated on the two sides.
-#:
-#: Nothing downstream of them can ever be proven -- `e_s_reg <= h_reg[4]` is a
-#: comparison between a gold word and a gate wire that is not the same signal --
-#: and that is exactly the 481 unproven points run17 reported: `dig_reg` 224,
-#: `hh/g/f/d/c/b_reg` 32 each, `e_s_reg` 32, `delta_reg` 32, `e_reg` 1. It is
-#: NOT a logic difference and NOT induction weakness: four ladder arms
-#: (`equiv_struct -icells`, `opt_dff -sat` on both sides, a carry-save
-#: cut-point, `-seq 66/80`) each stopped at 501-1000 unproven, and 0
-#: counterexamples were ever found.
-#:
-#: WITH THE WORDS ALIASED the SAME pair proves in 75 s: "Proved 1570 previously
-#: unproven $equiv cells ... 2209 are proven and 0 are unproven. Equivalence
-#: successfully proven!" -- reproduced in the pinned image on 8HD-6.
-#:
-#: DERIVED, NEVER A DESIGN LITERAL. The word NAMES come from the gold side's own
-#: post-`memory_map` wire list, and the total width from the gate netlist's own
-#: declaration; the word width is their quotient. A gate that already carries
-#: per-word names gets NOTHING emitted, and a gold word with no gate bits to
-#: alias is a FINDING, not a silent skip -- aliasing a word that does not exist
-#: would manufacture agreement, which is the one thing this must never do.
 _MEM_WORD_RE = re.compile(r"^\\?(?P<base>[A-Za-z_][\w$.]*)\[(?P<idx>\d+)\]$")
 _GATE_WIDE_RE = re.compile(
     r"^\s*wire\s*\[\s*(?P<hi>\d+)\s*:\s*0\s*\]\s*\\(?P<name>\S+)\s*;",
@@ -3675,7 +3633,6 @@ def blacklist_candidates(log_text, unproven, proven):
             seen.add(rec["d"])
             out.append(rec)
     return sorted(out, key=lambda r: r["d"])
-
 
 
 #: R-0915-97(3) — A HELPER WITH TESTS IS NOT A FIX UNTIL THE RUNNER RUNS IT.
@@ -5290,77 +5247,6 @@ def _resolve_gold_top(gold_files: List[str], top: str,
     return resolved, note
 
 
-def _drop_started_artefacts(*paths) -> List[str]:
-    """Remove the files `main` had already created, and name what it removed.
-
-    A run the environment refused wrote nothing about the design, so it must
-    leave nothing that looks like the beginning of one: an operator who finds
-    a live log and a telemetry sidecar with no report cannot tell a refused run
-    from a killed one. Best-effort by design — a file that cannot be removed is
-    not worth failing a refusal over, and the returned list says which ones
-    actually went.
-    """
-    dropped: List[str] = []
-    for pth in paths:
-        try:
-            if pth is not None and Path(pth).is_file():
-                Path(pth).unlink()
-                dropped.append(str(pth))
-        except OSError:
-            pass
-    return dropped
-
-
-def _report_env_refusal(exc: BaseException, dropped: List[str]) -> int:
-    """The ONE place this program says "the environment refused me".
-
-    vibe-ic#2173. `ContainerImageMismatch` is a `RuntimeError` and MEASURED
-    2026-09-07 on 8HD-6 against `a1f3685837ca` NOTHING on this path caught it:
-    `lec_run <project> --top top --container vibeic-eda` against a container
-    whose digest is not the pin exited 1 with a traceback ending in
-    `_container_exec.ContainerImageMismatch`, wrote no `reports/lec.json`, and
-    left `reports/lec.live.*.rpt` + `reports/lec.telemetry.*.json` behind. The
-    one line naming BOTH digests -- the only line a reader can act on --
-    reached the exit code as a bare 1 and the run record nowhere at all.
-
-    So it is reported as a REFUSAL and not as any of the things it is not: not
-    the "container not available -- runner should disclosed-skip" case (yosys
-    is there and is usable; the RIGHT to use it is what was refused), not a
-    verdict about the design, and not the tool's own rc.
-    """
-    print(f"{_ce.IMAGE_REFUSAL_MARK}{exc}", file=sys.stderr)
-    print(f"[lec_run] ENV_REFUSED: no equivalence was attempted and NO "
-          f"reports/lec.json was written: this is NOT a statement about the "
-          f"design, and NOT a missing toolchain — the container holds the "
-          f"wrong bytes."
-          + (f" Started artefacts removed: {dropped}." if dropped else ""),
-          file=sys.stderr)
-    return _ce.EX_ENV_REFUSED
-
-
-def entry(argv: Optional[List[str]] = None) -> int:
-    """`main`, with the environment refusal lifted out of the body.
-
-    THE BACKSTOP, and it is a WRAPPER rather than a rename. `main` keeps its
-    name and its whole body because three shipped guards read that body --
-    `inspect.getsource(lec_run.main)` in `test_lec_proof_checkpoint_resume`
-    among them -- and moving it under another name is a rename those guards
-    cannot follow: MEASURED here, it turned
-    `test_recovery_runs_before_the_prune_in_main` red for a reason that had
-    nothing to do with checkpoint recovery.
-
-    The door guard inside `main` (`_container_available`) is where a mismatch
-    is reached on every ordinary run, and it cleans up the two files `main` has
-    already opened. This wrapper is the backstop for the container touches
-    further down: a refusal from ANY of them is still a refusal, and this
-    program must never hand one to a caller as a traceback again.
-    """
-    try:
-        return main(argv)
-    except _ce.ContainerImageMismatch as exc:
-        return _report_env_refusal(exc, [])
-
-
 def _positive_completed_rung_cap(value: str) -> int:
     """Argparse type for the opt-in completed-rung policy.
 
@@ -5458,14 +5344,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
 
     container = "host" if _ce.local_exec_mode(PROGRAM) else args.container
-    try:
-        _reachable = _container_available(container)
-    except _ce.ContainerImageMismatch as exc:
-        # THE DOOR GUARD. Caught HERE and not only in `entry` because the two
-        # files above are already on disk: a refused run must take them back
-        # with it, or a reader finds the opening of a run that never happened.
-        return _report_env_refusal(
-            exc, _drop_started_artefacts(live_log_path, telemetry_path))
+    _reachable = _container_available(container)
     if not _reachable:
         print(f"[lec_run] ERROR: container '{container}' not available "
               "(docker/yosys cannot run) — runner should disclosed-skip.",
@@ -7139,4 +7018,4 @@ def main(argv: Optional[List[str]] = None) -> int:
 if __name__ == "__main__":
     # A stall is not a verdict about the subject: it reaches the exit
     # code as rc 2 (UNDETERMINED), announced, never as a finding.
-    sys.exit(_pr.exit_undetermined_on_stall(entry))
+    sys.exit(_pr.exit_undetermined_on_stall(main))

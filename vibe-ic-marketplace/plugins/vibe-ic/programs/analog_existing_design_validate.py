@@ -212,7 +212,7 @@ def validate(project, block, pdk, container=""):
                    design_content="structure_and_geometry" if spec_bound else "structure_only",
                    inputs=inputs, device_count=len(actual["devices"]),
                    normalized_cards_sha256=hashlib.sha256(json.dumps(actual, sort_keys=True).encode()).hexdigest())
-    except (FileNotFoundError, emitter._ce.ContainerImageMismatch) as exc:
+    except FileNotFoundError as exc:
         row.update(status="NOT_MEASURED", detail=str(exc))
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         row.update(detail=str(exc))

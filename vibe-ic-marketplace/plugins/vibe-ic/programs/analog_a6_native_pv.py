@@ -278,25 +278,6 @@ def _parse_svrf_tally(text: str) -> Tuple[int, int, int]:
     return fails, passes, skips
 
 
-# ── deck KIND, and why this dispatch exists ─────────────────────────────────
-#
-# THE DEFECT THIS CLOSES, MEASURED. The resolver's `drc_deck` axis globs
-# `input/pdk/klayout/*.drc` — correctly, because a KLayout DRC runset is what an
-# OPEN PDK actually ships. The only DRC ENGINE wired here was `svrfdrc`, which
-# reads SVRF (`.rule`). Handed an open PDK's KLayout-DSL runset it does not
-# crash: it derives the layers, finds **0 rules**, and writes a report whose
-# tally is empty. A6 then reports `A6_PV_DRC_NO_EVIDENCE` — correctly refusing
-# it, and fail-closed, so nothing was ever falsely certified clean. But the
-# design's own staged deck had been resolved and handed over, and the block
-# never got a DRC run at all.
-#
-# Measured on one block, same GDS, same container: `svrfdrc` on the open PDK's
-# runset -> "0 layers, 122 derivations, 0 rules", empty tally, A6 NO_EVIDENCE;
-# the same runset under `klayout -b -r` -> 4 real violations in 5 s.
-#
-# So the fix is not a new capability and not a new tool — both engines were
-# already on PATH in the pinned image. It is a DISPATCH: run the deck with the
-# engine that can read it.
 _SVRF_DECK_SUFFIXES = (".rule", ".svrf")
 _KLAYOUT_DECK_SUFFIXES = (".drc", ".lydrc")
 
@@ -1017,26 +998,8 @@ def unreadable_rule_messages(attribution: Dict[str, Any]) -> List[str]:
 SECOND_ENGINE_NOT_MEASURED = "NOT_MEASURED"
 
 
-def second_engine_not_measured(reason: str = "", *, container: str = "",
-                               refusal: str = "") -> Dict[str, Any]:
-    """The record for "the second engine did not grade anything", BY NAME.
-
-    ONE SHAPE, ONE PLACE — vibe-ic#2156. This record used to be composed in the
-    caller with a fixed sentence, and the runner's own `why` was dropped on the
-    floor one frame below (`attribution, why = run(...)` and then
-    `if attribution is None: return None`). So every way the engine could fail
-    to run — an absent container, a docker that would not start, and a container
-    running bytes other than the pinned ones — reached the report as the same
-    sentence, and the wrong-image case did not reach it at all: a
-    `ContainerImageMismatch` is a `RuntimeError` and nothing on this path caught
-    it, so it escaped `run_block_pv` and took the whole A6 producer down.
-
-    `refusal` is set exactly when the engine was REFUSED rather than merely
-    unavailable — the container was reached and it is the wrong image — and it
-    carries the refusal `_eda_pin` composed, which names both digests. "I could
-    not look" and "I looked and was refused" are different facts and this keeps
-    them different.
-    """
+def second_engine_not_measured(reason: str = "", *, container: str = "") -> Dict[str, Any]:
+    """Describe the native second-engine result when it could not run."""
     record: Dict[str, Any] = {
         "engine": "magic drc(full)",
         "result": SECOND_ENGINE_NOT_MEASURED,
@@ -1046,10 +1009,6 @@ def second_engine_not_measured(reason: str = "", *, container: str = "",
     }
     if container:
         record["container"] = container
-    if refusal:
-        record["refusal"] = _pin.CONTAINER_IMAGE_MISMATCH
-        record["refusal_detail"] = refusal
-        record["required_digest"] = _pin.IMAGE_DIGEST
     return record
 
 
@@ -1083,13 +1042,6 @@ def second_engine_drc(project: Path, block: str, container: str,
                 if not out.is_file():
                     return None, "the attribution program wrote no report"
                 return json.loads(out.read_text()), ""
-            except _ce.ContainerImageMismatch as exc:
-                # A REFUSAL, NOT AN ABSENCE, and never an escape. The guarded
-                # argv builder raises this when the container it was asked for
-                # runs bytes other than the pinned ones; the refusal already
-                # names the container and BOTH digests, so it is relayed
-                # verbatim rather than summarised.
-                return None, str(exc)
             except (OSError, ValueError, SystemExit) as exc:
                 return None, f"the second engine did not run: {exc}"
             finally:
@@ -1098,8 +1050,7 @@ def second_engine_drc(project: Path, block: str, container: str,
     if attribution is None:
         why = str(why or "")
         return second_engine_not_measured(
-            why, container=container,
-            refusal=why if _pin.CONTAINER_IMAGE_MISMATCH in why else "")
+            why, container=container)
     if isinstance(attribution.get("blocks"), dict):
         attribution = attribution["blocks"].get(block, attribution)
     # THE AUTHORITATIVE GRADED SET is every KLayout runset's (main + extra,

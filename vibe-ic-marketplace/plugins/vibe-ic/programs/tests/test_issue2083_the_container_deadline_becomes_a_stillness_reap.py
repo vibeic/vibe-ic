@@ -54,7 +54,6 @@ def test_the_supervised_launch_carries_no_clock_and_stamps_its_identity(
         seen.update(kw)
         return subprocess.CompletedProcess(cmd, 0, "out", "")
 
-    monkeypatch.setattr(ce._pin, "container_attach_refusal", lambda _c: None)
     monkeypatch.setattr(ce._pr, "run", fake_run)
     cp = ce.run_in_container_supervised("c", "magic -noconsole x.tcl",
                                         ceiling_s=900.0)
@@ -83,7 +82,6 @@ def test_a_stall_is_reaped_by_identity_and_never_reported_as_the_tools_rc(
         raise pr.Stalled(cmd, 4, 5.0, 20.0, {"container": True, "cpu": True},
                          "partial", "")
 
-    monkeypatch.setattr(ce._pin, "container_attach_refusal", lambda _c: None)
     monkeypatch.setattr(ce._pr, "run", fake_run)
     import _docker_watchdog as dw
     monkeypatch.setattr(dw, "kill_supervised_job",

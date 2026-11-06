@@ -78,28 +78,6 @@ RC_HONEST_GAP = 2
 #: written, no report was written, and nothing about the project was learned.
 EX_USAGE = 64
 
-#: ENVIRONMENT REFUSED — the producer was correctly invoked against a real
-#: project and the ENVIRONMENT it needs refused it: the container it was told
-#: to use is provably not the pinned image, the pinned image is not on this
-#: host, the tool is not installed. `sysexits.h` EX_UNAVAILABLE.
-#:
-#: WHY IT IS ITS OWN TIER AND NOT ONE OF THE THREE ABOVE (vibe-ic#2088).
-#: MEASURED on 8HD-9, 2026-09-07, against 94617408759e: with the container
-#: named `vibeic-eda` holding `sha256:06537f7e…` while the pin names
-#: `sha256:8c5694ab…`, `analog_a3_netlist_emit --verify-sim` raised
-#: `ContainerImageMismatch` out of `_docker_ok`, exited 1 with a traceback and
-#: wrote NO gap file and NO --json report. The analog runner recorded
-#: `WAIVED A3_netlist_gen … deterministic producer ERRORED rc=1 and wrote NO
-#: gap file`, and A4..A7 then reported BLOCKED on a missing `.sp` — a verdict
-#: about an absence three steps downstream of the real cause.
-#:
-#: An environment refusal is NOT `RC_OK` (nothing was produced), NOT
-#: `RC_NO_INPUT` (the input was there and was read), NOT `RC_HONEST_GAP` (a
-#: gap is a statement about the DESIGN, and this one says nothing about the
-#: design at all) and NOT `EX_USAGE` (the command line was right). Folding it
-#: into any of them is what let a host condition be read as a producer defect.
-#: A caller may translate this tier into NOT_MEASURED and MUST NOT translate
-#: it into a verdict about the subject.
 EX_ENV_REFUSED = 69
 
 #: Line-start tokens, for a caller that reads text rather than an exit code.

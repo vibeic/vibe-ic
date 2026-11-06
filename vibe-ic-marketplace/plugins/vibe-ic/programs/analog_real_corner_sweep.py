@@ -917,24 +917,6 @@ def _resolve_ngspice(container):
     ]
     for probe in candidates:
         r = _docker(container, probe)
-        # "I WAS NOT ALLOWED TO LOOK" IS NOT "IT IS NOT THERE" (vibe-ic#2173).
-        # A container running bytes other than the pinned ones comes back as
-        # `IMAGE_MISMATCH_RC` with NOTHING RUN, and a bare `rc != 0: continue`
-        # spends the whole candidate list on it and then answers None -- which
-        # every reader of this function spells as the SIMULATOR BEING ABSENT:
-        # `_run_block` below, `analog_mc_yield_run` as a SKIP verdict, and
-        # `analog_loop_liveness_samples_emit` as an unreachable simulator. Each
-        # of those tells an operator to install a tool that IS installed.
-        #
-        # (No reader's exact sentence is quoted here on purpose: two shipped
-        # guards LOCATE their subject by finding one of those sentences in this
-        # source and reading the lines that follow, so a comment repeating one
-        # verbatim moves the guard onto itself -- measured, this one turned
-        # `test_sweep_exits_non_zero_when_it_cannot_reach_ngspice` red.)
-        #
-        # The refusal has no room in an `Optional[str]` return, so it is raised
-        # and the entry points below report it as its own tier.
-        _container_exec.raise_on_image_refusal(r)
         if r.returncode != 0:
             continue
         # v1.6.219 (#95 follow-up) — iic-osic-tools' `bash -lc` login
@@ -3769,13 +3751,6 @@ def run_block(project, block, container, pdk, topology_override):
     # `ams-sim` skill, which cannot supply a container or a memory ceiling.
     try:
         return _run_block(project, block, container, pdk, topology_override)
-    except _container_exec.ContainerImageMismatch as exc:
-        print(f"{_container_exec.IMAGE_REFUSAL_MARK}{exc}", file=sys.stderr)
-        print(f"ENV_REFUSED: analog_real_corner_sweep block={block}: nothing "
-              f"was simulated and NO artefact was written: this is NOT a "
-              f"statement about the design, and NOT a missing simulator — the "
-              f"container holds the wrong bytes.", file=sys.stderr)
-        return _container_exec.EX_ENV_REFUSED
     except _aca.AdmissionRefused as exc:
         # MEASURED (lane mig94, 0.3.77, u_hawaii_adc/ldo): a container started
         # without a memory ceiling made the first single-deck launch raise

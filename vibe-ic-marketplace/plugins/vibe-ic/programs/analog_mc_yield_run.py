@@ -506,23 +506,11 @@ def run_block(project: Path, block: str, container: str, pdk: str,
         except ValueError as exc:
             return {"verdict": "NOT_MEASURED", "rc": 2, "mc_runs": 0,
                     "reason": str(exc)}
-        except _container_exec.ContainerImageMismatch as exc:
-            return {"verdict": ENV_REFUSED_VERDICT,
-                    "rc": _container_exec.EX_ENV_REFUSED, "mc_runs": 0,
-                    "reason": (f"{_container_exec.IMAGE_REFUSAL_MARK}{exc} — "
-                               f"nothing was simulated; this is NOT a statement "
-                               f"about the design and NOT a missing simulator")}
     try:
         return _run_block(
             project, block, container, pdk, n,
             **({"ngspice_bin": ngspice_bin,
                 "_selected_binary": selected_binary} if ngspice_bin else {}))
-    except _container_exec.ContainerImageMismatch as exc:
-        return {"verdict": ENV_REFUSED_VERDICT,
-                "rc": _container_exec.EX_ENV_REFUSED, "mc_runs": 0,
-                "reason": (f"{_container_exec.IMAGE_REFUSAL_MARK}{exc} — "
-                           f"nothing was simulated; this is NOT a statement "
-                           f"about the design and NOT a missing simulator")}
     except _dr.MountRootUnresolved as exc:
         st = exc.status
         return {"verdict": st["verdict"], "rc": 2, "mc_runs": 0,

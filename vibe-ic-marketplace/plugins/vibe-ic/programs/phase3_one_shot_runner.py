@@ -2439,29 +2439,7 @@ READ_REFUSED = "READ_REFUSED"
 
 def read_text_or_container_cat(path: str, container: str = ""
                                ) -> Tuple[Optional[str], str]:
-    """`(text, why_not)` — host read first, then `docker exec <container> cat`.
-
-    THE (value, why) PRIMITIVE, and the reason it exists — vibe-ic#2156. The
-    wrapper below returns text or `None`, and a blanket `except Exception: pass`
-    around the container read meant that "the pin check could not be made" and
-    "the file is not there" arrived at the caller as the SAME `None`. Measured
-    2026-09-07 on 8hd-3: a stubbed `subprocess.run` raised inside
-    `_container_exec.docker_exec_argv`'s attach check, this function swallowed
-    it, and a working reader reported an absent file — which is the one rule
-    every other input in this repo is held to ("I could not read it" is not "I
-    read it and it was empty").
-
-    So every failure is CLASSIFIED and none is swallowed:
-
-      * a `ContainerImageMismatch` is a REFUSAL — the container was reached and
-        it runs the wrong bytes — and its `why` is prefixed `READ_REFUSED` and
-        carries the refusal `_eda_pin` composed, which names both digests;
-      * a docker that could not be run says so;
-      * anything else is still caught (this must never take a runner down) and
-        is reported BY ITS TYPE rather than discarded.
-
-    `why_not` is non-empty exactly when `text` is None.
-    """
+    """Read host text first, then try the container and report native read errors."""
     host_why = ""
     try:
         return Path(path).read_text(errors="ignore"), ""
@@ -2469,12 +2447,7 @@ def read_text_or_container_cat(path: str, container: str = ""
         host_why = f"host read of {path} failed: {type(exc).__name__}"
     if not container:
         return None, f"{host_why}, and no container was named to read it from"
-    try:
-        argv = _cex.docker_exec_argv(container, "cat", path)
-    except _cex.ContainerImageMismatch as exc:
-        return None, (f"{READ_REFUSED}: {path} was not read because the "
-                      f"container it would be read from is the wrong image — "
-                      f"{exc}")
+    argv = _cex.docker_exec_argv(container, "cat", path)
     try:
         r = subprocess.run(
             argv, capture_output=True, text=True, timeout=30,
