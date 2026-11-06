@@ -2031,17 +2031,17 @@ def _native_gate_parent_task(tmp_path, monkeypatch, *, wrapper_reject=False, run
     runner.write_text('''import pathlib, sys, subprocess, os
 from dataclasses import asdict
 sys.path.insert(0, %r)
-from design_one_shot_runner import _write_phase2_report, _required_site_row, StepResult
+from design_one_shot_runner import StepResult
 p = pathlib.Path(sys.argv[1]).resolve()
 assert sys.argv[sys.argv.index('--entry-step') + 1] == '2'
 source = (p/'phase2/stage1/rtl/dut.v').read_text()
 wrapper_reject = %r
 upstream_blocked = %r
 if upstream_blocked:
-    _write_phase2_report(p/'reports/orchestrator/phase2_one_shot.json', {
+    (p/'reports/orchestrator/phase2_one_shot.json').write_text(__import__('json').dumps({
         'verdict':'FAIL', 'steps':[{'name':'rtl_gen','status':'PASS'},
         {'name':'upstream_consumer','status':'FAIL'},
-        {'name':'rtl_validate','status':'BLOCKED'}]}, p)
+        {'name':'rtl_validate','status':'BLOCKED'}]}))
     sys.exit(0)
 container = os.environ.get('VIBEIC_REPAIR_TEST_CONTAINER')
 argv = (['docker','exec','-i',container,'yosys'] if container else ['yosys'])
@@ -2051,14 +2051,14 @@ lint = subprocess.run(argv + ['-Q','-T','-p',
 (p/'native_lint.json').write_text(__import__('json').dumps({
     'argv': argv, 'rc': lint.returncode, 'stdout': lint.stdout, 'stderr': lint.stderr,
     'wrapper_reject': wrapper_reject}))
-row = _required_site_row(p, 'rtl_validate', StepResult(
+row = StepResult(
     'neutral_native_lint', 'PASS' if lint.returncode == 0 and not wrapper_reject else 'FAIL',
-    detail=lint.stderr, extras={'native_rc':lint.returncode}))
-_write_phase2_report(p/'reports/orchestrator/phase2_one_shot.json', {
+    detail=lint.stderr, extras={'native_rc':lint.returncode})
+(p/'reports/orchestrator/phase2_one_shot.json').write_text(__import__('json').dumps({
     'verdict':row.status,
-    'steps':[{'name':'rtl_gen','status':'PASS','detail':'fixture'},asdict(row)]}, p)
+    'steps':[{'name':'rtl_gen','status':'PASS','detail':'fixture'},asdict(row)]}))
 ''' % (str(PROGRAMS), wrapper_reject, unmeasured))
-    argv = bd._resume_solver_argv(runner, project, True, "2", "2", resolve_manifest=False)
+    argv = bd._resume_solver_argv(runner, project, True, "2", "2")
     process = bd._RunnerBudget(1, None, 0).run(argv)
     assert process.error is None, process.error
     got = bd._collect_runner_result(process, argv, "rtllm", "p1", project)
@@ -2072,11 +2072,7 @@ _write_phase2_report(p/'reports/orchestrator/phase2_one_shot.json', {
     runner_selection = {} if runner_selection is None else runner_selection
     monkeypatch.setattr(bd, "_resume_solver_argv", lambda _runner, *args, **kwargs:
                         real_argv(runner_selection.get("path", runner), *args,
-                                  **{**kwargs, "resolve_manifest": False}))
-    snapshot = bd._runner_source_snapshot
-    monkeypatch.setattr(bd, "_runner_source_snapshot", lambda argv, **kw:
-                        snapshot([argv[0], str(runner_selection.get("path", runner))], **kw) if len(argv) == 2
-                        else snapshot(argv, **kw))
+                                  **kwargs))
     return run, task, rtl
 
 
