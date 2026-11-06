@@ -7,10 +7,12 @@ flow_explore owns execution, native results and adoption.
 from __future__ import annotations
 
 import random
+import math
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from constraint_prose_tokens import scan_inputs
-from flow_config import _input_docs, _load, _value, native_excluded_cells
+from flow_config import SETTING_ALIASES, _input_docs, _load, _value, native_excluded_cells
 from _prose_polarity import is_denied
 
 
@@ -19,6 +21,12 @@ SAMPLE_SEED = 42
 MAX_UTIL = ("PL_RESIZER_SETUP_MAX_UTIL_PCT", "PL_RESIZER_HOLD_MAX_UTIL_PCT",
             "VIBEIC_PRR_MAX_UTIL_PCT")
 SIZING = {"VIBEIC_PRR_LIMIT_SIZING_AREA": 1, "VIBEIC_PRR_LIMIT_SIZING_LEAKAGE": 1}
+L2_SETTINGS = {"GPL_CELL_PADDING", "DPL_CELL_PADDING", "PL_TARGET_DENSITY_PCT",
+               "PL_TIMING_DRIVEN", "PL_ROUTABILITY_DRIVEN", "GRT_ADJUSTMENT",
+               "GRT_LAYER_ADJUSTMENTS", "CTS_SINK_CLUSTERING_SIZE",
+               "CTS_SINK_CLUSTERING_MAX_DIAMETER", "PL_RESIZER_SETUP_REPAIR_TNS_PCT",
+               "GRT_RESIZER_SETUP_REPAIR_TNS_PCT", "GRT_RESIZER_SETUP_MAX_UTIL_PCT",
+               "GRT_RESIZER_HOLD_MAX_UTIL_PCT"}
 
 
 def selected_level(project: Path, requested: int | None = None) -> tuple[int, str]:
@@ -50,20 +58,89 @@ def pinned_settings(project: Path) -> set[str]:
     from l19_constraint_token_emit import collect
 
     fields = _load(project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json").get("fields", {})
-    return {row["token"] for row in [*collect(project), *fields.get("constraint_declarations", [])]
+    return {SETTING_ALIASES.get(row["token"], row["token"])
+            for row in [*collect(project), *fields.get("constraint_declarations", [])]
             if row.get("kind") == "flow_setting" and row.get("token")}
 
 
+def _normalized(value):
+    if isinstance(value, list):
+        return [_normalized(item) for item in value]
+    if isinstance(value, bool) or value is None:
+        return value
+    try:
+        return Decimal(str(value))
+    except InvalidOperation:
+        return value
+
+
+def _effective(settings):
+    values = {key: _normalized(value) for key, value in settings.items()}
+    for key in ("GPL_CELL_PADDING", "DPL_CELL_PADDING"):
+        if values.get(key) is not None:
+            values[key] = int(values[key]) // 2
+    layers = values.get("GRT_LAYER_ADJUSTMENTS")
+    if layers and values.get("GRT_ADJUSTMENT") is not None:
+        values["GRT_LAYER_ADJUSTMENTS"] = [value or values["GRT_ADJUSTMENT"] for value in layers]
+        values.pop("GRT_ADJUSTMENT")
+    return values
+
+
+def level_two_axes(resolved, activity):
+    """Native names/units from ppa_pnr_search_space and the reference tool run."""
+    active = set(activity.get("steps", []))
+    axes, skipped = {}, {}
+    if "OpenROAD.GlobalPlacement" in active:
+        axes["placement"] = [None, *[
+            {"GPL_CELL_PADDING": global_pad, "DPL_CELL_PADDING": detailed_pad}
+            for global_pad, detailed_pad in ((0, 0), (2, 0), (2, 2), (4, 0), (4, 2), (4, 4))]]
+        axes["density"] = [None, *[{"PL_TARGET_DENSITY_PCT": v} for v in (40, 50, 60)]]
+        axes["placement_mode"] = [None, {"PL_TIMING_DRIVEN": True},
+                                  {"PL_ROUTABILITY_DRIVEN": True}]
+    else:
+        skipped["placement"] = "Reference has no executed native GlobalPlacement"
+    if "OpenROAD.GlobalRouting" in active:
+        axes["routing"] = [None, *[{"GRT_ADJUSTMENT": v} for v in (.1, .3, .5)]]
+        layers = resolved.get("GRT_LAYER_ADJUSTMENTS")
+        if layers:
+            axes["routing"] += [{"GRT_LAYER_ADJUSTMENTS": [v] * len(layers)} for v in (.1, .3, .5)]
+            if all(_normalized(value) != 0 for value in layers):
+                axes["routing"] = [v for v in axes["routing"] if not v or "GRT_ADJUSTMENT" not in v]
+    else:
+        skipped["routing"] = "Reference has no executed native GlobalRouting"
+    for step, prefix in (("OpenROAD.ResizerTimingPostGPL", "PL"),
+                         ("OpenROAD.ResizerTimingPostGRT", "GRT")):
+        if step in active:
+            axes[prefix + "_resizer"] = [None,
+                {prefix + "_RESIZER_SETUP_REPAIR_TNS_PCT": 50},
+                {prefix + "_RESIZER_SETUP_MAX_UTIL_PCT": 80,
+                 prefix + "_RESIZER_HOLD_MAX_UTIL_PCT": 80}]
+    if activity.get("cts_preclustering") is True:
+        limit = resolved.get("MAX_FANOUT_CONSTRAINT")
+        sizes = sorted({min(size, int(Decimal(str(limit)))) if limit else size for size in (2, 4, 8)})
+        axes["cts"] = [None, *[{"CTS_SINK_CLUSTERING_SIZE": size,
+                                "CTS_SINK_CLUSTERING_MAX_DIAMETER": diameter}
+                               for size in sizes for diameter in (25, 50, 100)]]
+    else:
+        skipped["CTS clustering"] = "Reference native log has no executed preclustering solution"
+    skipped["density addon"] = "LibreLane consumes a density target; native ORFS addon stays in Stage A"
+    return axes, skipped
+
+
 def native_candidates(project: Path, original: dict, resolved: dict, *, level: int,
-                      seed: int = SAMPLE_SEED) -> list[tuple[str, dict]]:
-    """Reference first; six bounded Level1 moves or sixteen native combinations.
+                      seed: int = SAMPLE_SEED, activity=None) -> list[tuple[str, dict]]:
+    """Reference first; six bounded Level1 moves or up to24 native combinations.
 
     A document-pinned setting is never changed to manufacture another trial.
     The population can therefore be smaller than its budget; publish that fact.
     Level3 is owned by the native-tool lane, not an algorithm in this module.
     """
     pinned = pinned_settings(project)
-    base = {key: value for key, value in original.items() if key not in pinned}
+    base = {}
+    for key, value in original.items():
+        canonical = SETTING_ALIASES.get(key, key)
+        if canonical not in pinned:
+            base[canonical] = float(value) * 100 if key == "PL_TARGET_DENSITY" else value
     if level == 0:
         return [("reference", base)]
     if level not in (1, 2):
@@ -86,31 +163,49 @@ def native_candidates(project: Path, original: dict, resolved: dict, *, level: i
     if level == 2:
         # Port the old proposer without Candidate identities, digests or receipts.
         # The axes are bounded native settings, so the complete grid is small.
-        values = {"drive": [None, toggle], "recover": [None, 50, 100],
-                  "util": [None, 80, 90], "sizing": [None, SIZING]}
-        grid = [{}]
-        for axis in sorted(values):
-            grid = [dict(point, **{axis: value}) for point in grid for value in values[axis]]
-        reference = {axis: values[axis][0] for axis in sorted(values)}
-        rest = [point for point in grid if point != reference]
-        random.Random(seed).shuffle(rest)
-        proposals = [("reference", base)]
+        values = {"drive": [None, {"EXTRA_EXCLUDED_CELLS": toggle}],
+                  "recover": [None, {RECOVERY: 50}, {RECOVERY: 100}],
+                  "util": [None, *[{key: value for key in MAX_UTIL} for value in (80, 90)]],
+                  "sizing": [None, SIZING]}
+        extra, _ = level_two_axes(resolved, activity or {})
+        values.update(extra)
+        # Remove document-pinned axes before constructing the Cartesian grid.
+        # Keep distinct effective settings, including native padding/route aliases.
+        reference_settings = {**resolved, **base}
+        for axis, options in values.items():
+            filtered = [None]
+            for option in options:
+                setting = {key: value for key, value in (option or {}).items() if key not in pinned}
+                if (setting and _effective({**reference_settings, **setting}) != _effective(reference_settings)
+                        and setting not in filtered):
+                    filtered.append(setting)
+            values[axis] = filtered
+        axes = sorted(values)
+        total = math.prod(len(values[axis]) for axis in axes)
+        # Sample Cartesian indices without materializing a large product.
+        indices = random.Random(seed).sample(range(1, total), min(total - 1, 96))
+        rest = []
+        for index in indices:
+            point = {}
+            for axis in reversed(axes):
+                index, digit = divmod(index, len(values[axis]))
+                point[axis] = values[axis][digit]
+            rest.append(point)
+        # Keep the high-value Level1 moves and one isolated move per new axis.
+        for axis, options in sorted(values.items()):
+            proposals.extend((f"{axis}_{i}", value) for i, value in enumerate(options[1:2], 1))
         for i, point in enumerate(rest, 1):
-            settings = {}
-            if point["drive"] is not None:
-                settings["EXTRA_EXCLUDED_CELLS"] = point["drive"]
-            if point["recover"] is not None:
-                settings[RECOVERY] = point["recover"]
-            if point["util"] is not None:
-                settings.update({key: point["util"] for key in MAX_UTIL})
-            if point["sizing"] is not None:
-                settings.update(point["sizing"])
+            settings = {key: value for axis in sorted(point)
+                        for key, value in (point[axis] or {}).items()}
             proposals.append((f"native_{i:03d}", settings))
     candidates = []
+    effective_seen = []
     for name, settings in proposals:
         effective = {**base, **{key: value for key, value in settings.items() if key not in pinned}}
-        if not any(effective == previous for _, previous in candidates):
+        signature = _effective({**resolved, **effective})
+        if signature not in effective_seen:
             candidates.append((name, effective))
-        if len(candidates) == (7 if level == 1 else 16):
+            effective_seen.append(signature)
+        if len(candidates) == (7 if level == 1 else 24):
             break
     return candidates

@@ -37,7 +37,7 @@ def test_native_candidate_population_and_fixed_document_settings(tmp_path):
     random.seed(999)
     b = native_candidates(tmp_path, {}, resolved, level=2)
     random.setstate(prior_state)
-    assert a == b and len(a) == 16
+    assert a == b and len(a) == 24
     assert a[0] == ("reference", {})
     docs = tmp_path / "input/docs"
     docs.mkdir(parents=True)
@@ -48,6 +48,62 @@ def test_native_candidate_population_and_fixed_document_settings(tmp_path):
                and "PL_RESIZER_SETUP_MAX_UTIL_PCT" not in value for _, value in constrained)
     assert len(constrained) < 7
     assert native_candidates(tmp_path, {}, resolved, level=0) == [("reference", {})]
+
+
+def test_level_two_preserves_a_density_declared_through_its_native_alias(tmp_path):
+    from flow_ppa_variants import native_candidates
+
+    docs = tmp_path / "input/docs"
+    docs.mkdir(parents=True)
+    (docs / "constraints.md").write_text("PL_TARGET_DENSITY = 0.5\n")
+    candidates = native_candidates(tmp_path, {"PL_TARGET_DENSITY_PCT": 90},
+        {"PL_TARGET_DENSITY_PCT": "50"}, level=2,
+        activity={"steps": ["OpenROAD.GlobalPlacement"]})
+    assert all("PL_TARGET_DENSITY_PCT" not in value for _, value in candidates)
+    assert candidates[0] == ("reference", {})
+
+
+def test_level_two_uses_native_effective_padding_and_routing_values(tmp_path):
+    from flow_ppa_variants import native_candidates
+
+    resolved = {"EXTRA_EXCLUDED_CELLS": ["*_1"], "GPL_CELL_PADDING": 1,
+                "DPL_CELL_PADDING": 0, "GRT_ADJUSTMENT": "0.3",
+                "GRT_LAYER_ADJUSTMENTS": ["0", "0", "0"],
+                "PL_TARGET_DENSITY_PCT": "50", "PL_TIMING_DRIVEN": False,
+                "PL_ROUTABILITY_DRIVEN": True}
+    candidates = native_candidates(tmp_path, {}, resolved, level=2,
+        activity={"steps": ["OpenROAD.GlobalPlacement", "OpenROAD.GlobalRouting"],
+                  "cts_preclustering": False})
+    assert 16 <= len(candidates) <= 32
+    settings = [value for _, value in candidates]
+    assert any(value.get("GPL_CELL_PADDING") == 2 for value in settings)
+    assert any(value.get("GRT_ADJUSTMENT") == .1 for value in settings)
+    assert all(value.get("GRT_ADJUSTMENT") != .3 for value in settings)
+    assert all(value.get("GRT_LAYER_ADJUSTMENTS") != [.3] * 3 for value in settings)
+    assert all(value.get("GPL_CELL_PADDING") != 0 for value in settings)
+    assert all("CTS_SINK_CLUSTERING_SIZE" not in value for value in settings)
+
+
+def test_cts_axes_require_an_executed_solution_and_keep_the_fanout_cap(tmp_path):
+    from flow_ppa_variants import level_two_axes
+
+    step = tmp_path / "native_cts"
+    step.mkdir()
+    log = step / "openroad-cts.log"
+    rows = [{"native_steps": [{"name": "OpenROAD.CTS", "ran": True,
+                               "exit_code": 0, "reports": str(step)}]}]
+    log.write_text('[INFO CTS-0060] Register sinks will be clustered in groups of up to 4.\n'
+                   '[INFO CTS-0023] Original sink region: [(0,0), (1,1)].\n')
+    inactive = explorer.native_activity(rows)
+    assert inactive["cts_preclustering"] is False
+    assert "cts" not in level_two_axes({}, inactive)[0]
+    log.write_text('[INFO CTS-0204] Clustering solution found.\n'
+                   '[INFO CTS-0019] Number of sinks after clustering: 200.\n')
+    active = explorer.native_activity(rows)
+    axes, _ = level_two_axes({"MAX_FANOUT_CONSTRAINT": "4.0"}, active)
+    assert {value["CTS_SINK_CLUSTERING_SIZE"] for value in axes["cts"] if value} == {2, 4}
+    log.unlink()
+    assert explorer.native_activity(rows)["cts_preclustering"] is None
 
 
 def test_zero_level_runs_once_without_a_ppa_measurement(tmp_path, monkeypatch):
