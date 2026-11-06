@@ -8,6 +8,16 @@ import flow_engine_frontend as frontend
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def keep_frontend_unit_tests_out_of_real_exploration(monkeypatch):
+    import flow_explore
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("Frontend unit tests must select Level 0 or mock PPA execution")
+
+    monkeypatch.setattr(flow_explore, "explore_public", unexpected)
+
+
 def test_document_owner_calls_extractor_without_submission_admission(tmp_path):
     import phase1_one_shot_runner as owner
     with patch.object(owner, "_run_docs_mode", return_value=0) as extract:
@@ -165,7 +175,7 @@ def test_public_native_delivery_flag_overrides_document_wording(tmp_path, monkey
         run=lambda project, **kwargs: observed.append(kwargs["route"]) or {})
     monkeypatch.setitem(sys.modules, "flow_engine", engine)
     args = SimpleNamespace(project=tmp_path, entry_step=None, exit_step=None,
-                           rtl_input="structured", delivery_target=None, route=selected, pdk="auto")
+                           rtl_input="structured", delivery_target=None, route=selected, pdk="auto", ppa_level=0)
     assert frontend.run_public(args) == 0
     assert observed[0]["delivery_target"] == target
 
