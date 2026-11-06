@@ -3943,7 +3943,7 @@ def _run_review_structural_proof(task: dict, candidate: dict,
             "message": "structural source_path does not select one immutable candidate file"}]}
     return repair_contract.run_structural_contract(
         selected[0], declaration, original_source=original_source,
-        requirement_sources={"input/phase1_prompt.md": prompt_text})
+        requirement_sources={"input/phase1_prompt.md": prompt_text}, runtime_root=project)
 
 
 def _validate_ai_review(task: dict, *,

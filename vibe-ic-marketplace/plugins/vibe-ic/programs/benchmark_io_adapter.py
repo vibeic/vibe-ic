@@ -700,6 +700,7 @@ def collect(fmt_name: str, problem_id: str, project: Path, *,
                         original_source=source_for_matrix or source_for_structural,
                         top=top,
                         requirement_sources=requirement_sources,
+                        runtime_root=project,
                         require=True)))
         # Ordinary benchmark dispatch must consume both independently-bound
         # contracts immediately before completion; a single opt-in half is not

@@ -43,6 +43,9 @@ def native(monkeypatch):
         if argv[1:3] == ["image", "inspect"]:
             assert argv[-1] == "{{json .Config.Entrypoint}}"
             return subprocess.CompletedProcess(argv, 0, "null", "")
+        if argv[1] == "inspect":
+            assert argv[-1] == "operator-runtime" and argv[-2] == "{{.Config.Image}}"
+            return subprocess.CompletedProcess(argv, 0, "configured-run:local", "")
         assert argv[1] == "run"
         assert "--pull=never" in argv and "--network=none" in argv
         assert "--read-only" in argv and "--cpus=2" in argv
@@ -126,6 +129,24 @@ def test_run_container_configuration_selects_image_without_identity(tmp_path, mo
         return subprocess.CompletedProcess(argv, 0, "selected-native:tag\n", "")
     monkeypatch.setattr(subprocess, "run", inspect)
     assert contract._structural_image(candidate, 10) == ("selected-native:tag", None)
+
+
+def test_normal_repair_keeps_runtime_configuration_for_detached_candidate(tmp_path, native):
+    run = tmp_path / "run"
+    project = run / "projects/neutral"
+    project.mkdir(parents=True)
+    (run / ".bench_config.json").write_text(json.dumps({"tool_container": "operator-runtime"}))
+    candidate = tmp_path / "detached/candidate.sv"
+    candidate.parent.mkdir()
+    candidate.write_text(RIGHT)
+    result = contract.validate_normal_repair_contract(
+        {"neutral_select.sv": WRONG}, {"neutral_select.sv": RIGHT},
+        {"structural": declaration(RIGHT)}, candidate_path=candidate, original_source=WRONG,
+        top="neutral_select", requirement_sources={"input/phase1_prompt.md": PROMPT}, runtime_root=project)
+    assert result["verdict"] == "PASS", result
+    measured = result["structural"]
+    assert measured["execution"]["image"] == "configured-run:local"
+    assert measured["observation"]["cell_type_counts"] == {"$mux": 1}
 
 
 def test_missing_native_runtime_does_not_become_a_structural_pass(tmp_path, monkeypatch):

@@ -664,14 +664,15 @@ def run_elaboration_matrix(
     return report
 
 
-def _structural_image(candidate: Path, timeout: int) -> Tuple[Optional[str], Optional[str]]:
+def _structural_image(location: Path, timeout: int) -> Tuple[Optional[str], Optional[str]]:
     """Select tool configuration from the operator, outside the AI declaration."""
     docker = shutil.which("docker")
     if docker is None:
         return None, "docker is unavailable"
     container = os.environ.get("VIBEIC_EDA_CONTAINER", "").strip()
     if not container:
-        for parent in Path(candidate).resolve().parents:
+        location = Path(location).resolve()
+        for parent in (location, *location.parents):
             config_path = parent / ".bench_config.json"
             if not config_path.is_file():
                 continue
@@ -904,6 +905,7 @@ def run_structural_contract(
     requirement_sources: Optional[Mapping[str, str]] = None,
     timeout: int = 300,
     require_header_preservation: bool = False,
+    runtime_root: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Replay a source-bound structural observation with a fixed Yosys recipe.
 
@@ -1073,7 +1075,7 @@ def run_structural_contract(
         return finish("REFUSED", "STRUCTURAL_EXPECTATION_CONTRADICTORY",
                       "a cell type cannot be both required and forbidden")
 
-    image, unavailable = _structural_image(candidate_path, timeout)
+    image, unavailable = _structural_image(runtime_root or candidate_path, timeout)
     if image is None:
         return finish("NOT_MEASURED", "STRUCTURAL_TOOL_UNAVAILABLE",
                       unavailable or "native structural runtime is unavailable")
@@ -1218,6 +1220,7 @@ def validate_normal_repair_contract(
     top: Optional[str] = None,
     requirement_sources: Optional[Mapping[str, str]] = None,
     require: bool = True,
+    runtime_root: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Single blocking consumer binding declared proofs before an emit is accepted.
 
@@ -1275,7 +1278,8 @@ def validate_normal_repair_contract(
         else:
             result["structural"] = run_structural_contract(
                 candidate_path, structural, original_source=original_source,
-                requirement_sources=requirement_sources, require_header_preservation=True)
+                requirement_sources=requirement_sources, require_header_preservation=True,
+                runtime_root=runtime_root)
         if result["structural"]["verdict"] != "PASS" and result["verdict"] == "PASS":
             result["verdict"] = result["structural"]["verdict"]
         result["findings"].extend(result["structural"].get("findings", []))
