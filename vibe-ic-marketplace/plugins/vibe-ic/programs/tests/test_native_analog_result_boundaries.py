@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import analog_a2_topology_emit as topology
 import analog_incremental_capture as capture
 import em_current_density_check as em
+import em_peak_current_authority_check as peak
 from test_native_em_result_cutover import density, write_rows
 
 
@@ -137,3 +138,35 @@ def test_measured_em_violation_stays_fail_with_another_supply_missing(density, m
         (reports / "em_openroad_density.json").write_text(json.dumps(doc))
     result = em.validate_native_density(project, segment_geometry={})
     assert result["verdict"] == "FAIL"
+
+
+@pytest.mark.parametrize("absolute", [False, True])
+@pytest.mark.parametrize("current,expected", [(1e-5, "PASS"), (1e-3, "FAIL")])
+def test_peak_consumer_reads_plain_native_paths_and_physical_limits(density, absolute, current, expected):
+    project, reports, doc, row = density
+    layout = project / "routed.def"
+    layout.write_text("VERSION 5.8 ;\nUNITS DISTANCE MICRONS 1000 ;\nEND DESIGN\n")
+    subject_path = reports / "em.json"
+    subject = json.loads(subject_path.read_text())
+    subject.update(subject_def=str(layout) if absolute else layout.name,
+                   subject_def_sha256="old", power_nets=["VDD"])
+    subject_path.write_text(json.dumps(subject))
+    doc.update(inputs={"layout": {"declared_path": str(layout), "sha256": "old"}},
+               step24_primary={"current_em_basis": {"def": {"path": str(layout), "sha256": "old"}}})
+    (reports / "em_openroad_density.json").write_text(json.dumps(doc))
+    segments = ("Node0 Layer,Node0 X location,Node0 Y location,Node1 Layer,"
+                "Node1 X location,Node1 Y location,Current\n"
+                f"met1,0,0,met1,1,0,{current}\n")
+    for name in ("em_segments.csv", "em_segments_VDD.csv"):
+        (reports / name).write_text(segments)
+    row.update({"Current(A)": current, "J(A/um^2)": current / row["Area(um^2)"],
+                "Ratio": current / row["Area(um^2)"] / row["Jlimit(A/um^2)"],
+                "Status": "OK" if expected == "PASS" else "VIOLATED"})
+    write_rows(reports / "em_openroad_density_VDD.csv", [row])
+    (reports / "em_pg_geometry.tsv").write_text(
+        "net\tlayer\tx0_um\ty0_um\tx1_um\ty1_um\tsource\n"
+        "VDD\tmet1\t0\t-0.07\t1\t0.07\tpg_port\n")
+    (reports / "em_pg_geometry_subject.json").write_text(json.dumps({
+        "geometry_file": "em_pg_geometry.tsv", "def_sha256": "old", "geometry_sha256": "old"}))
+    result = peak.jmax_tier(project, None, None, em._DEFAULT_MARGIN)
+    assert result["verdict"] == expected, result
