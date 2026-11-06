@@ -783,11 +783,12 @@ def test_chip_forwards_generated_clock_wire_budget(inputs, monkeypatch):
     assert result["CTS_CLK_MAX_WIRE_LENGTH"] == 120
 
 
-def test_native_timing_environment_and_pad_edge_bracket_reach_sdc(inputs):
+def test_native_timing_environment_and_driving_cells_reach_sdc(inputs):
     project, config, native, _, _ = inputs
     native.update(CLOCK_UNCERTAINTY_CONSTRAINT=0.25, CLOCK_TRANSITION_CONSTRAINT=0.15,
                   TIME_DERATING_CONSTRAINT=5, MAX_FANOUT_CONSTRAINT=4,
-                  MAX_TRANSITION_CONSTRAINT=3, MAX_CAPACITANCE_CONSTRAINT=0.2, OUTPUT_CAP_LOAD=10)
+                  MAX_TRANSITION_CONSTRAINT=3, MAX_CAPACITANCE_CONSTRAINT=0.2, OUTPUT_CAP_LOAD=10,
+                  SYNTH_DRIVING_CELL="data_driver/Y", SYNTH_CLK_DRIVING_CELL="clock_driver/Z")
     result = chip.prepare(project, config)
     text = Path(result["PNR_SDC_FILE"]).read_text()
     assert "set_timing_derate -late 1.05" in text
@@ -798,8 +799,9 @@ def test_native_timing_environment_and_pad_edge_bracket_reach_sdc(inputs):
     assert "set_max_capacitance 0.2 $_chip_core_pins" in text
     assert "set_max_capacitance 0.2 [current_design]" not in text
     assert "set_load 0.01" in text
-    assert "set _chip_pad_max 1" in text
-    assert "set _chip_pad_min 0.08" in text
+    assert "set_driving_cell -lib_cell data_driver -pin Y" in text
+    assert "set_driving_cell -lib_cell clock_driver -pin Z" in text
+    assert "_chip_pad_max" not in text and "_chip_pad_min" not in text
 
 
 @pytest.mark.parametrize("hierarchical", [False, True])
@@ -876,9 +878,8 @@ exit
                for line in second.splitlines()), process.stdout
 
 
-@pytest.mark.parametrize("linked, maximum, minimum", [("fast_view", "0.8", "0.04"),
-                                                       ("slow_view", "1.3", "0.1")])
-def test_pad_edges_follow_the_native_linked_corner(inputs, tmp_path, linked, maximum, minimum):
+@pytest.mark.parametrize("declared", [None, "0.23"])
+def test_pad_table_coverage_does_not_supply_external_edges(inputs, tmp_path, declared):
     import shutil
     import subprocess
 
@@ -889,13 +890,16 @@ def test_pad_edges_follow_the_native_linked_corner(inputs, tmp_path, linked, max
     project, config, native, _, _ = inputs
     original = Path(native["PAD_LIBS"]["*"][0]).read_text()
     paths = []
-    for name, bounds in (("fast_view", "0.04, 0.8"), ("slow_view", "0.10, 1.3")):
+    for name, bounds in (("fast_view", "0.01, 25"), ("slow_view", "0.10, 1.3")):
         path = tmp_path / (name + ".lib")
         text = original.replace("library (fixture)", f"library ({name})")
         text = text.replace("0.08, 1.0", bounds).replace("default_max_transition : 1;", "default_max_transition : 2;")
         path.write_text(text)
         paths.append(str(path))
     native["PAD_LIBS"] = {"*": paths}
+    native.update(SYNTH_DRIVING_CELL="data_driver/Y", SYNTH_CLK_DRIVING_CELL="clock_driver/Z")
+    if declared:
+        _write(project / "input/docs/L9_edges.md", f"| set_input_transition | {declared} |\n")
     result = chip.prepare(project, config)
     script = tmp_path / "read.sdc.tcl"
     script.write_text('''namespace eval sta {
@@ -913,20 +917,80 @@ proc set_input_delay args {}
 proc set_output_delay args {}
 proc set_case_analysis args {}
 proc set_input_transition args {puts "EDGE $args"}
+proc set_driving_cell args {puts "DRIVER $args"}
 proc get_libs args {
     if {[lindex $args end] eq $::linked} {return LIB}
     return {}
 }
-''' + f"set ::linked {linked}\nsource {{{result['PNR_SDC_FILE']}}}\n")
+''' + f"set ::linked fast_view\nsource {{{result['PNR_SDC_FILE']}}}\n")
     completed = subprocess.run([*command, str(script)], capture_output=True, text=True, check=True)
-    assert f"EDGE -max {maximum} PORTS" in completed.stdout
-    assert f"EDGE -min {minimum} PORTS" in completed.stdout
+    assert "DRIVER -lib_cell data_driver -pin Y PORTS" in completed.stdout
+    assert "DRIVER -lib_cell clock_driver -pin Z PORTS" in completed.stdout
+    assert ([line for line in completed.stdout.splitlines() if line.startswith("EDGE ")]
+            == ([f"EDGE {declared} PORTS"] if declared else []))
 
 
-def test_input_pad_edge_coverage_cannot_omit_a_selected_master(inputs):
+def test_undeclared_edge_does_not_require_pad_characterization_coverage(inputs):
     project, config, native, ports, _ = inputs
-    with pytest.raises(FileNotFoundError, match="characterized off-chip"):
-        chip._sdc(project, {**native, **config}, ports, {"fixture_io__input", "missing_receiver"})
+    native.pop("PAD_LIBS")
+    text = chip._sdc(project, {**native, **config}, ports)
+    assert "set_input_transition" not in text
+
+
+@pytest.mark.parametrize("clock_driver", [None, "clock_driver/Z"])
+def test_native_sta_consumes_resolved_clock_and_data_drivers(inputs, tmp_path, clock_driver):
+    import shutil
+    import subprocess
+
+    sta = shutil.which("sta")
+    if sta is None:
+        pytest.skip("Native OpenSTA required for input-driver checks")
+    project, config, native, ports, _ = inputs
+    native.update(SYNTH_DRIVING_CELL="data_driver/Y", SYNTH_CLK_DRIVING_CELL=clock_driver,
+                  CLOCK_TRANSITION_CONSTRAINT=0.15)
+    models = []
+    for master, pin in (("data_driver", "Y"), ("clock_driver", "Z")):
+        models.append(f'''cell ({master}) {{
+          pin (A) {{ direction : input; capacitance : 0.01; }}
+          pin ({pin}) {{ direction : output; function : "A";
+            timing () {{ related_pin : "A"; timing_sense : positive_unate;
+              cell_rise (scalar) {{ values ("0.1"); }}
+              cell_fall (scalar) {{ values ("0.1"); }}
+              rise_transition (scalar) {{ values ("0.1"); }}
+              fall_transition (scalar) {{ values ("0.1"); }}
+            }}
+          }}
+        }}''')
+    library = _write(tmp_path / "drivers.lib", '''library (drivers) {
+      delay_model : table_lookup; time_unit : "1ns";
+      capacitive_load_unit (1, pf);
+      input_threshold_pct_rise : 50; input_threshold_pct_fall : 50;
+      output_threshold_pct_rise : 50; output_threshold_pct_fall : 50;
+      slew_lower_threshold_pct_rise : 20; slew_lower_threshold_pct_fall : 20;
+      slew_upper_threshold_pct_rise : 80; slew_upper_threshold_pct_fall : 80;
+      nom_process : 1; nom_voltage : 1.8; nom_temperature : 25;
+    ''' + "\n".join(models) + "\n}\n")
+    design = _write(tmp_path / "netlist.v", "module logic(input clk, reset, input [5:2] data, "
+                    "output result); assign result=reset; endmodule\n")
+    sdc = _write(tmp_path / "inputs.sdc", chip._sdc(project, {**native, **config}, ports))
+    output = tmp_path / "native.sdc"
+    script = _write(tmp_path / "inputs.tcl", f'''read_liberty {{{library}}}
+read_verilog {{{design}}}
+link_design logic
+read_sdc {{{sdc}}}
+write_sdc {{{output}}}
+exit
+''')
+    completed = subprocess.run([sta, "-no_init", "-no_splash", "-exit", str(script)],
+                               capture_output=True, text=True, check=True)
+    assert "Error" not in completed.stdout + completed.stderr
+    written = output.read_text()
+    drivers = [line for line in written.splitlines() if line.startswith("set_driving_cell ")]
+    assert any("-lib_cell data_driver" in line and "reset" in line for line in drivers), written
+    selected = "clock_driver" if clock_driver else "data_driver"
+    assert any(f"-lib_cell {selected}" in line and "clk" in line for line in drivers), written
+    assert "set_clock_transition" in written and "0.15" in written
+    assert "set_input_transition" not in written
 
 
 def test_bus_order_offset_and_single_index_are_preserved():
