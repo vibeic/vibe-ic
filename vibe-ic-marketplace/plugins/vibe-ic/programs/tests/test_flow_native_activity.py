@@ -57,7 +57,7 @@ def test_native_activity_dump_and_vector_power_read_the_state_netlist(activity_c
 
 
 @pytest.mark.parametrize("instance", ["compute_stage", "signal_core"])
-@pytest.mark.parametrize("flattened", [False, True, "yosys"])
+@pytest.mark.parametrize("flattened", [False, True, "yosys", "renamed"])
 def test_native_core_scenario_annotates_the_wrapper_core(activity_case, monkeypatch, instance, flattened):
     native_tools()
     from flow_native_adapters import Commands
@@ -77,14 +77,19 @@ def test_native_core_scenario_annotates_the_wrapper_core(activity_case, monkeypa
     wrapper = f"module package_unit(input [1:0] pad_a, output [1:0] pad_y); unit {instance}(.a(pad_a), .y(pad_y)); endmodule\n"
     (chip / "wrapper.v").write_text(wrapper)
     mapped = project / "chip.v"
-    if flattened == "yosys":
+    if flattened in ("yosys", "renamed"):
         import subprocess
         if not shutil.which("yosys"):
             pytest.skip("Native Yosys is required for flattened naming")
         library = config["LIB"]["nominal"][0]
+        rename = (f"select -module package_unit; rename {instance}.buffer0 rewritten_0; "
+                  f"rename {instance}.buffer1 rewritten_1; ") if flattened == "renamed" else ""
         subprocess.run(["yosys", "-Q", "-T", "-p", f"read_liberty -lib {library}; "
             f"read_verilog {core_netlist} {chip / 'wrapper.v'}; hierarchy -top package_unit; "
-            f"flatten; write_verilog {mapped}"], cwd=project, check=True, capture_output=True, text=True)
+            f"flatten; {rename}write_verilog {mapped}"], cwd=project, check=True, capture_output=True, text=True)
+        if flattened == "renamed":
+            assert "plain rewritten_0" in mapped.read_text()
+            assert f"wire [1:0] \\{instance}.y " in mapped.read_text()
     else:
         mapped.write_text((f"module package_unit(input [1:0] pad_a, output [1:0] pad_y);\n"
             f"wire [1:0] \\{instance}/a ; wire [1:0] \\{instance}/y ;\n"
@@ -99,7 +104,8 @@ def test_native_core_scenario_annotates_the_wrapper_core(activity_case, monkeypa
         if argv[0] == "sta":
             script = Path(argv[-1])
             script.write_text(script.read_text() + '\nputs "CORE_ACTIVITY: [get_property [get_pins {'
-                + instance + ("." if flattened == "yosys" else "/") + 'buffer0/A}] activity]"\n')
+                + ('rewritten_0/Y' if flattened == "renamed" else instance
+                   + ("." if flattened == "yosys" else "/") + 'buffer0/Y') + '}] activity]"\n')
         return run(self, argv, cwd=cwd)
     monkeypatch.setattr(Commands, "run", probe)
 
