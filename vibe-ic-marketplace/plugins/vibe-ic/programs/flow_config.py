@@ -170,6 +170,19 @@ def _input_docs(project: Path) -> dict[str, str]:
             and path.suffix.lower() in {".md", ".rst", ".txt", ".markdown"}}
 
 
+def declared_fanout_checks(project: Path, *, config: dict | None = None, metrics: dict | None = None) -> list[dict]:
+    """Require zero native fanout violations only for a document-declared bound."""
+    path = Path(project) / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+    fields = _load(path).get("fields", {})
+    pdk = (config or {}).get("PDK") or fields.get("pdk_target") or ""
+    declared = _settings(fields, pdk).get("MAX_FANOUT_CONSTRAINT")
+    if declared is None:
+        return []
+    return [{"metric": "design__max_fanout_violation__count*", "operator": "==", "limit": 0,
+             "unit": "count", "declared_max_fanout": declared,
+             "source": {"file": str(path.relative_to(project)), "field": "fields.constraint_declarations"}}]
+
+
 def declared_power_checks(project: Path, *, config: dict | None = None, metrics: dict | None = None) -> list[dict]:
     config, metrics = config or {}, metrics or {}
     number = r"(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
