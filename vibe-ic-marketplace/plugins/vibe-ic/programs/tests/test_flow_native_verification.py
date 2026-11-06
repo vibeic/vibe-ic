@@ -157,6 +157,49 @@ def test_native_formal_preserves_supplied_formal_include_branch(tmp_path, case):
         assert "assert (q ==" in path.read_text()
 
 
+@pytest.mark.parametrize("case", ["good", "bad", "temporal"])
+def test_native_formal_retries_enum_methods_with_original_assertions(tmp_path, case):
+    if not all(shutil.which(name) for name in ("sby", "yosys", "sv2v", "yices-smt2")):
+        pytest.skip("Native formal tools are required")
+    from formal_property_run import emit_invariant_sby
+
+    root = tmp_path / "phase2/stage1/formal"
+    root.mkdir(parents=True)
+    package = root / "table_pkg.sv"
+    package.write_text("package table_pkg; typedef enum logic[1:0] {S0,S1,S2} state_t;\n"
+        "localparam state_t VALUES[3]='{S0,S1,S2}; endpackage\n")
+    harness = root / "proof.sv"
+    condition = "state[0] |=> $past(state[0])" if case == "temporal" else "invalid == (state==2'b11)"
+    harness.write_text("module proof import table_pkg::*; (input clk,input state_t state);\n"
+        "function automatic bit outside_table(state_t sig);\n"
+        "bit found=0; int i=0;\n"
+        "for(state_t value=value.first();i<value.num();i++,value=value.next()) found|=(sig===value);\n"
+        "return !found; endfunction\n"
+        f"wire invalid=outside_table(state) ^ 1'b{int(case == 'bad')};\n"
+        f"`ifdef YOSYS\nalways @(posedge clk) assert({condition});\n"
+        f"`else\nassert property(@(posedge clk) {condition});\n`endif\nendmodule\n")
+    deck = root / "proof.sby"
+    deck.write_text(emit_invariant_sby([str(package)], str(harness), "proof", [], [], prove_depth=8, bmc_depth=8))
+    originals = {p:p.read_bytes() for p in (package,harness,deck)}
+    output = tmp_path / "output"
+    output.mkdir()
+    commands = Commands(output)
+    result = formal(tmp_path, output, {"top":"system"}, commands)
+    rows = [r for r in result["native_steps"] if r["name"] in {"SymbiYosys.prove", "SymbiYosys.bmc"}]
+    expected = "NOT_MEASURED" if case == "temporal" else "FAIL" if case == "bad" else "PASS"
+    assert len(rows)==2 and {r["status"] for r in rows}=={expected},result
+    assert {p:p.read_bytes() for p in originals}==originals
+    retries = list(output.rglob("slang_frontend.sby"))
+    assert len(retries)==2,result
+    for retry in retries:
+        text=retry.read_text()
+        assert "--no-synthesis-define" in text and "--ignore-assertions" not in text
+        assert "depth 8" in text and str(harness) in text
+    assert not any("-DSYNTHESIS" in r["command"] for r in commands.records)
+    if case=="temporal":
+        assert "SVA" in result["detail"] or "sequence" in result["detail"].lower(),result
+
+
 def test_native_formal_keeps_an_uncompilable_sv_model_unmeasured(tmp_path):
     if not all(shutil.which(name) for name in ("sby", "yosys", "sv2v")):
         pytest.skip("Native formal tools are required")
