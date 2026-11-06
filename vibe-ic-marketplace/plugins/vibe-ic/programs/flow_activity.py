@@ -31,6 +31,26 @@ def _word(value):
     return "{" + str(value).replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}") + "}"
 
 
+def _read_sdc(path, config):
+    from decimal import Decimal
+    from librelane.common import GenericDict, TclUtils
+    from librelane.config import universal_flow_config_variables
+    from librelane.steps.tclstep import TclStep
+
+    # LibreLane's base SDC and supplied Tcl constraints read their configuration
+    # from the environment. Restore it for each linked design in this session.
+    config = config.copy()
+    captured = GenericDict({key: Decimal(str(value)) if type(value) is float else value
+                            for key, value in config.items()})
+    # JSON loses Decimal types; native Tcl arithmetic must keep fractional delays.
+    for variable in universal_flow_config_variables:
+        if type(config.get(variable.name)) in (int, float):
+            _, config[variable.name] = variable.compile(captured, [])
+    return [TclUtils.join(["unset", "-nocomplain", f"::env({key})"] if value is None else
+                          ["set", f"::env({key})", TclStep.value_to_tcl(value)])
+            for key, value in config.items()] + ["read_sdc " + _word(path)]
+
+
 def _cocotb_activity(files, bench, top, directory, commands):
     from flow_native_adapters import cocotb_run
     from _sim_results_bridge import parse_junit
@@ -162,7 +182,7 @@ def execute(project, directory, tool, route, *, state=None, config=None):
         lines = [*("read_liberty " + _word(path) for path in libraries)]
         if core_scope:
             lines += ["read_verilog " + _word(simulation_netlist[0]), "link_design " + _word(simulation_top),
-                "read_sdc " + _word(simulation_sdc[0]),
+                *_read_sdc(simulation_sdc[0], core_config),
                 "read_vcd -scope " + _word(activity["scope"]) + " " + _word(activity["vcd"]),
                 "set core_activity {}",
                 "foreach pin [get_pins -hierarchical *] {",
@@ -174,7 +194,7 @@ def execute(project, directory, tool, route, *, state=None, config=None):
                 "  }",
                 "}"]
         lines += ["read_verilog " + _word(netlist[0]), "link_design " + _word(top),
-                 "read_sdc " + _word(sdc[0]),
+                 *_read_sdc(sdc[0], config),
                  *("read_spef " + _word(path) for path in spef)]
         if core_scope:
             lines += ["set core_scope " + _word(core_scope),
