@@ -159,6 +159,10 @@ import _progress_run as _pr  # noqa: E402
 import _container_exec as _ce  # noqa: E402 — the ONE container-side deadline primitive
 
 PRODUCER = "analog_a3_netlist_emit"
+PROVENANCE_SCHEMA = 1
+SKILL = "analog-netlist-gen"
+
+_CANONICAL_ANALOG = "phase3/analog"
 
 
 _DECLARED_ANALOG = "phase1/analog"
