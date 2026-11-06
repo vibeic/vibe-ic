@@ -373,7 +373,7 @@ class TestMaintenanceTools:
         plugin = _authoring_fixture(tmp_path)
         target = plugin / "skills/hold-fix/tests/test_compliance.py"
         if style == "handwritten":
-            shutil.copy2(PLUGIN / "programs/tests/test_skill_compliance_audit_receipt_evidence.py", target)
+            shutil.copy2(Path(__file__), target)
         else:
             original = PLUGIN / "skills/hold-fix/tests/test_compliance.py"
             target.write_text(original.read_text() + '''

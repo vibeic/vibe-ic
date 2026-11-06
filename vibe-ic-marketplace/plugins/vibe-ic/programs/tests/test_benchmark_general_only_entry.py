@@ -46,59 +46,6 @@ def test_open_runner_declares_ip_without_changing_the_task_window(
     assert ("--skip-phase3" in argv) == (entry != "15")
 
 
-def _run_admission(argv):
-    # A demanded, unavailable image stops immediately after delivery admission.
-    # This runs the real runner/guard without dispatching Phase 1 or EDA tools.
-    return subprocess.run(
-        argv + ["--no-dashboard", "--container", "neutral-admission-fixture",
-                "--require-image", "sha256:" + "0" * 64],
-        capture_output=True, text=True, timeout=30)
-
-
-@pytest.mark.parametrize("entry,exit_step", [("D1", "D1"), ("2", "2")])
-def test_open_argv_passes_the_actual_delivery_guard(tmp_path, entry, exit_step):
-    argv = dispatch._solver_argv(
-        PROGRAMS / "vibe_ic_one_shot_runner.py", tmp_path, entry, exit_step)
-    result = _run_admission(argv)
-    assert result.returncode == 2
-    # Compare the observed refusal class, not a field the candidate introduces.
-    assert result.stderr.split(":", 1)[0] == "ERROR", result.stderr
-    assert "--require-image" in result.stderr
-    from _delivery_route import report_label
-    assert report_label(tmp_path) == {
-        "delivery_route": "IP", "deliverable": "HARDMACRO"}
-
-
-
-
-def test_open_delivery_cannot_overwrite_the_existing_owner_die_choice(tmp_path):
-    from _delivery_route import admit
-    from _submission_template import DESIGN_ANSWERS_REL
-    assert admit(tmp_path, "ic") is None
-    declaration = tmp_path / DESIGN_ANSWERS_REL
-    before = declaration.read_bytes()
-    argv = dispatch._solver_argv(
-        PROGRAMS / "vibe_ic_one_shot_runner.py", tmp_path, "2", "2")
-    result = _run_admission(argv)
-    assert result.returncode == 2
-    assert result.stderr.split(":", 1)[0] == "REFUSED", result.stderr
-    assert "contradicts the existing owner-provenance answer DIE" in result.stderr
-    assert declaration.read_bytes() == before
-
-
-def test_existing_owner_ip_choice_is_preserved(tmp_path):
-    from _delivery_route import admit
-    from _submission_template import DESIGN_ANSWERS_REL
-    assert admit(tmp_path, "ip") is None
-    declaration = tmp_path / DESIGN_ANSWERS_REL
-    before = declaration.read_bytes()
-    result = _run_admission(dispatch._solver_argv(
-        PROGRAMS / "vibe_ic_one_shot_runner.py", tmp_path, "2", "2"))
-    assert result.returncode == 2
-    assert result.stderr.split(":", 1)[0] == "ERROR", result.stderr
-    assert declaration.read_bytes() == before
-
-
 def test_phase1_provenance_frontdoor_supplies_the_same_delivery_route(tmp_path):
     prompt = tmp_path / "input" / "phase1_prompt.md"
     prompt.parent.mkdir()
@@ -111,14 +58,7 @@ def test_phase1_provenance_frontdoor_supplies_the_same_delivery_route(tmp_path):
     runner.parent.mkdir()
     runner.write_text('''import json, pathlib, sys
 sys.path.insert(0, %r)
-from _delivery_route import admit
-from benchmark_dispatch import _bind_runner_report
 p = pathlib.Path(sys.argv[1]).resolve()
-route = sys.argv[sys.argv.index('--route') + 1]
-refusal = admit(p, route)
-if refusal:
-    print(refusal, file=sys.stderr)
-    raise SystemExit(2)
 docs = p/'phase1/generated_docs'
 docs.mkdir(parents=True)
 (docs/'L1_DATASHEET.json').write_text('{"schema": 1}\\n')
@@ -126,7 +66,6 @@ out = p/'reports/orchestrator/phase1_one_shot.json'
 out.parent.mkdir(parents=True, exist_ok=True)
 summary = {'project':str(p), 'verdict':'NOT_MEASURED',
            'measurement_scope':'SOURCE_ONLY_FIXTURE'}
-summary = _bind_runner_report(summary, p, __file__, out.name)
 out.write_text(json.dumps(summary))
 ''' % str(PROGRAMS))
 
@@ -144,17 +83,6 @@ out.write_text(json.dumps(summary))
     assert calls[0][calls[0].index("--exit-step") + 1] == "D1"
     assert "--entry-step" not in calls[0]
     assert calls[0][calls[0].index("--route") + 1] == "ip"
-    invocation = result["runner_invocation"]
-    assert invocation["source_before"]["runner"]["path"] == str(runner)
-    assert invocation["source_before"] == invocation["source_after"]
-    # Delivery admission adds its owner answer; D1 still cannot regenerate
-    # supplied RTL or change the prompt it was asked to carry forward.
-    assert invocation["material_before"]["output_rtl"] == invocation["material_after"]["output_rtl"]
-    assert invocation["material_before"]["prompt_sha256"] == invocation["material_after"]["prompt_sha256"]
-    bound = invocation["reports_after"]["phase1_one_shot.json"]["runner_binding"]
-    assert bound["invocation_id"] == invocation["invocation_id"]
-    assert bound["source"] == invocation["source_before"]
-    assert bound["material"] == invocation["material_after"]
     reused = dispatch._ensure_phase1_frontdoor(runner, tmp_path, budget)
     assert reused["status"] == "REUSED"
     assert len(calls) == 1

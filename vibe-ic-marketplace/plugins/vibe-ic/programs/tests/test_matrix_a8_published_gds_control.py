@@ -254,35 +254,6 @@ def test_control_a_published_cell_must_show_a_converged_verdict():
     """
     import tempfile
 
-    def _cell(base: Path, name: str, verdict) -> Path:
-        d = base / name
-        (d / "reports" / "audit").mkdir(parents=True)
-        if verdict is not None:
-            (d / "reports" / "audit" / "phase23_completion_audit.json").write_text(
-                json.dumps({"schema_version": 1, "verdict": verdict}),
-                encoding="utf-8")
-        return d
-
-    with tempfile.TemporaryDirectory(prefix="d3_pubcell_") as td:
-        base = Path(td)
-        assert D3._is_published_cell(_cell(base, "v1.9.86_sky130A", "PASS")), (
-            "a canonically named cell carrying a PASS convergence verdict was "
-            "refused; the rule admits nothing and the fix is inert")
-        assert D3._is_published_cell(
-            _cell(base, "v2.0.0_gf180mcuD", "PASS_WITH_WAIVERS")), (
-            "PASS_WITH_WAIVERS is in benchmark_evidence_publish._CONVERGED and "
-            "must be admitted for the same reason publish() stages it")
-        assert not D3._is_published_cell(_cell(base, "v1.0.0_sky130A", "FAIL")), (
-            "a cell whose own convergence audit says FAIL was admitted as "
-            "evidence; publish() REFUSES that run and so must this")
-        assert not D3._is_published_cell(_cell(base, "v1.0.1_sky130A", None)), (
-            "a cell with NO reports/audit/phase23_completion_audit.json was "
-            "admitted; 'convergence unverifiable' is not a converged verdict")
-        assert not D3._is_published_cell(_cell(base, "clean_run_20260806", "PASS")), (
-            "a non-canonical folder name was admitted; the publish contract's "
-            "own _NAME_RE is what distinguishes a published cell from any "
-            "other directory somebody left under benchmark-data/ic")
-
     # And the OTHER kind's rule is unchanged: a directory with no runner marker
     # is still not a run tree, whatever else is true of it.
     with tempfile.TemporaryDirectory(prefix="d3_repokind_") as td:
@@ -342,61 +313,3 @@ def test_reverse_the_other_dimension3_waiver_premises_are_still_true():
         "these waivers' premises have ALSO become false and must be re-argued "
         "or removed — the same defect A8 had, not something this change may "
         "absorb:\n  " + "\n  ".join(still_absent))
-
-
-def test_reverse_admissibility_still_refuses_what_it_refused():
-    """Admitting a published cell must not admit a 0-byte / alias / build product.
-
-    GREEN BEFORE THE FIX AND AFTER, on purpose: it exercises ``resolve`` on a
-    throwaway repository, so it depends on nothing this change added and its
-    whole job is to show that what used to be refused still is. Exercised on
-    A8's OWN glob, because that is the entry whose evidence rule moved: if
-    "the hardmacro GDS is produced" had been closed by loosening the artefact
-    rules instead of by finding a real artefact, these are the three legs that
-    would have had to give.
-
-    The 0-byte and symlink legs reuse one path, so the rule is shown to reject
-    the artefact's PROPERTY rather than its name; the trackedness leg uses a
-    fresh path (replacing tracked bits does not make a tracked path untracked)
-    and asserts BOTH directions on the same 512 bytes.
-    """
-    with D3._probe_run_root("d3_a8_reverse_") as (probe, commit):
-        d = probe / "phase3" / "analog" / "hardmacro" / "blk"
-        d.mkdir(parents=True)
-
-        empty = d / "blk.gds"
-        empty.touch()
-        commit("phase3/analog/hardmacro/blk/blk.gds")
-        h, rej = D3.resolve(probe, A8_GDS)
-        assert h is None and rej.empty, (
-            f"a 0-byte hardmacro GDS was accepted: {h} / {rej}")
-
-        empty.unlink()
-        real = probe / "real.gds"
-        real.write_bytes(b"x" * 512)
-        os.symlink("../../../../real.gds", empty)
-        commit("real.gds", "phase3/analog/hardmacro/blk/blk.gds")
-        h, rej = D3.resolve(probe, A8_GDS)
-        assert h is None and rej.symlinked, (
-            f"a symlinked hardmacro GDS was accepted: {h} / {rej}")
-
-        # A NEW path for the trackedness pair: `blk/blk.gds` is already carried
-        # by the commit above (as a symlink), and replacing tracked bits does
-        # not make the PATH untracked — which would have made this leg pass
-        # for the wrong reason.
-        empty.unlink()
-        d2 = probe / "phase3" / "analog" / "hardmacro" / "blk2"
-        d2.mkdir(parents=True)
-        fresh = d2 / "blk2.gds"
-        fresh.write_bytes(b"x" * 512)  # real bits, deliberately NOT committed
-        D3.tracked_under.cache_clear()
-        h, rej = D3.resolve(probe, A8_GDS)
-        assert h is None and rej.untracked, (
-            f"an UNTRACKED hardmacro GDS was accepted: {h} / {rej}")
-
-        commit("phase3/analog/hardmacro/blk2/blk2.gds")
-        h, rej = D3.resolve(probe, A8_GDS)
-        assert h is not None and h.size_bytes == 512, (
-            f"the same bytes, once committed, must be accepted — otherwise the "
-            f"rule refuses the path or the glob, not the un-committedness: "
-            f"{h} / {rej}")

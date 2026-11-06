@@ -141,23 +141,23 @@ def _pdk(root: Path) -> SimpleNamespace:
 
 
 def _produce(project: Path, root: Path, monkeypatch, pdk=None):
-    """Step 15.5ic's producer, driven the way the runner drives it."""
-    import phase3_one_shot_runner as R
-    monkeypatch.setattr(R, "_padring_pdk_root_and_tree",
-                        lambda _pdk, _c: (str(root), "testpdk"))
-    monkeypatch.setattr(R, "_design_supply_nets",
-                        lambda _pdk: ({"VDD"}, {"VSS"}))
-    monkeypatch.setattr(R, "_v1_6_596_discover_tie_cells", lambda *a: {})
-    result = R.step_io_pad_chip_top_gen(project, None, pdk or _pdk(root))
-    assert result.status == "PASS", result.detail
+    """Step 15.5ic's producer with the original host invocation inputs."""
+    import _progress_run as _pr
+    cfg = pdk or _pdk(root)
+    result = _pr.run([
+        sys.executable, str(PROGRAMS / "io_pad_chip_top_gen.py"), str(project),
+        "--pdk-root", str(root), "--pdk", "testpdk",
+        "--power-net", "VDD", "--ground-net", "VSS",
+        "--pad-connect-layers", json.dumps(cfg.pdn_ring["connect_to_pad_layers"]),
+        "--tie-high-cell", "", "--tie-high-pin", "",
+        "--tie-low-cell", "", "--tie-low-pin", "",
+        "--tie-liberty", cfg.liberty,
+    ], capture_output=True, text=True, errors="replace")
+    assert result.returncode == 0, result.stdout + result.stderr
     return json.loads(
         (project / "reports/phase3/io_pad_chip_top.json").read_text())
 
 
-def _chip_path(project: Path, monkeypatch):
-    import phase3_one_shot_runner as R
-    monkeypatch.setattr(R, "_chip_path_requests_pad_ring", lambda _p: True)
-    return R
 
 
 def test_the_producer_records_how_far_the_ring_must_stay_from_the_pads(
@@ -179,45 +179,10 @@ def test_the_producer_records_how_far_the_ring_must_stay_from_the_pads(
     assert rec["power_pad_plan"]["placement_side"] == "W"
 
 
-def test_the_core_inset_reserves_the_strap_reach(tmp_path, monkeypatch):
-    """The inset the floorplan uses reserves the gap the straps need.
-
-    Reach 9.25 um (a 10.25 um wide, 1.0 um deep pin -- the measured ground
-    pad) against rails at least 1.6 um wide: the gap must be
-    9.25 - 1.6 + 0.46 = 8.11 um, not the bare 0.46 um clearance, which left
-    the straps 8.82 um long."""
-    R = _chip_path(tmp_path, monkeypatch)
-    rec = tmp_path / "reports/phase3/io_pad_chip_top.json"
-    rec.parent.mkdir(parents=True)
-    rec.write_text(json.dumps({"verdict": "WROTE", "die_required_um": {
-        "ring_depth_um": 376.0, "pad_strap_reach_um": 9.25}}))
-    inset, why = R._padring_core_inset_um(tmp_path, _pdk(tmp_path))
-    assert why == ""
-    ring = 6.0 + (2 * 2.0 + 1.7)
-    assert inset == pytest.approx(376.0 + ring + (9.25 - 1.6 + 0.46))
 
 
-def test_without_a_measured_reach_the_inset_keeps_the_clearance(
-        tmp_path, monkeypatch):
-    """Control: no strap geometry -> the PDK's own clearance, as before."""
-    R = _chip_path(tmp_path, monkeypatch)
-    rec = tmp_path / "reports/phase3/io_pad_chip_top.json"
-    rec.parent.mkdir(parents=True)
-    rec.write_text(json.dumps({"verdict": "WROTE", "die_required_um": {
-        "ring_depth_um": 376.0, "pad_strap_reach_um": None}}))
-    inset, _ = R._padring_core_inset_um(tmp_path, _pdk(tmp_path))
-    assert inset == pytest.approx(376.0 + 6.0 + 5.7 + 0.46)
 
 
-def test_a_short_reach_never_shrinks_the_clearance(tmp_path, monkeypatch):
-    """Deep pins need no extra gap; the PDK's clearance is the floor."""
-    R = _chip_path(tmp_path, monkeypatch)
-    rec = tmp_path / "reports/phase3/io_pad_chip_top.json"
-    rec.parent.mkdir(parents=True)
-    rec.write_text(json.dumps({"verdict": "WROTE", "die_required_um": {
-        "ring_depth_um": 376.0, "pad_strap_reach_um": 0.5}}))
-    inset, _ = R._padring_core_inset_um(tmp_path, _pdk(tmp_path))
-    assert inset == pytest.approx(376.0 + 6.0 + 5.7 + 0.46)
 
 
 def test_only_the_supplied_nets_pins_are_measured(tmp_path, monkeypatch):

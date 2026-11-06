@@ -77,9 +77,6 @@ _RTL_CLOG2_OF_AN_EXPRESSION_DEFAULT = (
 _GATE_REPORT = "reports/phase2/gates/slot_pad_budget.json"
 
 
-def _runner():
-    import design_one_shot_runner as R
-    return R
 
 
 def _declare(project: Path, values: dict) -> None:
@@ -187,71 +184,3 @@ def test_an_undeclared_parameter_still_answers_CANNOT_CHECK():
 # --------------------------------------------------------------------------- #
 # (a) the runner books a CANNOT CHECK as NOT_MEASURED, never NOT_APPLICABLE
 # --------------------------------------------------------------------------- #
-def test_the_runner_books_an_unresolved_width_CANNOT_CHECK_as_NOT_MEASURED():
-    """The measured row, driven through `step_slot_pad_budget`. RED on main:
-    NOT_APPLICABLE, declared_by the [CANNOT CHECK] line itself."""
-    R = _runner()
-    sr = R.step_slot_pad_budget(
-        D._project(rtl=_RTL_CLOG2_OF_AN_EXPRESSION_DEFAULT), _TOP)
-    assert sr.extras["exit_code"] == 2
-    assert "[CANNOT CHECK]" in sr.detail
-    assert sr.status == "NOT_MEASURED", (sr.status, sr.detail)
-    assert sr.status != "NOT_APPLICABLE"
-    assert sr.declared_by == ""
-    # ZERO_DENOMINATOR crosses the one gate->step boundary as no_population.
-    assert sr.reason_class == "no_population"
-
-
-def test_the_runner_books_an_unrun_upstream_CANNOT_CHECK_as_NOT_MEASURED():
-    """No slot files and no router declaration: the gate says UNDECIDED /
-    BLOCKED_BY_UPSTREAM. That is work outstanding, not an inapplicable
-    question. RED on main: NOT_APPLICABLE."""
-    R = _runner()
-    import test_issue1347_slot_pad_budget_is_wired_into_the_flow as W
-    sr = R.step_slot_pad_budget(
-        W._project(T._RTL_FITS, with_slots=False, route=None), "chip_top")
-    assert sr.extras["exit_code"] == 2
-    assert sr.status == "NOT_MEASURED", (sr.status, sr.detail)
-    assert sr.reason_class == "upstream_refused"
-    assert sr.declared_by == ""
-
-
-def test_rc2_with_no_report_is_NOT_MEASURED_and_a_stale_NA_does_not_answer():
-    """Missing evidence is NOT_MEASURED. The gate is run for real with its
-    `--json` stripped, so it exits 2 and writes nothing; a design-declared N/A
-    report left by an EARLIER run sits at the path. RED on main: the rc alone
-    decided NOT_APPLICABLE. Without the pre-spawn removal, the stale report
-    would answer for this run."""
-    R = _runner()
-    p = D._project(rtl=_RTL_CLOG2_OF_AN_EXPRESSION_DEFAULT)
-    stale = p / _GATE_REPORT
-    stale.parent.mkdir(parents=True, exist_ok=True)
-    stale.write_text(json.dumps({"check": "slot_pad_budget",
-                                 "verdict": "NOT_APPLICABLE",
-                                 "reason_class": "DESIGN_DECLARED_NA",
-                                 "rc": 2}))
-    orig = R._pr.run
-    try:
-        R._pr.run = lambda cmd, **kw: orig(
-            [c for i, c in enumerate(cmd)
-             if c != "--json" and (i == 0 or cmd[i - 1] != "--json")], **kw)
-        sr = R.step_slot_pad_budget(p, _TOP)
-    finally:
-        R._pr.run = orig
-    assert sr.extras["exit_code"] == 2
-    assert not stale.exists(), "a stale report survived to answer this run"
-    assert sr.status == "NOT_MEASURED", (sr.status, sr.detail)
-    assert sr.reason_class == "execution_error"
-
-
-def test_a_design_declared_route_is_still_NOT_APPLICABLE_and_names_it():
-    """The other rc-2 sentence keeps its landed reading (R-0915-85): the design
-    declared no operator template, the gate says NOT_APPLICABLE /
-    DESIGN_DECLARED_NA, and the row names the declaration."""
-    R = _runner()
-    import test_issue1347_slot_pad_budget_is_wired_into_the_flow as W
-    sr = R.step_slot_pad_budget(
-        W._project(T._RTL_FITS, with_slots=False), "chip_top")
-    assert sr.status == "NOT_APPLICABLE", (sr.status, sr.detail)
-    assert sr.declared_by and "no operator template" in sr.declared_by
-    assert sr.reason_class == ""

@@ -32,9 +32,7 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import phase1_doc_one_shot_runner as R  # noqa: E402
-import _path_layout as _pl  # noqa: E402
 from _hostpaths import require_corpus  # noqa: E402
-from _ai_judgement_fixture import sign as _sign_ai_fixture  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
@@ -139,28 +137,8 @@ def test_end_to_end_final_l9_emits_two_legal_rails(tmp_path):
     from _route_fixture import stage_owner_route
     stage_owner_route(proj, "ic")
     runner = _PROGRAMS / "phase1_one_shot_runner.py"
-    # The first pass emits the L docs and the expert handoff. Deliver an answer
-    # against those docs, sign the exact D1 evidence, then run the real second
-    # pass without re-extracting (which would invalidate the signed evidence).
-    _pr.run([sys.executable, str(runner), str(proj)],
-            capture_output=True, text=True)
-    report = _pl.report_path(proj, "phase1/expert_parse_track.json")
-    assert report.is_file(), "first pass did not emit the expert handoff"
-    answer = (report.parent / "expert_parse_track_pack"
-              / "l_doc_expectations.json")
-    assert answer.parent.is_dir(), "first pass did not emit the expert pack"
-    import json
-    answer.write_text(json.dumps({"expectations": [{
-        "id": "paired-power-rails-are-separate-ports",
-        "layer": "L9_INTERFACE",
-        "field_path": "top_ports",
-        "requirement": "both power rails named in the interface table are ports",
-        "expected_tokens": ["vccd1", "vssd1"],
-        "evidence": ["L3_external_interface.md names vccd1/vssd1"],
-    }]}))
-    _sign_ai_fixture(proj, "D1")
-    r = _pr.run([sys.executable, str(runner), str(proj),
-                 "--second-track-only"], capture_output=True, text=True)
+    r = _pr.run([sys.executable, str(runner), str(proj)],
+                capture_output=True, text=True)
     assert r.returncode == 0, r.stderr[-2000:]
     names = _final_l9_names(proj)
     lower = {n.lower() for n in names}

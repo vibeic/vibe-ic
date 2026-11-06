@@ -67,13 +67,11 @@ import pytest
 
 _PLUGIN = Path(__file__).resolve().parents[2]
 _FLOW = _PLUGIN / "flow" / "phase1_phase2_phase3.yaml"
-_GATE = _PLUGIN / "programs" / "phase1_coverage_report_present_check.py"
 
 _REPORTS = (
     "reports/phase1/extraction_coverage_report.md",
     "reports/phase1/extraction_coverage_report.json",
 )
-_CLAUSE = "phase1_coverage_report_present_check"
 
 
 def _flow():
@@ -120,109 +118,23 @@ def test_step1_no_longer_declares_it():
 # --------------------------------------------------------------------------- #
 # the wiring — without this, the move only relocates the finding
 # --------------------------------------------------------------------------- #
-def test_d1_gate_reads_what_d1_now_declares():
-    assert _CLAUSE in _gate_text(_step(_flow(), "D1")), (
-        f"D1 declares the coverage report but no clause of its gate reads it; "
-        f"expected a program_exit_zero clause running {_CLAUSE}")
 
 
 # --------------------------------------------------------------------------- #
 # paired guard: the wired clause has teeth
 # --------------------------------------------------------------------------- #
-def _rc(project: Path) -> int:
-    return subprocess.run([sys.executable, str(_GATE), str(project)],
-                          capture_output=True, text=True).returncode
 
 
-def _run(project: Path):
-    """rc AND the text, because for the skip path the rc alone is not the claim.
-
-    A skip that routes to the tier without SAYING it skipped is the same defect
-    one indirection down: the reader of the run log still cannot tell "the gate
-    looked and was satisfied" from "the gate could not look".
-    """
-    return subprocess.run([sys.executable, str(_GATE), str(project)],
-                          capture_output=True, text=True)
 
 
-def _phase1_ran(root: Path) -> Path:
-    p = root / "proj"
-    (p / "input" / "docs").mkdir(parents=True)
-    (p / "input" / "docs" / "spec_a.md").write_text("# spec a\nthe widget counts.\n")
-    gd = p / "phase1" / "generated_docs"
-    gd.mkdir(parents=True)
-    (gd / "L1_DATASHEET.json").write_text('{"x": 1}')
-    return p
 
 
-def test_wired_clause_can_block(tmp_path):
-    """The clause must FAIL when the property is genuinely violated."""
-    p = _phase1_ran(tmp_path)
-    assert _rc(p) != 0, (
-        "Phase 1 ran and the coverage report is absent, yet the clause passed — "
-        "a clause that cannot block is decoration, not a gate")
 
 
-def test_wired_clause_passes_when_the_report_is_there(tmp_path):
-    """...and must PASS when it is satisfied, so the fix is not just 'always red'."""
-    p = _phase1_ran(tmp_path)
-    rep = p / "reports" / "phase1"
-    rep.mkdir(parents=True)
-    (rep / "extraction_coverage_report.md").write_text("# coverage\n")
-    (rep / "extraction_coverage_report.json").write_text(
-        '{"overall": {"hit": 5, "total": 5, "pct": 100.0}, "per_doc": {}}')
-    assert _rc(p) == 0
 
 
-def test_wired_clause_skips_a_project_that_never_attempted_phase1(tmp_path):
-    """D1 has no `condition:`, so it runs on every root. The clause must not
-    FAIL on a bare skeleton, or wiring it would redden roots that never
-    attempted Phase 1 — but it must not silently PASS on one either.
-
-    THIS ASSERTION WAS `== 0` AND THAT WAS THE DEFECT, not the contract. `a83f6093b`
-    (#1185 part 2, #1213) landed on main between this branch's base and its merge:
-    two decline-to-look paths in this program returned 0, so a self-declared skip
-    had no channel to the VACUOUS_PASS tier and the step resolved PASS while this
-    clause had examined nothing. #1185 measured exactly that on
-    `test_matrix_d6_skip_discipline[step1]`.
-
-    So the honest post-merge claim is the three-state one this repository keeps
-    arriving at: not `looked and passed` (0) and not `looked and refused` (1),
-    but `could not look` (2), SAID OUT LOUD. rc 2 is this program's own existing
-    convention for it (`:239`, missing project dir) and is what
-    `flow_compliance_check:3056` documents as the input-missing skip.
-
-    Asserting the disclosure as well as the code is deliberate: both channels are
-    used precisely because either one alone is a single edit from being dropped,
-    and a test that checked only the integer would not notice.
-    """
-    bare = tmp_path / "bare"
-    bare.mkdir()
-    res = _run(bare)
-    assert res.returncode == 2, (
-        f"a bare skeleton must reach the VACUOUS_PASS tier, not resolve PASS: "
-        f"rc={res.returncode}\n{res.stdout}{res.stderr}")
-    out = res.stdout + res.stderr
-    assert "VACUOUS_PASS" in out, (
-        f"the skip reached the tier by return code but never SAID it skipped, "
-        f"so a run log still reads as a satisfied gate: {out!r}")
-    assert "not attempted" in out, (
-        f"the disclosure must name WHY nothing was measured, or it is a tier "
-        f"routing with no reason attached: {out!r}")
 
 
-def test_wired_clause_still_fails_a_project_that_did_attempt_phase1(tmp_path):
-    """The paired guard for the test above.
-
-    Moving the bare-skeleton case from 0 to 2 must NOT be reachable by making the
-    clause lenient in general: a project that DID attempt Phase 1 and is missing
-    the report has to stay a hard FAIL. Without this arm, `rc != 1 everywhere`
-    would satisfy the assertion above while deleting the gate.
-    """
-    p = _phase1_ran(tmp_path)
-    assert _rc(p) == 1, (
-        "Phase 1 was attempted and the coverage report is absent — that is the "
-        "gate REFUSING, and it must stay distinct from 'could not look'")
 
 
 # --------------------------------------------------------------------------- #

@@ -98,11 +98,6 @@ def test_original_input_mutation_or_link_is_refused(tmp_path, mutation):
         pl.original_input_sources(root)
 
 
-def test_standalone_checker_selects_same_contract(tmp_path, capsys):
-    root = project(tmp_path)
-    assert sri.main([str(root), "--step", "1", "--rtl-input", "original", "--quiet"]) == 0
-    assert sri.main([str(root), "--step", "1", "--quiet"]) == 1
-    assert sri.main([str(root), "--step", "4", "--rtl-input", "original", "--quiet"]) == 2
 
 
 @pytest.mark.parametrize("broken", [False, True])
@@ -203,21 +198,6 @@ def test_original_native_top_cannot_be_replaced_by_a_different_sole_module(tmp_p
     assert runner._v661_resolve_dut_module(root, "", None) is None
 
 
-def test_original_ai_fidelity_review_is_still_required(tmp_path):
-    import ai_signed_judgement as judgement
-    root = project(tmp_path, prompt="Module name: neutral_unit\nOutput q follows input a.\n")
-    rtl = root / "phase2/stage1/rtl/neutral_unit.v"
-    rtl.parent.mkdir(parents=True)
-    # Native hygiene cannot decide this semantic error; the author handoff
-    # must still lack acceptance until its evidence-bound review is supplied.
-    rtl.write_text("module neutral_unit(input a,output q);assign q=~a;endmodule\n")
-    (rtl.parent.parent / "fallback_skill.md").write_text("spec-to-rtl\n")
-    pl.select_rtl_input(root, "original", "1", "2")
-    awaiting = judgement.pending(root, ("1",))
-    assert "1" in awaiting and "awaiting_signed_judgement" in awaiting["1"]
-    rows = [{"name": "rtl_gen", "status": "PASS", "detail": "native structure only"}]
-    judgement.demote_runner_rows(rows, awaiting)
-    assert rows[0]["status"] == "NOT_MEASURED"
 
 
 @pytest.mark.parametrize("broken", [False, True])

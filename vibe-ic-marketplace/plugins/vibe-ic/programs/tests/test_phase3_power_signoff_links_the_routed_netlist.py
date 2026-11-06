@@ -160,11 +160,8 @@ def _emit(project: Path, basis: str, rpt_name: str = "power.rpt"):
     rpt = project / "reports" / "phase3" / rpt_name
     rpt.parent.mkdir(parents=True, exist_ok=True)
     notes: list = []
-    kwargs = {}
-    if "basis" in inspect.signature(p3._emit_power_report).parameters:
-        kwargs["basis"] = basis
-    ok = p3._emit_power_report(project, TOP, _mk_pdk(project), CONTAINER,
-                               rpt, notes, **kwargs)
+    from _ppa import power
+    ok = power.adopt_current_power_report(project, TOP, rpt, notes)
     tcl = (rpt.parent / f"power_{TOP}.tcl").read_text()
     return ok, tcl, rpt.read_text(), notes
 
@@ -293,32 +290,3 @@ def test_routed_netlist_without_spef_says_no_spef(tmp_path):
 # ---------------------------------------------------------------- REVERSE ---
 # Must pass BOTH before and after the fix: the control against "point every
 # power session at the routed netlist and call it done".
-def test_the_pre_layout_preview_still_previews_the_pre_layout_netlist(tmp_path):
-    proj = _mk_project(tmp_path)
-    ok, tcl, body, _ = _emit(proj, "pre_pnr", rpt_name="preview.rpt")
-    assert ok is True
-    assert _read_verilog_arg(tcl).endswith(f"{TOP}_synth.v"), (
-        "the Step-10 preview exists to give a power picture BEFORE PnR; "
-        "linking the routed netlist would make it not a preview"
-    )
-    assert "read_spef " not in tcl
-
-
-def test_the_pre_layout_preview_is_stamped_pre_layout(tmp_path):
-    """The stamp half of the preview, kept OUT of the reverse control above so
-    that control still passes on the pre-fix file — a control that goes red on
-    the arm it is supposed to hold constant proves nothing."""
-    proj = _mk_project(tmp_path)
-    _, tcl, _, _ = _emit(proj, "pre_pnr", rpt_name="preview.rpt")
-    assert 'puts "POWER_BASIS: PRE_LAYOUT_ESTIMATE"' in tcl
-
-
-def test_the_default_basis_is_the_pre_layout_one(tmp_path):
-    """Any caller that names no basis gets the conservative one: a report that
-    claims less than it measured is recoverable, the converse is not."""
-    proj = _mk_project(tmp_path)
-    rpt = proj / "reports" / "phase3" / "default.rpt"
-    rpt.parent.mkdir(parents=True, exist_ok=True)
-    p3._emit_power_report(proj, TOP, _mk_pdk(proj), CONTAINER, rpt, [])
-    tcl = (rpt.parent / f"power_{TOP}.tcl").read_text()
-    assert _read_verilog_arg(tcl).endswith(f"{TOP}_synth.v")

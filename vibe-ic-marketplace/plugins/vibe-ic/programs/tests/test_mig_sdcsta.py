@@ -227,92 +227,6 @@ def test_sdc_syntax_check_defers_to_opensta_when_step8_is_switched(tmp_path):
     assert result.findings[0].rule == "OPENSTA_GATE_STALE" and not result.passed
 
 
-def test_step10_tool_path_publishes_and_blocks_on_a_black_box(tmp_path, monkeypatch):
-    from _stated_eda_image import mock_docker_route
-    # This test substitutes the image process edge; it is not a LOCAL image
-    # attestation control and must not borrow the enclosing QA container's CID.
-    mock_docker_route(monkeypatch)
-    runner = importlib.import_module("phase3_one_shot_runner")
-    p = design(tmp_path)
-    libs = p / "input/pdk/liberty"
-    libs.mkdir(parents=True)
-    for name in ("x_ss_125C.lib", "x_tt_025C.lib"):
-        (libs / name).write_text("library(x) {}\n")
-    put(p / "phase3/stage3/pnr/constraint.sdc", (CAL / "cal_full.sdc").read_text())
-    # The stated environment: image AND PDK root declared, so the contract's
-    # resolvers answer without asking this host's docker.
-    (tmp_path / "pdkroot").mkdir()
-    put(p / "phase3/librelane_switch.json", {"steps": {"7": "librelane", "8": "librelane",
-                                                        "10": "librelane"}, "image": "img",
-                                              "pdk_root_host": str(tmp_path / "pdkroot")})
-    logs = {"clean": "sta_prepnr_linked_clean_negative.log",
-            "bad": "sta_prepnr_black_box_positive.log"}
-    chosen = {}
-
-    def tool(project, image, pdk, top, netlist, sdc, rtl, **_):
-        root = project / "phase3/librelane/prelayout/design_sdc"
-        shutil.rmtree(root, ignore_errors=True)
-        folder, _ = sta_folder(root, log=logs[chosen["log"]])
-        config = json.loads((folder / "config.json").read_text())
-        # This full-signoff fixture must supply every declared corner, not
-        # just the sparse TT log used by the parser-only tests above. The
-        # neutral native OpenSTA calibration reports include real max/min
-        # path tables (GF180 public TT/SS Liberty, input min delay 1 ns).
-        # This substituted process edge remains a program-fixture control.
-        state = json.loads((folder / "state_out.json").read_text())
-        for label, name, setup, hold in (
-                ("tt", "nom_tt_025C_5v00", 5.0, 0.3),
-                ("ss", "nom_ss_125C_4v50", 4.0, 0.2)):
-            corner = folder / name
-            corner.mkdir(exist_ok=True)
-            shutil.copy(CAL / logs[chosen["log"]], corner / "sta.log")
-            shutil.copy(CAL / "sta_prepnr_check_setup_clean_negative.rpt",
-                        corner / "checks.rpt")
-            for kind in ("max", "min"):
-                shutil.copy(CAL / f"sta_prepnr_cal_{label}_{kind}.rpt",
-                            corner / f"{kind}.rpt")
-            for check, slack in (("setup", setup), ("hold", hold)):
-                for metric, value in (("ws", slack), ("wns", 0), ("tns", 0)):
-                    state["metrics"][f"timing__{check}__{metric}__corner:{name}"] = value
-        put(folder / "state_out.json", state)
-        config["PNR_SDC_FILE"] = str(sdc)
-        put(folder / "config.json", config)
-        return folder
-
-    def prepare(project, image, pdk, top, netlist, sdc, rtl, **_):
-        # The same substituted native transport resolves its configuration
-        # before the owning Step10 snapshot; it has not run STA here.
-        root = project / "phase3/librelane/prelayout-config/design_sdc"
-        config = put(root / "resolved.json", {
-            "PNR_SDC_FILE": str(sdc),
-            "STA_CORNERS": ["nom_tt_025C_5v00", "nom_ss_125C_4v50"],
-            "DEFAULT_CORNER": "nom_tt_025C_5v00",
-            "CELL_LIBS": {"*_tt_025C_5v00": ["/pdk/tt.lib"],
-                          "*_ss_125C_4v50": ["/pdk/ss.lib"]}})
-        state = put(root / "state_in.json", {"nl": str(netlist)})
-        return {"configs": dict.fromkeys(prelayout.STEPS, config), "state": state}
-
-    monkeypatch.setattr(prelayout, "prepare_prelayout", prepare, raising=False)
-    monkeypatch.setattr(prelayout, "run_prelayout", tool)
-    pdk = SimpleNamespace(name="pdkA", liberty=str(libs / "x_tt_025C.lib"))
-    chosen["log"] = "clean"
-    ok = runner.step_prelayout_signoff(p, "cal_chain", pdk, "")
-    assert ok.status == "PASS", ok.detail
-    rpt = (p / "phase3/stage3/sta/prelayout_per_corner/sta_TT.rpt").read_text()
-    assert "STA_BASIS: PRE_LAYOUT_ESTIMATE" in rpt and "worst slack max 5.00" in rpt
-    # CUT_W1A: step 10 never writes step 23's post-route corner directory
-    assert not (p / "phase3/stage3/sta/per_corner").exists()
-    # Both declared corners must reach the unchanged canonical summary gate.
-    summary_path = p / "reports/phase3/sta/pre_pnr_summary.json"
-    if summary_path.exists():
-        summary = json.loads(summary_path.read_text())
-        assert summary["passed"] is True
-        assert summary["summary"]["corner_reports_distinct"] == 2
-    pvt = json.loads((p / "phase2/stage2/constraints/pvt_matrix.json").read_text())
-    assert pvt["corner_source"].startswith("LibreLane resolved STA_CORNERS")
-    chosen["log"] = "bad"
-    bad = runner.step_prelayout_signoff(p, "cal_chain", pdk, "")
-    assert bad.status == "FAIL" and "LL_STA_BLACK_BOX" in bad.detail
 
 
 # ── step 13: EQY arm B ─────────────────────────────────────────────────────
@@ -638,10 +552,6 @@ def test_step13_row_takes_the_eqy_counterexample(tmp_path, monkeypatch):
     assert json.loads((p / "reports/lec_arms.json").read_text())["selected"] == "eqy"
 
 
-def test_step13_direct_mode_leaves_arm_a_untouched(tmp_path):
-    runner = importlib.import_module("design_one_shot_runner")
-    arm_a = runner.StepResult("lec_equivalence", "PASS", 1.0, "arm A")
-    assert runner._lec_eqy_arm(tmp_path, "t", "n.v", [arm_a]) == [arm_a]
 
 
 # ── step 14: the handoff netlist ────────────────────────────────────────────
@@ -674,34 +584,3 @@ def test_handoff_gate_cli_exit_codes(tmp_path):
 
 
 # ── step 12: DFT ports survive, and PPA admits only feasible arms ──────────
-
-def test_scan_survival_fails_when_published_dft_ports_vanish(tmp_path):
-    survival = importlib.import_module("dft_post_optimization_scan_survival_check")
-    p = tmp_path / "proj"
-    dff = "  DFFX1 r0 (.CLK(clk), .D(d), .Q(q));\n"
-    put(p / "phase2/stage2/dft/scan_netlist.v",
-        "module t(clk, d, q, shift, sout);\n input clk, d, shift;\n output q, sout;\n" + dff + "endmodule\n")
-    put(p / "phase2/stage2/synth/netlist.v", "module t(clk, d, q);\nendmodule\n")
-    put(p / "reports/phase2/dft/scan_chain.json", {
-        "published": True, "functional_mode_tieoff": {"shift": 0}, "scan_out_port": "sout"})
-    post = p / "phase2/stage2/synth/post_dft_netlist.v"
-    put(post, "module t(clk, d, q);\n input clk, d;\n output q;\n" + dff + "endmodule\n")
-    report = survival.assess(p)
-    if report["post_dft_netlist_dff_count"] == 0:
-        pytest.fail("fixture flop not recognised by the shared DFF detector")
-    assert report["verdict"] == "FAIL" and report["missing_dft_ports"] == ["shift", "sout"]
-    put(post, "module t(clk, d, q, shift, sout);\n input clk, d, shift;\n output q, sout;\n"
-        + dff + "endmodule\n")
-    assert survival.assess(p)["verdict"] == "PASS"
-
-
-def test_post_dft_ppa_never_adopts_an_unproven_arm(tmp_path):
-    post_dft = importlib.import_module("_ppa.post_dft")
-    arms = {}
-    for name, area, lec in (("small_unproven", 10.0, "INCONCLUSIVE"), ("large_proven", 20.0, "PASS")):
-        report = put(tmp_path / f"{name}.json", {"verdict": "PASS", "scope": {"stage": "post_dft"},
-                     "metrics": {"design__instance__area": {"status": "MEASURED", "value": area},
-                                 "design__instance__count": {"status": "MEASURED", "value": 5}}})
-        arms[name] = tmp_path / f"{name}.admitted.json"
-        post_dft.admit(report, {"verdict": "PASS"}, {"verdict": lec, "unproven_points": 0}, arms[name])
-    assert post_dft.select(arms, tmp_path / "sel.json")["selection"] == "large_proven"

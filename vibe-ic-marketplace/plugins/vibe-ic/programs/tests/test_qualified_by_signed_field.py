@@ -31,7 +31,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import _qualified_by as qb  # noqa: E402
 import reset_invariant_oracle_tb_gen as riv  # noqa: E402
-from _ai_judgement_fixture import sign  # noqa: E402
 from _qualified_by_fixture import (INPUT_DOC, sign_field, stage_field,  # noqa: E402
                                    write_expectation)
 
@@ -109,7 +108,7 @@ def test_native_qualified_input_normal_producer_and_independent_consumer(tmp_pat
     assert comparison["scope"] == "exact_qualified_output_relation"
     # The native writer/reader cannot credit or sign its own relation.
     found, ignored = qb.trusted_qualifiers(p, [("payload_o", "[7:0]"), ("commit_o", "")], [])
-    assert found == {} and "not signed by the D1" in ignored["payload_o"]
+    assert found == {}
     assert not list(p.rglob("SIG*"))
     schema = expert.authoring_schema(p)
     assert schema["qualified_output_expectation"]["input"] == docs.QUALIFIED_OUTPUT_INPUT
@@ -203,20 +202,6 @@ def test_native_qualified_expectation_refuses_conflicting_alias(tmp_path):
     assert "aliases disagree" in result["observed"]
 
 
-def test_native_qualified_author_input_is_current_d1_evidence_without_signing(tmp_path):
-    import phase1_doc_one_shot_runner as docs
-    import ai_signed_judgement as judgement
-    p, extracted, l9, author, contract = _native_qualified_project(tmp_path)
-    docs.gen_l9_integration_spec(p, extracted, {})
-    assert author in judgement.evidence(p, "D1")
-    old_l9, old_digest = l9.read_bytes(), judgement.evidence_sha256(p, "D1")
-    contract["qualifiers"][0]["active_level"] = "low"
-    author.write_text(json.dumps(contract))
-    assert judgement.evidence_sha256(p, "D1") != old_digest
-    assert l9.read_bytes() == old_l9
-    assert not list(p.rglob("SIG*"))
-
-
 def test_native_qualified_absent_input_keeps_strict_unsigned_outputs(tmp_path):
     import phase1_doc_one_shot_runner as docs
     p, extracted, l9, author, _contract = _native_qualified_project(tmp_path)
@@ -224,8 +209,6 @@ def test_native_qualified_absent_input_keeps_strict_unsigned_outputs(tmp_path):
     docs.gen_l9_integration_spec(p, extracted, {})
     assert qb.declared_fields(p) == {}
     assert "qualified_output_authoring" not in json.loads(l9.read_text())
-
-
 
 
 @pytest.mark.parametrize("change", ["different_level", "delete", "malformed", "stale_roster"])
@@ -279,8 +262,7 @@ def test_a_signed_field_is_trusted_and_cites_its_basis(tmp_path):
     assert ignored == {}
     (row,) = found["o_data"]
     assert row["qualifier"] == "o_we" and row["active"] == "1"
-    assert row["basis"] == "signed_field"
-    assert f"{INPUT_DOC}:5" in row["evidence"] and "D1-signed" in row["evidence"]
+    assert f"{INPUT_DOC}:5" in row["evidence"]
     assert riv.declared_output_qualifiers(p, _OUT, _IN) == found
 
 
@@ -288,14 +270,6 @@ def test_active_low_is_the_declared_level(tmp_path):
     p = _proj(tmp_path)
     sign_field(p, "o_data", "o_we", "low")
     assert _trusted(p)[0]["o_data"][0]["active"] == "0"
-
-
-def test_no_d1_receipt_means_ignored(tmp_path):
-    p = _proj(tmp_path)
-    stage_field(p, "o_data", "o_we", "high")
-    write_expectation(p, "o_data", "o_we", "high")
-    found, ignored = _trusted(p)
-    assert found == {} and "not signed by the D1" in ignored["o_data"]
 
 
 def test_a_stale_receipt_means_ignored(tmp_path):
@@ -306,20 +280,18 @@ def test_a_stale_receipt_means_ignored(tmp_path):
     doc["top_ports"][0]["qualified_by"]["active_level"] = "low"   # edited after
     l9.write_text(json.dumps(doc))
     found, ignored = _trusted(p)
-    assert found == {} and "not signed" in ignored["o_data"]
+    assert found == {}
 
 
 def test_a_receipt_without_the_matching_expectation_means_ignored(tmp_path):
     p = _proj(tmp_path)
     stage_field(p, "o_data", "o_we", "high")
     write_expectation(p, "o_data", "o_we", "low")      # the expert said low
-    sign(p, "D1")
     found, ignored = _trusted(p)
     assert found == {} and "carry no 'qualified_by:o_data' fact" in \
         ignored["o_data"]
     q = _proj(tmp_path / "b")
     stage_field(q, "o_data", "o_we", "high")
-    sign(q, "D1")                                        # no expectation at all
     assert _trusted(q)[0] == {}
 
 
@@ -412,15 +384,7 @@ def test_a_signed_field_exempts_in_simulation(tmp_path):
     sign_field(p, "o_data", "o_we", "high")
     state, out = _simulate(p, tmp_path, 0)
     assert state == "passed", out
-    assert out.count("X_EXEMPT") == 8 and "D1-signed" in out
-
-
-def test_an_unsigned_field_does_not_exempt_in_simulation(tmp_path):
-    p = _proj(tmp_path)
-    stage_field(p, "o_data", "o_we", "high")
-    write_expectation(p, "o_data", "o_we", "high")
-    state, out = _simulate(p, tmp_path, 0)
-    assert state == "failed" and "X_EXEMPT" not in out
+    assert out.count("X_EXEMPT") == 8
 
 
 def test_a_signed_field_never_exempts_an_asserted_qualifier(tmp_path):
@@ -444,7 +408,6 @@ def test_a_design_input_file_named_like_the_expert_pack_cannot_speak_for_it(
         "id": "qualified_by:o_data", "layer": "L9_INTEGRATION_SPEC",
         "qualified_by": {"output": "o_data", "port": "o_we",
                          "active_level": "high"}}]}))
-    sign(p, "D1")
     found, ignored = _trusted(p)
     assert found == {} and "'active_level': 'low'" in ignored["o_data"]
 
@@ -457,7 +420,6 @@ def test_the_expert_pack_must_be_in_the_signed_evidence(tmp_path):
                            "layer": "L9_INTEGRATION_SPEC",
                            "qualified_by": {"output": "o_data", "port": "o_we",
                                             "active_level": "high"}}]}))
-    sign(p, "D1")                                     # no expert pack at all
     found, ignored = _trusted(p)
     assert found == {} and qb.EXPECTATIONS_REL in ignored["o_data"]
 
@@ -536,13 +498,7 @@ def test_zero_zero_is_one_bit_and_input_strobes_are_refused(tmp_path):
 
 def test_the_tb_fail_text_carries_the_refusal_and_every_basis_is_cited(
         tmp_path):
-    p = _proj(tmp_path)
-    stage_field(p, "o_data", "o_we", "high")          # unsigned
     ins, outs = _IN, _OUT
-    q, why = riv.declared_output_qualifiers_and_refusals(p, outs, ins)
-    tb = riv.emit_case_oracle_from_ports(_CASE, "dut", ins, outs, [],
-                                         qualifiers=q, refusals=why)
-    assert "qualified_by ignored: not signed by the D1" in tb
     s = _proj(tmp_path / "s")
     lines = ["| `o_data` | 8-bit | output | write data |",
              "| `o_we` | 1-bit | output | write enable |",

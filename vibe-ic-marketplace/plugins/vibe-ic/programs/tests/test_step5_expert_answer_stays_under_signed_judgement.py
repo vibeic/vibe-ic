@@ -29,7 +29,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import formal_harness_gen  # noqa: E402
 
-import _ai_judgement_fixture  # noqa: E402
 
 FORMAL = "phase2/stage1/formal"
 RESULTS = f"{FORMAL}/results.json"
@@ -81,9 +80,6 @@ def test_closing_the_request_does_not_drop_the_signature_requirement(tmp_path):
     assert not (tmp_path / REQUEST).exists(), "producer kept the request"
 
 
-    _ai_judgement_fixture.sign(tmp_path, "5")
-
-
 HARNESS = f"{FORMAL}/formal_top.sv"
 
 
@@ -98,4 +94,3 @@ def test_a_review_only_closure_still_needs_the_signature(tmp_path):
            "a_x_sync: assert property (p_x_sync);\nendmodule\n")
     _close_request_like_the_producer(tmp_path)
     assert not (tmp_path / REQUEST).exists()
-    _ai_judgement_fixture.sign(tmp_path, "5")

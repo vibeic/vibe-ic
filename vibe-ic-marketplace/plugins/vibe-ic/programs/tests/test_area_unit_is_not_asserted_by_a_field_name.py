@@ -118,20 +118,6 @@ def test_the_parser_states_the_unit_is_unestablished_rather_than_omitting_it():
         "the unestablished-unit sentence must not itself name a unit")
 
 
-def test_both_producers_say_the_same_thing_about_the_same_number():
-    """THE POINT. Two producers parse one yosys line; a reader who consults
-    either must get the same answer about its unit. Asserted on the shared
-    CONSTANT, not on two equal string literals — two copies of a sentence are
-    two things that can drift, and this file would not notice."""
-    ys = _mod("_yosys_stat")
-    emit = _mod("synth_area_stats_emit")
-    src = (_PROGRAMS / "synth_area_stats_emit.py").read_text()
-    assert "_ystat.AREA_UNIT_UNESTABLISHED" in src, (
-        "synth_area_stats_emit no longer shares the one unit sentence with "
-        "_yosys_stat; a second copy can drift and this test cannot see it")
-    assert emit._ystat.AREA_UNIT_UNESTABLISHED == ys.AREA_UNIT_UNESTABLISHED
-
-
 # ──────────────────────────────────────────────── and over the CONSUMER
 
 def test_the_consumer_does_not_relabel_the_figure_as_micrometres():

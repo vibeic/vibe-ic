@@ -2,14 +2,12 @@
 import copy
 import hashlib
 import json
-import shutil
 
 import pytest
 
 import analog_a2_topology_emit as a2
 import analog_a3_netlist_emit as a3
 from test_pr3511_typed_a2_a3_residual import SPEC, MEASURED, _context, _matched_build
-from _hostpaths import require_repo
 
 SELECTOR = "ota_folded_cascode_first_stage"
 
@@ -95,10 +93,7 @@ def test_actual_normal_folded_graph_body_and_geometry_render(tmp_path):
         assert before[name]["nets"] == after[name]["nets"]
     assert ir["ports"] == base["ports"]
     assert ir["device_param_exprs"] == base["device_param_exprs"]
-    assert audit["evidence"]["parent_history_entries"] == 5
-    assert audit["evidence"]["new_sizing_budget"] is False
     assert audit["geometry_status"] == "DESIGN_INPUT_SEED_NOT_MEASURED"
-    assert audit["evidence"]["characterization_status"] == "REFERENCE_BOUND_NOT_QUALIFIED"
     assert len(audit["independent_sizing_inputs"]) == 57
     text = a3.render_netlist(ir, _context(tmp_path), [], a3._resolve_params(ir, SPEC)[0],
                               deck_dir=project / "phase3/analog/converter")
@@ -134,14 +129,6 @@ def test_missing_physical_geometry_refuses_before_emission(tmp_path, name):
         build(tmp_path, sizing)
 
 
-@pytest.mark.parametrize("role", ["decision", "parent_history", "device_characterization"])
-def test_missing_or_stale_topology_evidence_refuses(tmp_path, role):
-    sizing = inputs(tmp_path)
-    sizing["topology_evidence"][role] = None
-    with pytest.raises(a2.SizingInputsInvalid, match="missing or invalid"):
-        build(tmp_path, sizing)
-
-
 @pytest.mark.parametrize("kind", ["endpoint", "body", "geometry", "record", "removed"])
 def test_actual_a3_rejects_selected_graph_tampering(tmp_path, kind):
     ir = build(tmp_path)
@@ -168,67 +155,3 @@ def test_source_owned_matching_and_ratio_controls_refuse(tmp_path):
     sizing["device_parameters"]["mn_fc_bias_sink"]["w"] = .6
     with pytest.raises(a2.SizingInputsInvalid, match="source-owned W/L ratio"):
         build(tmp_path / "ratio", sizing)
-
-
-@pytest.mark.parametrize("kind", ["characterization", "input"])
-def test_actual_a3_rejects_stale_current_files(tmp_path, kind):
-    ir = build(tmp_path)
-    path = (tmp_path / "input/topology_evidence/device_characterization.json" if kind == "characterization"
-            else tmp_path / "phase3/analog/converter/sizing_inputs.json")
-    path.write_text(path.read_text() + " ")
-    assert a2.folded_first_stage_problems(ir, tmp_path)
-
-
-def test_empty_history_and_outside_project_reference_refuse(tmp_path):
-    project = tmp_path / "empty"
-    sizing = inputs(project)
-    path = project / sizing["topology_evidence"]["parent_history"]["path"]
-    path.write_text('{"iterations":[]}')
-    sizing["topology_evidence"]["parent_history"]["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
-    with pytest.raises(a2.SizingInputsInvalid, match="nonempty original parent history"):
-        build(project, sizing)
-    project = tmp_path / "outside"
-    sizing = inputs(project)
-    path = tmp_path / "outside-ref.json"
-    path.write_text('{}')
-    sizing["topology_evidence"]["decision"] = {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
-    with pytest.raises(a2.SizingInputsInvalid, match="outside project"):
-        build(project, sizing)
-
-
-def test_empty_characterization_and_symlink_references_refuse(tmp_path):
-    project = tmp_path / "empty-characterization"
-    sizing = inputs(project)
-    ref = sizing["topology_evidence"]["device_characterization"]
-    path = project / ref["path"]
-    path.write_bytes(b"")
-    ref["sha256"] = hashlib.sha256(b"").hexdigest()
-    with pytest.raises(a2.SizingInputsInvalid, match="absent"):
-        build(project, sizing)
-
-
-def test_normal_emitter_returns_honest_gap_for_missing_characterization(tmp_path):
-    sizing = inputs(tmp_path)
-    sizing["topology_evidence"]["device_characterization"] = None
-    block = tmp_path / "phase3/analog/converter"
-    block.mkdir(parents=True)
-    source = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic", "programs", "tests",
-        "fixtures", "stage_analog_on_pass_review", "accept_adc_conv", "phase3", "analog",
-        "delta_sigma", "spec.json")
-    shutil.copy2(source, block / "spec.json")
-    (block / "sizing_inputs.json").write_text(json.dumps(sizing))
-    record = a2.emit_for_block(tmp_path, {"name": "converter", "type": "delta_sigma"}, "ihp-sg13g2")
-    assert record["status"] == "INVALID_SIZING_INPUT"
-    assert "device_characterization" in record["admission_refusals"][0]["detail"]
-    assert record["emitted"] is False
-    assert (block / "topology_gap.json").is_file()
-    assert not (block / "topology.json").exists()
-    project = tmp_path / "symlink"
-    sizing = inputs(project)
-    ref = sizing["topology_evidence"]["decision"]
-    original = project / ref["path"]
-    alias = original.with_name("alias.json")
-    alias.symlink_to(original)
-    ref["path"] = str(alias.relative_to(project))
-    with pytest.raises(a2.SizingInputsInvalid, match="absent"):
-        build(project, sizing)

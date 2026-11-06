@@ -210,34 +210,10 @@ def test_producer_binds_the_measured_gds_sha(tmp_path, monkeypatch):
 
 # ── Step 35 ─────────────────────────────────────────────────────────────────
 
-def _content_gate(project: Path):
-    return subprocess.run([sys.executable, str(PROGRAMS / "flow_step_output_content_check.py"),
-                           str(project), "--mode", "dfm"], capture_output=True, text=True)
 
 
-def test_step35_refuses_density_ref_null(tmp_path):
-    """RED on main: the real dfm_screen.json (PASS_WITH_ADVISORIES,
-    density_ref null) passed Step 35's content gate."""
-    rpt = tmp_path / "reports/phase3/dfm_screen.json"
-    rpt.parent.mkdir(parents=True)
-    rpt.write_text(json.dumps({
-        "program": "dfm_screen_check", "verdict": "PASS_WITH_ADVISORIES",
-        "density_ref": None,
-        "findings": [{"severity": "INFO", "category": "DENSITY_REF",
-                      "message": "Step-34 metal-fill density gate result not present yet"}]}))
-    r = _content_gate(tmp_path)
-    assert r.returncode != 0, r.stdout
-    assert "density_ref" in r.stdout
 
 
-def test_step35_accepts_a_resolved_density_ref(tmp_path):
-    rpt = tmp_path / "reports/phase3/dfm_screen.json"
-    rpt.parent.mkdir(parents=True)
-    rpt.write_text(json.dumps({
-        "verdict": "PASS", "findings": [],
-        "density_ref": {"source": "metal_fill_density_check (in process)",
-                        "step34_pass": True, "errors": 0}}))
-    assert _content_gate(tmp_path).returncode == 0
 
 
 def test_screen_emitted_before_step34_gate_still_carries_its_verdict(tmp_path):

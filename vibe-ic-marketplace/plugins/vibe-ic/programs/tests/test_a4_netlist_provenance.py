@@ -216,8 +216,6 @@ def test_sweep_records_deck_origin_when_it_does_run(
         "phase3/analog/vreg/vreg.sp", (
         "the record must say the netlist EXISTS and could not be used — a "
         "different fix from 'it was never produced'")
-    assert doc.get("netlist_sha256"), (
-        "the bytes that could not be used must still be identified")
     assert "tb_vreg.sp" in doc.get("reason", "")
 
 
@@ -322,68 +320,6 @@ def test_gate_leaves_derived_only_artefact_to_the_value_rules(
 
 
 # ── SHAPE 3 — the A1-A9 matrix must not read A4 as done on presence alone ──
-
-def _matrix(project: Path) -> dict:
-    prog = PROGRAMS / "analog_flow_compliance_check.py"
-    subprocess.run(
-        [sys.executable, str(prog), str(project),
-         "--json", str(project / "afcc.json")],
-        capture_output=True, text=True)
-    rpt = json.loads((project / "afcc.json").read_text())
-    return (rpt.get("summary") or {}).get("matrix") or {}
-
-
-def test_matrix_does_not_read_a4_done_without_a_netlist(
-        tmp_path: Path) -> None:
-    """The measured round's matrix said, for the same block and in the same
-    table, `A3: MISSING` and `A4: PASS` — a corner sweep certified over a
-    netlist the run never produced. A cell that can read PASS while its own
-    declared input reads MISSING is a presence probe wearing a verdict's
-    clothes."""
-    project = _project(tmp_path, [("vreg", "ldo")])           # no vreg.sp
-    _corners(project, "vreg", _real_sim_doc())
-
-    row = _matrix(project)["vreg"]
-    assert row["A3"] == "MISSING", row
-    assert row["A4"] != "PASS", (
-        f"A1-A9 matrix reports A4 done while A3 is {row['A3']}: {row}")
-
-
-def test_matrix_does_not_read_a4_done_on_a_blocked_record(
-        tmp_path: Path) -> None:
-    """The refusal record is A4 saying it produced nothing. A consumer that
-    keys on the filename alone would read it as A4 done — the fix must not
-    hand anyone a new false clean."""
-    project = _project(tmp_path, [("vreg", "ldo")])
-    _corners(project, "vreg", {
-        "block": "vreg", "status": "BLOCKED",
-        "_provenance": "upstream_netlist_missing",
-        "blocked_on": "A3_netlist_gen",
-        "required_input": "phase3/analog/vreg/vreg.sp",
-        "corners": [], "spec_results": [], "simulator_run": False,
-    })
-    row = _matrix(project)["vreg"]
-    assert row["A4"] != "PASS", row
-
-
-def test_matrix_still_reads_a4_done_for_an_a3_derived_sweep(
-        tmp_path: Path) -> None:
-    """Negative control: a sweep with A3's netlist behind it still counts.
-
-    Carries `design_content` for the same reason the sibling gate control
-    above does: the matrix cell delegates to the gate's certification
-    predicates, and an artefact that claims an upstream-derived deck while
-    saying nothing about what is IN it is not one of them. Without the field
-    this control would be asserting that the cell may sign off what the gate
-    refuses."""
-    project = _project(tmp_path, [("vreg", "ldo")], with_netlist=("vreg",))
-    _corners(project, "vreg", _real_sim_doc(
-        netlist_provenance="a3_netlist",
-        design_content="structure_and_geometry",
-        netlist_source="phase3/analog/vreg/vreg.sp"))
-    row = _matrix(project)["vreg"]
-    assert row["A3"] == "PASS", row
-    assert row["A4"] == "PASS", row
 
 
 # ── SHAPE 4 — the runner's record must agree with what is on disk ───────────

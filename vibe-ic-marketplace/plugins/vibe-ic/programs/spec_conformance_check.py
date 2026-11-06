@@ -102,6 +102,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -2001,6 +2002,76 @@ def _declared_spellings(project: Optional[Path]) -> set:
     return out
 
 
+def _selected_interface_ports(project: Path, ports: List[Port], top: str) -> List[Port]:
+    """Use declared names and document widths for delegated port roles.
+
+    An incomplete or ambiguous choice leaves the document default intact.
+    The expected interface never comes from the RTL being checked.
+    """
+    from l9_rtl_pin_consistency_check import _l3_fixed_port_name, _l3_iface_illustrative
+
+    try:
+        choice = json.loads((project / "plugin_output/declaration.json").read_text())
+    except (OSError, ValueError):
+        return ports
+    if not isinstance(choice, dict) or choice.get("top_module") != top:
+        return ports
+    for key, selected in choice.items():
+        if not key.endswith("_interface") or not isinstance(selected, dict):
+            continue
+        interface = key[:-len("_interface")]
+        protocol = choice.get(interface + "_interface_protocol")
+        if not isinstance(protocol, str) or not protocol.strip():
+            continue
+        if not _l3_iface_illustrative(project, interface, input_only=True):
+            continue
+        address_roles = (("address",) if "address" in selected else
+                         ("read_address", "write_address"))
+        roles = (*address_roles, "write_data", "read_data", "write_enable")
+        names = [selected.get(role) for role in roles]
+        if (any(not isinstance(name, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", name)
+                for name in names) or len(set(names)) != len(names)
+                or ("address" in selected and
+                    any(role in selected for role in ("read_address", "write_address")))):
+            continue
+        pattern = re.compile(r"(?:^|_)" + re.escape(interface) + r"_(.+)$", re.I)
+        replacements, used = {}, set()
+        for port in ports:
+            match = pattern.search(port.name)
+            if not match or _l3_fixed_port_name(project, port.name):
+                continue
+            suffix = match[1].lower()
+            if suffix in {"addr", "address"}:
+                targets = address_roles
+            elif suffix in {"raddr", "read_address"}:
+                targets = ("read_address",)
+            elif suffix in {"waddr", "write_address"}:
+                targets = ("write_address",)
+            elif suffix in {"data", "wdata", "rdata", "write_data", "read_data"}:
+                targets = (("write_data",) if port.direction == "output" else
+                           ("read_data",) if port.direction == "input" else ())
+            elif suffix in {"we", "wen", "write_enable"}:
+                targets = ("write_enable",)
+            else:
+                continue
+            if not targets or any(role not in roles for role in targets):
+                continue
+            replacements[port.name] = [Port(selected[role], port.direction, port.width,
+                                             port.optional) for role in targets]
+            used.update(targets)
+        if used != set(roles):
+            continue
+        projected = [p for port in ports for p in replacements.get(port.name, [port])]
+        by_name = {}
+        for port in projected:
+            if port.name in by_name and by_name[port.name] != port:
+                break
+            by_name[port.name] = port
+        else:
+            ports = list(by_name.values())
+    return ports
+
+
 def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
           rtl_resets: dict, rtl_registered: Optional[bool],
           path: str, rtl_body: str = '', spec_text: str = '',
@@ -2817,46 +2888,42 @@ def main(argv: Optional[List[str]] = None) -> int:
     except Exception:  # noqa: BLE001 — no manifest ⇒ no relaxation
         _renamed_groups = []
 
-    # Phase1 retains illustrative names alongside the selected interface.
-    # A marker or an old binding receipt is not authority: recompute through
-    # its owning producer from current input, declaration and selected top.
-    # The manifest must still declare each accepted rename, and check() still
-    # compares both original and target electrical obligations with the RTL.
-    _projected_groups: List[tuple] = []
-    _binding_findings: List[Finding] = []
-    if spec_path.suffix == '.json':
-        _content = json.loads(spec_raw)
-        if isinstance(_content, dict) and 'selected_interface_binding' in _content:
-            try:
-                from _staged_top_module import bind_selected_interface
-                _rosters = [_content[key] for key in
-                            ('ports', 'top_ports', 'top_module_pins') if key in _content]
-                if ('ports' not in _content or not _rosters
-                        or any(not isinstance(roster, list) or roster != _rosters[0]
-                               for roster in _rosters)):
-                    raise ValueError('selected interface port rosters disagree')
-                _binding_project = _project_root_of(
-                    files, 'phase2/stage1/rtl/SOURCE_MANIFEST.json')
-                if _binding_project is None:
-                    raise ValueError('current reused-IP manifest is unavailable')
-                # Step 2 checks the chosen current raw RTL, including its
-                # elaborated --tool-ports view, before Step 9 exists. Scope
-                # follows the actual chosen file, not the invocation spelling.
-                try:
-                    Path(chosen).resolve().relative_to(
-                        _binding_project.resolve() / 'phase2/stage1/rtl')
-                    _logical_rtl = True
-                except ValueError:
-                    _logical_rtl = False
-                _bound = bind_selected_interface(
-                    _binding_project, _content,
-                    include_synthesis_handoff=not _logical_rtl)
-                for _group in _bound['selected_interface_binding']['illustrative_groups']:
-                    _projected_groups.append((set(_group['l9']), set(_group['rtl'])))
-            except (OSError, ValueError, KeyError, TypeError) as exc:
-                _binding_findings.append(Finding(
-                    chosen, 'ERROR', 'selected-interface-binding-invalid',
-                    top or rtl_name, f'current selected interface refused: {exc}'))
+    # A normal skill-authored project has no manifest or L9 binding record.
+    # Read its selected interface directly from the existing declaration.
+    _projected_groups, _binding_findings = [], []
+    _choice_project = _project_root_of(files, "plugin_output/declaration.json")
+    if _choice_project is not None:
+        spec.ports = _selected_interface_ports(_choice_project, spec.ports, top or rtl_name)
+        try:
+            _choice = json.loads((_choice_project / "plugin_output/declaration.json").read_text())
+        except (OSError, ValueError):
+            _choice = {}
+        if isinstance(_choice, dict):
+            # A legacy rename cannot override a structured choice, including
+            # an unresolved one which must retain the document default.
+            _families = [key[:-len("_interface")] for key in _choice
+                         if key.endswith("_interface")]
+            _renamed_groups = [(lhs, rhs) for lhs, rhs in _renamed_groups
+                if not any(re.search(r"(?:^|_)" + re.escape(family) + r"_", name)
+                           for family in _families for name in lhs)]
+            if (_choice.get("top_module")
+                    and _choice["top_module"] != (top or rtl_name)):
+                _binding_findings.append(Finding(chosen, 'ERROR',
+                    'selected-interface-binding-invalid', top or rtl_name,
+                    'declaration.top_module differs from the checked top'))
+            elif spec_path.suffix == '.json' and not _families:
+                # Older L9s retain both documentary examples and staged
+                # names. Keep explicit legacy renames usable; the input's
+                # delegation still decides which targets may already be in L9.
+                _content = json.loads(spec_raw)
+                if isinstance(_content, dict):
+                    from l9_rtl_pin_consistency_check import _auto_derive_renamed_interfaces
+                    _ports = _content.get('ports', [])
+                    _groups = _auto_derive_renamed_interfaces(_choice_project,
+                        [p['name'] for p in _ports if p.get('declared_by_staged_top') is False],
+                        [p['name'] for p in _ports if p.get('declared_by_staged_top') is True],
+                        input_only=True)
+                    _projected_groups = [(set(group['l9']), set(group['rtl'])) for group in _groups]
 
     # RB2-04 (#2063) — the alternative spellings the INPUT states, and the
     # design's own declared choice. Read from `input/docs/` and

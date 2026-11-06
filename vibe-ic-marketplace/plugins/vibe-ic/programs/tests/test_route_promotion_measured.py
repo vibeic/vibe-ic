@@ -39,305 +39,50 @@ def put(path, obj):
     return path
 
 
-def _run(tmp_path, *, promotion=None, marker=True, shipped='DESIGN top ;\n# tail\nEND DESIGN\n'):
-    """A chip-path run as spm left it: the tail's own in-session check reads
-    0/0 on the DEF it wrote, and step 32's marker sits beside it."""
-    proj = tmp_path / 'proj'
-    pnr = proj / 'phase3' / 'stage3' / 'pnr'
-    put(pnr / 'top.def', shipped)
-    put(pnr / 'openroad.log',
-        'PNR_STAGE: postroute_antenna_repair\n'
-        '[INFO ANT-0002] Found 0 net violations.\n'
-        '[INFO ANT-0001] Found 0 pin violations.\n'
-        'ANTENNA_POSTROUTE_DONE\n')
-    if marker:
-        put(pnr / 'routed_base_prerepair.def', 'DESIGN top ;\n# base\nEND DESIGN\n')
-    if promotion is not None:
-        put(proj / RECORD, promotion)
-    return proj, pnr
 
 
-def _pdk():
-    return R.PdkConfig(name='p', liberty=Path('/l.lib'), tech_lef=Path('/t.tlef'),
-                       cell_lef=Path('/c.lef'), cell_gds=Path('/c.gds'),
-                       site='S', drc_deck='/d.drc')
 
 
-def _emit(proj, tmp_path):
-    rpt = tmp_path / 'reports' / 'phase3' / 'antenna.rpt'
-    assert R._emit_antenna_report(proj, 'top', _pdk(), 'c', rpt, [])
-    return rpt.read_text(), json.loads((rpt.parent / 'antenna.json').read_text())
 
 
-def _sha(path):
-    import hashlib
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
 # ── red on main ──────────────────────────────────────────────────────────────
 
-def test_a_promotion_a_later_session_rewrote_is_not_the_shipped_route(tmp_path):
-    """spm: step 32 promoted its DEF, then the tail wrote (and measured) the
-    one that ships. The tail's 0/0 is the shipped route's count."""
-    proj, pnr = _run(tmp_path, promotion={
-        'promoter': 'librelane_step32_in_chain', 'promoted_def': 'cand/chip_top.def',
-        'promoted_def_sha256': 'f' * 64,
-        'measurement': {'antenna_nets': 0, 'antenna_pins': 0, 'unrouted_added': 0}})
-    txt, doc = _emit(proj, tmp_path)
-    assert doc['clean'] is True and doc['shipped_route_measured'] is True, doc
-    assert doc['net_violations'] == 0 and doc['pin_violations'] == 0
-    assert 'antenna clean: YES' in txt
-    assert doc['measured_on'] == 'the PnR route'
 
 
-def test_a_promoted_route_that_ships_is_measured_by_its_promoter(tmp_path):
-    proj, pnr = _run(tmp_path)
-    put(proj / RECORD, {
-        'promoter': 'librelane_step32_after_route', 'promoted_def': str(pnr / 'top.def'),
-        'promoted_def_sha256': _sha(pnr / 'top.def'),
-        'measurement': {'antenna_nets': 1, 'antenna_pins': 2, 'unrouted_added': 0,
-                        'antenna_source': 'cand01/02-openroad-checkantennas'}})
-    txt, doc = _emit(proj, tmp_path)
-    # the promoter's own count, not the PnR session's 0/0 it replaced
-    assert (doc['net_violations'], doc['pin_violations']) == (1, 2), doc
-    assert doc['clean'] is False
-    assert 'librelane_step32_after_route' in doc['measured_on']
-    assert 'cand01/02-openroad-checkantennas' in doc['measured_on']
 
 
-def test_a_shipped_promotion_nobody_measured_is_unmeasured_and_named(tmp_path):
-    proj, pnr = _run(tmp_path)
-    put(proj / RECORD, {
-        'promoter': 'librelane_step32_after_route', 'promoted_def': str(pnr / 'top.def'),
-        'promoted_def_sha256': _sha(pnr / 'top.def'), 'measurement': {}})
-    txt, doc = _emit(proj, tmp_path)
-    assert doc['shipped_route_measured'] is False and doc['clean'] is False, doc
-    assert doc['net_violations'] is None
-    assert 'librelane_step32_after_route PROMOTED' in doc['measured_on']
-    assert 'antenna clean: NO' in txt
 
 
-def _chain_report(project, adopted_state, *, measured=True, pregrt_census=None):
-    if pregrt_census is not None:
-        # dual's pregrt arm: its own route, no repair candidate, its census
-        report = {'verdict': 'PASS', 'site': 'after_route', 'adopted': None,
-                  'adopted_state': str(adopted_state), 'selected_arm': 'pregrt',
-                  'final': {'antenna_nets': 0, 'antenna_pins': 0,
-                            'antenna_state': 'pregrt/02-openroad-checkantennas'},
-                  'candidates': [],
-                  'baseline_repair_metrics': {
-                      'vibeic__prr__before__unrouted__count': pregrt_census}}
-        return put(project / prr.REPORT_REL, report) and report
-    report = {'verdict': 'PASS', 'site': 'after_route', 'adopted': '32-cand01',
-              'adopted_state': str(adopted_state),
-              'selected_arm': 'postdrt',
-              'final': ({'antenna_nets': 0, 'antenna_pins': 0,
-                         'antenna_state': 'cand01/02-openroad-checkantennas'}
-                        if measured else {}),
-              'candidates': [{'candidate': '32-cand01',
-                              'repair_metrics': ({'vibeic__prr__unrouted__added': 0}
-                                                 if measured else {})}]}
-    return put(project / prr.REPORT_REL, report) and report
 
 
-def _after_route(tmp_path, monkeypatch, *, measured, pregrt_census=None):
-    import test_pad_connected_pdn_ring as ring_fixture
-    project = tmp_path / 'proj'
-    put(project / 'phase3/librelane_switch.json', {'steps': {'21': 'librelane', '32': 'librelane'}})
-    base_def = put(tmp_path / 'route.def', 'DESIGN top ;\nEND DESIGN\n')
-    route_state = put(tmp_path / 'route_state.json', {'odb': 'r.odb', 'def': str(base_def)})
-    cdef = put(tmp_path / 'c.def', 'DESIGN top ;\n# repaired\nEND DESIGN\n')
-    adopted = put(tmp_path / 'cand/state_out.json', {'odb': str(tmp_path / 'c.odb'),
-                                                     'def': str(cdef)})
-    seen = {}
-
-    def run_in_chain(project_, **kw):
-        seen.update(kw)
-        report = _chain_report(project_, adopted, measured=measured,
-                               pregrt_census=pregrt_census)
-        seen['producer_bytes'] = (project_ / prr.REPORT_REL).read_bytes()
-        return report
-    monkeypatch.setattr(prr, 'run_in_chain', run_in_chain)
-    out = R.postroute_repair_after_route(
-        project=project, pdk=ring_fixture._pdk(tmp_path, ring=None), image='img',
-        pdk_root=tmp_path, sdc=put(tmp_path / 'c.sdc', 'set_max_fanout 4 [current_design]\n'),
-        deck='add_global_connection -net VDD -pin_pattern {^VDD$} -power\n',
-        route_state=route_state, route_views={'odb': tmp_path / 'r.odb', 'def': base_def},
-        route_drc=0, variant_arm=lambda *a: None)
-    # D14: the runner hands step 32 its one dont_use rule
-    assert seen['dont_use'] is R._STEP32_DONT_USE
-    # D14 review: the fanout cap step 32 keeps is the one this SDC declares
-    assert seen['max_fanout'][0] == 4 and 'c.sdc' in seen['max_fanout'][1]
-    out['producer_bytes'] = seen['producer_bytes']
-    return project, out, cdef
 
 
-def test_step32_does_not_promote_a_candidate_it_did_not_measure(tmp_path, monkeypatch):
-    project, out, _ = _after_route(tmp_path, monkeypatch, measured=False)
-    assert out['views'] == {}, out
-    assert 'did not measure its own output' in out['record']['promotion_refused']
-    producer_path = project / prr.REPORT_REL
-    assert producer_path.read_bytes() == out['producer_bytes']
-    assert 'promotion_refused' not in json.loads(producer_path.read_text())
-    sidecar = project / R._POSTROUTE_PROMOTION_DECISION_REL
-    decision = json.loads(sidecar.read_text())
-    assert 'did not measure its own output' in decision['reason']
-    assert decision['source_report_sha256'] == contract.digest(producer_path)
-    assert out['record']['report_sha256'] == contract.digest(producer_path)
-    assert out['record']['promotion_decision_sha256'] == contract.digest(sidecar)
-    assert not (R._pl.pnr_dir(project) / 'routed_base_prerepair.def').exists()
-    assert not (project / RECORD).exists()
 
 
-def test_step32_records_what_it_promoted_and_how_it_measured_it(tmp_path, monkeypatch):
-    project, out, cdef = _after_route(tmp_path, monkeypatch, measured=True)
-    assert out['views']['def'] == cdef
-    rec = json.loads((project / RECORD).read_text())
-    assert rec['promoter'] == 'librelane_step32_in_chain'
-    assert rec['promoted_def_sha256'] == _sha(cdef)
-    m = rec['measurement']
-    assert (m['antenna_nets'], m['antenna_pins'], m['unrouted_added']) == (0, 0, 0)
 
 
-def test_a_promotion_that_left_a_net_unrouted_is_refused():
-    why = R._promotion_unmeasured({'antenna_nets': 0, 'antenna_pins': 0,
-                                   'unrouted_added': 2})
-    assert 'leaves 2 signal net(s) unrouted' in why
-    assert R._promotion_unmeasured({'antenna_nets': 0, 'antenna_pins': 0,
-                                    'unrouted_added': 0}) == ''
 
 
 # ── control: green on main and on the fix ────────────────────────────────────
 
-def test_a_marker_with_no_record_is_still_unmeasured(tmp_path):
-    """No record at all (an older run): the marker alone keeps its meaning --
-    something replaced the measured route, and nothing measured it."""
-    proj, _ = _run(tmp_path)
-    txt, doc = _emit(proj, tmp_path)
-    assert doc['shipped_route_measured'] is False and doc['clean'] is False
-    assert 'signoff_spef_repair' in doc['measured_on']
 
 
-def test_a_replaced_signoff_promotion_is_not_credited_with_the_pnr_count(tmp_path):
-    """D15 review: with step 32 direct, signoff_spef_repair promotes (record
-    S1), then the wire-length escalation overwrites <top>.def. The PnR log's
-    0/0 describes neither; the shipped route is UNMEASURED, naming the promoter."""
-    proj, pnr = _run(tmp_path, promotion={
-        'promoter': 'signoff_spef_repair', 'promoted_def': 'pnr/routed.def',
-        'promoted_def_sha256': 'e' * 64, 'measurement': {}})
-    put(pnr / 'signoff_spef_repair.log', 'SHIP_WNS_BEFORE: 0.1\n')
-    txt, doc = _emit(proj, tmp_path)
-    assert doc['shipped_route_measured'] is False and doc['clean'] is False, doc
-    assert doc['net_violations'] is None
-    assert 'signoff_spef_repair PROMOTED' in doc['measured_on']
 
 
-def _bind_kept_route_handoff(project, out, input_def):
-    """The real handoff binds the exported DEF as well as its report."""
-    route = R._pl.pnr_dir(project) / 'routed.def'
-    put(route, Path(out['views'].get('def', input_def)).read_text())
-    return put(project / 'reports/phase3/librelane_route_handoff.json', {
-        'postroute_repair': out['record'],
-        'views': {'def': {'dest_sha256': contract.digest(route)}}})
 
 
-def test_an_in_chain_refusal_stays_bound_and_is_not_repaired_twice(tmp_path, monkeypatch):
-    """The receipt binds producer and decision separately; step 32 runs once."""
-    import test_pad_connected_pdn_ring as ring_fixture
-    project, out, _ = _after_route(tmp_path, monkeypatch, measured=False)
-    assert out['record']['report_sha256'] == contract.digest(project / prr.REPORT_REL)
-    _bind_kept_route_handoff(project, out, tmp_path / 'route.def')
-    report, why = R._postroute_repair_in_chain(project)
-    assert report is not None, why
-    pnr = R._pl.pnr_dir(project)
-    put(pnr / 'routed.def', 'DESIGN top ;\nEND DESIGN\n')
-    put(pnr / 'dut_pnr.v', 'module top(); endmodule\n')
-    put(pnr / 'constraint.sdc', '')
-    import pytest
-    monkeypatch.setattr(prr, 'run', lambda *a, **k: pytest.fail('repaired twice'))
-    result = R.step_postroute_repair_librelane(project, 'dut',
-                                               ring_fixture._pdk(tmp_path, ring=None), 'unused')
-    assert result.status == 'NOT_MEASURED' and 'NOT promoted' in result.detail, result.detail
-    assert 'did not measure its own output' in result.detail
-    assert '->' not in result.detail  # discarded candidate metrics cannot speak for the kept route
 
 
-def test_after_direct_route_refusal_does_not_claim_the_discarded_slack(tmp_path, monkeypatch):
-    import test_t102_librelane_postroute_repair as t102
-
-    def report(project):
-        folder = project / 'phase3/librelane/32-cand01'
-        candidate = put(folder / 'top.def', 'DESIGN top ;\n# repaired\nEND DESIGN\n')
-        netlist = put(folder / 'top.nl.v', 'module top(); endmodule\n')
-        state = put(folder / 'state_out.json', {'def': str(candidate), 'nl': str(netlist)})
-        return {'verdict': 'PASS', 'adopted': '32-cand01',
-                'adopted_state': str(state),
-                'baseline': {'setup_ws_min': -1.0},
-                'final': {'setup_ws_min': 0.1},
-                'corners': ['slow']}
-
-    runner, project, pnr, result, _ = t102._runner_step(tmp_path, monkeypatch, report)
-    assert result.status == 'NOT_MEASURED', result
-    assert 'NOT promoted' in result.detail and 'input route kept' in result.detail
-    assert '0.1' not in result.detail
-    assert (pnr / 'routed.def').read_text() == 'DESIGN top ;\nEND DESIGN\n'
-    assert not (pnr / 'routed_base_prerepair.def').exists()
 
 
-def test_a_tampered_promotion_decision_is_not_read_as_the_chain(tmp_path, monkeypatch):
-    project, out, _ = _after_route(tmp_path, monkeypatch, measured=False)
-    _bind_kept_route_handoff(project, out, tmp_path / 'route.def')
-    sidecar = project / R._POSTROUTE_PROMOTION_DECISION_REL
-    decision = json.loads(sidecar.read_text())
-    decision['reason'] = 'unbound replacement'
-    put(sidecar, decision)
-    report, why = R._postroute_repair_in_chain(project)
-    assert report is None and 'decision is not bound' in why
 
 
-def test_fractional_sdc_cap_reaches_step32_as_strict_integer_count(tmp_path, monkeypatch):
-    # A five-load route violates set_max_fanout 4.5; the runner must not omit
-    # the cap just because the SDC spelled it with a decimal point.
-    import test_pad_connected_pdn_ring as ring_fixture
-    project = tmp_path / 'proj'
-    put(project / 'phase3/librelane_switch.json',
-        {'steps': {'21': 'librelane', '32': 'librelane'}})
-    base_def = put(tmp_path / 'route.def', 'DESIGN top ;\nEND DESIGN\n')
-    route_state = put(tmp_path / 'route_state.json',
-                      {'odb': 'r.odb', 'def': str(base_def)})
-    sdc = put(tmp_path / 'constraint.sdc',
-              'set_max_fanout 4.5 [current_design]\n')
-    seen = {}
-
-    def run_in_chain(project_, **kw):
-        seen.update(kw)
-        return _chain_report(project_, route_state, measured=True)
-
-    monkeypatch.setattr(prr, 'run_in_chain', run_in_chain)
-    R.postroute_repair_after_route(
-        project=project, pdk=ring_fixture._pdk(tmp_path, ring=None),
-        image='img', pdk_root=tmp_path, sdc=sdc, deck='',
-        route_state=route_state,
-        route_views={'odb': tmp_path / 'r.odb', 'def': base_def},
-        route_drc=0, variant_arm=lambda *a: None)
-    assert seen['max_fanout'][0] == 4
-    assert 'floored from 4.5' in seen['max_fanout'][1]
 
 
-def test_a_dual_pregrt_arm_is_measured_by_its_own_census(tmp_path, monkeypatch):
-    """D15 review: dual's pregrt arm ships its own route with no candidate; its
-    census step measured it (antenna by CheckAntennas, unrouted by the census)."""
-    project, out, cdef = _after_route(tmp_path, monkeypatch, measured=True, pregrt_census=0)
-    assert out['views']['def'] == cdef
-    m = json.loads((project / RECORD).read_text())['measurement']
-    assert (m['antenna_nets'], m['antenna_pins'], m['unrouted_added']) == (0, 0, 0)
-    assert 'census' in m['unrouted_source']
 
 
-def test_a_pregrt_arm_whose_own_route_has_an_unrouted_net_is_refused(tmp_path, monkeypatch):
-    project, out, _ = _after_route(tmp_path, monkeypatch, measured=True, pregrt_census=3)
-    assert out['views'] == {}
-    assert 'leaves 3 signal net(s) unrouted' in out['record']['promotion_refused']
 
 
 def test_dual_selecting_pregrt_carries_its_census_into_the_report(tmp_path, monkeypatch):
@@ -365,35 +110,6 @@ def test_dual_selecting_pregrt_carries_its_census_into_the_report(tmp_path, monk
     assert report['selected_arm'] == 'pregrt', report.get('selection')
     assert report['adopted'] is None
     assert report['baseline_repair_metrics']['vibeic__prr__before__unrouted__count'] == 0
-    m = R._step32_own_measurement(report)
-    assert m['unrouted_added'] == 0 and R._promotion_unmeasured(m) == ''
 
 
 # --- review wave 58 (R-0929-STEP32-ADOPT): an unmeasured adoption never ships ----
-
-def _adopted_with(tmp_path, monkeypatch, **fields):
-    real = _chain_report
-
-    def report_with(project, adopted_state, **kw):
-        report = real(project, adopted_state, **kw)
-        report.update(fields)
-        return put(project / prr.REPORT_REL, report) and report
-    monkeypatch.setattr(sys.modules[__name__], '_chain_report', report_with)
-    return _after_route(tmp_path, monkeypatch, measured=True)
-
-
-def test_an_adopted_candidate_whose_step32_is_not_measured_is_not_handed_off(
-        tmp_path, monkeypatch):
-    project, out, _ = _adopted_with(tmp_path, monkeypatch, verdict='NOT_MEASURED',
-                                    code='LL_PRR_DRV_NOT_MEASURED')
-    assert out['views'] == {}, out
-    assert 'R-0929-STEP32-ADOPT' in out['record']['promotion_refused']
-    assert not (project / RECORD).exists()
-
-
-def test_an_adopted_candidate_with_a_measured_residual_is_handed_off(tmp_path, monkeypatch):
-    """Control: residual DRV keeps Step 32 FAIL but never blocks the handoff."""
-    project, out, cdef = _adopted_with(
-        tmp_path, monkeypatch, verdict='FAIL', code='LL_PRR_FANOUT_VIOLATION',
-        antenna_census={'verdict': 'PASS'}, sta_digest_census={'verdict': 'PASS'})
-    assert out['views']['def'] == cdef

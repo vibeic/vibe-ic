@@ -103,6 +103,9 @@ chip-AGNOSTIC — no design-specific knowledge.
 """
 from __future__ import annotations
 
+import vibeic_temp as _vtmp
+import shlex
+
 import argparse
 import json
 import os
@@ -621,7 +624,7 @@ def _run_in_docker(project: Path, shell_cmd: str, timeout: int,
                                                         tag="tdf")
 
     docker_cmd = [
-        "docker", "run", "--rm", "--name", cname,
+        "docker", "run", *_vtmp.docker_mounts(), "--rm", "--name", cname,
         *_dmem.docker_memory_flags(),
         "--entrypoint", "bash",
         "-v", f"{project}:/work",
@@ -1261,11 +1264,12 @@ def _detect_sat_solver(project: Path, pdk_dir: Path | None,
         return _SAT_SOLVER_PROBE_CACHE[key]
     chosen = ""
     for name in candidates:
+        source = str(Path(_vtmp.mkdtemp(prefix="sat-probe-")) / "probe.v")
+        recipe = f'read_verilog "{source}"; prep -top p; sat -prove y 0 -select-solver {name} -set a 1'
         probe = (
-            "printf 'module p(input a, output y); assign y = a; endmodule\\n' "
-            "> /tmp/_vibeic_satprobe.v 2>/dev/null; "
-            "yosys -p 'read_verilog /tmp/_vibeic_satprobe.v; prep -top p; "
-            f"sat -prove y 0 -select-solver {name} -set a 1' 2>&1"
+            "printf %s " + shlex.quote("module p(input a, output y); assign y = a; endmodule\n")
+            + " > " + shlex.quote(source) + " 2>/dev/null; "
+            + "yosys -p " + shlex.quote(recipe) + " 2>&1"
         )
         try:
             _ec, out, err = _run_in_docker(project, probe,

@@ -99,6 +99,8 @@ PDK, which is the shape vibe-ic#1962 was reported on.
 """
 from __future__ import annotations
 
+import vibeic_temp as _vtmp
+
 import argparse
 import base64
 import posixpath
@@ -1344,7 +1346,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     reader = _apdc.container_reader(a.container)
     family = registry_family_for(a.pdk, ctx) or a.pdk
     res_w = resolve_res_width(family)
-    stage = f"/tmp/pdk_char_{int(time.time())}"
+    stage = _vtmp.mkdtemp(prefix="pdk-char-")
     decks: Dict[str, str] = {}
     corners: Dict[str, Dict[str, Any]] = {}
     notes: Dict[str, Dict[str, str]] = {}

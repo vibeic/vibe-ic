@@ -2452,6 +2452,7 @@ def main() -> int:
     parser.add_argument("--blocks", default="")
     parser.add_argument("--pdk", default="")
     parser.add_argument("--post-mc-samples", type=int)
+    parser.add_argument("--keep-temp", action="store_true")
     parser.add_argument("--execution-mode", choices=("default",), default="default")
     parser.add_argument("--execution-cpus", type=int, default=8)
     parser.add_argument("--execution-workers", type=int, default=1)

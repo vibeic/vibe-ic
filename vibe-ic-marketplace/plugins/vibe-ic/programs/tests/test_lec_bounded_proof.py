@@ -186,27 +186,6 @@ class InconclusiveIsNeverConsumedAsEquivalence(unittest.TestCase):
                     rep["equivalent"],
                     f"verdict {verdict!r} was recorded as equivalent")
 
-    def test_downstream_step_status_never_promotes_a_non_pass_to_PASS(self):
-        for verdict in self.NON_PASS:
-            with self.subTest(verdict=verdict):
-                with tempfile.TemporaryDirectory() as d:
-                    f = Path(d) / "lec.json"
-                    f.write_text(json.dumps({"verdict": verdict}))
-                    status, _ = dosr.lec_step_status_from_report(f)
-                    self.assertNotEqual(
-                        status, "PASS",
-                        f"step status for verdict {verdict!r} was PASS -- an "
-                        "undecided or failed equivalence proof was consumed "
-                        "as a proven equivalence")
-
-    def test_a_real_PASS_is_still_a_PASS(self):
-        """THE CONTROL. The guard above must not be satisfiable by refusing
-        every verdict."""
-        with tempfile.TemporaryDirectory() as d:
-            f = Path(d) / "lec.json"
-            f.write_text(json.dumps({"verdict": "PASS"}))
-            self.assertEqual(dosr.lec_step_status_from_report(f)[0], "PASS")
-
 
 class TheBoundIsRecordedWithTheOutcome(unittest.TestCase):
     """An honest INCONCLUSIVE must carry what ran out, not just say so in

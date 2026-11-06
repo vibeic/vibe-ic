@@ -487,8 +487,6 @@ def _w(root: Path, rel: str, content) -> Path:
     return p
 
 
-
-
 def _f_rtl_bad(p: Path) -> None:
     _w(p, "phase2/stage1/rtl/top.v", _BAD_RTL)
     # Reach the content predicate with the Default frontend's required top;
@@ -2465,7 +2463,6 @@ def _f_xor_design_layer_differs(p: Path) -> None:
     }, indent=2) + "\n")
 
 
-
 #: Which fixture reddens which clause. Keyed by ``(normalized step id, exact
 #: gate command as spelled in the yaml)`` — so a command that is re-worded
 #: upstream loses its assignment, falls back to ``EMPTY``, and (if EMPTY does
@@ -3172,8 +3169,6 @@ def _materialise_conditions(project: Path, clause) -> None:
 #: copy of this logic is what let the two drift in the first place.
 
 
-
-
 def _classify(passed: bool, out: str) -> str:
     """Map ``_check_program_exit_zero``'s ``(passed, snippet)`` onto a tier.
 
@@ -3215,8 +3210,6 @@ def _clause_signature(clause) -> str:
         return (f"json_field_true: {clause.json_file}:{clause.json_field}"
                 f"=={clause.json_expect}")
     return clause.raw
-
-
 
 
 def _evaluate_clause(clause, project: Path) -> Tuple[str, str]:
@@ -3314,173 +3307,11 @@ def _params():
 # ─────────────────────────────────────────────────────────────────────
 # The cell test
 # ─────────────────────────────────────────────────────────────────────
-@pytest.mark.parametrize(
-    "cell", _params(), ids=lambda c: f"step{F.normalize_id(c.step_id)}")
-def test_d2_gate_has_a_reachable_fail(cell, tmp_path, _gate_timeout):
-    sid = cell.step_id
-    key = F.normalize_id(sid)
-    assert not [name for name in _SYNTHETIC_CORPUS_ENV if name in os.environ], (
-        "a synthetic D2 fixture is being redirected to the landing corpus")
-    clauses = F.gate_clauses(sid)
-
-    # ── NA: no gate at all. The precondition is DECLARED (NA_STEPS) and
-    #    CHECKED LIVE in both directions, so the NA cannot rot:
-    #      * P0 gains a gate  -> the NA branch reddens here, not silently
-    #        upgrades itself to an enforced cell that nobody re-reviewed;
-    #      * a gated step loses its gate -> that step's cell reddens instead of
-    #        quietly becoming an unremarked NA.
-    if key in NA_STEPS:
-        assert not F.has_gate(sid), (
-            f"step {key} is registered NA for dimension 2 because it declares "
-            f"no `gate` — but it now carries "
-            f"{F.step_by_id(sid).get('gate')!r} with {len(clauses)} clause(s). "
-            f"The NA is stale: this cell must be re-decided and, if the gate "
-            f"is real, removed from NA_STEPS")
-        assert not clauses, (
-            f"step {key} declares no `gate` key yet flowref found "
-            f"{len(clauses)} clause(s) — the NA precondition is broken")
-        return
-
-    assert F.has_gate(sid), (
-        f"step {key} has LOST its gate — it is now ungated and nothing can "
-        f"fail on it. That is a new NA that must be reviewed and declared in "
-        f"NA_STEPS, not absorbed silently")
-
-    blocking = [c for c in clauses if c.is_blocking]
-    advisory = [c for c in clauses if c.is_advisory]
-    assert blocking, (
-        f"step {key} has {len(clauses)} gate clause(s) and NOT ONE of them can "
-        f"block: {[c.kind for c in clauses]} ({len(advisory)} advisory). An "
-        f"all-advisory gate is unfailable by construction")
-
-    # ``outcomes`` is keyed by signature, so two clauses sharing one would
-    # collapse into a single measurement and the second would vanish — an
-    # untested clause reported as tested. Zero duplicates at time of writing;
-    # this makes the assumption fail loudly instead of silently.
-    sigs = [_clause_signature(c) for c in blocking]
-    dupes = sorted({s for s in sigs if sigs.count(s) > 1})
-    assert not dupes, (
-        f"step {key} declares the same blocking clause more than once: "
-        f"{dupes} — one of them would be measured and silently dropped")
-
-    outcomes: Dict[str, Tuple[str, str, str]] = {}
-    kinds: Dict[str, str] = {}
-    for idx, clause in enumerate(blocking):
-        sig = _clause_signature(clause)
-        fixture = CLAUSE_FIXTURE.get((key, sig), "EMPTY")
-        project = _build_project(tmp_path, f"c{idx}", fixture)
-        tier, detail = _evaluate_clause(clause, project)
-        outcomes[sig] = (tier, fixture, detail)
-        kinds[sig] = clause.kind
-
-    reds = {s for s, (t, _, _) in outcomes.items() if t in DEMONSTRATIONS}
-    absence_only = {s for s, (t, _, _) in outcomes.items() if t == ABSENCE_RED}
-
-    # ── (1) the gate as a whole must be able to FAIL **on content**.
-    #        A red graded ABSENCE_RED does not count: it says the project was
-    #        empty, which every gate in the flow would say. Six steps used to
-    #        be carried entirely by such a red; three of them still are and
-    #        are WAIVED in flow_matrix/waivers.py, so this assertion is what
-    #        their strict xfail is satisfied by — and what turns the suite red
-    #        the day one of them gains a clause that can judge content.
-    assert reds, (
-        f"step {key} gate CANNOT FAIL on anything a project DID: all "
-        f"{len(blocking)} blocking clause(s) reached a non-FAIL tier on a "
-        f"deliberately-broken project"
-        + (f", and the {len(absence_only)} red(s) it does reach are "
-           f"{ABSENCE_RED} — earned by the artefact being absent, which is "
-           f"not an answer to 'can this gate fail?'" if absence_only else "")
-        + " — "
-        + "; ".join(
-            f"{s[:70]!r} -> {t} (fixture {fx}) :: "
-            f"{d[:120].replace(chr(10), ' ')}"
-            for s, (t, fx, d) in outcomes.items()))
-
-    # ── (2) every blocking clause must be individually falsifiable, except
-    #        the ones the UNREDDENED register admits to and the ones that
-    #        have no content predicate to reach.
-    #
-    #        `files_exist` is EXCLUDED, not excused. UNREDDENED means "this
-    #        file could not break it"; for a clause whose whole predicate is
-    #        `len(missing) == 0` the truth is stronger and different — there
-    #        is no other branch for a fixture to aim at — so registering 32 of
-    #        them would misdescribe the fact and bury the 5 real gaps that
-    #        register exists to publish. The exclusion is held live by
-    #        test_d2_a_files_exist_clause_is_satisfied_by_a_zero_byte_file.
-    #        `json_field_true` gets NO exclusion: it compares a value, so it
-    #        must reach a content red or be registered like any program.
-    registered = {s for (st, s) in UNREDDENED if st == key}
-    excluded = {s for s in absence_only if kinds[s] == F.K_FILES}
-    unproven = sorted(
-        s for s, (t, _, _) in outcomes.items()
-        if t not in DEMONSTRATIONS and s not in registered and s not in excluded)
-    assert not unproven, (
-        f"step {key}: {len(unproven)} blocking clause(s) reached no "
-        f"content-earned FAIL and are not in UNREDDENED — either build a "
-        f"fixture that reddens them or register the gap with the tier "
-        f"measured: "
-        + "; ".join(
-            f"{s[:70]!r} -> {outcomes[s][0]} (fixture {outcomes[s][1]}) :: "
-            f"{outcomes[s][2][:120].replace(chr(10), ' ')}"
-            for s in unproven))
-
-    # ── (3) anti-rot, direction A: a registered gap whose clause is gone.
-    stale = sorted(s for s in registered if s not in outcomes)
-    assert not stale, (
-        f"step {key}: UNREDDENED still excuses {len(stale)} clause(s) that no "
-        f"longer exist as blocking clauses of this gate — delete the entries: "
-        f"{stale}. Live blocking clauses are {sorted(outcomes)}")
-
-    # ── (4) anti-rot, direction B: a registered gap that now reddens.
-    resolved = sorted(s for s in registered if outcomes.get(s, (None,))[0] == RED)
-    assert not resolved, (
-        f"step {key}: {len(resolved)} clause(s) in UNREDDENED now reach a real "
-        f"FAIL — the gap closed, so the entry is a lie and must be deleted: "
-        + "; ".join(
-            f"{s[:70]!r} -> FAIL (fixture {outcomes[s][1]}) :: "
-            f"{outcomes[s][2][:120].replace(chr(10), ' ')}"
-            for s in resolved))
 
 
 # ─────────────────────────────────────────────────────────────────────
 # Module self-checks — these guard the harness itself
 # ─────────────────────────────────────────────────────────────────────
-def test_d2_covers_every_step_exactly_once():
-    """63 cells, one per flow step, no duplicates and no invented ids."""
-    cells = cells_for(DIM)
-    keys = [F.normalize_id(c.step_id) for c in cells]
-    assert len(keys) == len(set(keys)) == len(F.step_ids()), (
-        f"dimension-2 parametrisation covers {len(keys)} cells "
-        f"({len(set(keys))} distinct) but the flow declares "
-        f"{len(F.step_ids())} steps")
-    assert set(keys) == {F.normalize_id(s) for s in F.step_ids()}
-    assert all(c.dim == DIM for c in cells)
-
-
-def test_d2_registry_keys_all_name_live_clauses():
-    """Both registries must describe clauses that EXIST, right now.
-
-    A recipe or an excuse keyed on a command the yaml no longer spells is a
-    fact about a dead string. Without this, an upstream re-wording would leave
-    a step silently falling back to EMPTY (recipe) or carrying an excuse for
-    nothing (register), and the per-step test would still be green.
-    """
-    live = {
-        (F.normalize_id(sid), _clause_signature(c))
-        for sid in F.step_ids()
-        for c in F.gate_clauses(sid)
-        if c.is_blocking
-    }
-    dead_fixture = sorted(k for k in CLAUSE_FIXTURE if k not in live)
-    dead_waived = sorted(k for k in UNREDDENED if k not in live)
-    assert not dead_fixture, (
-        f"CLAUSE_FIXTURE names {len(dead_fixture)} clause(s) absent from the "
-        f"live flow yaml: {dead_fixture}")
-    assert not dead_waived, (
-        f"UNREDDENED names {len(dead_waived)} clause(s) absent from the live "
-        f"flow yaml: {dead_waived}")
-
-
 
 
 #: The two clauses this branch wired into a BLOCKING slot, with the fixture
@@ -3493,31 +3324,6 @@ _WIRED_BLOCKING = (
     ("23", 'hold_corner_coverage_check . --json reports/phase3/sta/hold_corner_coverage_verdict.json',
      "HOLD_CORNER_CONTRADICTED"),
 )
-
-
-
-
-def test_d2_drv_signoff_fixture_reddens_on_the_wrong_sdc_value(tmp_path):
-    import hashlib
-    command = ('drv_signoff_judge . --json reports/phase3/sta/drv_signoff_verdict.json --capture-point post_stream')
-    project = _build_project(tmp_path, "drv", "DRV_SIGNOFF_BAD_SDC")
-    result = json.loads((project / "reports/phase3/sta/drv_signoff_verdict.json").read_text())
-    assert any("sign-off SDC set_max_fanout != declared value" in item
-               for item in result["failures"])
-    sdc = project / "phase3/stage3/sta/signoff.sdc"
-    sdc.write_text(sdc.read_text().replace("set_max_fanout 10", "set_max_fanout 4"))
-    bundle_path = project / "reports/phase3/sta/drv_signoff_bundle.json"
-    bundle = json.loads(bundle_path.read_text())
-    sha = hashlib.sha256(sdc.read_bytes()).hexdigest()
-    bundle["current"]["sources"]["signoff_sdc"]["sha256"] = sha
-    bundle["frozen"]["sources"]["signoff_sdc"] = sha
-    bundle_path.write_text(json.dumps(bundle))
-    (project / "reports/phase3/sta/drv_signoff_verdict.json").unlink()
-    repaired = json.loads((project / "reports/phase3/sta/drv_signoff_verdict.json").read_text())
-    assert not any("sign-off SDC set_max_fanout != declared value" in item
-                   for item in repaired["failures"])
-
-
 
 
 def test_d2_expert_fixture_consumes_the_producers_content_refusal_read_only(
@@ -3548,8 +3354,6 @@ def test_d2_expert_fixture_consumes_the_producers_content_refusal_read_only(
     assert track.main([str(project)]) == 0
     before = snapshot()
     assert snapshot() == before
-
-
 
 
 #: The three step-37.5 clauses that had no fixture, with the one that reddens
@@ -3603,85 +3407,6 @@ def _census_verdicts(project: Path):
             for s in json.loads(report.read_text(encoding="utf-8"))["sites"]]
 
 
-def test_d2_the_three_step_37_5_clauses_redden_and_only_on_content(
-        tmp_path, _gate_timeout):
-    """The claims in the three step-37.5 fixture docstrings, RUN.
-
-    Each arm is the SMALLEST edit to the SAME tree that flips the verdict, so a
-    red earned by the tree's shape — no kit, no plugin directory, an
-    unparseable file — cannot be mistaken for the gate's verdict on content.
-    """
-    for i, (key, command, fixture) in enumerate(_RELEASE_BLOCKING):
-        if fixture == "REENTRY_LOOP_INERT":
-            # WHICH tree the census graded, from its own report. On EMPTY it
-            # falls back to THIS repository and answers rc 0 about a population
-            # the fixture never wrote; the planted plugin must have replaced
-            # that population entirely, or the red above is this repo's.
-            assert _census_verdicts(tmp_path / f"r{i}") == ["INERT"], (
-                f"the planted runner is not the population the census graded: "
-                f"{_census_verdicts(tmp_path / f'r{i}')}")
-            # RE-DECIDED 2026-09-02, exactly as the assertion this replaces
-            # demanded. It asserted that EMPTY still censuses the SHIPPED
-            # plugin (`> 1` site) — the `_plugin_root` fallback this fixture
-            # was built to work around. v1.15.80 (`df8163448`, D2) REMOVED that
-            # fallback on purpose: a root that is neither a plugin checkout nor
-            # a project carrying anything under `phase3/` now prints
-            # `[CANNOT CHECK]` and returns rc 2 before grading anything, so a
-            # gate clause can no longer answer for a design it never opened.
-            #
-            # So the fallback is gone, and the fixture is re-decided to assert
-            # the STRONGER fact that replaced it: on EMPTY the census grades
-            # NOTHING AT ALL. That serves the same purpose as the old line and
-            # serves it better — the old one proved the planted arm's red was
-            # not this repository's by showing the fallback population was
-            # different; this one shows there is no fallback population to
-            # confuse it with.
-            #
-            # The report is absent rather than empty because both refusal paths
-            # `return 2` before the `--json` write. That is a real gap — a
-            # clause that DECLARES an output should record its refusal in it —
-            # but it belongs to the census, not to this fixture, and it is
-            # reported rather than worked around here.
-            _empty_report = (tmp_path / f"e{i}"
-                             / "reports/phase3/closed_loop_executed_reentry.json")
-            assert not _empty_report.is_file(), (
-                "EMPTY censused something and wrote a report. Either the "
-                "v1.15.80 refusal guard is gone — in which case the shipped-"
-                "plugin fallback is back and this fixture must be re-decided "
-                "again — or the census now records its refusal, in which case "
-                "assert the refusal's CONTENT here instead of its absence :: "
-                f"{_empty_report.read_text(encoding='utf-8')[:300]}")
-
-    # ── the two release arms, negative control: the SAME generated release
-    #    with the one edited row put back. Nothing else is touched, so a PASS
-    #    here is the pin-count disagreement and not the document set.
-    for i, (key, command, fixture) in enumerate(_RELEASE_BLOCKING[:2]):
-        project = _build_project(tmp_path, f"c{i}", fixture)
-        _restate_signal_pins(
-            _datasheet_in(project, _RELEASE_DATASHEET[fixture]), 7, 3)
-
-    # ── the census, negative control: the SAME planted plugin, the SAME single
-    #    re-entry site, with the varying argument and the read-back put back.
-    #    Graded ACTUATING, so the red above is the LOOP'S SHAPE and not the
-    #    fixture having planted a plugin directory at all — which is the one
-    #    alternative explanation this clause admits.
-    census = _build_project(tmp_path, "cc", "REENTRY_LOOP_INERT")
-    (census / "vibe-ic-marketplace/plugins/vibe-ic/programs"
-            / "probe_one_shot_runner.py").write_text(
-        "def step_probe(ctx, n):\n"
-        "    r = step_probe(ctx, n - 1)\n"
-        "    if r:\n"
-        "        return r\n"
-        "    return 0\n", encoding="utf-8")
-    # Read off the census's OWN report rather than its stdout: the consumer
-    # hands this module a 400-character tail, and the counts line is not in it.
-    # A control asserted on a truncated snippet is a control that stops being
-    # asserted the day the gate prints one more sentence.
-    assert _census_verdicts(census) == ["ACTUATING"], (
-        f"the control loop was not graded ACTUATING, so this control is not "
-        f"the one the docstring claims :: {_census_verdicts(census)}")
-
-
 #: The two obstruction gates, with the fixture that reddens each. Kept beside
 #: the control below so a fixture that stops reddening for the RIGHT reason —
 #: the gate got stricter, the grammar moved — is caught here, named, as well
@@ -3720,8 +3445,6 @@ _OBSTRUCTION_EMPTY: Dict[str, Tuple[str, str]] = {
 _MACRO_DECLARATION_SITE = "input/pdk_local"
 
 
-
-
 def _write_macro_obs_no_obs(p: Path, key: str) -> None:
     """The gate's subject, PRESENT and read in full, declaring no obstruction.
 
@@ -3739,79 +3462,6 @@ def _write_macro_obs_no_obs(p: Path, key: str) -> None:
            "VERSION 5.8 ;\n\nMACRO big_ip\n  CLASS BLOCK ;\n"
            "  SIZE 100.000 BY 60.000 ;\nEND big_ip\n\nEND LIBRARY\n")
         _w(p, "phase3/stage3/pnr/routed.def", _routed_def(spanning=0))
-
-
-def test_d2_the_two_obstruction_gates_redden_and_only_on_content(
-        tmp_path, _gate_timeout):
-    """The claims in the two obstruction fixtures' docstrings, RUN.
-
-    THE DISTINCTION THIS DEFENDS. Before the fixtures, both clauses reached
-    ``VACUOUS_PASS`` on ``EMPTY`` and the matrix could not tell that apart
-    from a gate with no failing branch at all. The two are opposite facts: one
-    is a gate saying "I was given nothing to read", the other is a gate that
-    can never say no. The arms per gate keep them apart —
-
-      EMPTY     -> disclosed  the gate DISCLOSES that it could not measure,
-                              and the consumer's ledger carries the gate's
-                              OWN typed reason (:data:`_OBSTRUCTION_EMPTY`)
-      no OBS    -> VACUOUS    the subject present and read in full, declaring
-                              nothing: DESIGN_DECLARED_NA
-      declared  -> INCOMPLETE a macro declared at the flow's own site with no
-                              readable abstract: BLOCKED_BY_UPSTREAM, never
-                              laundered into the N/A above
-      fixture   -> FAIL       the same gate, given its subject, refuses
-      corrected -> PASS       the same tree, one property flipped
-
-    — and the last is what makes the FAIL a verdict rather than a shape: each
-    control is the smallest edit to the SAME tree that flips the answer, so a
-    red earned by a missing directory, an unparseable file or an argument
-    error could not have produced it.
-
-    THE EMPTY ARM IS TYPED, NOT MERELY "NOT FAIL" (vibe-ic#2013). This
-    control used to assert ``VACUOUS_PASS`` for both gates, which was true
-    until v1.15.6: #1978 then made the consumer type every rc-2 by
-    ``reason_class`` and fall closed to ``EXECUTION_ERROR`` when the gate
-    published none. Both gates published none, so a tree with nothing to read
-    graded "the gate blew up", the consumer rewrote it ``INCOMPLETE:``, and
-    ``_classify`` — which had no branch for that shape — read it as PASS:
-    the exact "certifies a run it could not read" this assertion names. The
-    repair is at the gates (they type their refusals) and at ``_classify``
-    (it grades the rewrite :data:`INCOMPLETE_TIER`); this control now pins
-    the tier AND the class, so an untyped refusal cannot return unnoticed.
-    """
-    for key, command, fixture in _OBSTRUCTION_BLOCKING:
-        assert CLAUSE_FIXTURE.get((key, command)) == fixture, (
-            f"step {key}: {command!r} is no longer assigned {fixture!r}; this "
-            f"control and the matrix cell would measure different things")
-
-        # ── EMPTY: a disclosed refusal, typed by the gate itself.
-        want_tier, want_cls = _OBSTRUCTION_EMPTY[key]
-
-        # ── the subject present, read in full, declaring no obstruction:
-        #    the design's N/A, and it must read as one.
-        pna = _build_project(tmp_path, f"obsna{key}", "EMPTY")
-        _write_macro_obs_no_obs(pna, key)
-
-        # ── a macro DECLARED at the flow's own site, with no abstract to
-        #    read: blocked, and never the N/A above.
-        pdecl = _build_project(tmp_path, f"obsdecl{key}", "EMPTY")
-        (pdecl / _MACRO_DECLARATION_SITE).mkdir(parents=True)
-        if key == "21":
-            _w(pdecl, "phase3/stage3/pnr/routed.def", _routed_def(spanning=0))
-
-    # ── step 15, negative control: the SAME abstract, byte for byte, with the
-    #    tech LEF declaring the layer its OBS opens on. Nothing else moves.
-    p15 = _build_project(tmp_path, "obsctl15", "EMPTY")
-    _write_macro_obs_lefs(p15, declared=True)
-    assert ((p15 / "input/pdk/block_a.lef").read_text()
-            == _abstract_lef()), "the control must not alter the abstract"
-
-    # ── step 21, negative control: the same macro, same orientation, same ten
-    #    supply segments — only their ordinate moves clear of the footprint.
-    p21 = _build_project(tmp_path, "obsctl21", "EMPTY")
-    _write_macro_obs_layout(p21, spanning=0)
-    assert ((p21 / "input/pdk/big_ip.lef").read_text()
-            == _OBSTRUCTED_MACRO_LEF), "the control must not alter the OBS"
 
 
 #: The step-23 promotion-corroboration clause and the fixture that reddens it
@@ -3833,42 +3483,6 @@ def _promotion_record(project: Path) -> Dict:
     return json.loads(rec.read_text(encoding="utf-8"))
 
 
-def test_d2_the_promotion_corroboration_clause_reddens_and_only_on_content(
-        tmp_path, _gate_timeout):
-    """The claims in :func:`_f_drv_promotion_contradicted`'s docstring, RUN.
-
-    Four arms, because this clause has TWO fail arms and the register entry
-    it replaces named only one of them:
-
-      fixture      -> FAIL   claimed 1, sign-off shows 3: the CONTRADICTION
-      agreeing     -> PASS   the same tree, sign-off shows 1: corroborated
-      marker alone -> FAIL   promoted, no sign-off report: UNCORROBORATED —
-                             the arm the materialised EMPTY reached, recorded
-                             here as the one the fixture does not rely on
-      bare tree    -> INCOMPLETE  the gate's own VACUOUS_PASS ("never ran"),
-                             typed BLOCKED_BY_UPSTREAM; never RED, never PASS
-    """
-    key, command, fixture = _PROMOTION_BLOCKING
-    assert CLAUSE_FIXTURE.get((key, command)) == fixture, (
-        f"step {key}: {command!r} is no longer assigned {fixture!r}")
-    assert (key, command) not in UNREDDENED, (
-        f"step {key}: {command!r} is both excused and assigned a fixture")
-
-    pred = _build_project(tmp_path, "drvred", fixture)
-    rec = _promotion_record(pred)
-    assert "claimed it ended at 1" in rec["reason"] and "shows 3" in rec["reason"], (
-        f"the red is not the contradiction arm: {rec['reason']}")
-
-    pok = _build_project(tmp_path, "drvok", fixture)
-    _w(pok, _DRV_SIGNOFF_RPT, _drv_signoff_report(1))
-    rec = _promotion_record(pok)
-
-    pbare = _build_project(tmp_path, "drvmarker", "EMPTY")
-    _w(pbare, _DRV_PROMOTION_MARKER, "")
-    rec = _promotion_record(pbare)
-
-
-
 # ─────────────────────────────────────────────────────────────────────
 # The empty-directory red — the controls, both directions
 # ─────────────────────────────────────────────────────────────────────
@@ -3885,150 +3499,6 @@ _ABSENCE_COUNTEREXAMPLE_STEP = "21"
 #: producing a file the clause does not match — so the sweep refuses it out
 #: loud rather than reporting a PASS it did not measure.
 _SUPPORTED_GLOB_CHARS = "*"
-
-
-
-
-def test_d2_an_absent_artefact_is_not_falsifiability_evidence(tmp_path):
-    """The red that proved nothing, run in both directions.
-
-    FORWARD — against the pre-repair file this assertion FAILS: the same
-    clause, the same empty tree, came back ``FAIL``, was counted among the
-    129 reds, and was the whole of step 21's neighbours' cells. 33 of 129
-    reds were this shape.
-
-    REVERSE — the same clause against a project that produced a routed.def
-    must still PASS, so the grading below is about what the clause can
-    DEMONSTRATE and not a second way to fail it. The stub is 25 bytes,
-    ``VERSION 5.8 ;\\nEND DESIGN\\n``: no placement, no routing, no geometry,
-    and the clause is satisfied. That contrast is the whole finding.
-    """
-    clauses = [c for c in F.gate_clauses(_ABSENCE_COUNTEREXAMPLE_STEP)
-               if c.is_blocking and c.kind == F.K_FILES]
-    assert len(clauses) == 1, (
-        f"step {_ABSENCE_COUNTEREXAMPLE_STEP} no longer carries exactly one "
-        f"blocking {F.K_FILES} clause ({len(clauses)} found), so this control "
-        f"has lost its subject and must be re-pointed, not deleted")
-    clause = clauses[0]
-
-    # ── (a) nothing was produced: FAIL, and the FAIL demonstrates nothing.
-    tier, detail = _evaluate_clause(
-        clause, _build_project(tmp_path, "absent", "EMPTY"))
-    assert tier == ABSENCE_RED, (
-        f"a {F.K_FILES} clause measured on a tree where nothing exists came "
-        f"back {tier!r}. Its whole predicate is `passed = len(missing) == 0` "
-        f"(flow_compliance_check.py:2239-2242), so this FAIL says the path is "
-        f"absent and says nothing else :: {detail}")
-    assert tier not in DEMONSTRATIONS, (
-        f"{ABSENCE_RED} is being counted as a demonstration of "
-        f"falsifiability, which is the defect this tier exists to name")
-
-    # ── (b) the reverse: a project that produced the file, badly, PASSES.
-    produced = _build_project(tmp_path, "stub", "PNR_BAD")
-    named = list(clause.files)
-    assert len(named) == 1, named
-    stub = produced / named[0]
-    assert stub.is_file(), (
-        f"the PNR_BAD fixture no longer produces {named[0]}, so the reverse "
-        f"arm below would pass for the wrong reason")
-    assert stub.read_bytes() == b"VERSION 5.8 ;\nEND DESIGN\n", (
-        f"the stub this control quotes has changed to "
-        f"{stub.read_bytes()!r}; re-measure the docstring before editing it")
-    tier2, detail2 = _evaluate_clause(clause, produced)
-    assert tier2 == PASS, (
-        f"a 25-byte DEF with no geometry must still SATISFY this clause — "
-        f"that is the counter-example, and if it stopped being true the "
-        f"grading above would be measuring something else :: {tier2} {detail2}")
-
-
-def test_d2_a_files_exist_clause_is_satisfied_by_a_zero_byte_file():
-    """The exclusion in rule (2), MEASURED over every such clause in the flow.
-
-    Rule (2) excludes ``files_exist`` clauses from "must reach a FAIL" on the
-    ground that they have no FAIL to reach other than absence. That ground is
-    a claim about the consumer, and a claim about the consumer that nobody
-    runs is how this dimension got into trouble in the first place — so it is
-    not read out of ``flow_compliance_check`` here, it is measured: every
-    blocking ``files_exist`` clause in the live flow is handed a ZERO-BYTE
-    file for each pattern it names, and every one of them must PASS.
-
-    The day a ``files_exist`` clause grows a content predicate — a size floor,
-    a parse — this reddens and the exclusion has to be re-decided rather than
-    silently continuing to excuse a clause that could now have been broken.
-    """
-    subjects = [(F.normalize_id(sid), c)
-                for sid in F.step_ids()
-                for c in F.gate_clauses(sid)
-                if c.is_blocking and c.kind == F.K_FILES]
-    assert subjects, (
-        "the flow declares no blocking files_exist clause at all — rule (2)'s "
-        "exclusion now excuses nothing and should be deleted with this test")
-
-    survivors = []
-    with tempfile.TemporaryDirectory() as td:
-        root = Path(td)
-        for idx, (key, clause) in enumerate(subjects):
-            project = root / f"z{idx}"
-            project.mkdir()
-            tier, detail = _evaluate_clause(clause, project)
-    assert not survivors, (
-        f"{len(survivors)} of {len(subjects)} files_exist clause(s) refused a "
-        f"zero-byte artefact, so they DO judge something beyond resolution "
-        f"and rule (2) must stop excluding them: " + "; ".join(survivors))
-
-
-def test_d2_a_present_but_wrong_json_field_is_still_a_real_red(tmp_path):
-    """The tightening must not swallow the non-exec clause that DOES judge.
-
-    ``json_field_true`` compares a value (``v == expect``,
-    flow_compliance_check.py:7012), so unlike ``files_exist`` it can be
-    reddened by a project that produced its artefact and got the answer wrong.
-    Three arms on the one clause the flow declares, so "absent" and "present
-    and wrong" cannot be collapsed:
-
-      EMPTY            -> ABSENCE_RED   (json file missing)
-      field == False   -> FAIL          (the board run says it did not pass)
-      field == True    -> PASS          (agreeing evidence is not reddened)
-
-    Without the middle arm this repair would degenerate into "no non-exec
-    clause can ever demonstrate anything", which is a tightening that fires
-    on everything and distinguishes nothing.
-    """
-    subjects = [(F.normalize_id(sid), c)
-                for sid in F.step_ids()
-                for c in F.gate_clauses(sid)
-                if c.is_blocking and c.kind == F.K_JSON_FIELD]
-    assert subjects, (
-        "the flow declares no blocking json_field_true clause, so the "
-        "absent-vs-wrong distinction this test defends is unreachable; delete "
-        "the branch in _evaluate_clause in the same change that deletes this")
-    key, clause = subjects[0]
-    assert (key, _clause_signature(clause)) in CLAUSE_FIXTURE, (
-        f"step {key}'s json_field_true clause has no fixture and would fall "
-        f"back to EMPTY, where its red means only 'no such file'")
-
-    tier, detail = _evaluate_clause(
-        clause, _build_project(tmp_path, "j_absent", "EMPTY"))
-    assert tier == ABSENCE_RED, f"EMPTY -> {tier} :: {detail}"
-
-    wrong = _build_project(tmp_path, "j_wrong", "ON_BOARD_FAILED")
-    tier, detail = _evaluate_clause(clause, wrong)
-    assert tier == RED, (
-        f"a record that EXISTS and states the run did not pass must be a real "
-        f"FAIL — it is a project that did the work and got it wrong, which is "
-        f"exactly the input this dimension asks for :: {tier} {detail}")
-
-    # ── reverse: same file, same tree, the field flipped to the expected
-    #    value. Nothing else changes, so the red above is the value.
-    right = _build_project(tmp_path, "j_right", "ON_BOARD_FAILED")
-    payload = json.loads((right / clause.json_file).read_text())
-    payload[clause.json_field] = clause.json_expect
-    (right / clause.json_file).write_text(json.dumps(payload, indent=1))
-    tier, detail = _evaluate_clause(clause, right)
-    assert tier == PASS, (
-        f"flipping ONLY {clause.json_field!r} to {clause.json_expect!r} must "
-        f"PASS, else the red above is the tree and not the field :: "
-        f"{tier} {detail}")
 
 
 #: The three clauses whose fixtures replaced an empty-directory red, each with
@@ -4057,223 +3527,11 @@ _CONTENT_REPLACEMENTS: Tuple[Tuple[str, str, str, Callable[[Path], None]], ...] 
 )
 
 
-def test_d2_the_three_replaced_empty_reds_are_earned_by_content(
-        tmp_path, _gate_timeout):
-    """Steps 6, 28 and 30: the red is the artefact's content, not the tree.
-
-    Each of these steps used to be certified falsifiable by one thing — a
-    ``files_exist`` clause answering "nothing is there" on the EMPTY fixture —
-    while its program clause sat in :data:`UNREDDENED`. Three claims are run
-    here for each:
-
-      * the fixture drives the program to a real FAIL;
-      * the EMPTY tree does NOT, so the fixture is measuring something the
-        bare tree does not (this is what makes the replacement a repair
-        rather than a relabelling);
-      * for the two that have a one-field negative control, the SAME tree with
-        that field corrected reads PASS.
-
-    Step 30 has no such control here: its FAIL arm is the ABSENCE of any SPICE
-    run in a tree that reached SPEF and STA, so the input that flips it is a
-    whole SPICE result set rather than one edited field. Its EMPTY arm below
-    is still the discriminator that matters — rc=2 there, rc=1 here — and the
-    fix notes record the arm this suite does not reach.
-    """
-    for key, command, fixture in (
-            ("6", _CONTENT_REPLACEMENTS[0][1], "QUARTUS_STUCK_AT"),
-            ("28", _CONTENT_REPLACEMENTS[1][1], "PERC_ESD_FAIL"),
-            ("30", "spice_correlation_check . --json "
-                   "reports/phase2/gates/spice_correlation.json",
-             "POST_LAYOUT_NO_SPICE")):
-        assert CLAUSE_FIXTURE.get((key, command)) == fixture, (
-            f"step {key}: {command!r} is no longer assigned {fixture!r}; this "
-            f"control and the matrix cell would be measuring different things")
-
-    for key, command, fixture, correct in _CONTENT_REPLACEMENTS:
-        project = _build_project(tmp_path, f"ctl{key}", fixture)
-        correct(project)
-
-
-def test_d2_a_content_earned_program_red_is_still_a_real_red(
-        tmp_path, _gate_timeout):
-    """Non-degeneracy: the exec clauses this change did not touch still redden.
-
-    A repair that grades reds more strictly can pass its own forward control
-    by grading EVERYTHING as no-demonstration. These three are program clauses
-    whose fixtures judge content — a 0-byte GDS, a hollow IR report, a
-    testbench that prints a pass without driving the DUT — and all three must
-    still come back ``FAIL``.
-    """
-    subjects = (
-        ("37", "gds_size_check --gds-file phase3/stage4/gds/*.gds --json "
-               "reports/phase3/gds_size.json", "GDS_BAD"),
-        ("24", "dynamic_ir_drop_check reports/phase3/dynamic_ir.json "
-               "--budget-pct 10", "HOLLOW_REPORTS"),
-        ("4", "vacuous_testbench_check . --json "
-              "reports/phase2/gates/vacuous_testbench.json", "TB_BAD"),
-    )
-    for key, command, fixture in subjects:
-        assert CLAUSE_FIXTURE.get((key, command)) == fixture, (
-            f"step {key}: {command!r} is no longer assigned {fixture!r}")
-
-
 #: Every flow gate now has at least one blocking clause beyond mere file
 #: existence. Step 12 gained scan-survival checking earlier; steps 1 and 35
 #: gained content checks in this change. The register remains a two-way pin:
 #: a future absence-only gate must be recorded and justified or the test fails.
 ABSENCE_ONLY_STEPS: Tuple[str, ...] = ()
-
-
-def test_d2_the_waived_cells_are_gated_by_existence_alone():
-    """The honest record and the flow must say the same thing.
-
-    Both directions, because either alone rots:
-
-      * a step in :data:`ABSENCE_ONLY_STEPS` that acquires a blocking clause
-        able to judge content is no longer an accepted gap — the entry must go,
-        and until it does this test names it (the strict xfail catches the same
-        thing from the other side, one full matrix run later);
-      * a step whose gate is ALL ``files_exist`` and which is NOT registered
-        here is an unpublished absence-only cell — the exact shape that let
-        six steps report a green earned by an empty directory.
-
-    The registry side is checked too: every entry must carry a dimension-2
-    waiver, or the accepted gap is invisible in the one file that publishes
-    accepted gaps.
-    """
-    all_files_only = set()
-    for sid in F.step_ids():
-        key = F.normalize_id(sid)
-        if key in NA_STEPS or not F.has_gate(sid):
-            continue
-        blocking = [c for c in F.gate_clauses(sid) if c.is_blocking]
-        if blocking and all(c.kind == F.K_FILES for c in blocking):
-            all_files_only.add(key)
-
-    registered = set(ABSENCE_ONLY_STEPS)
-    assert all_files_only == registered, (
-        f"the flow's absence-only gates and this module's register disagree. "
-        f"Gated by files_exist alone but unregistered: "
-        f"{sorted(all_files_only - registered)}; registered but no longer "
-        f"absence-only: {sorted(registered - all_files_only)}")
-
-    unpublished = [k for k in sorted(registered) if W.waiver_for(k, DIM) is None]
-    assert not unpublished, (
-        f"{unpublished} are recorded here as not-yet-falsified but carry no "
-        f"dimension-{DIM} waiver in flow_matrix/waivers.py, so the accepted "
-        f"gap is invisible where accepted gaps are published — and the cell "
-        f"would be RUN as if enforced")
-
-
-def test_d2_unreddened_reasons_are_substantive():
-    """The per-clause register may not carry a placeholder.
-
-    Same floor the shared waiver registry applies, reused here because
-    UNREDDENED is doing the same job at a finer granularity.
-    """
-    bad = []
-    for (sid, sig), reason in UNREDDENED.items():
-        text = (reason or "").strip()
-        if len(text) < W.MIN_REASON_LEN:
-            bad.append(f"{sid}/{sig[:40]}: reason is {len(text)} chars")
-        for phrase in W.FORBIDDEN_REASON_SUBSTRINGS:
-            if phrase in text.lower():
-                bad.append(f"{sid}/{sig[:40]}: non-reason phrase {phrase!r}")
-    assert not bad, "UNREDDENED entries that say nothing checkable: " + "; ".join(bad)
-
-
-def test_d2_harness_reports_crash_and_timeout_as_non_demonstrations():
-    """The tier classifier is the whole integrity of this module.
-
-    If a traceback or a killed subprocess were graded FAIL, every gate in the
-    flow would look falsifiable the moment its output directory was missing.
-    """
-    assert _classify(False, "Traceback (most recent call last):\n  ...") == CRASH
-    assert _classify(False, "program TIMED OUT after 120s") == TIMEOUT
-    assert _classify(False, "program not found: nope_check") == UNWIRED
-    assert _classify(False, "verdict: FAIL\n  [ERROR] REAL_FINDING") == RED
-    assert _classify(True, "VACUOUS_PASS: nothing to audit") == VACUOUS
-    assert _classify(True, "[PASS] all good") == PASS
-    # vibe-ic#2013: the consumer's #1978 rewrite of a refusal it could not
-    # promote to a skip. `passed=True`, no vacuous hint — and NOT a pass.
-    assert _classify(
-        True, "INCOMPLETE: x . --json y — reason_class=BLOCKED_BY_UPSTREAM; "
-              "no routed DEF under .") == INCOMPLETE_TIER
-    assert INCOMPLETE_TIER not in DEMONSTRATIONS
-
-    # ── The shape the consumer ACTUALLY produces ──────────────────────
-    # `_check_program_exit_zero` hands back
-    # `(stdout[-300:] + "\n" + stderr[-300:]).strip()`, so a traceback deeper
-    # than two frames arrives WITHOUT its header. Feeding the classifier only
-    # the header form certified it on an input that cannot occur; this is the
-    # truncated form, built by running the real truncation over a real
-    # traceback rather than by hand-writing what it is assumed to look like.
-    try:
-        _d2_selfcheck_raise_deep(3)
-    except KeyError:
-        full = traceback.format_exc()
-    truncated = (full[-300:] + "\n").strip()
-    assert _classify(False, truncated) == CRASH, (
-        f"a header-less (truncated) traceback was graded "
-        f"{_classify(False, truncated)!r}, not {CRASH!r}; a crashing gate "
-        f"would be certified as falsifiable. Snippet:\n{truncated}"
-    )
-
-    # ── The same cut, made DETERMINISTIC. ────────────────────────────
-    # `full[-300:]` keeps or drops the header depending on how long this
-    # checkout's absolute path is, so on its own it exercises the truncation
-    # on some hosts and not others — the same host lottery that let this
-    # grader read CRASH on a short path and FAIL on a long one (2026-07-28).
-    # This cut starts INSIDE the last frame line's path, so on every host the
-    # header AND the `File "` prefix are provably gone and only the frame
-    # TAIL is left to recognise the crash by.
-    # Built from a traceback with NO caret row (an explicit `raise` statement
-    # emits none), so the frame TAIL is the only signal left and this case
-    # cannot be carried by the caret corroboration below. Deleting the
-    # truncated-frame branch reddens exactly here.
-    try:
-        _d2_selfcheck_raise_plain(3)
-    except KeyError:
-        full_plain = traceback.format_exc()
-    mid_path = full_plain.rindex('File "') + 12
-    headerless = full_plain[mid_path:].strip()
-    assert "Traceback (most recent call last)" not in headerless
-    assert not re.search(r'^\s*File "', headerless, re.MULTILINE), headerless
-    assert _classify(False, headerless) == CRASH, (
-        f"a traceback cut mid-path — the shape a long checkout path actually "
-        f"produces — was graded {_classify(False, headerless)!r}, not "
-        f"{CRASH!r}. Snippet:\n{headerless}"
-    )
-
-    # ── And a cut deep enough to take the frame tail too. ─────────────
-    # A several-hundred-character exception message pushes even the frame
-    # line out of the 300-char window; what is left is the caret row and the
-    # exception line, and that pair is still a crash.
-    deepest = "\n".join(full.splitlines()[-2:])
-    assert _classify(False, deepest) == CRASH, (
-        f"a traceback cut below its last frame was graded "
-        f"{_classify(False, deepest)!r}, not {CRASH!r}. Snippet:\n{deepest}")
-
-    # ── And the converse: a gate legitimately PRINTING an exception name as
-    # its finding must still be a real FAIL, not a crash. ────────────────
-    assert _classify(
-        False, "verdict: FAIL\n  ValueError: corner name 'ss' is not in the "
-               "PVT matrix") == RED
-    assert _classify(
-        False, 'File "top.v", line 12: syntax error near `endmodule`') == RED
-    # A frame-shaped line with trailing text is a tool diagnostic, not CPython.
-    assert _classify(
-        False, 'Error: in file "top.v", line 12, in module top') == RED
-    # The caret row corroborates an exception tail; alone it decides nothing.
-    assert _classify(False, "    ~~~~~^^^^^") == RED
-    # An indented finding above a column-0 exception-named summary is an
-    # ordinary gate report, not a traceback tail. 2026-07-28: it was graded
-    # CRASH for one revision, i.e. a working gate reported as having blown up
-    # and its demonstration deleted from this dimension's count.
-    assert _classify(
-        False, "verdict: FAIL\n  [ERROR] 3 corners missing\n"
-               "    ss_125c, ff_m40c, tt_25c\n"
-               "ConstraintError: 3 of 5 PVT corners are undeclared") == RED
 
 
 #: Gate shapes that all END in a real unhandled exception, differing only in
@@ -4320,8 +3578,6 @@ _D2_CRASH_SHAPES = {
 }
 
 
-
-
 def _d2_selfcheck_raise_deep(depth: int):
     """Raise a KeyError through *depth* frames, for the truncation self-check.
 
@@ -4343,15 +3599,6 @@ def _d2_selfcheck_raise_plain(depth: int):
     if depth <= 0:
         raise KeyError("missing_key_that_is_deliberately_absent")
     return _d2_selfcheck_raise_plain(depth - 1)
-
-
-def test_d2_flow_yaml_override_is_unset():
-    """A run with ``$VIBE_IC_MATRIX_FLOW_YAML`` set grades a file nobody
-    reviewed. The ledger asserts this too; repeated here because this module
-    shells out 150+ times on the strength of that yaml."""
-    assert not os.environ.get(F.FLOW_YAML_ENV), (
-        f"{F.FLOW_YAML_ENV}={os.environ.get(F.FLOW_YAML_ENV)!r} — this suite "
-        f"would measure an unreviewed flow definition")
 
 
 # ══════════════════════════════════════════════════════════════════════

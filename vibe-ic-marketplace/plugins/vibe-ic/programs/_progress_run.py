@@ -66,7 +66,7 @@ from __future__ import annotations
 
 import os
 import subprocess  # nosec B404 — this module IS the process-launch primitive
-import tempfile
+import vibeic_temp as tempfile
 import sys
 import time
 from pathlib import Path

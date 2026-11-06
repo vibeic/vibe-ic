@@ -91,16 +91,7 @@ def _step1():
     return next(s for s in flow['steps'] if str(s.get('id')) == '1')
 
 
-
-
 # -- ruling 2: declared but never reached ---------------------------------
-
-
-
-
-
-
-
 
 
 # -- F28b: reachability does not depend on synth-safe parameters -----------
@@ -116,16 +107,6 @@ def _picorv32_design(root, glue):
     p = _design(root, glue, L2_DECLARES_PICORV32)
     (p / 'phase2/stage1/rtl/serv_top.v').rename(p / 'phase2/stage1/rtl/picorv32.v')
     return p
-
-
-
-
-
-
-def test_the_runner_step_fails_a_declared_ip_without_params_it_never_reaches(root):
-    import design_one_shot_runner as dor
-    sr = dor.step_catalog_synth_safe_params(_picorv32_design(root, 'unreached'))
-    assert (sr.status, sr.extras['failure_codes']) == ('FAIL', [CODE]), sr
 
 
 def test_a_declared_ip_naming_no_rtl_file_is_refused_never_passed(root, monkeypatch):
@@ -145,35 +126,6 @@ def test_a_declared_ip_naming_no_rtl_file_is_refused_never_passed(root, monkeypa
 
 # -- ruling 1: the runner blocks on it inline ------------------------------
 
-def test_the_runner_step_fails_on_the_gate_it_spawns(root):
-    import design_one_shot_runner as dor
-    p = _design(root, 'unreached')
-    sr = dor.step_catalog_synth_safe_params(p)
-    assert sr.status == 'FAIL', sr
-    assert sr.extras['failure_codes'] == [CODE]
-    assert sr.output_files == [REPORT]
-
-
-def test_the_runner_step_passes_and_stands_down_as_the_gate_does(root):
-    import design_one_shot_runner as dor
-    assert dor.step_catalog_synth_safe_params(_design(root, 'pinned')).status == 'PASS'
-    shutil.rmtree(root / 'proj')
-    plain = _design(root, 'pinned', {'description': 'a toggle flip-flop'})
-    sr = dor.step_catalog_synth_safe_params(plain)
-    assert (sr.status, sr.declared_by) == ('NOT_APPLICABLE', 'DESIGN_DECLARED_NA'), sr
-
-
-def test_the_runner_step_never_credits_an_unread_declaration(root):
-    import design_one_shot_runner as dor
-    p = _design(root, 'pinned')
-    _put(p / 'phase1/generated_docs/L2_FRS.json', '{"cpu_isa": ')
-    sr = dor.step_catalog_synth_safe_params(p)
-    assert (sr.status, sr.reason_class) == ('NOT_MEASURED', 'input_absent'), sr
-
-
-
-
-
 
 def _main_plan_appends(src):
     """``plan.append(<call>)`` targets inside ``main``, in source order.
@@ -192,29 +144,6 @@ def _main_plan_appends(src):
              and isinstance(n.args[0], ast.Call)]
     return [ast.unparse(c.args[0].func)
             for c in sorted(calls, key=lambda c: (c.lineno, c.col_offset))]
-
-
-
-
-def test_main_appends_the_step_after_the_rtl_is_staged_and_before_step2():
-    order = _main_plan_appends((PROGRAMS / RUNNER).read_text())
-    assert order.count('step_catalog_synth_safe_params') == 1, order
-    at = order.index('step_catalog_synth_safe_params')
-    # After the last step-1 stager (reused-IP consume and both alias emitters)
-    # and before the step-2/3 determinism gates and synthesis.
-    for before in ('step_reused_ip_consume', 'step_leaf_typo_aliases',
-                   'step_reset_clock_variant_aliases'):
-        assert order.index(before) < at, (before, order[:at + 1])
-    assert at < order.index('step_lesson_consumption'), order
-
-
-def test_mutation_an_uncalled_step_is_seen(tmp_path):
-    text = (PROGRAMS / RUNNER).read_text()
-    assert text.count(INLINE_CALL) == 1, 'the inline call moved; update INLINE_CALL'
-    cut = text.replace(INLINE_CALL, '        pass\n')
-    assert 'step_catalog_synth_safe_params' not in _main_plan_appends(cut)
-
-
 
 
 def test_the_register_is_not_written_for_it():

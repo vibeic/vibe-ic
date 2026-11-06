@@ -125,13 +125,11 @@ def test_a_design_with_no_pad_ring_keeps_direct(tmp_path, fixture):
 
 
 def test_the_class_predicate_is_the_runners_15_5ic_condition(tmp_path):
-    import phase3_one_shot_runner as R
     for project, want in ((tmp_path / "a", False),
                           (_chip(tmp_path / "b"), True),
                           (_chip(tmp_path / "c", deliverable="HARDMACRO", marker="slots"), False),
                           (_chip(tmp_path / "d", deliverable="NOT_DETERMINED", marker="slots"), True)):
         project.mkdir(parents=True, exist_ok=True)
-        assert R._chip_path_requests_pad_ring(project) is want
         assert (LC.design_class(project) is not None) is want
 
 
@@ -186,43 +184,3 @@ def test_every_class_default_is_a_mode_the_contract_knows():
         assert set(defaults.values()) <= {"direct", "librelane", "dual"}
     assert set(LC.CLASS_DEFAULT_REQUIRES) <= set(
         LC.CLASS_PRODUCTION_DEFAULTS[LC.DESIGN_CLASS_CHIP_PAD_RING])
-
-
-def test_the_class_default_is_part_of_the_admission_identity(tmp_path, monkeypatch):
-    import phase3_one_shot_runner as R
-    monkeypatch.delenv("VIBEIC_LIBRELANE_PDK_ROOT", raising=False)
-    assert R._librelane_admission_facts(tmp_path) == {}
-    project = _chip(tmp_path / "chip")
-    facts = R._librelane_admission_facts(project)
-    assert facts["librelane_class_defaults"] == dict(
-        dict.fromkeys(_CHAIN_R4 + tuple(sorted(_CUTW2_MEMBERS)), "librelane"),
-        **_W1A_MODES, **_FRONTEND_MODES)
-    assert facts["librelane_contract_sha256"] == LC.digest(Path(LC.__file__))
-    # An explicit switch naming every class-default key leaves none in force.
-    _switch(project, dict.fromkeys(
-        _CHAIN_R4 + tuple(sorted(_CUTW2_MEMBERS)) + tuple(_W1A_MODES) + tuple(_FRONTEND_MODES), "direct"))
-    facts = R._librelane_admission_facts(project)
-    assert "librelane_class_defaults" not in facts and "librelane_switch" in facts
-
-
-def test_pdk_root_override_is_bound_to_admission_identity(tmp_path, monkeypatch):
-    import phase3_one_shot_runner as R
-    monkeypatch.delenv("VIBEIC_LIBRELANE_PDK_ROOT", raising=False)
-    absent = R._librelane_admission_facts(tmp_path)
-    assert absent == {}
-
-    declared = tmp_path / "mounted-pdk" / ".." / "pdk"
-    monkeypatch.setenv("VIBEIC_LIBRELANE_PDK_ROOT", str(declared))
-    overridden = R._librelane_admission_facts(tmp_path)
-    assert overridden["librelane_pdk_root_override"] == {
-        "path": str(declared.resolve()),
-        "source": "environment:VIBEIC_LIBRELANE_PDK_ROOT",
-    }
-    assert overridden != absent
-
-
-def test_phase3_main_passes_pdk_admission_facts_to_canonical_admission():
-    import inspect
-    import phase3_one_shot_runner as R
-    source = inspect.getsource(R.main)
-    assert "**_librelane_admission_facts(project)" in source

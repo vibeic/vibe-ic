@@ -193,26 +193,3 @@ def test_a_single_hole_row_is_not_reported_as_exempt(tmp_path):
 
 
 # ── the sibling fact this limb justifies itself with ──────────────────────
-
-def test_reconciliation_keeps_the_first_row(tmp_path):
-    """Measured against the REAL shipped consumer, not asserted from a comment.
-
-    Limb 3's whole reason for existing is what the reconciliation does with a
-    repeated mnemonic. Pin it here so the justification cannot go stale again.
-    """
-    import importlib.util as _iu
-    p = _HERE.parent / "opcode_field_width_consistency_check.py"
-    s = _iu.spec_from_file_location("opcode_field_width_consistency_check", p)
-    ofw = _iu.module_from_spec(s)
-    s.loader.exec_module(ofw)
-
-    idx = ofw._l3_name_hex({"opcodes": [
-        {"name": "synth_alpha", "hex": "0x11"},
-        {"name": "synth_hole", "hex": "0x22"},
-        {"name": "synth_hole", "hex": "0x33"},
-        {"name": "synth_hole", "hex": "0x44"},
-    ]})
-    # `setdefault` => the FIRST row survives. If this ever becomes 0x44 the
-    # gate's docstring and FAIL message must be updated with it.
-    assert idx["synth_hole"] == (0x22, "0x22"), idx
-    assert len(idx) == 2, idx

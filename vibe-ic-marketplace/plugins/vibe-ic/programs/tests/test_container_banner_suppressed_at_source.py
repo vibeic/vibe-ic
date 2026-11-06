@@ -80,7 +80,7 @@ def container_route(monkeypatch):
     _real = _sh.which
     monkeypatch.setattr(R, "_LOCAL_EXEC_MODE", None, raising=False)
     monkeypatch.setattr(
-        R.shutil, "which",
+        _sh, "which",
         lambda n, *a, **k: ("/usr/bin/docker" if n == "docker"
                             else _real(n, *a, **k)))
     yield
@@ -94,7 +94,7 @@ def local_route(monkeypatch):
     _real = _sh.which
     monkeypatch.setattr(R, "_LOCAL_EXEC_MODE", None, raising=False)
     monkeypatch.setattr(
-        R.shutil, "which",
+        _sh, "which",
         lambda n, *a, **k: (None if n == "docker" else _real(n, *a, **k)))
     yield
     R._LOCAL_EXEC_MODE = None

@@ -67,8 +67,6 @@ _PRIVATE_DIR_NAME = "AI" + "_IC_" + "design"
 _SITES = {
     "analog_real_corner_sweep.py": _PROGRAMS / "analog_real_corner_sweep.py",
     "analog_mc_yield_run.py": _PROGRAMS / "analog_mc_yield_run.py",
-    "pdk_yosys_flatten_for_quartus.py":
-        _PROGRAMS / "pdk_yosys_flatten_for_quartus.py",
 }
 
 
@@ -171,15 +169,6 @@ def test_host_root_is_assigned_from_the_ladder_not_from_a_string(name):
             f"ladder, got {_call_dotted_name(a.value)!r}")
 
 
-def test_flattener_translates_through_the_ladder():
-    src = _SITES["pdk_yosys_flatten_for_quartus.py"].read_text()
-    tree = ast.parse(src)
-    called = {_call_dotted_name(c) for c in _calls_in(tree)}
-    assert "_dr.container_path" in called, (
-        "the flattener must translate host paths through the shared ladder")
-    assert "Path.home" not in called, (
-        "the flattener must not anchor a container mount root on the home "
-        "directory: whose home it is cannot be a shipped value")
 
 
 # ---------------------------------------------------------------------------
@@ -298,89 +287,3 @@ def test_mc_yield_reports_a_structured_skip_instead_of_raising(
     assert out["needs_user_decision"] is True
     assert {o["id"] for o in out["options"]} == {"derive_from_project",
                                                  "explicit_env"}
-
-
-# ---------------------------------------------------------------------------
-# BEHAVIOUR — the yosys flattener, driven as a real process over a fake docker
-# ---------------------------------------------------------------------------
-def _fake_docker(tmp_path, mounts):
-    """A `docker` on PATH that reports `mounts` and fails every exec.
-
-    The .ys script is written BEFORE yosys is invoked, so a failing exec still
-    lets the test read exactly which container paths the program emitted.
-    """
-    bindir = tmp_path / "fakebin"
-    bindir.mkdir()
-    payload = tmp_path / "inspect.json"
-    payload.write_text(json.dumps(
-        [{"Mounts": [{"Source": str(s), "Destination": d} for s, d in mounts]}]))
-    docker = bindir / "docker"
-    docker.write_text(
-        "#!/bin/sh\n"
-        'if [ "$1" = "inspect" ]; then cat %s; exit 0; fi\n'
-        "exit 2\n" % payload)
-    docker.chmod(0o755)
-    return bindir
-
-
-def _run_flattener(tmp_path, treedir, mounts):
-    d = treedir
-    (d / "shim.v").write_text(
-        "module AND2X1(input A, input B, output Y); assign Y = A & B; "
-        "endmodule\n")
-    (d / "gate.v").write_text(
-        "module chip_top(input a, input b, output y); "
-        "AND2X1 u1(.A(a), .B(b), .Y(y)); endmodule\n")
-    env = dict(os.environ)
-    env["PATH"] = str(_fake_docker(tmp_path, mounts)) + os.pathsep + env["PATH"]
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    env.pop("VIBEIC_DESIGNS_HOST_ROOT", None)
-    env.pop("VIBEIC_DESIGNS_CONT_ROOT", None)
-    cp = _pr.run(
-        [sys.executable, str(_SITES["pdk_yosys_flatten_for_quartus.py"]),
-         "--gate-netlist", str(d / "gate.v"), "--pdk-shim", str(d / "shim.v"),
-         "--top", "chip_top", "--output", str(d / "flat.v"),
-         "--container", "any-container", "--keep-tmp"],
-        capture_output=True, text=True, env=env)
-    ys = d / ".tmp_flatten" / "flatten.ys"
-    return cp, (ys.read_text() if ys.is_file() else None)
-
-
-def test_flattener_emits_mount_derived_container_paths(tmp_path):
-    mount = tmp_path / "photon_lab_workspace"
-    d = mount / "quiet_adc"
-    d.mkdir(parents=True)
-    _cp, ys = _run_flattener(tmp_path, d, [(mount, "/foss/designs")])
-    assert ys is not None, "no .ys script was emitted"
-    assert "read_verilog /foss/designs/quiet_adc/shim.v" in ys
-    assert "read_verilog /foss/designs/quiet_adc/gate.v" in ys
-    assert str(mount) not in ys, "a host path leaked into the container script"
-
-
-def test_flattener_honours_a_non_default_mount_destination(tmp_path):
-    mount = tmp_path / "photon_lab_workspace"
-    d = mount / "quiet_adc"
-    d.mkdir(parents=True)
-    _cp, ys = _run_flattener(tmp_path, d, [(mount, "/elsewhere")])
-    assert ys is not None
-    assert "read_verilog /elsewhere/quiet_adc/shim.v" in ys
-
-
-def test_flattener_control_tree_under_the_old_magic_name(tmp_path):
-    mount = tmp_path / _PRIVATE_DIR_NAME
-    d = mount / "quiet_adc"
-    d.mkdir(parents=True)
-    _cp, ys = _run_flattener(tmp_path, d, [(mount, "/foss/designs")])
-    assert ys is not None
-    assert "read_verilog /foss/designs/quiet_adc/shim.v" in ys
-
-
-def test_flattener_refuses_when_no_mount_covers_the_inputs(tmp_path):
-    mount = tmp_path / "photon_lab_workspace"
-    d = mount / "quiet_adc"
-    d.mkdir(parents=True)
-    cp, _ys = _run_flattener(tmp_path, d, [(tmp_path / "unrelated", "/x")])
-    assert cp.returncode == 2, cp.stdout + cp.stderr
-    assert "BLOCKED on host mount root" in cp.stderr
-    assert "DESIGNS_ROOT_UNRESOLVED" in cp.stderr or \
-        dr.HOST_ROOT_ENV in cp.stderr

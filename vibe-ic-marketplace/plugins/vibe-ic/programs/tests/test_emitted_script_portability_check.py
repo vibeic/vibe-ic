@@ -69,32 +69,16 @@ report_power
 """
 
 
-
-
-
-
 # ================================================================ POSITIVE ===
-
-
 
 
 # ================================================================ NEGATIVE ===
 
 
-
-
 # ================================================================= VACUOUS ===
 
 
-
-
 # ========================================================== BAD INVOCATION ===
-
-
-
-
-
-
 
 
 # =============================================== THE EMITTER'S OWN BEHAVIOUR ==
@@ -144,11 +128,9 @@ def _no_docker(monkeypatch):
 def _emit(proj: Path, rpt: Path):
     rpt.parent.mkdir(parents=True, exist_ok=True)
     notes: list = []
-    p3._emit_power_report(proj, TOP, _mk_pdk(proj), CONTAINER, rpt, notes,
-                          basis="post_pnr")
+    from _ppa import power
+    power.adopt_current_power_report(proj, TOP, rpt, notes)
     return (rpt.parent / f"power_{TOP}.tcl").read_text(), notes
-
-
 
 
 def test_a_deck_written_outside_the_run_tree_keeps_absolute_paths(tmp_path, _no_docker):
@@ -171,7 +153,5 @@ def test_a_run_path_reaching_the_deck_is_noted_loudly(tmp_path, monkeypatch,
     says so in its own notes, instead of the defect surfacing later as an
     identity hash that quietly will not match."""
     proj = _mk_project(tmp_path)
-    monkeypatch.setattr(p3, "_run_root_tcl_path",
-                        lambda hp, project, container, script_path: str(hp))
     _, notes = _emit(proj, proj / "reports" / "phase3" / "power.rpt")
     assert any("absolute path(s) INTO the run root" in n for n in notes), notes

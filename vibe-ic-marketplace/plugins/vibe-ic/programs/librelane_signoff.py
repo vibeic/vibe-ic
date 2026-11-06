@@ -40,6 +40,8 @@ chip-AGNOSTIC: no design, PDK or corner literal selects a branch.
 """
 from __future__ import annotations
 
+import vibeic_temp as _vtmp
+
 import fnmatch
 import math
 import re
@@ -1034,7 +1036,7 @@ def run_sta_script(project: Path, image: str, mounts: list[tuple[Path, str]],
         volumes += ['-v', f'{host.resolve()}:{guest}:ro']
     network, command = native_tool_command(
         image, ['sta', '-no_init', '-no_splash', '-exit', str(script)])
-    completed = run_container([docker, 'run', '--rm', '--network', network,
+    completed = run_container([docker, 'run', *_vtmp.docker_mounts(), '--rm', '--network', network,
                                *_dmem.docker_memory_flags(), *volumes,
                                image, '--skip', *command], supervised=True, log=log)
     log.parent.mkdir(parents=True, exist_ok=True)

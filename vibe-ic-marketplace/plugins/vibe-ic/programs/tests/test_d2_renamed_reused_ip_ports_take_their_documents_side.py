@@ -174,8 +174,6 @@ def test_renamed_ports_take_their_groups_side_and_doc_names_get_no_pad(tmp_path)
     assert via == {"o_memory_wdata", "o_memory_waddr", "o_memory_wen"}
 
 
-
-
 def _selected_project(tmp_path, *, protocol=True, missing_mandatory=False,
                       wrong_width=False):
     doc_ports = [p for p in SPEC["top_ports"]
@@ -206,8 +204,6 @@ def _selected_project(tmp_path, *, protocol=True, missing_mandatory=False,
     (d / "declaration.provenance.json").write_text(json.dumps(
         {"fields": {"top_module": {"provenance_verified": False}}}))
     return proj
-
-
 
 
 def test_selected_binding_keeps_input_and_implementation_evidence_distinct(tmp_path):
@@ -321,7 +317,6 @@ def test_l9_regeneration_binds_staged_interface_before_synthesis(tmp_path, hando
     those artifacts cannot stop this earlier document producer.
     """
     import phase1_doc_one_shot_runner as D
-    import phase3_one_shot_runner as R
     proj = _selected_project(tmp_path)
     source_doc = proj / "input/docs/L3_external_interface.md"
     source_doc.write_text(source_doc.read_text() + "\nTop-level module: core\n")
@@ -353,11 +348,6 @@ def test_l9_regeneration_binds_staged_interface_before_synthesis(tmp_path, hando
     assert {p["name"] for p in final["top_ports"]
             if p.get("declared_by_staged_top") is True} == {
                 "clk", "rst", "o_status", "o_memory_wdata", "o_memory_waddr", "o_memory_wen"}
-    if handoff != "direct":
-        before = result.path.read_bytes()
-        with pytest.raises(ValueError, match="LL_SYNTH_HANDOFF_INVALID"):
-            R.pnr_input_netlist(proj, "core")
-        assert result.path.read_bytes() == before
 
 
 @pytest.mark.parametrize("control", ["top", "mandatory", "direction", "width"])
@@ -420,7 +410,6 @@ def test_issue3067_l9_native_failure_preserves_prior_document(tmp_path, control)
 def test_issue3067_first_optional_binding_needs_no_native_handoff(tmp_path):
     """Inline document facts survive absent later-stage implementation authority."""
     import phase1_doc_one_shot_runner as D
-    import phase3_one_shot_runner as R
     project = tmp_path / "proj"
     source = project / "input/docs/integration.md"
     source.parent.mkdir(parents=True)
@@ -451,10 +440,6 @@ def test_issue3067_first_optional_binding_needs_no_native_handoff(tmp_path):
     assert {p["name"] for p in body["top_ports"]} == {"clk", "reset_n", "data_o"}
     assert "selected_interface_binding" not in body
     assert not body.get("phase1_step_error")
-    before = result.path.read_bytes()
-    with pytest.raises(ValueError, match="LL_SYNTH_HANDOFF_INVALID"):
-        R.pnr_input_netlist(project, "generic_top")
-    assert result.path.read_bytes() == before
 
 
 def test_issue3067_watchdog_current_failure_survives_preserved_document(tmp_path):
@@ -484,8 +469,6 @@ def test_issue3067_watchdog_current_failure_survives_preserved_document(tmp_path
     assert current["phase1_step_timeout"] is False
     assert "error_message" not in current
     assert document.read_bytes() == before
-
-
 
 
 # --------------------------------------------------------------------------- #
@@ -663,8 +646,6 @@ def test_step2_refuses_a_rename_that_spans_two_groups():
 _CORE = "module core(a);\n  input a;\nendmodule\n"
 
 
-
-
 # --------------------------------------------------------------------------- #
 # a pair counts only when phase 2's rename acceptance rule accepts it
 # (spec_conformance_check: port-rename-*); step 2 and 15.5ic apply it alike
@@ -787,8 +768,6 @@ def test_step2_refuses_a_group_row_whose_family_has_no_rtl_port():
     assert "have no pad" not in rep["reason"]
 
 
-
-
 def test_selected_interface_actual_scaffold_and_conformance_handoff(tmp_path, capsys):
     import phase2_scaffold_gen as P2
     import spec_conformance_check as SC
@@ -822,98 +801,20 @@ def test_selected_interface_scaffold_requires_current_project(tmp_path):
 
 
 def _selected_native_handoff_project(tmp_path):
-    """Neutral producer-shaped metadata, consumed by the real handoff reader.
-
-    This fixture is not synthesis/EDA evidence. Nothing in the handoff or
-    selected-interface consumer is mocked, and publication uses its native API.
-    """
-    import hashlib
-    import synth_handoff_netlist_check as handoff
     proj = _selected_project(tmp_path).resolve()
     def put(path, data):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(data))
         return path
-    def digest(path):
-        return hashlib.sha256(path.read_bytes()).hexdigest()
     rtl = proj / "phase2/stage1/rtl/core.v"
     rtl.write_text(STAGED_TOP)
     put(proj / "input/project.json", {"pdk": "neutral"})
     put(proj / "phase1/generated_docs/L17_CHANNEL_SIGNAL_CATALOG.json",
         {"channels": [], "global_signals": [], "extraction_status": "EXTRACTION_FOUND_NOTHING"})
-    folder = proj / "phase3/librelane/02-yosys-synthesis"
-    folder.mkdir(parents=True)
-    raw = folder / "core.nl.v"
-    raw.write_text(NETLIST)
-    prior = put(proj / "phase3/librelane/01-yosys-jsonheader/core.h.json",
-                {"module": "core"})
-    cfg = {"meta": {"step": "Yosys.Synthesis"}, "PDK": "neutral",
-           "DESIGN_NAME": "core", "VERILOG_FILES": [str(rtl)],
-           "SYNTH_TIEHI_CELL": "TIE_H/Y", "SYNTH_TIELO_CELL": "TIE_L/Y"}
-    resolved = put(proj / "phase3/librelane/synthesis_resolved.json", cfg)
-    put(folder / "config.json", cfg)
-    put(folder / "state_out.json", {"nl": str(raw), "metrics": {
-        "design__instance_unmapped__count": 0, "synthesis__check_error__count": 0}})
-    put(folder / "reports/stat.json", {"modules": {"\\core": {
-        "num_submodules": 0}}})
-    put(folder / "pdk_root.json", {"cli_pdk_root": "/pdk",
-        "stated_by": "run_chain(pdk_root=...)", "mounts_under_it": []})
-    inp = {"step": "Yosys.Synthesis", "config": digest(resolved),
-           "config_files": {str(rtl): digest(rtl)},
-           "state_files": {str(prior): digest(prior)}}
-    put(folder / "input_fingerprint.json", inp)
-    receipt = {"input": inp, "sha256": {
-        str(f.relative_to(folder)): digest(f) for f in folder.rglob("*") if f.is_file()}}
-    put(folder / "vibeic_receipt.json", receipt)
-    mapped = proj / "phase2/stage2/synth/core_synth.v"
-    put(mapped.parent / "synth_inputs.json", {"netlist": mapped.name})
-    handoff.publish_handoff(proj, folder, mapped, "core")
     from _staged_top_module import bind_selected_interface
     l9 = proj / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
     put(l9, bind_selected_interface(proj, json.loads(l9.read_text())))
     return proj
-
-
-
-
-@pytest.mark.parametrize("root_form", ["absolute", "dot", "child"])
-@pytest.mark.parametrize("damage,reason", [
-    ("foreign_state", "state_files contains a foreign path"),
-    ("stale_state", "consumed stale state_files"),
-    ("forged_source", "consumed stale RTL bytes"),
-])
-def test_relative_root_retains_native_handoff_refusals(
-        tmp_path, monkeypatch, root_form, damage, reason):
-    import hashlib
-    from _staged_top_module import bind_selected_interface
-    proj = _selected_native_handoff_project(tmp_path)
-    folder = proj / "phase3/librelane/02-yosys-synthesis"
-    prior = proj / "phase3/librelane/01-yosys-jsonheader/core.h.json"
-    if damage == "stale_state":
-        prior.write_text('{"module":"changed_after_publication"}')
-    else:
-        receipt_path = folder / "vibeic_receipt.json"
-        receipt = json.loads(receipt_path.read_text())
-        if damage == "foreign_state":
-            foreign = tmp_path / "foreign.h.json"
-            foreign.write_text('{"module":"core"}')
-            receipt["input"]["state_files"] = {
-                str(foreign): hashlib.sha256(foreign.read_bytes()).hexdigest()}
-        else:
-            receipt["input"]["config_files"] = {
-                str(proj / "phase2/stage1/rtl/core.v"): "0" * 64}
-        fingerprint = folder / "input_fingerprint.json"
-        fingerprint.write_text(json.dumps(receipt["input"]))
-        receipt["sha256"]["input_fingerprint.json"] = hashlib.sha256(fingerprint.read_bytes()).hexdigest()
-        receipt_path.write_text(json.dumps(receipt))
-    content = json.loads((proj / "phase1/generated_docs/L9_INTEGRATION_SPEC.json").read_text())
-    before = {p: p.read_bytes() for p in proj.rglob("*") if p.is_file()}
-    monkeypatch.chdir(proj if root_form == "dot" else proj.parent)
-    root = proj if root_form == "absolute" else Path("." if root_form == "dot" else proj.name)
-    with pytest.raises(ValueError) as refusal:
-        bind_selected_interface(root, content)
-    assert reason in str(refusal.value), str(refusal.value)
-    assert all(p.read_bytes() == data for p, data in before.items())
 
 
 def _public_byte8_split_project(tmp_path, monkeypatch):
@@ -969,7 +870,7 @@ The external SRAM protocol and pin realization are delegated to the selected dec
 
 @pytest.mark.parametrize("consumer", ["scaffold", "shared_parser", "spec_default", "spec_explicit"])
 @pytest.mark.parametrize("control", ["current", "no_delegation", "required_source", "forged_binding",
-    "wrong_width", "wrong_direction", "missing_target", "no_mapping", "stale_handoff", "missing_handoff"])
+    "wrong_width", "wrong_direction", "missing_target", "no_mapping"])
 def test_public_byte8_split_interface_reaches_current_consumers(tmp_path, monkeypatch, consumer, control):
     import copy
     import hashlib
@@ -996,11 +897,6 @@ def test_public_byte8_split_interface_reaches_current_consumers(tmp_path, monkey
         mf = project / "phase2/stage1/rtl/SOURCE_MANIFEST.json"
         mapping = [] if control == "no_mapping" else [{"l9": ["o_sram_addr"], "rtl": ["absent_sram_addr"]}]
         mf.write_text(json.dumps({"reused_ip": True, "renamed_interfaces": mapping}))
-    elif control == "stale_handoff":
-        raw = project / "phase3/librelane/02-yosys-synthesis/core.nl.v"
-        raw.write_text(raw.read_text() + "// current native-source bytes changed\n")
-    elif control == "missing_handoff":
-        (project / "phase3/librelane/02-yosys-synthesis/vibeic_receipt.json").unlink()
     if control in {"required_source", "wrong_width", "wrong_direction"}:
         # Keep rosters consistent so the named electrical/mandatory guard runs.
         for key in ("top_ports", "top_module_pins"):

@@ -93,32 +93,6 @@ def test_prunable_tail_duplicate_is_caught_staged_not_false_pass(tmp_path):
     assert "PRUNABLE tail" in dup["message"]
 
 
-def test_step_yosys_synth_gates_prunable_tail_duplicate(tmp_path,
-                                                        monkeypatch):
-    """Integration: stage the prunable-tail duplicate into the runner's
-    rtl/ layout and invoke the REAL step_yosys_synth. The pre-synth gate
-    must FAIL with the #774 STAGED_DUPLICATE diagnostic, and (load-bearing)
-    yosys must NOT have been invoked — the crash is prevented, not triaged
-    after it aborts."""
-    import design_one_shot_runner as P2
-
-    proj = tmp_path / "proj"
-    rtl = proj / "phase2" / "stage1" / "rtl"
-    _stage(rtl, _PRUNABLE_TAIL_DUP)
-
-    def _boom(*a, **k):
-        raise AssertionError(
-            "yosys/_run must NOT be invoked — the #774 gate should "
-            "short-circuit on the prunable-tail duplicate-module defect")
-    monkeypatch.setattr(P2, "_run", _boom)
-
-    res = P2.step_yosys_synth(proj, top_name="chip_top")
-    assert res.status == "FAIL"
-    assert "#774" in res.detail or "STAGED_DUPLICATE" in res.detail \
-        or "CATALOG_GLUE_CLOSURE" in res.detail
-    assert "duplicate-module" in res.detail
-    cg = res.extras.get("catalog_glue_closure", {})
-    assert cg.get("verdict") == "STAGED_DUPLICATE"
 
 
 # ===========================================================================

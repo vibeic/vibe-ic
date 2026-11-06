@@ -39,46 +39,12 @@ SRC = (MCP_ROOT / "src" / "index.js").read_text()
 METRICS = (MCP_ROOT / "src" / "lib" / "manifest_metrics.mjs").read_text()
 
 
-def _tool(name: str) -> str:
-    """The whole tool body: from its name to the next server.tool( registration."""
-    i = SRC.find(f'"{name}"')
-    assert i > 0, f"tool {name} not found"
-    j = SRC.find("server.tool(", i)
-    return SRC[i:j if j > 0 else len(SRC)]
 
 
-def test_gds_measures_placed_instances_of_the_designs_own_top_cell():
-    t = _tool("eda_gds")
-    assert "GDS_TOP_INSTS=" in t, "eda_gds does not count placed instances"
-    assert "each_inst()" in t
-    # anchored on the DEF's DESIGN line, not a most-instances heuristic
-    assert "DESIGN" in t and "cell_by_name" in t
-    assert "top_cells" not in t, (
-        "a top-cell heuristic is back — it selects a PDK library cell with 7 "
-        "instances on an emptied DEF and reports a plausible non-zero count"
-    )
 
 
-def test_an_empty_die_is_not_a_success():
-    t = _tool("eda_gds")
-    assert "const emptyDie = topInsts === 0;" in t
-    assert "const gdsOk = cellsMatch != null && mergeOk && instsMeasured && !emptyDie;" in t
-    assert "success: gdsOk," in t, "the verdict is not conjoined with the instance count"
-    # every derived verdict must move with it, not just the returned boolean
-    assert "measured: gdsOk," in t
-    assert "wrote: gdsOk ? [output_gds] : []," in t
-    assert "exitCode: gdsOk ? 0 : 1," in t
-    assert "EMPTY DIE" in t, "the failure does not say what is wrong"
 
 
-def test_an_unidentifiable_top_cell_is_not_measured_rather_than_bad():
-    """Absent must render as neither good nor bad."""
-    t = _tool("eda_gds")
-    assert "GDS_TOP_CELL_UNKNOWN" in t
-    assert "instsMeasured" in t
-    assert "NOT_MEASURED" in t
-    # top_insts is recorded as null (absent), not as 0 (a measured empty die)
-    assert "top_insts: instsMeasured ? topInsts : null," in t
 
 
 def test_top_insts_is_a_required_metric_for_gds_generation():

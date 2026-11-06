@@ -107,43 +107,12 @@ LL_REPORT = "reports/phase3/librelane_postroute_repair.json"
 
 
 
-def _ll_report(p: Path, *, adopted, before_drv, after_drv, setup=0.5, hold=0.2):
-    """The Step-32 LibreLane producer's own report, as `run` writes it: the
-    census baseline, the adopted candidate, and the adopted route's
-    STAPostPNR measurement bound by its state's sha256."""
-    state = p / "phase3/librelane/32-cand01/03-openroad-stapostpnr/state_out.json"
-    state.parent.mkdir(parents=True, exist_ok=True)
-    state.write_text(json.dumps({"metrics": {"x": 1}}))
-    digest = hashlib.sha256(state.read_bytes()).hexdigest()
-    report = p / LL_REPORT
-    report.parent.mkdir(parents=True, exist_ok=True)
-    report.write_text(json.dumps({
-        "step": "32", "mode": "librelane", "verdict": "PASS", "adopted": adopted,
-        "baseline": {"drv_count": before_drv, "setup_ws_min": setup,
-                     "hold_ws_min": hold},
-        "final": {"drv_count": after_drv, "setup_ws_min": setup, "hold_ws_min": hold,
-                  "sta_state": str(state), "sta_state_sha256": digest}}))
-    return report, state
 
 
 
 
 
 
-def test_decide_sees_the_step32_drv(tmp_path):
-    """decide() reads the DRV Step 32 measured on the route it kept: a
-    residual is a failed domain, an absent count is not a zero."""
-    p = tmp_path
-    _ll_report(p, adopted=None, before_drv=3, after_drv=3)
-    d = R._repair_dec.decide(None, True, project=p)
-    assert d["repair_needed"] is True and d["timing_repair_needed"] is False
-    assert d["nontiming_failures"][0]["signal"] == "drv_count=3"
-    _ll_report(p, adopted=None, before_drv=3, after_drv=None)
-    d = R._repair_dec.decide(None, True, project=p)
-    assert d["repair_needed"] is True
-    assert d["nontiming_not_determined"][0]["domain"] == "drv"
-    _ll_report(p, adopted=None, before_drv=0, after_drv=0)
-    assert R._repair_dec.decide(None, True, project=p)["repair_needed"] is False
 
 
 

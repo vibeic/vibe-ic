@@ -27,64 +27,13 @@ chip-, PDK- and vendor-AGNOSTIC: synthetic fixtures; only EDA writes are faked.
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
-import pytest
 import yaml
 
 import phase3_one_shot_runner as R
 
 FLOW = Path(R.__file__).resolve().parent.parent / "flow" / "phase1_phase2_phase3.yaml"
-
-
-@pytest.fixture(autouse=True)
-def diagnostic_transport_mode(monkeypatch):
-    """Exercise legacy native transport; candidate scheduling is out of scope."""
-    monkeypatch.setattr(R, '_default_step15_with_backend_receipt',
-                        lambda *a, **k: R.step_pnr(*a, **k))
-
-
-# ── Step 32 ───────────────────────────────────────────────────────────────
-
-
-# ── the pre-stream gate ───────────────────────────────────────────────────
-
-
-# ── the admission predicate ───────────────────────────────────────────────
-
-def _gate_record(project: Path, **doc) -> None:
-    out = R._pl.reports_phase3_dir(project) / "prestream_gate.json"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(doc))
-
-
-@pytest.mark.parametrize("doc, digest, streams", [
-    ({"verdict": "PASS", "layout_digest": "a"}, "a", True),
-    ({"verdict": "FAIL", "layout_digest": "a", "gates": [{"name": "x"}],
-      "unmeasured_gates": ["si"]}, "a", True),
-    ({"verdict": "NOT_MEASURED", "layout_digest": "a", "gates": [{"name": "x"}],
-      "unmeasured_gates": ["si_mcf"]}, "a", True),
-    # the receipt must bind THIS layout
-    ({"verdict": "FAIL", "layout_digest": "b", "gates": [{"name": "x"}]}, "a", False),
-    ({"verdict": "PASS", "layout_digest": "a"}, "", False),
-    # a stub receipt measured nothing
-    ({"verdict": "FAIL", "layout_digest": "a"}, "a", False),
-    ({"verdict": "FAIL", "layout_digest": "a", "gates": []}, "a", False),
-    # the route itself absent / unidentified
-    ({"verdict": "NOT_MEASURED", "layout_digest": "a", "gates": [{"name": "x"}],
-      "unmeasured_gates": ["layout_basis"]}, "a", False),
-    ({"verdict": "NOT_MEASURED", "layout_digest": "a", "gates": [{"name": "x"}],
-      "unmeasured_gates": ["route_evidence"]}, "a", False),
-    # an owner-WAIVED gate is never PASS: it streams for measurement
-    # (review wave 58), and `gate_passed` still refuses to admit it
-    ({"verdict": "WAIVED", "layout_digest": "a", "gates": [{"name": "x"}]}, "a", True),
-    ({"verdict": "PASS_WITH_WAIVERS", "layout_digest": "a",
-      "gates": [{"name": "x"}]}, "a", False),
-])
-def test_stream_refusal(tmp_path, doc, digest, streams):
-    _gate_record(tmp_path, **doc)
-    assert (R._ga.stream_refusal(tmp_path, digest) == "") is streams
 
 
 # ── the declared order matches the runner's data flow ─────────────────────

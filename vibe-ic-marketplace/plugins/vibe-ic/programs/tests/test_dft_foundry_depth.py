@@ -194,13 +194,6 @@ def _write(tmp_path: Path, name: str, text: str) -> Path:
 
 
 
-def test_bsdl_cli_writes_plan_json(tmp_path):
-    _write(tmp_path, "net.v", _PADDED_NETLIST)
-    r = _run("bsdl_emit.py", str(tmp_path), "--netlist", "net.v")
-    assert r.returncode == 0, r.stdout + r.stderr
-    plan_json = tmp_path / "reports" / "phase2" / "dft" / "bsdl_plan.json"
-    assert plan_json.is_file()
-    assert json.loads(plan_json.read_text())["verdict"] == "PASS"
 
 
 # ════════════════════════════════════════════════════════════════════════

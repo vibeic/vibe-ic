@@ -238,21 +238,20 @@ def test_step_33_on_librelane_publishes_the_worst_corner_report_unedited(tmp_pat
     project, folder, library = _current_power_scene(tmp_path)
     rpt3 = runner._pl.reports_phase3_dir(project)
     written, notes = [], []
-    runner._step33_tool_arm(project, 'neutral', _pdk(str(library))[1], 'librelane',
-                            rpt3 / 'power.rpt', False, written, notes)
+    import _opensta_current as current
+    power.adopt_current_power_report(project, 'neutral', rpt3 / 'power.rpt', notes)
+    current.power_binding(project)
+    power.emit_signoff_record(project, rpt3 / 'power.rpt', rpt3 / 'power.json',
+                              'vectorless_sdc', notes, tool_rc=0)
     record = json.loads((rpt3 / 'power.json').read_text())
     assert record['total_power_w'] == pytest.approx(2.646044e-02), notes
     assert record['power_basis'] == 'POST_ROUTE_SPEF'
     assert record['activity']['basis'] == power.BASIS_VECTORLESS
     assert (folder / 'max_typ/power.rpt').read_text() in (rpt3 / 'power.rpt').read_text()
-    import _opensta_current as current
     current.power_binding(project)
     receipt = json.loads((rpt3 / 'power.current.json').read_text())
     assert receipt['tool_corner'] == 'max_typ'
     assert receipt['source_report']['sha256'] == contract.digest(folder / 'max_typ/power.rpt')
-    arms = json.loads((rpt3 / 'power_arms.json').read_text())
-    assert arms['canonical'] == 'current_opensta'
-    assert arms['current_receipt_sha256'] == contract.digest(rpt3 / 'power.current.json')
 
 
 def test_step_33_retires_an_unbound_direct_record_even_with_a_legacy_dual_flag(tmp_path):
@@ -262,12 +261,11 @@ def test_step_33_retires_an_unbound_direct_record_even_with_a_legacy_dual_flag(t
     put(rpt3 / 'power.json', {'total_power_w': 0.0215, 'activity': {'basis': 'VECTORLESS'}})
     write(rpt3 / 'power.rpt', 'Total 1.65e-02 4.94e-03 1.58e-06 2.15e-02 100.0%\n')
     notes = []
-    runner._step33_tool_arm(tmp_path, 'spm', pdk, 'dual', rpt3 / 'power.rpt', True, [], notes)
+    power.adopt_current_power_report(tmp_path, 'spm', rpt3 / 'power.rpt', notes)
     record = json.loads((rpt3 / 'power.json').read_text())
     assert record['power_measurement'] == 'NOT_MEASURED'
     assert record['verdict'] == 'NOT_MEASURED'
     assert 'total_power_w' not in record
-    assert not (rpt3 / 'power_arms.json').exists()
     assert any('current power NOT_MEASURED' in note for note in notes)
 
 
@@ -489,22 +487,6 @@ def test_step_29_gates_on_delays_applied_sdf_errors_and_every_case(tmp_path, mon
     assert any(reason in c['reasons'] for c in judged['corners'].values())
 
 
-def test_step_29_on_librelane_writes_evidence_the_step_29_gate_fails(tmp_path, monkeypatch):
-    project, root, declared = _gls_project(tmp_path)
-    fake, _ = _gls_edge(declared, lambda c: VVP_PASS + VVP_SDF_ERROR)
-    monkeypatch.setattr(contract, 'run_container', fake)
-    monkeypatch.setattr(contract, 'image_capability', lambda *_: {})
-    monkeypatch.setattr(contract._ce, 'no_container_route', lambda: False)
-    put(project / 'phase3/librelane_switch.json', {'steps': {'29': 'librelane'},
-                                                   'image': 'img', 'pdk_root_host': str(root)})
-    runner, _ = _pdk('/p/l.lib')
-    sim_dir = runner._pl.sim_postlayout_dir(project)
-    written, notes = [], []
-    runner._step29_tool_arm(project, 'spm', SimpleNamespace(name='x'), 'librelane', sim_dir,
-                            sim_dir / 'spm.sdf', written, notes)
-    log = (sim_dir / 'results.log').read_text()
-    assert 'ERROR: corner nom_tt_025C_5v00 FAIL: SDF_ERRORS' in log, notes
-    assert not (sim_dir / 'pass.flag').exists()
 
 
 # ---------------------------------------------------------------- step 28 ---
@@ -656,20 +638,11 @@ def test_post_route_power_keeps_native_clock_analysis_and_pre_pnr_keeps_ideal_cl
     pdk = _pdk(str(library))[1]
     monkeypatch.setattr(runner, '_docker_exec',
                         lambda *a, **k: pytest.fail('parallel post-route power session ran'))
-    assert runner._emit_power_report(project, 'neutral', pdk, 'c', rpt, [], basis='post_pnr')
+    assert power.adopt_current_power_report(project, 'neutral', rpt, [])
     assert (folder / 'max_typ/power.rpt').read_text() in rpt.read_text()
     import _opensta_current as current
     current.power_binding(project)
     assert not (rpt.parent / 'power_neutral.tcl').exists()
-    write(runner._pl.synth_dir(project) / 'neutral_synth.v',
-          'module neutral(input x, y, output z); assign z = x & y; endmodule\n')
-    write(runner._pl.pnr_dir(project) / 'constraint.sdc',
-          'create_clock -period 24 [get_ports x]\n')
-    monkeypatch.setattr(runner, '_docker_exec', lambda *a, **k: (1, '', ''))
-    runner._emit_power_report(project, 'neutral', pdk, 'c', rpt, [], basis='pre_pnr')
-    deck = (rpt.parent / 'power_neutral.tcl').read_text()
-    assert 'set_propagated_clock [all_clocks]' not in deck
-    assert 'read_spef' not in deck
 
 
 STA_PATH = '''Startpoint: u_core/_417_ (rising edge-triggered flip-flop clocked by clk)

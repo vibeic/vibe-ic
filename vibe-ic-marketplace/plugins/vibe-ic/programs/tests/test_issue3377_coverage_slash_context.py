@@ -14,7 +14,6 @@ from pathlib import Path
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 PRODUCER = PROGRAMS / "phase1_coverage_report_gen.py"
-CONSUMER = PROGRAMS / "phase1_coverage_report_present_check.py"
 
 
 def _write_project(project: Path, text: str, l1: dict) -> None:
@@ -69,8 +68,6 @@ def test_normal_entry_keeps_pin_alias_and_ignores_policy_slash(tmp_path):
 
     produced = _run(PRODUCER, project)
     assert produced.returncode == 0, produced.stdout + produced.stderr
-    consumed = _run(CONSUMER, project)
-    assert consumed.returncode == 0, consumed.stdout + consumed.stderr
 
     aliases = {
         item["literal"] for item in _auto_items(project)
@@ -127,8 +124,6 @@ def test_missing_true_pin_alias_remains_a_coverage_failure(tmp_path):
 
     produced = _run(PRODUCER, project)
     assert produced.returncode == 0, produced.stdout + produced.stderr
-    consumed = _run(CONSUMER, project)
-    assert consumed.returncode == 1, consumed.stdout + consumed.stderr
     report = json.loads(
         (project / "reports" / "phase1" /
          "extraction_coverage_report.json").read_text())

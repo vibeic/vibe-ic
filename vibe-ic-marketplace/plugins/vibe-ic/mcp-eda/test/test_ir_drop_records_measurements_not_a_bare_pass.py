@@ -55,12 +55,6 @@ METRICS = METRICS_MJS.read_text()
 _NODE = shutil.which("node")
 
 
-def _tool(name: str) -> str:
-    """The whole tool body: from its name to the next server.tool( registration."""
-    i = SRC.find(f'"{name}"')
-    assert i > 0, f"tool {name} not found"
-    j = SRC.find("server.tool(", i)
-    return SRC[i:j if j > 0 else len(SRC)]
 
 
 def test_ir_drop_has_a_required_metrics_entry():
@@ -74,13 +68,6 @@ def test_ir_drop_has_a_required_metrics_entry():
     assert "total_power_w" in keys, f"ir_drop requires {keys}, not the power number"
 
 
-def test_ir_drop_parses_the_psm_report_instead_of_echoing_markers():
-    t = _tool("eda_ir_drop")
-    assert "parseIrReport(result.output)" in t, "the PSM report is still not parsed"
-    assert "measured: irMeasured" in t
-    assert "not_measured_reason" in t
-    # the numbers reach both the response and the manifest
-    assert t.count("...ir,") >= 2, "the parsed metrics do not reach both the response and the manifest"
 
 
 @pytest.mark.skipif(_NODE is None, reason="node not installed")

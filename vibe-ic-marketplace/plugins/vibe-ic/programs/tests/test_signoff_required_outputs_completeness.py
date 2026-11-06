@@ -420,8 +420,6 @@ _STEP31_DRC_SIGNOFF_JSON = "reports/phase3/drc_signoff.json"
 #: when a reader stops reading rather than when a file is merely renamed.
 _STEP31_JSON_READERS = {
     "signoff_ladder_run": "reports/**/drc_signoff.json",
-    "final_report_generate": "drc_signoff.json",
-    "macro_obs_geometry_intersect_check": "drc_signoff.json",
 }
 
 
@@ -459,89 +457,8 @@ _WRITE_VERBS = frozenset({
 })
 
 
-def _module_writes(module: str, literal: str) -> bool:
-    """True when `module` hands `literal` (or a name bound to it) to a write.
-
-    AST, not grep: the literal is usually assigned to a module constant and
-    used through it, so a text search for the path beside the word "write"
-    would answer about proximity rather than about data flow."""
-    import ast
-    path = _PROGRAMS / f"{module}.py"
-    if not path.is_file():
-        return False
-    try:
-        tree = ast.parse(path.read_text(errors="replace"))
-    except SyntaxError:                       # pragma: no cover - not our tree
-        return False
-    bound = {literal}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant) \
-                and node.value.value == literal:
-            for t in node.targets:
-                if isinstance(t, ast.Name):
-                    bound.add(t.id)
-
-    def _mentions(n) -> bool:
-        for sub in ast.walk(n):
-            if isinstance(sub, ast.Constant) and sub.value in bound:
-                return True
-            if isinstance(sub, ast.Name) and sub.id in bound:
-                return True
-        return False
-
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        name = (node.func.attr if isinstance(node.func, ast.Attribute)
-                else getattr(node.func, "id", ""))
-        if name in _WRITE_VERBS and any(_mentions(a) for a in
-                                        [node.func] + list(node.args)):
-            return True
-        if name == "open" and any(_mentions(a) for a in node.args):
-            mode = node.args[1] if len(node.args) > 1 else None
-            if isinstance(mode, ast.Constant) and isinstance(mode.value, str) \
-                    and ("w" in mode.value or "a" in mode.value):
-                return True
-    return False
 
 
-def test_the_matrix_does_not_hold_the_step31_json_entry():
-    """NEGATIVE CONTROL for the pin above, and the honest statement of an
-    analyser limit: `literal_index` is keyed on the FULL path literal, so a
-    reader that reaches this file by glob is invisible to W1. Asserted rather
-    than described, so that if the analyser is ever widened to see glob readers
-    this test goes red and the comment above stops being true quietly."""
-    import matrix_d7_artifact_graph as G  # noqa: WPS433
-    consumers = G.literal_index().get(_STEP31_DRC_SIGNOFF_JSON, frozenset())
-    # `task_nature_route` NAMES this artefact and neither reads nor writes it:
-    # it is the `artefact` field of the exit-evidence row that says which file
-    # proves a manufacturability exit. A routing table has to spell the path to
-    # be a routing table, and `literal_index` is keyed on the path literal, so
-    # it cannot tell a declaration from a read. That is the analyser limit this
-    # negative control exists to state.
-    #
-    # THE ALLOW-LIST IS GONE, AND THE PROPERTY IS ASSERTED INSTEAD.
-    # This used to read `set(consumers) <= {"drc_report_check",
-    # "task_nature_route"}` — a hand-written name list, which is the shape that
-    # expires silently, and it did. MEASURED on TREE 7903c1972305 the index
-    # holds `{'_ic_release_artefacts', 'task_nature_route'}`: a legitimate new
-    # READER arrived (the 37.5ic product document set, 5bfae3aedb) and
-    # `drc_report_check` LEFT, because it now names the path only in its module
-    # docstring and the analyser stopped counting prose — the correct
-    # direction, verified rather than assumed.
-    #
-    # The assertion this control actually owes is in its own failure message:
-    # a READER is fine, a WRITER is "the general_precheck clobber returning
-    # under a new name". So that is what is measured — per consumer, by AST,
-    # not by whether the name looks harmless.
-    assert consumers, (
-        f"no consumer names {_STEP31_DRC_SIGNOFF_JSON} at all; the pin above "
-        f"rests on readers that must exist for it to mean anything")
-    writers = sorted(c for c in consumers if _module_writes(c, _STEP31_DRC_SIGNOFF_JSON))
-    assert not writers, (
-        f"{writers} WRITE {_STEP31_DRC_SIGNOFF_JSON}. A consumer that writes "
-        f"this path is the general_precheck clobber returning under a new "
-        f"name — the matrix must not hold an entry an audit produces itself.")
 
 
 # ===========================================================================

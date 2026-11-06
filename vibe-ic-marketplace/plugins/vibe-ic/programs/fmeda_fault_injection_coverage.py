@@ -99,6 +99,8 @@ EXIT CODES
 """
 from __future__ import annotations
 
+import vibeic_temp as _vtmp
+
 import argparse
 import json
 import os
@@ -923,7 +925,7 @@ def run_injection_iverilog(project: Path, rtl_rel_files: List[str], tb_rel: str,
     compile_command = shlex.join(["iverilog", "-g2012", "-o", executable, "-s", tb_top,
         *[f"/work/{path}" for path in [*rtl_rel_files, tb_rel]]])
     run_command = shlex.join(["vvp", executable])
-    command = ["docker", "run", "--rm", *_dmem.docker_memory_flags(),
+    command = ["docker", "run", *_vtmp.docker_mounts(), "--rm", *_dmem.docker_memory_flags(),
         "--entrypoint", "bash", "-v", f"{project}:/work", image, "-c",
         _ENV_PREAMBLE + compile_command + " && " + run_command]
     try:

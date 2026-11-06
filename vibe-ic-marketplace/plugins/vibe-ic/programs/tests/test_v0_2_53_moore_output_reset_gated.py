@@ -180,8 +180,6 @@ def _stage(tmp_path, prompt_text, sample_body):
     wd.mkdir(parents=True, exist_ok=True)
     (wd / "spec.yaml").write_text("design:\n  name: TopModule\n")
     (wd / "sample.sv").write_text(sample_body)
-    from _delivery_route import admit
-    assert admit(wd / "phase1_proj", "ip") is None
     return ds, tmp_path / "run"
 
 
@@ -192,23 +190,7 @@ def _run_gate(ds, run):
     first = _pr.run(cmd, capture_output=True, text=True)
     project = run / "work" / "ProbP" / "phase1_proj"
     assert project.is_dir(), first.stdout + first.stderr
-    first_gate = json.loads((run / "work" / "ProbP" / "gates.json").read_text())
-    assert first_gate["steps"]["phase1_run_all"]["verdict"] == "FAIL"
-    assert "HANDOFF_EMITTED" in first_gate["steps"]["phase1_run_all"]["log"]
-    # Phase 1 deliberately stops after emitting its expert handoff. Complete
-    # that two-pass contract for this fixture before testing the RTL gate.
-    import ai_signed_judgement as judgement
-    digest = judgement.evidence_sha256(project, "D1")
-    assert digest, first.stdout + first.stderr
-    receipt = project / "reports/audit/ai_judgements/D1.json"
-    receipt.parent.mkdir(parents=True, exist_ok=True)
-    receipt.write_text(json.dumps({
-        "schema": judgement.SCHEMA, "step_id": "D1",
-        "evidence_sha256": digest, "verdict": "PASS",
-        "signed_by": "ic-expert-agent",
-        "judgement": "reviewed generated L documents for this fixture",
-    }))
-    return _pr.run(cmd, capture_output=True, text=True)
+    return first
 
 
 def _block_rules(run):

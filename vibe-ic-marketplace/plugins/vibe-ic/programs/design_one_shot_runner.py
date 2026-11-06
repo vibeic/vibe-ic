@@ -2,6 +2,8 @@
 """Tool owners and public entry for design_one_shot_runner."""
 from __future__ import annotations
 
+import vibeic_temp as _vtmp
+
 import sys
 from pathlib import Path
 
@@ -802,7 +804,7 @@ def _run_stage_in_mounted_image(argv: List[str], run_dir: Path,
     for d in _bind_dirs_for(argv, run_dir):
         binds += ["-v", "%s:%s" % (d, d)]
     inner = " ".join(_shlex.quote(str(t)) for t in argv)
-    cmd = ["docker", "run", "--rm",
+    cmd = ["docker", "run", *_vtmp.docker_mounts(), "--rm",
            # The plugin's standing ceiling. A container with no cgroup limit
            # does not share the host's memory, it IS the host's memory.
            *_dmem.docker_memory_flags(),
@@ -1688,7 +1690,7 @@ def _rcvar_flat_compiles(flat_txt: str, tgt: str, rtl_dir: Path,
     the structural single-token guards in emit_variant_alias_flat already prevent
     a mis-edit; do not block a healthy transform on a missing tool)."""
     import shutil as _sh
-    import tempfile as _tf
+    import vibeic_temp as _tf
     if not _sh.which("iverilog"):
         return True
     try:

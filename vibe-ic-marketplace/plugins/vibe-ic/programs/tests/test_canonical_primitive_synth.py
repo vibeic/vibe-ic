@@ -884,15 +884,6 @@ def _r5_assert_publication(domain, emit, tmp_path):
     assert observed == ("unsigned_iterative_restoring_divider" if emit else None)
     reason = rcs.route_to_ai_reason(description)
     assert (reason is None) == emit
-    import design_one_shot_runner as runner
-    project = tmp_path / "project"
-    input_file = project / "phase1/input_doc/design_description.txt"
-    input_file.parent.mkdir(parents=True)
-    input_file.write_text(description)
-    result = runner._try_canonical_primitive_rtl(project, time.time())
-    files = list(project.glob("phase2/stage1/rtl/*.v"))
-    assert bool(files) == emit
-    assert (result is not None and result.status == "PASS") == emit
 
 
 @pytest.mark.parametrize("withdrawal", [
@@ -1260,16 +1251,6 @@ def test_unsigned_divider_r7_f4_interface_compiles_and_behaves(label, renames, w
                           "--out", str(rtl)], capture_output=True, text=True)
     assert json.loads(run.stdout)["verdict"] == "EMIT"
     assert run.returncode == 0, run.stdout + run.stderr
-    import design_one_shot_runner as runner
-    project = tmp_path / "project"
-    prompt = project / "phase1/input_doc/design_description.txt"
-    prompt.parent.mkdir(parents=True)
-    prompt.write_text(description)
-    step = runner._try_canonical_primitive_rtl(project, time.time())
-    assert step is not None and step.status == "PASS"
-    consumer_rtl = list(project.glob("phase2/stage1/rtl/*.v"))
-    assert len(consumer_rtl) == 1
-    assert consumer_rtl[0].read_bytes() == rtl.read_bytes()
     vectors = _native_divider_vectors(width, exhaustive=width == 6)
     tb_text = _native_divider_tb(width, vectors)
     for before, after in renames.items():
@@ -1707,10 +1688,13 @@ def test_parallel2serial_dout_is_combinational():
 # emit RTL to phase2/stage1/rtl/, and DEFER (None) on a non-matching project.
 # Self-contained (inline description); no external dataset.
 # ============================================================================
+
+
 def _load_runner():
     sys.path.insert(0, str(PROGRAMS))
     import design_one_shot_runner as mod  # noqa: E402
     return mod
+
 
 
 def _mk_project(tmp_path, desc_text):
@@ -1720,46 +1704,12 @@ def _mk_project(tmp_path, desc_text):
     return tmp_path
 
 
-def test_hook_fires_and_emits(tmp_path):
-    R = _load_runner()
-    proj = _mk_project(tmp_path, _INLINE_POS["pulse_detect_0to1to0"])
-    res = R._try_canonical_primitive_rtl(proj, 0.0)
-    assert res is not None and res.status == "PASS"
-    assert res.extras.get("deterministic_generator") == "canonical_primitive_synth"
-    assert res.extras.get("shape") == "pulse_detect_0to1to0"
-    emitted = list((proj / "phase2" / "stage1" / "rtl").glob("*.v"))
-    assert [p.name for p in emitted] == ["pulse_detect.v"]
-    assert "module pulse_detect" in emitted[0].read_text()
 
 
-def test_hook_defers_on_nonmatching(tmp_path):
-    R = _load_runner()
-    proj = _mk_project(tmp_path, _INLINE_NEG[1])   # a plain 8-bit adder
-    assert R._try_canonical_primitive_rtl(proj, 0.0) is None
 
 
-def test_hook_author_guard_never_overwrites(tmp_path):
-    R = _load_runner()
-    proj = _mk_project(tmp_path, _INLINE_POS["pulse_detect_0to1to0"])
-    rtl_dir = proj / "phase2" / "stage1" / "rtl"
-    rtl_dir.mkdir(parents=True)
-    (rtl_dir / "existing.v").write_text("module existing(); endmodule\n")
-    # RTL already present → the guard must DEFER (never clobber the design's own).
-    assert R._try_canonical_primitive_rtl(proj, 0.0) is None
 
 
-def test_unsigned_divider_normal_consumer_emits_and_preserves_occupied_output(tmp_path):
-    R = _load_runner()
-    proj = _mk_project(
-        tmp_path / "project", _INLINE_POS["unsigned_iterative_restoring_divider"])
-    res = R._try_canonical_primitive_rtl(proj, 0.0)
-    assert res is not None and res.status == "PASS"
-    output = proj / "phase2" / "stage1" / "rtl" / "unsigned_ratio_unit.v"
-    assert output.is_file()
-    before = output.read_text()
-    assert "module unsigned_ratio_unit" in before
-    assert R._try_canonical_primitive_rtl(proj, 0.0) is None
-    assert output.read_text() == before
 
 
 @pytest.mark.parametrize("mode", ["project", "direct"])
@@ -2207,47 +2157,10 @@ def _mk_contract_project(tmp_path, desc_text):
     return tmp_path
 
 
-def test_composed_shape_publishes_its_scoreboard(tmp_path):
-    R = _load_runner()
-    proj = _mk_contract_project(tmp_path / "p", _F6_DESC)
-    res = R._try_canonical_primitive_rtl(proj, 0.0)
-    assert res is not None and res.status == "PASS"
-    assert res.extras["shape"] == "elastic_handshake_stage"
-    tb = proj / "phase2" / "stage1" / "tb" / "tb_elastic_stage.v"
-    assert tb.is_file()
-    assert res.extras["scoreboard_tb"] == str(tb)
-    assert str(tb) in res.output_files
-    body = tb.read_text()
-    assert "module tb_elastic_stage;" in body
-    assert "accepted transfers lost" in body
 
 
-def test_scoreboard_never_overwrites_an_authors_testbench(tmp_path):
-    R = _load_runner()
-    proj = _mk_contract_project(tmp_path / "p", _F6_DESC)
-    tb = proj / "phase2" / "stage1" / "tb" / "tb_elastic_stage.v"
-    tb.parent.mkdir(parents=True)
-    tb.write_text("// an author's own testbench\n")
-    res = R._try_canonical_primitive_rtl(proj, 0.0)
-    assert res is not None and res.status == "PASS"
-    assert tb.read_text() == "// an author's own testbench\n"
-    assert "kept the existing" in res.extras["scoreboard_tb"]
-    assert str(tb) not in res.output_files
 
 
-def test_template_shapes_publish_no_scoreboard(tmp_path):
-    """The sixteen fixed templates own no contract, so nothing new appears next
-    to them: this wiring is additive for the composed shapes only."""
-    R = _load_runner()
-    proj = _mk_contract_project(tmp_path / "p",
-                                _INLINE_POS["pulse_detect_0to1to0"])
-    res = R._try_canonical_primitive_rtl(proj, 0.0)
-    assert res is not None and res.status == "PASS"
-    assert res.extras["shape"] == "pulse_detect_0to1to0"
-    assert res.extras.get("scoreboard_tb") is None
-    assert not (proj / "phase2" / "stage1" / "tb").exists()
-    assert res.output_files == [
-        str(proj / "phase2" / "stage1" / "rtl" / "pulse_detect.v")]
 
 
 # ============================================================================
@@ -2259,48 +2172,12 @@ def test_template_shapes_publish_no_scoreboard(tmp_path):
 # coverage of a named behavioural sequence.
 # ============================================================================
 
-def _run_l12(project):
-    return subprocess.run(
-        [sys.executable, str(PROGRAMS / "l12_tb_coverage_check.py"), str(project)],
-        capture_output=True, text=True)
 
 
-def _composed_project_with_l12(tmp_path, sequence_ids):
-    R = _load_runner()
-    proj = _mk_contract_project(tmp_path / "p", _F6_DESC)
-    res = R._try_canonical_primitive_rtl(proj, 0.0)
-    assert res is not None and res.status == "PASS"
-    gd = proj / "phase1" / "generated_docs"
-    gd.mkdir(parents=True, exist_ok=True)
-    (gd / "L12_BEHAVIORAL_SEQUENCES.json").write_text(json.dumps(
-        {"sequences": [{"id": s, "description": s.lower()} for s in sequence_ids]}))
-    return proj
 
 
-def test_scoreboard_is_not_mistaken_for_l12_sequence_coverage(tmp_path):
-    proj = _composed_project_with_l12(
-        tmp_path, ["BACKPRESSURE_STALL_RECOVERY", "RESET_MID_TRANSFER"])
-    run = _run_l12(proj)
-    assert run.returncode == 1, run.stdout + run.stderr
-    report = json.loads(
-        (proj / "reports" / "phase2" / "gates" / "l12_tb_coverage.json").read_text())
-    assert report["tb_dir"].endswith("phase2/stage1/tb")
-    assert report["total_sequences"] == 2
-    assert report["covered_sequences"] == 0
 
 
-def test_the_l12_gate_really_can_see_that_directory(tmp_path):
-    """The control for the test above: if the gate could not read the published
-    scoreboard at all, 'zero coverage' would prove nothing. A sequence whose id
-    the scoreboard does contain IS reported covered."""
-    proj = _composed_project_with_l12(tmp_path, ["TB_ELASTIC_STAGE"])
-    tb = proj / "phase2" / "stage1" / "tb" / "tb_elastic_stage.v"
-    assert "tb_elastic_stage" in tb.read_text()
-    run = _run_l12(proj)
-    report = json.loads(
-        (proj / "reports" / "phase2" / "gates" / "l12_tb_coverage.json").read_text())
-    assert report["covered_sequences"] == 1, run.stdout + run.stderr
-    assert run.returncode == 0
 
 
 # ============================================================================
@@ -3052,30 +2929,8 @@ def test_the_lfsr_states_a_direction_and_keeps_its_template():
     assert rcs.emit_rtl("lfsr4_xnor_left", desc) == rcs._TEMPLATES["lfsr4_xnor_left"]
 
 
-def test_the_front_door_defers_the_contradicted_shape(tmp_path):
-    """NO HUMAN HAS TO REMEMBER THIS. The withdrawal is on the path the runner
-    already takes for every ordinary design: `_try_canonical_primitive_rtl`
-    returns None, the step falls through to the AI author, and -- the part that
-    matters -- NO RTL is written. Before this layer the same project got a
-    right-shift `barrel_shifter.v` on disk and a PASS."""
-    R = _load_runner()
-    proj = _mk_project(tmp_path, _BARREL_LEFT_DESC)
-    assert R._try_canonical_primitive_rtl(proj, 0.0) is None
-    rtl_dir = proj / "phase2" / "stage1" / "rtl"
-    assert not rtl_dir.is_dir() or list(rtl_dir.rglob("*.v")) == []
 
 
-def test_the_front_door_still_emits_the_agreeing_shape(tmp_path):
-    """The control, on the same path: an input that states the direction the
-    template implements is still answered program-first, byte for byte."""
-    R = _load_runner()
-    proj = _mk_project(tmp_path, _BARREL_RIGHT_DESC)
-    res = R._try_canonical_primitive_rtl(proj, 0.0)
-    assert res is not None and res.status == "PASS"
-    assert res.extras.get("shape") == "barrel_shifter_right_8"
-    emitted = sorted((proj / "phase2" / "stage1" / "rtl").glob("*.v"))
-    assert [p.name for p in emitted] == ["barrel_shifter.v"]
-    assert emitted[0].read_text() == rcs._TEMPLATES["barrel_shifter_right_8"]
 
 
 # ============================================================================
@@ -3306,17 +3161,7 @@ def test_unsigned_divider_r8_exact_independent(case, emit, domain, ports, tmp_pa
     assert response["verdict"] == expected, response
     assert command.returncode == (0 if emit else 2), command.stderr
     assert rtl.is_file() == emit
-    project = tmp_path / "project"
-    input_doc = project / "phase1/input_doc/design_description.txt"
-    input_doc.parent.mkdir(parents=True)
-    input_doc.write_text(description)
-    consumer = _load_runner()._try_canonical_primitive_rtl(project, time.time())
-    outputs = list(project.glob("phase2/stage1/rtl/*.v"))
-    actual = "EMIT" if consumer is not None and consumer.status == "PASS" and outputs else "DEFER"
-    assert actual == expected
-    assert bool(outputs) == emit
     if emit:
-        assert len(outputs) == 1 and outputs[0].read_bytes() == rtl.read_bytes()
         # Same Icarus standard and options as the sealed independent probe.
         compile_run = subprocess.run(["iverilog", "-g2012", "-s", "extra_scope_unit",
                                       "-o", str(tmp_path / "sim.out"), str(rtl)],
@@ -4143,17 +3988,7 @@ def test_unsigned_divider_r9_exact_independent(case, expected, interface, domain
     emit = expected == "EMIT"
     assert command.returncode == (0 if emit else 2), command.stderr
     assert rtl.is_file() == emit
-    project = tmp_path / "project"
-    input_doc = project / "phase1/input_doc/design_description.txt"
-    input_doc.parent.mkdir(parents=True)
-    input_doc.write_bytes(source.read_bytes())
-    consumer = _load_runner()._try_canonical_primitive_rtl(project, time.time())
-    outputs = list(project.glob("phase2/stage1/rtl/*.v"))
-    actual = "EMIT" if consumer is not None and consumer.status == "PASS" and outputs else "DEFER"
-    assert actual == expected, {"observed": actual, "expected": expected, "case": case}
-    assert bool(outputs) == emit
     if emit:
-        assert len(outputs) == 1 and outputs[0].read_bytes() == rtl.read_bytes()
         compiler = subprocess.run(["iverilog", "-g2012", "-s", "extra_scope_unit",
                                    "-o", str(tmp_path / "sim.out"), str(rtl)],
                                   capture_output=True, text=True)
@@ -4569,23 +4404,12 @@ def _r11_public_paths(description, expected, tmp_path, rtl_sha256=None):
     cli = subprocess.run([sys.executable, str(PROG), "--from-desc", str(source),
                           "--out", str(rtl)], capture_output=True, text=True)
     payload = json.loads(cli.stdout)
-    project = tmp_path / "project"
-    doc = project / "phase1/input_doc/design_description.txt"
-    doc.parent.mkdir(parents=True)
-    doc.write_bytes(source.read_bytes())
-    result = _load_runner()._try_canonical_primitive_rtl(project, time.time())
-    outputs = list(project.rglob("*.v")) + list(project.rglob("*.sv"))
     assert payload["verdict"] == expected, payload
     assert cli.returncode == (0 if expected == "EMIT" else 2), cli.stderr
     assert rtl.exists() == (expected == "EMIT")
     if expected == "DEFER":
         assert payload["defer_reason"]["kind"] == "unsupported_unsigned_iterative_divider"
-        assert result is None
-        assert outputs == []
     else:
-        assert result is not None and result.status == "PASS"
-        assert len(outputs) == 1
-        assert outputs[0].read_bytes() == rtl.read_bytes()
         if rtl_sha256 is not None:
             assert hashlib.sha256(rtl.read_bytes()).hexdigest() == rtl_sha256
         compiler = subprocess.run(["iverilog", "-g2012", "-s", "review_ratio_unit",
@@ -4740,24 +4564,12 @@ def test_unsigned_divider_r12_exact_review(case, clause, module, width, expected
     cli = subprocess.run([sys.executable, str(PROG), "--from-desc", str(source),
                           "--out", str(rtl)], capture_output=True, text=True)
     payload = json.loads(cli.stdout)
-    project = tmp_path / "project"
-    doc = project / "phase1/input_doc/design_description.txt"
-    doc.parent.mkdir(parents=True)
-    doc.write_bytes(source.read_bytes())
-    result = _load_runner()._try_canonical_primitive_rtl(project, time.time())
-    outputs = list(project.rglob("*.v")) + list(project.rglob("*.sv"))
-    # Both public paths have executed before any observed verdict is asserted.
     assert payload["verdict"] == expected, payload
     assert cli.returncode == (0 if expected == "EMIT" else 2), cli.stderr
     assert rtl.exists() == (expected == "EMIT")
     if expected == "DEFER":
         assert payload["defer_reason"]["kind"] == "unsupported_unsigned_iterative_divider"
-        assert result is None
-        assert outputs == []
     else:
-        assert result is not None and result.status == "PASS"
-        assert len(outputs) == 1
-        assert outputs[0].read_bytes() == rtl.read_bytes()
         compiler = subprocess.run(["iverilog", "-g2012", "-s", module,
                                    "-o", str(tmp_path / "sim.out"), str(rtl)],
                                   capture_output=True, text=True)

@@ -507,7 +507,7 @@ def emit_block_report(prompt_text: str, rtl: str,
                        f"({type(exc).__name__}): {exc}")
     import json as _json                                    # noqa: PLC0415
     import subprocess as _sp                                # noqa: PLC0415
-    import tempfile as _tf                                  # noqa: PLC0415
+    import vibeic_temp as _tf                                  # noqa: PLC0415
     with _tf.TemporaryDirectory() as td:
         tdp = Path(td)
         (tdp / "TopModule.sv").write_text(rtl)

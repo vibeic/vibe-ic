@@ -10,7 +10,7 @@ import math
 from pathlib import Path
 import re
 import subprocess
-import tempfile
+import vibeic_temp as tempfile
 
 import _container_exec as _ce
 
@@ -212,7 +212,7 @@ def main(argv=None):
             raise ValueError("GEOMETRY_ADMISSION_OUTPUT_OUTSIDE_PROJECT")
         serialized = (json.dumps(portable, indent=2, sort_keys=True) + "\n").encode("utf-8")
         output.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(dir=output.parent, delete=False) as staged:
+        with tempfile.atomic_file(dir=output.parent, delete=False) as staged:
             temporary = Path(staged.name)
             try:
                 staged.write(serialized)

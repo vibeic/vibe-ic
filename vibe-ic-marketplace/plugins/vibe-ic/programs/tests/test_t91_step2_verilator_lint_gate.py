@@ -14,6 +14,7 @@ import pytest
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
+import _progress_run as _pr
 contract = importlib.import_module('librelane_contract')
 hub = importlib.import_module('_rtl_include_hub')
 
@@ -213,12 +214,12 @@ def test_librelane_mode_lints_the_synthesis_file_set_and_blocks(tmp_path, monkey
 def test_tool_port_conformance_receives_the_native_declared_top(tmp_path, monkeypatch):
     project, _, _, tool = _design(tmp_path, 'librelane', MULTI, 0, 1)
     runner, step = _runner(monkeypatch, tool)
-    original = runner._pr.run
+    original = _pr.run
     captured = []
     def record(argv, **kwargs):
         captured.append(argv)
         return original(argv, **kwargs)
-    monkeypatch.setattr(runner._pr, 'run', record)
+    monkeypatch.setattr(_pr, 'run', record)
     row = step(project)
     command = next(argv for argv in captured
                    if any(str(part).endswith('spec_conformance_check.py') for part in argv))
@@ -339,7 +340,7 @@ def test_native_lint_failed_transport_is_not_a_design_pass(tmp_path, monkeypatch
             'status': 'NOT_MEASURED'})
         return SimpleNamespace(returncode=1, stdout='', stderr='native transport failed')
 
-    monkeypatch.setattr(runner._pr, 'run', failed_transport)
+    monkeypatch.setattr(_pr, 'run', failed_transport)
     row = runner.step_rtl_lint_tool(project, bounded_rtl=True)
     assert row.status == 'NOT_MEASURED', row.detail
     assert row.extras['completed'] is False

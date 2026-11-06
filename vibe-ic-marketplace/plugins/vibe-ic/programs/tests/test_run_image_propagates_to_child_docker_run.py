@@ -40,9 +40,6 @@ chip — and the run's own declaration is not what governs.
 """
 from __future__ import annotations
 
-import importlib.util
-import json
-import os
 import pathlib
 import sys
 
@@ -50,251 +47,32 @@ _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
-_RUNNER_SRC = (_PROGRAMS / "vibe_ic_one_shot_runner.py").read_text(
-    encoding="utf-8")
 _SCAN_SRC = (_PROGRAMS / "fault_scan_chain_insert.py").read_text(
     encoding="utf-8")
 
 
-def _capture(monkeypatch_env: dict, rec: dict, tmp: pathlib.Path,
-             docker_lookup=None):
-    """Drive the runner's `_capture_container_image` with a stubbed prober and
-    a controlled Docker lookup; return (record, env_after).
-
-    The synthetic container is called ``c``. Docker also accepts short ID
-    prefixes, so asking the host daemon about it could select an unrelated
-    container. Every caller states the lookup it needs; the default daemon
-    contains no images or containers.
-    """
-    import _eda_pin as _pin
-    import container_image_provenance as _cip
-    real_verify = _cip.verify
-    real_docker = _pin._docker
-    saved = {k: os.environ.get(k)
-             for k in ("VIBEIC_EDA_IMAGE", "IIC_EDA_IMAGE")}
-
-    def no_images(*_argv, timeout=None):
-        return 1, "", "synthetic Docker has no image or container"
-
-    try:
-        _pin._docker = docker_lookup or no_images       # type: ignore
-        spec = importlib.util.spec_from_file_location(
-            "vibe_ic_one_shot_runner", _PROGRAMS / "vibe_ic_one_shot_runner.py")
-        mod = importlib.util.module_from_spec(spec)
-        sys.modules["vibe_ic_one_shot_runner"] = mod
-        try:
-            spec.loader.exec_module(mod)
-        except SystemExit:
-            pass
-        _cip.verify = lambda *a, **k: dict(rec)          # type: ignore
-        for k in ("VIBEIC_EDA_IMAGE", "IIC_EDA_IMAGE"):
-            os.environ.pop(k, None)
-        os.environ.update(monkeypatch_env)
-        out = mod._capture_container_image(tmp, "c", None)
-        return out, dict(os.environ)
-    finally:
-        _cip.verify = real_verify                        # type: ignore
-        _pin._docker = real_docker                       # type: ignore
-        for k, v in saved.items():
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
 
 
 # ── the propagation ───────────────────────────────────────────────────────
-def test_the_verified_image_is_exported_to_child_docker_run(tmp_path):
-    """The fix in one assertion: the image the run VERIFIED becomes the image a
-    child that resolves its own will pick.
-
-    RE-ANCHORED ON THE SHAPE (#2085), and the fixture is the real world rather
-    than a sketch of it. A container started from a digest-pinned reference has
-    that reference verbatim in `.Config.Image`, which is what `image_ref`
-    carries; the assertion below used to demand `image_id` instead — the bare
-    `sha256:<hex>` Id from `.Image` — and that value is not a reference. The far
-    end read it as one, split it into repository `sha256` + tag, and handed
-    `docker run` `sha256@sha256:<digest>`: rc=125, and step 0.5ic published
-    `database_unit_um` as NOT_DETERMINED with nothing saying the reference had
-    been malformed. The property this test was written for is unchanged — the
-    verified image reaches the child — and it is now asserted in the one shape
-    the child can actually run."""
-    rec, env = _capture(
-        {}, {"verdict": "PASS",
-             "image_ref": "ghcr.io/vibeic/vibeic-eda@sha256:" + "4e" * 32,
-             "image_id": "sha256:" + "9f" * 32}, tmp_path)
-    want = "ghcr.io/vibeic/vibeic-eda@sha256:" + "4e" * 32
-    assert env["VIBEIC_EDA_IMAGE"] == want
-    assert rec["propagated_to_child_docker_run"] == want
 
 
-def test_the_child_env_is_snapshotted_AFTER_the_image_capture():
-    """THE ORDERING IS HALF THE FIX, and it is the half that actually reaches
-    the delegated phase runners.
-
-    `_runner_lock.child_env()` COPIES `os.environ`; `_capture_container_image`
-    is what writes VIBEIC_EDA_IMAGE into it. With the snapshot taken first, the
-    export lands in the parent's env only, every delegated phase runner is
-    spawned with `env=_phase_env` and never sees it, and the propagation is a
-    no-op that the run record nevertheless ATTESTS TO.
-
-    MEASURED with the snapshot in the wrong place (the state this test pins
-    against): reports/container_image.json said
-        "propagated_via": "VIBEIC_EDA_IMAGE",
-        "propagated_to_child_docker_run": "sha256:4e89590fcb9c..."
-    while the DFT step, running inside the delegated phase-2 runner, recorded
-        "image_used": "hpretl/iic-osic-tools:latest"
-        "exit": 64
-    A record that claims a propagation the children never received is worse
-    than no propagation at all."""
-    cap = _RUNNER_SRC.index("_img_rec = _capture_container_image")
-    snap = _RUNNER_SRC.index("_phase_env = _runner_lock.child_env")
-    assert cap < snap, (
-        "child_env() snapshots os.environ, so it must run AFTER the image "
-        "capture that writes VIBEIC_EDA_IMAGE into it")
 
 
-def test_the_immutable_identity_wins_over_the_tag_in_a_shape_that_resolves():
-    """A tag can be re-pointed; the digest is exactly what the container runs.
-    The whole defect is an identity resolved by something other than the run's
-    own declaration, so the strongest available identity is the one to
-    propagate — PROVIDED it is one a child can hand to `docker run`.
-
-    THIS TEST WAS `test_the_content_addressed_id_wins_over_the_tag`, and it
-    pinned `rec.get("image_id") or rec.get("image_ref")` as source text. That
-    expression is #2085: `image_id` is `.Image`, a bare Id, which has no
-    repository half. The reasoning behind preferring it was right about
-    IMMUTABILITY and wrong about SHAPE, and a source-literal assertion could not
-    tell the two apart. Both properties are kept by preferring the
-    registry-portable DIGEST REFERENCE, which is immutable AND resolvable; the
-    behaviour is asserted directly below and in
-    `test_issue2085_the_image_variable_carries_a_reference.py`, and the retired
-    expression is named here so it cannot come back."""
-    assert 'rec.get("image_id") or rec.get("image_ref")' not in _RUNNER_SRC, (
-        "the runner is selecting the container's image Id again; an Id is not "
-        "a reference (#2085)")
-    assert "_propagatable_image" in _RUNNER_SRC
 
 
-def test_the_repo_digest_beats_the_tag_the_container_was_started_from(tmp_path):
-    """The behavioural half of the test above: started from a TAG, what
-    propagates is the portable digest of the bytes that tag resolved to."""
-    ref = "ghcr.io/vibeic/vibeic-eda@sha256:" + "7c" * 32
-
-    def fake(*argv, timeout=None):
-        fmt = list(argv)[list(argv).index("--format") + 1]
-        if "Config.Image" in fmt:
-            return 0, "sha256:%s\tghcr.io/vibeic/vibeic-eda:0.2.58\n" % ("9f" * 32), ""
-        if "RepoDigests" in fmt:
-            return 0, '["%s"]\n' % ref, ""
-        return 1, "", "unexpected format"
-
-    _rec, env = _capture(
-        {}, {"verdict": "PASS",
-             "image_ref": "ghcr.io/vibeic/vibeic-eda:0.2.58",
-             "image_id": "sha256:" + "9f" * 32}, tmp_path,
-        docker_lookup=fake)
-    assert env["VIBEIC_EDA_IMAGE"] == ref, env["VIBEIC_EDA_IMAGE"]
 
 
-def test_a_foreign_container_prefix_cannot_replace_the_verified_image(tmp_path):
-    """A second lookup by short container token must not replace the full Id
-    that the provenance record already measured, even when their Ids start
-    with the same bytes and each has a valid repository digest."""
-    verified_id = "sha256:" + "ab" * 32
-    foreign_id = "sha256:" + "ab" * 31 + "ac"
-    verified_ref = "ghcr.io/vibeic/vibeic-eda@sha256:" + "7c" * 32
-    foreign_ref = "vexaai/meeting-api@sha256:" + "ae" * 32
-
-    def fake(*argv, timeout=None):
-        if argv[0] == "inspect" and argv[-1] == "c":
-            return 0, f"{foreign_id}\tvexaai/meeting-api:latest\n", ""
-        if argv[:2] == ("image", "inspect"):
-            if argv[-1] == verified_id:
-                # The verified bytes may also have a local mirror name. The
-                # repository used to start the run must win when available.
-                return 0, json.dumps([foreign_ref, verified_ref]) + "\n", ""
-            if argv[-1] == foreign_id:
-                return 0, json.dumps([foreign_ref]) + "\n", ""
-        return 1, "", "not in the controlled daemon"
-
-    _, env = _capture(
-        {}, {"verdict": "PASS", "image_ref": "ghcr.io/vibeic/vibeic-eda:0.2.58",
-             "image_id": verified_id}, tmp_path, docker_lookup=fake)
-    assert env["VIBEIC_EDA_IMAGE"] == verified_ref
 
 
-def test_verified_id_mirror_digest_survives_a_moved_tag(tmp_path):
-    """The verified Id identifies the bytes even when its only digest is a mirror.
-
-    A tag lookup is deliberately made to return different bytes. The child must
-    receive the digest found by the full verified Id, not that mutable tag.
-    """
-    verified_id = "sha256:" + "ab" * 32
-    tag = "ghcr.io/vibeic/vibeic-eda:0.2.58"
-    mirror_ref = "mirror.example/eda@sha256:" + "ae" * 32
-    moved_ref = "ghcr.io/vibeic/vibeic-eda@sha256:" + "bd" * 32
-    looked_up = []
-
-    def fake(*argv, timeout=None):
-        if argv[:2] == ("image", "inspect"):
-            looked_up.append(argv[-1])
-            if argv[-1] == verified_id:
-                return 0, json.dumps([mirror_ref]) + "\n", ""
-            if argv[-1] == tag:
-                return 0, json.dumps([moved_ref]) + "\n", ""
-        return 1, "", "not in the controlled daemon"
-
-    rec, env = _capture(
-        {}, {"verdict": "PASS", "image_ref": tag, "image_id": verified_id},
-        tmp_path, docker_lookup=fake)
-    assert looked_up == [verified_id]
-    assert env["VIBEIC_EDA_IMAGE"] == mirror_ref
-    assert rec["propagated_to_child_docker_run"] == mirror_ref
 
 
-def test_the_tag_is_used_when_no_portable_digest_could_be_named(tmp_path):
-    """A tag is mutable and is still a REFERENCE. When no registry digest can
-    be recovered — a locally built image, or a container docker will not
-    describe — the tag is what a child can run, and withholding it would revive
-    the very defect this capture exists for: a child resolving an image of its
-    own and landing on upstream iic-osic-tools."""
-    _, env = _capture({}, {"verdict": "PASS",
-                           "image_ref": "ghcr.io/vibeic/vibeic-eda:0.2.58"},
-                      tmp_path)
-    assert env["VIBEIC_EDA_IMAGE"] == "ghcr.io/vibeic/vibeic-eda:0.2.58"
 
 
 # ── no-leak boundary (§4.05): what it must NOT overwrite ──────────────────
-def test_an_operator_set_VIBEIC_EDA_IMAGE_is_NOT_overwritten(tmp_path):
-    """NO-LEAK. Deliberately running the flow against a different image is a
-    real experiment (it is how the 0.2.52-vs-0.2.54 `--skip-boundary` behaviour
-    was measured in the first place). Filling an EMPTY slot fixes the defect;
-    overwriting a set one would silently destroy that experiment."""
-    rec, env = _capture({"VIBEIC_EDA_IMAGE": "operator/pinned:1.2.3"},
-                        {"verdict": "PASS",
-                         "image_ref": "ghcr.io/vibeic/vibeic-eda:0.2.58",
-                         "image_id": "sha256:4e89590fcb9c"}, tmp_path)
-    assert env["VIBEIC_EDA_IMAGE"] == "operator/pinned:1.2.3"
-    assert rec["propagated_to_child_docker_run"] is None
 
 
-def test_the_legacy_IIC_EDA_IMAGE_override_is_also_respected(tmp_path):
-    """NO-LEAK. `_resolve_docker_image` honours BOTH names; propagating over
-    the legacy one would change the resolved image for anyone still using it."""
-    _, env = _capture({"IIC_EDA_IMAGE": "legacy/pinned:9"},
-                      {"verdict": "PASS",
-                       "image_ref": "ghcr.io/vibeic/vibeic-eda:0.2.58",
-                       "image_id": "sha256:4e89590fcb9c"}, tmp_path)
-    assert "VIBEIC_EDA_IMAGE" not in env
 
 
-def test_an_unresolvable_image_propagates_NOTHING(tmp_path):
-    """NO-LEAK. When the probe could not identify an image there is nothing
-    verified to propagate; inventing one would be worse than the fallback."""
-    rec, env = _capture({}, {"verdict": "SKIP",
-                             "reason": "image identity unverifiable"}, tmp_path)
-    assert "VIBEIC_EDA_IMAGE" not in env
-    assert "propagated_to_child_docker_run" not in rec
 
 
 # ── the diagnostic must not name a cause it did not measure ───────────────

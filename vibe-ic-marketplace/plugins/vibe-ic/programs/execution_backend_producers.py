@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import re
 import shutil
-import tempfile
+import vibeic_temp as tempfile
 import time
 
 from _atomic_artefact import write_json

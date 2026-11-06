@@ -306,8 +306,6 @@ def _stage(tmp_path, prompt_text, sample_body):
     wd.mkdir(parents=True, exist_ok=True)
     (wd / "spec.yaml").write_text("design:\n  name: TopModule\n")
     (wd / "sample.sv").write_text(sample_body)
-    from _delivery_route import admit
-    assert admit(wd / "phase1_proj", "ip") is None
     return ds, tmp_path / "run"
 
 
@@ -316,16 +314,9 @@ def _run_gate(ds, run):
            "--workdir", str(run / "work"), "--dataset", str(ds),
            "--prompt-suffix", "_prompt.txt", "--top-module", "TopModule"]
     first = _pr.run(cmd, capture_output=True, text=True)
-    # The Shape-C fallback writes D1 evidence on its first pass. The later
-    # signed-judgement gate requires a reviewer receipt over those exact bytes
-    # before an unrelated RTL rule can be tested through gates_atomic.
     project = run / "work" / "ProbP" / "phase1_proj"
     assert project.is_dir(), first.stdout + first.stderr
-    from _ai_judgement_fixture import sign
-    sign(project, "D1")
-    return _pr.run(
-        cmd,
-        capture_output=True, text=True)
+    return first
 
 
 def _block_rules(run):

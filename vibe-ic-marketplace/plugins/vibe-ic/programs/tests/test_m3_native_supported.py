@@ -164,9 +164,7 @@ def current_interface_project(project, monkeypatch):
     """
     import hashlib
     import analog_a7_post_layout_emit as a7
-    import mixed_signal_top_lvs_run as merge
     import mixed_signal_power_domain_run as power
-    import librelane_contract as lc
     def put(rel, text):
         path = project / rel
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -219,7 +217,6 @@ endmodule
     for name in ("state_out.json", "input_fingerprint.json", "pdk_root.json"):
         write(step / name, {"scope": "SOURCE_CONTROL"})
     (step / "invocation.log").write_text("SOURCE_CONTROL, not native extraction proof\n")
-    monkeypatch.setattr(lc, "validate_step_receipt", lambda folder, sid: {"sha256": {"receiver.spice": sha(extracted)}})
     record = {"producer": "analog_a7_post_layout_emit", "schema": 1, "block": "receiver", "step": "A7",
         "result": "PRODUCED", "layout_path": str(layout.relative_to(project)), "layout_sha256": sha(layout),
         "layout_netlist_identity": {"state": "MATCH"}, "pdk": "neutral", "pdk_root": str(project / "input/pdk"),
@@ -233,15 +230,10 @@ endmodule
     macro_v = put("phase3/analog/hardmacro/receiver/receiver.v", "module receiver(inout drive,sense); endmodule\n")
     for suffix, text in ((".gds", layout.read_text()), (".lib", lib.read_text()), (".lef", "SOURCE_CONTROL abstract\n")):
         put("phase3/analog/hardmacro/receiver/receiver" + suffix, text)
-    write(macro / "a8_views_provenance.json", {"producer": "analog_a8_hardmacro_emit", "schema": merge._A8_MANIFEST_SCHEMA,
-        "block": "receiver", "source_gds": record["layout_path"], "source_gds_sha256": record["layout_sha256"],
-        "views": {suffix: {"path": str((macro / ("receiver" + suffix)).relative_to(project)), "sha256": sha(macro / ("receiver" + suffix))}
-                  for suffix in (".gds", ".v", ".lib", ".lef")}})
     put("phase3/mixed_signal/top_merged.gds", "SOURCE_CONTROL M1 merge\n")
     write(project / "phase3/mixed_signal/m1_merge_receipt.json", {"scope": "SOURCE_CONTROL"})
     report = project / "reports/analog/mixed_signal"
     write(report / "top_lvs.json", {"verdict": "PASS", "scope": "SOURCE_CONTROL"})
-    monkeypatch.setattr(merge, "validate_current_receipt", lambda p, result: None if result["scope"] == "SOURCE_CONTROL" else "unsupported")
     write(report / "power_domain_run.json", {"scope": "SOURCE_CONTROL"})
     monkeypatch.setattr(power, "verify", lambda p: read(p / "reports/analog/mixed_signal/power_domain_run.json"))
     write(report / "power_domain_tool/netlist.json", {"modules": {"bridge_top": {

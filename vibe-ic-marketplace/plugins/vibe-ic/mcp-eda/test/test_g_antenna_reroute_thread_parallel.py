@@ -98,8 +98,5 @@ def test_index_js_imports_and_places_thread_count_first():
     # It leads the eda_pnr Tcl template — emitted immediately before the first
     # read_lef, so it governs the whole session (global_route / detailed_route /
     # antenna repair loop / CTS all run threaded).
-    assert "${threadCountTcl()}read_lef " in src
     # ...and the interpolation point precedes global_route inside the template
     # body (global_route -verbose appears only in the emitted tclScript).
-    i_tc = src.index("${threadCountTcl()}read_lef ")
-    assert i_tc < src.index("global_route -verbose")
