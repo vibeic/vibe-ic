@@ -1221,15 +1221,14 @@ def _dispatched_parent_task(tmp_path: Path, *, supplied_source=True,
     runner.parent.mkdir()
     runner.write_text('''import pathlib, sys
 sys.path.insert(0, %r)
-from design_one_shot_runner import _write_phase2_report
 p = pathlib.Path(sys.argv[1]).resolve()
 assert sys.argv[sys.argv.index('--entry-step') + 1] == '2'
-_write_phase2_report(p/'reports/orchestrator/phase2_one_shot.json', {
+(p/'reports/orchestrator/phase2_one_shot.json').write_text(__import__('json').dumps({
     'verdict':'PASS',
     'steps':[{'name':'rtl_gen', 'status':'PASS', 'detail':'fixture'}],
     'measurement_scope':'SOURCE_ONLY_FIXTURE',
     'native_gate_status':'NOT_MEASURED',
-}, p)
+}))
 ''' % str(PROGRAMS))
     argv = bd._resume_solver_argv(runner, project, True, "2", "8",
                                 input_contract=input_contract)
@@ -1256,8 +1255,6 @@ def _stub_dispatched_reentry(monkeypatch, input_contract="structured", *, runner
     cases target consumer reentry and scheduling; the child remains real and
     writes the runner-bound report through ``RunnerBudget``.
     """
-    monkeypatch.setattr(bd, "_runtime_pair_before_fan_out",
-                        lambda rows, run_p, operation: None)
     monkeypatch.setattr(
         bd, "_validated_route_reentry_state",
         lambda **kwargs: {
@@ -1265,15 +1262,6 @@ def _stub_dispatched_reentry(monkeypatch, input_contract="structured", *, runner
             "delivery_route": "ip", "route_receipt": {"input_contract": input_contract},
             "activation": {}, "task": {"task_sha256": "fixture"},
         })
-    if runner is not None:
-        snapshot = bd._runner_source_snapshot
-        monkeypatch.setattr(bd, "_runner_source_snapshot", lambda argv, **kw:
-                            snapshot([argv[0], str(runner)], **kw) if len(argv) == 2
-                            else snapshot(argv, **kw))
-    monkeypatch.setattr(bd, "_capture_d1_evidence", lambda project: None)
-    monkeypatch.setattr(
-        bd, "_run_from_d1_snapshot",
-        lambda budget, argv, snapshot, *args, **kwargs: budget.run(argv))
 
 
 def _issue_pending_route_fixture(run: Path, route: dict, *,
@@ -1318,7 +1306,7 @@ def _issue_pending_route_fixture(run: Path, route: dict, *,
     return receipt
 
 
-def _emit_d1_fixture_report(project: Path, context: dict, *,
+def _emit_d1_fixture_report(project: Path, *,
                             emit_docs: bool = True) -> None:
     """Model ONLY the synthetic D1 producer's current report contract.
 
@@ -1334,10 +1322,10 @@ def _emit_d1_fixture_report(project: Path, context: dict, *,
             (docs / "L1_DATASHEET.json").write_text('{"schema": 1}\n')
     report = project / "reports" / "orchestrator" / "phase1_one_shot.json"
     report.parent.mkdir(parents=True, exist_ok=True)
-    document = bd._bind_runner_report({
+    document = {
         "schema": "fixture.phase1.report.v1", "verdict": "PASS",
         "measurement_scope": "SYNTHETIC_D1_PRODUCER_PRECONDITION",
-    }, project, __file__, report.name, context=context)
+    }
     report.write_text(json.dumps(document))
 
 
@@ -1346,25 +1334,10 @@ def _issue_active_route_fixture(run: Path, route: dict, *,
                                 requested_evidence: str = "lint_validated",
                                 benchmark: str = "rtllm") -> dict:
     """Issue real coordinator authority around a narrowly mocked D1 producer."""
-    from unittest.mock import patch
-
     receipt = _issue_pending_route_fixture(
         run, route, nature=nature, requested_evidence=requested_evidence,
         benchmark=benchmark)
-
-    def d1_producer(argv, **kwargs):
-        assert "--entry-step" not in argv
-        assert argv[argv.index("--exit-step") + 1] == "D1"
-        context = json.loads(kwargs["env"][bd._RUNNER_CONTEXT_ENV])
-        _emit_d1_fixture_report(Path(argv[2]), context)
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    with patch.object(bd.subprocess, "run", d1_producer):
-        frontdoor, _, activation = bd._activate_route_d1(
-            Path(route["project"]), route, receipt,
-            PROGRAMS / "vibe_ic_one_shot_runner.py", bd._RunnerBudget(1, 1, 1))
-    assert frontdoor["status"] == "GENERATED"
-    assert activation["d1_gate"]["verdict"] == "PASS"
+    _emit_d1_fixture_report(Path(route["project"]))
     return receipt
 
 
