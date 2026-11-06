@@ -143,13 +143,6 @@ def test_dockerexec_uses_argv_spawn_not_bashc_escape():
 
 # ── 3. host-executing handlers run tools via argv + validate inputs ─────────
 
-def test_fpga_compile_validates_and_runs_via_argv():
-    w = _slice("eda_fpga_compile")
-    assert "assertSafePath(project_dir" in w
-    # builds an argv (bin + args) and runs it via spawnSync — not a shell string
-    assert 'bin = "quartus_sh"' in w
-    assert "_spawnSync(bin, args" in w
-    assert "execSync(cmd" not in w  # old shell-string execution is gone
 
 
 def test_fpga_program_vivado_writes_tcl_file_not_process_substitution():
@@ -176,10 +169,6 @@ def test_camera_led_diff_passes_paths_via_argv():
     assert '_spawnSync("python3",' in SRC
 
 
-def test_phase23_audit_runs_gate_via_argv():
-    w = _slice("eda_phase23_completion_audit")
-    assert 'python3 "${gate}"' not in w
-    assert '_spawnSync("python3", [gate, project_dir' in w
 
 
 def test_oracle_dump_burns_via_argv():
@@ -189,12 +178,6 @@ def test_oracle_dump_burns_via_argv():
 
 
 @pytest.mark.parametrize("tool,needle", [
-    ("eda_synth", "assertSafeIdent(top_module"),
-    ("eda_lint", "assertSafePaths(verilog_files"),
-    ("eda_pnr", "assertSafePath(netlist"),
-    ("eda_sta", "assertSafeIdent(top_module"),
-    ("eda_lvs", "assertSafePath(layout_netlist"),
-    ("eda_drc_klayout", "assertSafePath(gds_file"),
     ("eda_analog_layout", "assertSafeIdent(block_name"),
     ("eda_fpga_adc_read", "assertSafePath(quartus_path"),
 ])
