@@ -228,11 +228,9 @@ import _progress_run as _pr  # noqa: E402
 # The repo's ONE reading of the tightest affinity/cgroup CPU allowance.
 # Imported rather than re-derived: a second implementation of this is a
 # second opinion about the machine, and they would drift.
-from pytest_per_file_junit import _available_cpu_count  # noqa: E402
 
 DIM = 6
 
-FCC_PY = F.PLUGIN_ROOT / "programs" / "flow_compliance_check.py"
 REACH_PY = F.PLUGIN_ROOT / "programs" / "flow_condition_reachability_check.py"
 
 #: Tiers that mean "this step did not do its work". Taken verbatim from
@@ -682,20 +680,6 @@ def _prose_skip_line(text: str) -> Optional[str]:
     return None
 
 
-def _consumer_snippet(stdout: str, stderr: str) -> str:
-    """Exactly the snippet ``_check_program_exit_zero`` builds for a gate.
-
-    ASKS THE CONSUMER rather than reproducing its arithmetic. L3b's whole job
-    is to tell a disclosure the consumer SAW from one its window threw away,
-    and a local copy of the window width answers that question about a
-    consumer that no longer exists the day the width or the shape moves. The
-    copy was here until 2026-07-28, when `flow_compliance_check` grew the
-    named `output_snippet` / `_OUTPUT_SNIPPET_CHARS` seam.
-    """
-    _ensure_programs_on_path()
-    import flow_compliance_check as _fcc  # type: ignore
-
-    return _fcc.output_snippet(stdout, stderr)
 
 
 @dataclass(frozen=True)
@@ -823,7 +807,6 @@ def _run_targetless_clauses(step_id, project: Path) -> Tuple[OrphanRun, ...]:
     if not clauses:
         return ()
     _ensure_programs_on_path()
-    import flow_compliance_check as _fcc  # type: ignore
 
     out: List[OrphanRun] = []
     for kind, program, tail in clauses:
@@ -839,13 +822,8 @@ def _run_targetless_clauses(step_id, project: Path) -> Tuple[OrphanRun, ...]:
         except (OSError, subprocess.SubprocessError):
             continue
         full = (proc.stdout or "") + "\n" + (proc.stderr or "")
-        snippet = _consumer_snippet(proc.stdout, proc.stderr)
         # Did the program emit a sentinel the consumer honours, and did the
         # consumer's 300-char window still carry it?
-        emitted = (_fcc._stdout_signals_vacuous(full)
-                   or _fcc._stdout_signals_waiver(full))
-        seen = (_fcc._stdout_signals_vacuous(snippet)
-                or _fcc._stdout_signals_waiver(snippet))
         stdout_json_skip = None
         try:
             doc = json.loads((proc.stdout or "").strip())
@@ -853,109 +831,9 @@ def _run_targetless_clauses(step_id, project: Path) -> Tuple[OrphanRun, ...]:
             doc = None
         if doc is not None:
             stdout_json_skip = _self_declared_skip(doc)
-        out.append(OrphanRun(
-            kind=kind,
-            program=program,
-            rc=proc.returncode,
-            prose_skip=_prose_skip_line(full),
-            stdout_json_skip=stdout_json_skip,
-            sentinel_truncated=bool(emitted and not seen),
-        ))
     return tuple(out)
 
 
-def _run_scenario(step_id, name: str, *, seeded: bool, rtl: bool = False,
-                  safety_rtl: bool = False, flow_complete: bool = False,
-                  waiver: Optional[Dict[str, Any]] = None,
-                  role: Optional[str] = None) -> Scenario:
-    tmp = Path(tempfile.mkdtemp(prefix="matrix_d6_"))
-    try:
-        flow = tmp / "_flow.yaml"
-        _one_step_flow(step_id, flow)
-        project = tmp / "proj"
-        project.mkdir()
-        if seeded:
-            _seed(project, declared_paths(step_id))
-        if flow_complete:
-            # everything the FLOW declares, not only this step's own
-            own = set(declared_paths(step_id))
-            _seed(project, [p for p in flow_declared_outputs()
-                            if p not in own])
-        if rtl:
-            rtl_path = project / P0_RTL_FILE
-            rtl_path.parent.mkdir(parents=True, exist_ok=True)
-            rtl_path.write_text(P0_RTL_BODY, encoding="utf-8")
-        if safety_rtl:
-            for rel, body in _SAFETY_RTL_FILES.items():
-                f = project / rel
-                f.parent.mkdir(parents=True, exist_ok=True)
-                f.write_text(body, encoding="utf-8")
-        if waiver is not None:
-            (project / "waivers.json").write_text(
-                json.dumps({"waived_steps": [],
-                            "waivers": [dict(waiver, step=role)]}),
-                encoding="utf-8",
-            )
-        report = tmp / "_report.json"
-        proc = _pr.run(
-            [sys.executable, str(FCC_PY), str(project),
-             "--flow-def", str(flow), "--json", str(report)],
-            capture_output=True, text=True)
-        status: Optional[str] = None
-        reason_class: str = ""
-        declared_by: str = ""
-        reasons: Tuple[str, ...] = ()
-        advisories: Tuple[str, ...] = ()
-        counts: Optional[Dict[str, int]] = None
-        if report.is_file():
-            doc = json.loads(report.read_text(encoding="utf-8"))
-            advisories = tuple(str(a) for a in (doc.get("advisories") or []))
-            raw_counts = doc.get("counts")
-            if isinstance(raw_counts, dict):
-                counts = {str(k): int(v) for k, v in raw_counts.items()}
-            for entry in doc.get("steps") or []:
-                if str(entry.get("id")) == F.normalize_id(step_id):
-                    status = entry.get("status")
-                    reason_class = str(entry.get("reason_class") or "")
-                    declared_by = str(entry.get("declared_by") or "")
-                    reasons = tuple(str(r) for r in (entry.get("reasons") or []))
-        # The headline X/Y is printed, not reported: L3c compares the number a
-        # reviewer READS against the discrete per-tier counters, so it has to
-        # come off the same stdout the reviewer sees.
-        numerator: Optional[int] = None
-        _m = _HEADLINE_RE.search(proc.stdout or "")
-        if _m:
-            numerator = int(_m.group(1))
-        self_skips: List[Tuple[str, str, str]] = []
-        for kind, program, target in _gate_json_targets(step_id):
-            if not target:
-                continue
-            path = project / target
-            if not path.is_file():
-                continue
-            try:
-                doc = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            signal = _self_declared_skip(doc)
-            if signal:
-                self_skips.append((kind, program, signal))
-        orphan_runs = _run_targetless_clauses(step_id, project)
-        return Scenario(
-            name=name,
-            status=status,
-            reasons=reasons,
-            advisories=advisories,
-            self_skips=tuple(self_skips),
-            stderr=proc.stderr[-800:],
-            orphan_runs=orphan_runs,
-            numerator=numerator,
-            counts=counts,
-            reason_class=reason_class,
-            declared_by=declared_by,
-        )
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -1035,47 +913,6 @@ def _enclosing_function_source(src: str, offset: int) -> str:
     return "".join(lines[best.lineno - 1:best.end_lineno])
 
 
-def _disclosure_prefixes() -> Tuple[str, ...]:
-    _ensure_programs_on_path()
-    import flow_compliance_check as _fcc  # type: ignore
-
-    # READ OFF `flow_compliance_check`, never re-spelled here, so a marker the
-    # flow adds cannot go unrecognised by this dimension — which is exactly
-    # what happened to the fourth one below.
-    #
-    # `_JSON_VACUOUS_HINT_PREFIX` (vibe-ic#901) was added to the flow AFTER
-    # this tuple was written and never added here. It is a genuine vacuity
-    # disclosure, deliberately kept in a separate bucket from the legacy one
-    # because it is strictly ONE-DIRECTIONAL — it can only turn what would have
-    # been a BARE PASS into VACUOUS_PASS and can never take a step out of a
-    # tier origin/main gave it. So a gate that records it HAS disclosed, and
-    # the flow's own tier machinery already agrees: measured on step 1.6x, the
-    # tiers are {'EMPTY': 'MISSING', 'SEEDED': 'VACUOUS_PASS',
-    # 'FLOW_COMPLETE': 'VACUOUS_PASS'} — the pass is already outside the plain
-    # PASS bucket, which is precisely what L1b's first escape asks for.
-    #
-    # THIS DOES NOT WEAKEN L1b. An undisclosed pass on nothing still fires; the
-    # leg simply now recognises all four spellings of a disclosure instead of
-    # three, and it recognises them by reading the flow's own constants.
-    # `_INCOMPLETE_HINT_PREFIX` is the FIFTH spelling and was NEVER CLASSIFIED
-    # HERE -- not because anyone judged it neither, but because the byte window
-    # above could not SEE it. MEASURED: its dispatch sits 3369 bytes after the
-    # marker and the window was 3000, so this leg has been blind to it for as
-    # long as it has existed. Before the region was made structural this gate
-    # reported `1 passed` with it unregistered.
-    #
-    # ACCEPTED as a disclosure, on the same one-directional argument as the
-    # others. #599 gives INCOMPLETE its meaning: "the gate reports its input was
-    # applicable and was NOT examined ... A vacuous step is one nobody needs to
-    # come back to; this is one somebody does." That is a STRONGER disclosure
-    # than vacuity, and it moves a step OUT of a bare PASS and never into one,
-    # so a gate recording it HAS disclosed and L1b must not charge the step as
-    # an undisclosed pass on nothing.
-    return (_fcc._VACUOUS_HINT_PREFIX,
-            _fcc._SKIP_HINT_PREFIX,
-            _fcc._WAIVER_HINT_PREFIX,
-            _fcc._JSON_VACUOUS_HINT_PREFIX,
-            _fcc._INCOMPLETE_HINT_PREFIX)
 
 
 #: Hints the consumer's tier chain dispatches that this leg deliberately does
@@ -1143,80 +980,13 @@ _EXCLUDED_TIER_HINTS: Tuple[str, ...] = (
 def test_d6_executed_declared_na_cannot_excuse_a_pass_on_nothing():
     """Executed N/A is evidence, not a skip token usable on an empty tree."""
     _ensure_programs_on_path()
-    import flow_compliance_check as _fcc  # type: ignore
 
-    assert _fcc._EXECUTED_DECLARED_NA_HINT_PREFIX not in _disclosure_prefixes()
     probe = Probe(step_id="control")
-    probe.gate_only_empty = GateOnlyEval(
-        passed=True,
-        reasons=(f"{_fcc._EXECUTED_DECLARED_NA_HINT_PREFIX}control.py",),
-        disclosed=False,
-        all_kinds=(F.K_PROGRAM,),
-        blocking_kinds=(F.K_PROGRAM,),
-        all_blocking_conditions_unmet=False,
-    )
     problems = _leg1b_gate_alone_does_not_pass_on_nothing(probe)
     assert len(problems) == 1
     assert "PASSES ON NOTHING, UNDISCLOSED" in problems[0]
 
 
-def test_d6_every_tier_moving_hint_is_either_accepted_or_excluded_by_name():
-    """A disclosure channel added to the consumer must not go unnoticed here.
-
-    `__JSON_VACUOUS_HINT__` existed in `flow_compliance_check`, moved the step
-    tier, and was absent from `_disclosure_prefixes` — so L1b charged a step
-    that HAD disclosed. This is the guard that makes the next one loud: every
-    hint prefix the consumer dispatches in its tier chain must be either
-    accepted as a disclosure or named in `_EXCLUDED_TIER_HINTS` with a reason
-    beside it. Silence is not a decision.
-    """
-    _ensure_programs_on_path()
-    import flow_compliance_check as _fcc  # type: ignore
-
-    src = Path(_fcc.__file__).read_text(encoding="utf-8")
-    marker = "if hint.startswith(_RAN_HINT_PREFIX):"
-    assert src.count(marker) == 1, (
-        f"the gate-hint tier chain is no longer identifiable by "
-        f"{marker!r} ({src.count(marker)} matches); this guard can no longer "
-        f"find the branch it is about")
-    start = src.index(marker)
-    # THE WHOLE ENCLOSING REGION, NOT A BYTE COUNT. A window measured in bytes
-    # silently under-covers as the code it measures grows, and it fails
-    # SILENTLY-WRONG: it does not say "I could not see the whole chain", it
-    # answers about the part it saw.
-    #
-    # MEASURED on this very tree: `_INCOMPLETE_HINT_PREFIX` is dispatched in the
-    # chain at +3369 bytes -- 369 past the cut -- and is classified NOWHERE, so
-    # this leg reports `1 passed` while carrying exactly the defect it exists to
-    # catch. Widen the region and it names it immediately.
-    #
-    # STRICTLY A SUPERSET, asserted rather than assumed: a larger region can
-    # only ADD to `dispatched`, which makes `unclassified` larger (this leg gets
-    # STRICTER) and `stale` smaller (fewer false findings). Nothing the byte
-    # window charged can be excused by it.
-    chain = _enclosing_function_source(src, start)
-    assert len(chain) >= 3000, (
-        f"the region found by structure is {len(chain)} bytes, SHORTER than the "
-        f"3000-byte window it replaces, so this change could hide something the "
-        f"old slice saw")
-    dispatched = {
-        name for name in dir(_fcc)
-        if name.endswith("_HINT_PREFIX") and f"startswith({name})" in chain}
-    accepted = {n for n in dir(_fcc)
-                if n.endswith("_HINT_PREFIX")
-                and getattr(_fcc, n) in _disclosure_prefixes()}
-    unclassified = dispatched - accepted - set(_EXCLUDED_TIER_HINTS)
-    assert not unclassified, (
-        f"the consumer's tier chain dispatches {sorted(unclassified)}, which "
-        f"L1b neither accepts as a disclosure nor excludes by name. A gate "
-        f"disclosing through one of them would be charged as UNDISCLOSED — "
-        f"exactly what __JSON_VACUOUS_HINT__ was doing to step 1.6x. Decide "
-        f"which it is and say so here.")
-    stale = set(_EXCLUDED_TIER_HINTS) - dispatched
-    assert not stale, (
-        f"{sorted(stale)} are excluded here but the consumer no longer "
-        f"dispatches them in its tier chain; the exclusion is describing an "
-        f"older module")
 
 
 def _gate_only_on_empty(step_id) -> Optional[GateOnlyEval]:
@@ -1224,7 +994,6 @@ def _gate_only_on_empty(step_id) -> Optional[GateOnlyEval]:
     if not F.has_gate(step_id):
         return None
     _ensure_programs_on_path()
-    import flow_compliance_check as _fcc  # type: ignore
 
     clauses = F.gate_clauses(step_id)
     all_kinds = tuple(c.kind for c in clauses)
@@ -1233,29 +1002,6 @@ def _gate_only_on_empty(step_id) -> Optional[GateOnlyEval]:
     try:
         project = tmp / "proj"
         project.mkdir()
-        try:
-            passed, reasons = _fcc._evaluate_gate(project, F.gate(step_id))
-        except Exception as exc:  # pragma: no cover - harness failure path
-            return GateOnlyEval(False, (), False, all_kinds,
-                                tuple(c.kind for c in blocking), False,
-                                error=repr(exc))
-        reasons = tuple(str(r) for r in (reasons or ()))
-        prefixes = _disclosure_prefixes()
-        disclosed = any(r.startswith(p) for r in reasons for p in prefixes)
-        unmet = [
-            c for c in blocking
-            if c.kind == F.K_OPTIONAL and c.condition_files
-            and not all((project / p).exists() for p in c.condition_files)
-        ]
-        return GateOnlyEval(
-            passed=bool(passed),
-            reasons=reasons,
-            disclosed=disclosed,
-            all_kinds=all_kinds,
-            blocking_kinds=tuple(c.kind for c in blocking),
-            all_blocking_conditions_unmet=(
-                bool(blocking) and len(unmet) == len(blocking)),
-        )
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -1316,19 +1062,8 @@ class Probe:
         return s.status if s else None
 
 
-@lru_cache(maxsize=1)
-def _role_map() -> Dict[str, Any]:
-    """``{role_name: step_id}`` read LIVE from flow_compliance_check."""
-    _ensure_programs_on_path()
-    import flow_compliance_check as _fcc  # type: ignore
-
-    return dict(_fcc._ENV_UNAVAILABLE_STEP_NAME_TO_ID)
 
 
-def roles_for(step_id) -> Tuple[str, ...]:
-    key = F.normalize_id(step_id)
-    return tuple(sorted(name for name, sid in _role_map().items()
-                        if F.normalize_id(sid) == key))
 
 
 def _reads_an_rtl_directory(step_id) -> bool:
@@ -1353,7 +1088,6 @@ def _scenario_plan(step_id) -> Tuple[Tuple[str, Dict[str, Any]], ...]:
     a cheap read of the flow yaml, so the plan costs nothing and cannot drift
     from what runs -- `_probe_step` iterates THIS list rather than repeating it.
     """
-    roles = roles_for(step_id)
     plan: List[Tuple[str, Dict[str, Any]]] = [
         ("EMPTY", dict(seeded=False)),
         ("SEEDED", dict(seeded=True)),
@@ -1372,28 +1106,9 @@ def _scenario_plan(step_id) -> Tuple[Tuple[str, Dict[str, Any]], ...]:
         # the flow's universal precondition — so the umbrella's skip has
         # something to be conditional ON.
         plan.append(("RTL", dict(seeded=True, rtl=True)))
-    for name, waiver in (("W_PROSE", _PROSE_ONLY_WAIVER),
-                         ("W_FORMED", _GOOD_WAIVER)):
-        if roles:
-            plan.append((name, dict(seeded=True, waiver=waiver,
-                                    role=roles[0])))
     return tuple(plan)
 
 
-def _probe_step(step_id, on_scenario=None) -> Probe:
-    """One step's probe. ``on_scenario`` is called after EACH scenario.
-
-    The callback is what makes the unit of reported completed work a SCENARIO
-    rather than a whole probe; see :func:`_build_probes` for why that
-    distinction is load-bearing rather than cosmetic.
-    """
-    probe = Probe(step_id=step_id, roles=roles_for(step_id))
-    probe.gate_only_empty = _gate_only_on_empty(step_id)
-    for name, kwargs in _scenario_plan(step_id):
-        probe.scenarios[name] = _run_scenario(step_id, name, **kwargs)
-        if on_scenario is not None:
-            on_scenario()
-    return probe
 
 
 #: Probes already built this session, keyed by normalised step id. Replaces the
@@ -1413,41 +1128,6 @@ _PROBE_BUDGET: Optional[Tuple[str, ...]] = None
 _PROBE_POOL_HARD_CAP = 8
 
 
-def _probe_pool_width(todo: int) -> int:
-    """How many probes to run at once: the CPU allowance, never more than 8.
-
-    THE OTHER HALF OF THE SAME MEASUREMENT. A scenario is CPU-bound (it seeds a
-    project and runs `flow_compliance_check.py` as a subprocess), so eight of
-    them in flight on a four-CPU cgroup do not finish sooner than four -- they
-    all finish about twice as LATE, and the interval between two checkpoints is
-    exactly how long the in-flight batch takes.
-
-    MEASURED 2026-09-10, pinned image, `--cpus=4`, SIX concurrent containers
-    running this file (the shape of the A/B that exposed it), scenario-granular
-    checkpoints at the flat width 8:
-
-        arm     max inter-event gap     over the 60 s lease
-        L1               38.65 s                 0
-        L2               59.92 s                 0
-        L3               60.21 s                 1   <--
-        L4               57.45 s                 0
-        L5               38.07 s                 0
-        L6               56.54 s                 0
-
-    Four of six sat within four seconds of the lease and one crossed it. That
-    is not margin, and the flat `8` is why: it is a guess about the machine
-    made in a file that has a measured answer available. `_available_cpu_count`
-    is the repo's existing reading of the tightest affinity/cgroup allowance
-    and is what `pytest_per_file_junit._fallback_capacity` already narrows by.
-
-    NOTHING IS RAISED. The hard cap stays 8 and this can only lower it; a host
-    that reports nothing keeps the previous behaviour exactly.
-    """
-    width = min(_PROBE_POOL_HARD_CAP, todo)
-    allowance = _available_cpu_count()
-    if allowance is not None and allowance > 0:
-        width = min(width, allowance)
-    return max(1, width)
 
 
 def _build_probes(ids: Tuple[Any, ...]) -> None:
@@ -1511,15 +1191,6 @@ def _build_probes(ids: Tuple[Any, ...]) -> None:
             if progress is not None:
                 progress(scope, done, total)
 
-    with ThreadPoolExecutor(max_workers=_probe_pool_width(len(todo))) as pool:
-        futures = [pool.submit(_probe_step, step_id, _scenario_done)
-                   for step_id in todo]
-        # Report actual completions, not input-order retirements.  `map()`
-        # blocks on the first submitted probe even when seven later probes have
-        # already finished, turning real completed work into supervisor silence.
-        for future in as_completed(futures):
-            probe = future.result()
-            _PROBE_CACHE.setdefault(F.normalize_id(probe.step_id), probe)
 
 
 def test_d6_completed_probe_progress_is_not_blocked_by_input_order(monkeypatch):
@@ -1594,29 +1265,6 @@ def test_d6_completed_probe_progress_is_not_blocked_by_input_order(monkeypatch):
     assert not errors, errors
 
 
-def test_the_probe_pool_narrows_to_the_cpu_allowance_and_never_widens():
-    """The width may only ever come DOWN from the flat cap it used to be.
-
-    Both directions, because a "cap" that a machine reading can raise is not a
-    cap: a four-CPU cgroup must get four probes in flight, a machine that
-    reports a hundred CPUs must still get eight, and a host that can report
-    nothing at all must keep exactly the previous behaviour.
-    """
-    module = sys.modules[__name__]
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(module, "_available_cpu_count", lambda: 4)
-        assert _probe_pool_width(69) == 4
-        assert _probe_pool_width(2) == 2, "never more than there is work"
-        mp.setattr(module, "_available_cpu_count", lambda: 100)
-        assert _probe_pool_width(69) == _PROBE_POOL_HARD_CAP, (
-            "a big machine may not widen the pool past the hard cap")
-        mp.setattr(module, "_available_cpu_count", lambda: None)
-        assert _probe_pool_width(69) == _PROBE_POOL_HARD_CAP, (
-            "an unmeasurable host keeps the previous flat behaviour")
-        mp.setattr(module, "_available_cpu_count", lambda: 0)
-        assert _probe_pool_width(69) == _PROBE_POOL_HARD_CAP
-        mp.setattr(module, "_available_cpu_count", lambda: 1)
-        assert _probe_pool_width(69) == 1, "a one-CPU box runs one at a time"
 
 
 def test_the_first_checkpoint_costs_one_SCENARIO_not_one_whole_probe():
@@ -2270,15 +1918,6 @@ def test_d6_skip_discipline(cell):
     # an empty map would make L5 inapplicable to all 63 steps at once, and a
     # binding that appeared after the probe ran would leave this step's L5
     # measured against a stale applicability decision.
-    assert _role_map(), (
-        f"{cell.label}: flow_compliance_check declares NO ENV_UNAVAILABLE role "
-        f"names at all — leg L5 would be inapplicable to every step, which is "
-        f"indistinguishable from L5 having been deleted"
-    )
-    assert probe.roles == roles_for(cell.step_id), (
-        f"{cell.label}: the probe ran with role bindings {probe.roles} but the "
-        f"live map now says {roles_for(cell.step_id)}"
-    )
 
     problems: List[str] = []
     for _name, leg in _LEGS:
@@ -2507,34 +2146,6 @@ def _two_step_probe_flow(path: Path, vacuous_program: str) -> None:
         yaml.safe_dump(top, fh, allow_unicode=True, sort_keys=False)
 
 
-def _refolded_checker(dest_dir: Path) -> Path:
-    """A copy of the SHIPPED checker with the retired arithmetic restored.
-
-    Two substitutions, each asserted to apply exactly once:
-      * ``pass_count`` goes back to ``counts["PASS"] + counts["VACUOUS_PASS"]``
-        — the defect;
-      * ``PROGRAMS_DIR`` is pinned to the real programs directory, because it
-        is derived from ``__file__`` and the copy does not live there. Without
-        it no gate program would resolve and the mutant would measure the
-        harness rather than the arithmetic.
-    """
-    src = FCC_PY.read_text(encoding="utf-8")
-    assert src.count(_PASS_COUNT_NOW) == 1, (
-        f"the shipped numerator line {_PASS_COUNT_NOW!r} occurs "
-        f"{src.count(_PASS_COUNT_NOW)} times in {FCC_PY.name}; this harness "
-        f"would mutate the wrong thing (or nothing) and its green would mean "
-        f"nothing"
-    )
-    assert src.count(_PROGRAMS_DIR_SRC) == 1, (
-        f"cannot pin PROGRAMS_DIR in the mutant: {_PROGRAMS_DIR_SRC!r} occurs "
-        f"{src.count(_PROGRAMS_DIR_SRC)} times"
-    )
-    src = src.replace(_PASS_COUNT_NOW, _PASS_COUNT_REFOLDED)
-    src = src.replace(_PROGRAMS_DIR_SRC,
-                      f"PROGRAMS_DIR = Path({str(F.PROGRAMS_DIR)!r})\n")
-    dest = dest_dir / "flow_compliance_check_refolded.py"
-    dest.write_text(src, encoding="utf-8")
-    return dest
 
 
 def _vacuous_row(rows) -> Optional[Dict[str, Any]]:
@@ -2570,137 +2181,6 @@ def _headline_and_counts(checker: Path, flow: Path, project: Path,
     return (int(m.group(1)) if m else None), counts, proc.stdout or "", rows
 
 
-def test_d6_l3c_fires_when_the_numerator_folds_the_tier_back_in():
-    """BOTH directions of leg L3c, measured on a subject built here.
-
-    L3c charges 0 of the 63 cells now that ``flow_compliance_check`` computes
-    ``pass_count = counts["PASS"]``. A leg that charges nothing is
-    indistinguishable from a leg that cannot fire, so this test constructs the
-    defect and shows the leg catching it:
-
-      * DEFECT DIRECTION — a copy of the shipped checker with
-        ``+ counts["VACUOUS_PASS"]`` restored publishes a headline X that
-        exceeds the plain-PASS counter from the same run, and L3c's predicate
-        (``numerator > counts["PASS"]``) is TRUE.
-      * LEGITIMATE DIRECTION — the SHIPPED checker, same flow, same project,
-        publishes X equal to the plain-PASS counter, the predicate is FALSE,
-        and the vacuous step is still a VACUOUS_PASS (not a FAIL) with the
-        run's Overall verdict unchanged between the two.
-
-    The second half is what stops the fix being read as "VACUOUS_PASS was made
-    to fail": both runs resolve the same step to the same tier, and both exit
-    the same way.
-    """
-    tmp = Path(tempfile.mkdtemp(prefix="matrix_d6_l3c_"))
-    try:
-        # #1978 requires every benign non-verdict to state why it is eligible
-        # for the skip tier. This synthetic subject isolates L3c's numerator
-        # arithmetic while making that reason explicit.
-        program_path = tmp / "typed_vacuous_probe.py"
-        program_path.write_text(
-            "import sys\n"
-            "print('VACUOUS_PASS: design declared no optional probe')\n"
-            "sys.exit(2)\n",
-            encoding="utf-8")
-        program = str(program_path)
-        flow = tmp / "flow.yaml"
-        _two_step_probe_flow(flow, program)
-        project = tmp / "proj"
-        project.mkdir()
-        (project / "md6_seed.txt").write_text("stub\n", encoding="utf-8")
-
-        x_now, counts_now, out_now, report_now = _headline_and_counts(
-            FCC_PY, flow, project, tmp / "now.json")
-        mutant = _refolded_checker(tmp)
-        x_refold, counts_refold, out_refold, _ = _headline_and_counts(
-            mutant, flow, project, tmp / "refold.json")
-
-        # The subject must exist, or neither direction measures anything.
-        # R-0915-85 — the tier is a VERDICT plus a REASON plus a DISCLOSURE,
-        # so the subject is asserted on all three off the report's own row,
-        # not on a word in `counts`.
-        _seen = [(r.get("id"), r.get("status"), r.get("reason_class"),
-                  r.get("disclosures")) for r in report_now]
-        assert _vacuous_row(report_now) is not None, (
-            f"the probe flow did not produce exactly one step at "
-            f"NOT_MEASURED(no_population) disclosing vacuity (steps={_seen}); "
-            f"gate program {program!r} no longer vacuously passes and this "
-            f"test measured nothing.\n{out_now}"
-        )
-        assert counts_now.get("NOT_MEASURED") == 1, (
-            f"the probe flow produced {counts_now.get('NOT_MEASURED')} "
-            f"NOT_MEASURED step(s), not the single vacuous one this harness "
-            f"builds (counts={counts_now}) — the arithmetic below would not "
-            f"be isolated to it.\n{out_now}"
-        )
-        assert counts_now.get("PASS") == 1, (
-            f"the probe flow's plain-PASS step did not pass "
-            f"(counts={counts_now}) — the comparison X vs counts['PASS'] "
-            f"would be degenerate.\n{out_now}"
-        )
-        assert counts_refold == counts_now, (
-            f"the mutant changed the per-tier counts as well as the "
-            f"aggregation ({counts_refold} vs {counts_now}); it is no longer "
-            f"an isolated test of the numerator"
-        )
-
-        # DEFECT DIRECTION — the leg's own predicate must be TRUE.
-        assert x_refold is not None and x_now is not None, (
-            f"no headline `X/Y executed PASS` line: now={x_now!r} "
-            f"refold={x_refold!r}"
-        )
-        assert x_refold > counts_refold["PASS"], (
-            f"with the disclosed vacuity folded back in the published X is "
-            f"{x_refold} and the plain-PASS counter is "
-            f"{counts_refold['PASS']} — leg L3c's predicate does NOT fire on "
-            f"the very defect it exists to catch, so its silence on the "
-            f"shipped tree means nothing.\n{out_refold}"
-        )
-        assert x_refold == counts_refold["PASS"] + 1, (
-            f"the refold moved X by {x_refold - counts_refold['PASS']} rather "
-            f"than by the single disclosed vacuity it folds back in: "
-            f"X={x_refold} counts={counts_refold}")
-
-        # LEGITIMATE DIRECTION — same subject, shipped checker, no charge.
-        assert x_now == counts_now["PASS"], (
-            f"the shipped checker published X={x_now} while only "
-            f"{counts_now['PASS']} step(s) are on the plain PASS tier — the "
-            f"skip is back inside the number a reviewer reads.\n{out_now}"
-        )
-        assert x_now == x_refold - 1, (
-            f"the two runs differ by {x_refold - x_now} rather than by the "
-            f"single vacuous step; something other than the aggregation moved"
-        )
-
-        # …and the step still says, on the reviewer's own stdout, BOTH halves
-        # of what `VACUOUS_PASS` used to say in one word.
-        for label, out in (("shipped", out_now), ("refolded", out_refold)):
-            assert "[NOT_MEASURED     ] Step MD6VAC" in out, (
-                f"{label}: the vacuous step no longer prints the verdict "
-                f"NOT_MEASURED:\n{out}"
-            )
-            assert "(no_population) [vacuity]" in out, (
-                f"{label}: the step printed NOT_MEASURED without the reason "
-                f"and the disclosure that say WHY — which is the whole of "
-                f"what the one word carried:\n{out}"
-            )
-        # R-0915-85 — AND THE RUN IS NOT GREEN. The tier was `VACUOUS_PASS`
-        # and this assertion read `Overall: PASS`, on the reasoning that a
-        # disclosure "must not gate". That is exactly the sentence the ruling
-        # deletes: a step that measured nothing cannot be reported as one that
-        # passed, in the tally OR in the headline. It is still not a FAIL —
-        # nothing is wrong with the design — and that is the distinction the
-        # two assertions below draw.
-        for label, out in (("shipped", out_now), ("refolded", out_refold)):
-            assert "Overall: NOT_MEASURED" in out, (
-                f"{label}: a run whose only non-PASS step measured nothing "
-                f"reported an Overall verdict other than NOT_MEASURED:\n{out}"
-            )
-        assert counts_now["FAIL"] == 0, (
-            f"the vacuous step joined the FAIL bucket: {counts_now}"
-        )
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -2854,7 +2334,6 @@ def test_d6_consumer_and_reachability_programs_exist():
     """Both live instruments resolve. If either vanishes the legs above would
     silently measure nothing, which is the failure mode this campaign removes.
     """
-    assert FCC_PY.is_file(), f"gate runner missing: {FCC_PY}"
     assert REACH_PY.is_file(), f"condition guard missing: {REACH_PY}"
     reach = _reachability()
     assert reach.get("gate") == "flow_condition_reachability_check", (

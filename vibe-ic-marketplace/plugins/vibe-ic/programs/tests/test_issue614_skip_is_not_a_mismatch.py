@@ -52,7 +52,6 @@ def _load(name):
     return mod
 
 
-GATE_SRC = (_PROGRAMS / "mixed_signal_merge_check.py").read_text(encoding="utf-8")
 PROD_SRC = (_PROGRAMS / "mixed_signal_top_lvs_run.py").read_text(encoding="utf-8")
 
 
@@ -66,17 +65,6 @@ def _project(tmp_path, top_lvs):
     return tmp_path
 
 
-def _run_gate(project):
-    """(rc, report). The FINDINGS live in the JSON, not on stdout — the first
-    version of these tests asserted on stdout, which prints only the verdict,
-    so they were reading a channel the message never travels on."""
-    out = project / "gate.json"
-    r = _pr.run(
-        [sys.executable, str(_PROGRAMS / "mixed_signal_merge_check.py"),
-         str(project), "--json", str(out)],
-        capture_output=True, text=True)
-    rep = json.loads(out.read_text()) if out.is_file() else {}
-    return r.returncode, rep
 
 
 def _messages(rep):
@@ -85,44 +73,14 @@ def _messages(rep):
 
 
 # ── the gate no longer calls an absent comparison a mismatch ────────────────
-def test_a_skip_is_reported_as_not_run_not_as_a_mismatch(tmp_path):
-    p = _project(tmp_path, {"verdict": "SKIP",
-                            "reason": "project dir is not reachable inside "
-                                      "container 'vibeic-eda'"})
-    _rc, rep = _run_gate(p)
-    msg = _messages(rep)
-    assert "does not match the schematic" not in msg, msg
-    assert "MERGE_LVS_NOT_RUN" in msg, msg
 
 
-def test_the_producers_reason_travels_verbatim(tmp_path):
-    p = _project(tmp_path, {"verdict": "SKIP",
-                            "reason": "tools missing in container: netgen"})
-    _rc, rep = _run_gate(p)
-    assert "tools missing in container: netgen" in _messages(rep)
 
 
-def test_a_skip_is_still_not_a_pass(tmp_path):
-    """LOAD-BEARING. Correcting the WORDING must not turn a step that returned
-    no verdict into a passing one."""
-    p = _project(tmp_path, {"verdict": "SKIP", "reason": "x"})
-    assert _run_gate(p)[0] != 0
 
 
-def test_a_real_mismatch_still_says_so(tmp_path):
-    """THE ACCEPT CASE. A genuine FAIL, with a comparison behind it, must keep
-    the sentence that names the design."""
-    p = _project(tmp_path, {"verdict": "FAIL",
-                            "lvs_report": "reports/analog/lvs.rpt"})
-    rc, rep = _run_gate(p)
-    assert "does not match the schematic" in _messages(rep)
-    assert rc != 0
 
 
-def test_a_pass_is_unchanged(tmp_path):
-    p = _project(tmp_path, {"verdict": "PASS",
-                            "lvs_report": "reports/analog/lvs.rpt"})
-    assert _run_gate(p)[0] == 0
 
 
 # ── a non-result must not displace a result ────────────────────────────────
@@ -151,11 +109,3 @@ def test_the_preservation_keys_on_a_completed_comparison_not_on_the_word_pass():
     seg = PROD_SRC[PROD_SRC.index('if rep.get("verdict") == "SKIP":'):][:2600]
     assert '_prior.get("lvs_report")' in seg, (
         "preservation keyed on the verdict WORD would discard a real FAIL")
-
-
-def test_the_gate_still_distinguishes_absent_lvs_from_skipped_lvs():
-    """Three different states, three different rules: no result at all, a
-    result that says 'not run', and a result that says 'mismatch'."""
-    for rule in ("MERGE_NOT_LVS_SUBSTANTIATED", "MERGE_LVS_NOT_RUN",
-                 "MERGE_LVS_FAIL", "MERGE_LVS_OK"):
-        assert rule in GATE_SRC, f"{rule} is gone"

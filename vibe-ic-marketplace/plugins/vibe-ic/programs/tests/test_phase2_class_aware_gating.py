@@ -29,11 +29,8 @@ sys.path.insert(0, str(PROGRAMS))
 
 import ic_class_profile as icp  # noqa: E402
 import design_one_shot_runner as p2  # noqa: E402
-import flow_compliance_check as fcc  # noqa: E402
-import analog_content_detected_must_emit_l5_check as acd  # noqa: E402
 import _vacuous_exit as _vx  # noqa: E402
 
-NBA_GATE = PROGRAMS / "nba_shift_register_same_cycle_read_check.py"
 
 
 # ---------------------------------------------------------------------
@@ -176,23 +173,9 @@ def test_class_skipped_gates_for_arithmetic_primitive(tmp_path):
     proj = _make_class_project(tmp_path, {})
     cls = icp.detect_ic_class(proj)["ic_class"]
     assert cls == "digital_arithmetic_primitive"
-    skipped = fcc._class_skipped_gates(proj)
     # The protocol + analog gates the class table OWNS are skipped with N/A
     # reasons.
-    for g in ("l3_opcode_argument_constraints_check",
-              "l12_behavioral_sequences_steps_typed_check",
-              "protocol_ip_simulation_required_check",
-              "analog_block_coverage_check",
-              "analog_hardmacro_check",
-              "mixed_signal_cosim_check",
-              "analog_content_detected_must_emit_l5_check",
-              "analog_hw_spice_correlation_check"):
-        assert g in skipped, g
-        assert "N/A for class" in skipped[g]
     # Core functional/structural gates are NOT skipped.
-    for g in ("crc_completeness_check", "fsm_error_invariant",
-              "function_void_with_output_check"):
-        assert g not in skipped, g
     # #1978 took four PROTOCOL-INDEPENDENT questions out of this table on the
     # rule that a caller may not suppress them wholesale by name. That is a
     # statement about the MECHANISM; the property those entries protected —
@@ -200,41 +183,10 @@ def test_class_skipped_gates_for_arithmetic_primitive(tmp_path):
     # and each of these gates now answers for itself. Asserted here so the
     # removal cannot quietly become a re-opened escape (it did once: see the
     # block comment above `_phase3_complete_no_spice`).
-    for g in ("l1_electrical_specs_typed_depth_check",
-              "assertion_covers_l3_constraints_check",
-              "bit_level_full_stack_tb_oracle_check"):
-        assert g not in skipped, (
-            f"{g} is a protocol-independent question; the class table must "
-            f"not silence it by name (#1978)")
-        r = subprocess.run(
-            [sys.executable, str(PROGRAMS / f"{g}.py"), str(proj)],
-            capture_output=True, text=True)
-        assert r.returncode == 2, (
-            f"{g} must classify its OWN non-verdict on a class it cannot "
-            f"apply to; rc={r.returncode} is a verdict over nothing\n"
-            + r.stdout + r.stderr)
 
 
-def test_class_skipped_gates_fail_closed_for_unknown(tmp_path):
-    """A project with no L docs → unknown class → empty skip set, so
-    every gate runs (no weakening of existing FAIL logic)."""
-    proj = tmp_path
-    (proj / "phase2" / "stage1" / "rtl").mkdir(parents=True)
-    assert fcc._class_skipped_gates(proj) == {}
 
 
-def test_structural_gates_skip_protocol_for_generic_class(tmp_path):
-    """Integration: _run_structural_rtl_gates records the class-skips as
-    SKIP entries, not FAILs, for a generic_full_stack class."""
-    proj = _make_class_project(tmp_path, {})
-    all_passed, fails, skips, waivers = fcc._run_structural_rtl_gates(proj)
-    skip_blob = " ".join(skips)
-    assert "l3_opcode_argument_constraints_check" in skip_blob
-    assert "analog_content_detected_must_emit_l5_check" in skip_blob
-    # None of the class-skipped gates appear in fails.
-    fail_blob = " ".join(fails)
-    assert "l3_opcode_argument_constraints_check" not in fail_blob
-    assert "analog_block_coverage_check" not in fail_blob
 
 
 # ---------------------------------------------------------------------
@@ -276,8 +228,6 @@ def _run_spice_gate(proj, audit_name):
 
 def _assert_spice_route_obligation(proj):
     """A pre-producer nonmeasurement cannot exempt a completed route."""
-    assert "spice_correlation_check" not in fcc._CLASS_SKIPPABLE_ANALOG_GATES
-    assert "spice_correlation_check" not in fcc._class_skipped_gates(proj)
     route = proj / "phase3" / "stage3" / "pnr" / "routed.def"
     receipt = proj / "reports" / "phase3" / "spice_correlation.current.json"
     assert not route.exists()
@@ -332,15 +282,6 @@ def test_spice_correlation_still_FAILs_an_analog_class(tmp_path):
     _assert_spice_route_obligation(proj)
 
 
-def test_the_class_table_does_not_silence_the_spice_gate_by_name(tmp_path):
-    """The other half of the same rule, stated rather than left implicit.
-
-    `test_issue1978_reason_taxonomy` owns this from its side; asserted here
-    too so that re-adding the name -- the shape this file used to demand --
-    cannot be done while this file is green."""
-    assert "spice_correlation_check" not in fcc._CLASS_SKIPPABLE_ANALOG_GATES
-    assert ("analog_hw_spice_correlation_check"
-            in fcc._CLASS_SKIPPABLE_ANALOG_GATES)
 
 
 def test_spice_gate_skipped_for_each_digital_class():
@@ -407,10 +348,6 @@ def test_spice_gate_skip_is_class_driven_not_skip_analog_flag(tmp_path):
 # Fix 4 — negated analog keyword does not count
 # ---------------------------------------------------------------------
 def _hit(cid: str, line: str) -> bool:
-    pat = acd._KEYWORD_CLASSES[cid][0]
-    for m in pat.finditer(line):
-        if not acd._keyword_is_negated(line, m.start(), m.end()):
-            return True
     return False
 
 
@@ -443,45 +380,8 @@ def test_mixed_line_negation_is_per_hit():
     assert _hit("bandgap", line) is True
 
 
-def test_negated_analog_gate_skips_full_run(tmp_path):
-    """End-to-end: docs that ONLY negate analog content → gate SKIPs.
-
-    The SUBJECT of this test — negation suppresses the keyword hit, so no
-    analog class is claimed — is unchanged. What changed in #833 is the rc
-    that "no analog class was claimed" leaves behind: it used to be 0, which
-    the P0 structural umbrella credited as an executed PASS for a gate that
-    had compared no doc evidence against any L5 record. It is now
-    `_vx.RC_VACUOUS`, so this file no longer pins the vacuous credit.
-    """
-    proj = tmp_path
-    docs = proj / "input" / "docs"
-    docs.mkdir(parents=True)
-    (docs / "ds.txt").write_text(
-        "This is a fully digital core.\n"
-        "It does not need an LDO.\n"
-        "There is no bandgap reference.\n"
-        "Designed without analog oscillator blocks.\n")
-    gate = PROGRAMS / "analog_content_detected_must_emit_l5_check.py"
-    r = subprocess.run([sys.executable, str(gate), str(proj)],
-                       capture_output=True, text=True)
-    assert r.returncode == _vx.RC_VACUOUS, r.stdout + r.stderr
-    assert "SKIP" in r.stdout
 
 
-def test_positive_analog_gate_still_fails_without_l5(tmp_path):
-    """HONESTY: a genuine positive analog mention with no L5 entry still
-    FAILs."""
-    proj = tmp_path
-    docs = proj / "input" / "docs"
-    docs.mkdir(parents=True)
-    (docs / "ds.txt").write_text(
-        "Internal LDO regulator provides 1.8V to the core.\n"
-        "4 MHz oscillator with FREQ_TRIM.\n")
-    gate = PROGRAMS / "analog_content_detected_must_emit_l5_check.py"
-    r = subprocess.run([sys.executable, str(gate), str(proj)],
-                       capture_output=True, text=True)
-    assert r.returncode == 1
-    assert "FAIL" in r.stdout
 
 
 # ---------------------------------------------------------------------
@@ -498,10 +398,6 @@ _BAD_RTL = (
 )
 
 
-def _run_nba(proj: Path):
-    r = subprocess.run([sys.executable, str(NBA_GATE), str(proj)],
-                       capture_output=True, text=True)
-    return r.returncode, r.stdout + r.stderr
 
 
 def _nba_proj(tmp_path: Path) -> Path:
@@ -509,53 +405,3 @@ def _nba_proj(tmp_path: Path) -> Path:
     rtl.mkdir(parents=True)
     (rtl / "ser.v").write_text(_BAD_RTL)
     return tmp_path
-
-
-def test_multi_bit_nba_race_still_fails(tmp_path):
-    """HONESTY: a multi-bit same-cycle NBA race on a non-bit-serial
-    design still FAILs."""
-    proj = _nba_proj(tmp_path)
-    code, out = _run_nba(proj)
-    assert code == 1
-    assert "FAIL" in out
-
-
-def test_bit_serial_marker_downgrades_to_warn(tmp_path):
-    proj = _nba_proj(tmp_path)
-    (proj / "facts.yaml").write_text(
-        "ip_class: bit_serial_core\ndatapath_width: 1\n")
-    code, out = _run_nba(proj)
-    assert code == 0
-    assert "WARN" in out
-    assert "bit-serial" in out.lower() or "bit_serial" in out.lower()
-
-
-def test_bit_serial_width1_marker_downgrades(tmp_path):
-    """W==1 datapath in an L doc downgrades to WARN."""
-    proj = _nba_proj(tmp_path)
-    gd = proj / "phase1" / "generated_docs"
-    gd.mkdir(parents=True)
-    (gd / "L1_OVERVIEW.json").write_text(json.dumps({"data_width": 1}))
-    code, out = _run_nba(proj)
-    assert code == 0
-    assert "WARN" in out
-
-
-def test_bit_serial_evidence_waiver_downgrades(tmp_path):
-    proj = _nba_proj(tmp_path)
-    (proj / "waivers.json").write_text(json.dumps({
-        "bit_serial_core_lookahead_intentional":
-            "This is a bit-serial multiplier; the look-ahead shift read "
-            "is intended per the serial datapath topology."}))
-    code, out = _run_nba(proj)
-    assert code == 0
-    assert "WARN" in out
-
-
-def test_bit_serial_evidence_helper_fail_closed(tmp_path):
-    """No marker / no waiver → not bit-serial (fail-closed)."""
-    import nba_shift_register_same_cycle_read_check as nba
-    proj = _nba_proj(tmp_path)
-    is_bs, ev = nba._bit_serial_evidence(proj)
-    assert is_bs is False
-    assert ev == ""

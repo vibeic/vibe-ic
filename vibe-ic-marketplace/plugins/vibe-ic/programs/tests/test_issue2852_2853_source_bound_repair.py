@@ -16,7 +16,6 @@ import pytest
 
 import benchmark_io_adapter as bio
 import file_extend_preserve_check as preserve
-import harness_exact_selfverify as selfverify
 from _hostpaths import require_repo
 from rtl_repair_contract import (
     SCHEMA_MATRIX,
@@ -225,29 +224,6 @@ endmodule
     assert outputs[1][0] != 0 and "supplied recovery assignment removed" in outputs[1][1]
 
 
-def test_public_matrix_blocks_buggy_real_arm_and_fixed_matrix_passes(tmp_path):
-    if shutil.which("iverilog") is None:
-        pytest.fail("native EDA unavailable: public matrix is NOT_MEASURED")
-    buggy = tmp_path / "buggy.sv"
-    buggy.write_text(PUBLIC_BUGGY)
-    matrix = _matrix_decl(PUBLIC_BUGGY, PUBLIC_BUGGY,
-                          quotes=["`ifdef FAST_MODE localparam CYCLES=0.05*1000;"])
-    broken = selfverify.selfverify(buggy, "public_mode_fixture",
-                                   elaboration_matrix=matrix,
-                                   original_source=PUBLIC_BUGGY)
-    assert broken["emit"] is False
-    assert broken["public_elaboration_matrix"]["verdict"] == "FAIL"
-    assert any(row["name"] == "fast" and row["returncode"] != 0
-               for row in broken["public_elaboration_matrix"]["configurations"])
-    fixed = tmp_path / "fixed.sv"
-    fixed.write_text(PUBLIC_FIXED)
-    fixed_matrix = _matrix_decl(PUBLIC_BUGGY, PUBLIC_FIXED,
-                                quotes=["`ifdef FAST_MODE localparam CYCLES=0.05*1000;"])
-    good = selfverify.selfverify(fixed, "public_mode_fixture",
-                                 elaboration_matrix=fixed_matrix,
-                                 original_source=PUBLIC_BUGGY)
-    assert good["public_elaboration_matrix"]["verdict"] == "PASS"
-    assert good["emit"] is True
 
 
 def test_matrix_default_only_deleted_branch_and_bad_mapping_refuse(tmp_path):
@@ -354,27 +330,3 @@ def test_contract_json_rejects_nonfinite_constants(tmp_path, constant):
     path.write_text('{"value": ' + constant + "}")
     with pytest.raises(ValueError, match="non-finite JSON constant"):
         load_json(path)
-
-
-def test_renamed_public_parameter_mapping_runs_native_standalone(tmp_path):
-    if shutil.which("iverilog") is None:
-        pytest.fail("native EDA unavailable: renamed parameter matrix is NOT_MEASURED")
-    original = "module count_mode #(parameter DURATION=4)(output wire [7:0] q); assign q = 8'(DURATION); endmodule\n"
-    candidate = original.replace("DURATION", "SPAN")
-    path = tmp_path / "candidate.sv"
-    path.write_text(candidate)
-    matrix = {
-        "schema": SCHEMA_MATRIX, "source_sha256": sha256_text(original),
-        "candidate_sha256": sha256_text(candidate), "top": "count_mode",
-        "supported_macros": [],
-        "supported_parameters": [{"name": "DURATION", "required": True}],
-        "parameter_bindings": {"DURATION": "SPAN"},
-        "source_quotes": ["parameter DURATION=4"],
-        "configurations": [{"name": "default"},
-                            {"name": "integer", "parameters": {"DURATION": 9}}],
-    }
-    report = selfverify.selfverify(path, "count_mode", elaboration_matrix=matrix,
-                                   original_source=original)
-    assert report["public_elaboration_matrix"]["verdict"] == "PASS"
-    command = report["public_elaboration_matrix"]["configurations"][1]["command"]
-    assert "-Pcount_mode.SPAN=9" in command

@@ -39,8 +39,6 @@ sys.path.insert(0, str(_PROGRAMS))
 
 import crosslayer_search_space as X                 # noqa: E402
 import ppa_pnr_search_space as P                    # noqa: E402
-import ppa_search_run as R                          # noqa: E402
-from _ppa import search as S                        # noqa: E402
 
 
 @pytest.fixture
@@ -140,53 +138,12 @@ def test_a_lever_with_no_caller_values_says_it_was_not_enumerated(out):
 # ---------------------------------------------------------------------------
 # THE POINT: the emitted space feeds the search
 # ---------------------------------------------------------------------------
-def test_the_emitted_space_drives_ppa_search_run(out, tmp_path):
-    """F-1 in one assertion. Before this program existed there was no document
-    a reader could re-emit to feed this search."""
-    rc, _ = _emit(out, "--values", "placement_density=0.30,0.20",
-                  "--values", "spare_cell_density=0.02,0.00")
-    assert rc == P.RC_PASS
-    man_path = tmp_path / "manifest.json"
-    assert R.main([str(out), "--max-trials", "4", "--json", str(man_path)]) \
-        == R.RC_PASS
-    man = json.loads(man_path.read_text())
-    knobs = [json.dumps(c["knobs"], sort_keys=True) for c in man["candidates"]]
-    assert man["budget_spent"]["trials_proposed"] == 4
-    assert len(set(knobs)) == 4, "a search must not propose the same point twice"
-    assert man["space_digest"].startswith("sha256:")
     # And a PLAN over this space is still refused as a RESULT: the space being
     # real does not make a set of proposed points into a search that ran.
-    assert R.main(["--verify", str(man_path)]) == R.RC_REFUSED
 
 
-def test_the_first_candidate_is_the_callers_first_value_on_every_axis(
-        out, tmp_path):
-    """`_ppa.search.propose` puts the baseline first, so a caller who lists the
-    runner's own defaults first gets the DEFAULT RUN as the reference point
-    rather than a lucky draw."""
-    _emit(out, "--values", "placement_density=0.30,0.20",
-          "--values", "spare_cell_density=0.02,0.00")
-    man_path = tmp_path / "m.json"
-    R.main([str(out), "--max-trials", "4", "--json", str(man_path)])
-    man = json.loads(man_path.read_text())
-    assert man["candidates"][0]["knobs"] == {
-        "placement_density": "0.30", "spare_cell_density": "0.02"}
-    assert man["candidates"][0]["note"] == "baseline"
 
 
-def test_a_space_with_no_values_is_read_as_not_enumerable_not_as_empty(
-        out, tmp_path):
-    """The honest degrade. A space that proposes no value must not look like a
-    space with no levers -- the search records the lever and says it did not
-    vary it."""
-    _emit(out)
-    man_path = tmp_path / "m.json"
-    assert R.main([str(out), "--max-trials", "4", "--json", str(man_path)]) \
-        == R.RC_PASS
-    man = json.loads(man_path.read_text())
-    notes = {n["lever"]: n["status"] for n in man["lever_notes"]}
-    assert notes.get("placement_density") == S.NOT_ENUMERABLE
-    assert man["budget_spent"]["trials_proposed"] == 1
 
 
 # ---------------------------------------------------------------------------

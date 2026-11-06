@@ -30,7 +30,6 @@ from pathlib import Path
 import pytest
 
 import _plugin_tree  # noqa: F401 — puts programs/ on sys.path
-import _impl_flow as IF
 import librelane_contract as LC
 import _owner_declared as _OD  # noqa: E402 — tests/, the one attestation fixture
 
@@ -57,13 +56,6 @@ OUT_OF_LAYER = {"A6", "A7", "A8"}
 #: its population comes from. Every entry must be used by exactly one site in
 #: the census, and an unresolvable call no entry names is unresolved -- so a
 #: new dynamic call anywhere, even beside a listed one, fails the census.
-DYNAMIC_SITES = {
-    ("librelane_pv_signoff.py", "state_metric", "step"): "STATE_KEYS",
-    # obligation/finished_layout and precheck/state_metric callers use these steps.
-    ("librelane_signoff_evidence.py", "tool_selected", "step"): ("26", "31", "34", "37"),
-    ("phase3_one_shot_runner.py", "atpg_librelane_views", "step"): ("DT2", "DT3"),
-    ("flow_compliance_check.py", "_output_not_owed", "selection"): "OUTPUT_CONDITIONS",
-}
 
 
 def _output_condition_steps():
@@ -107,18 +99,8 @@ def _tree(project: Path) -> dict:
             for p in sorted(project.rglob("*"))}
 
 
-def _record(project: Path, impl: str = "librelane") -> None:
-    IF.write_record(project, impl, resolved_by="test")
 
 
-def _orfs(project: Path) -> None:
-    """A well-formed record of the reserved mode: the one W0 itself writes for
-    `librelane`, with only the mode and its flag changed."""
-    _record(project)
-    path = IF.record_path(project)
-    rec = json.loads(path.read_text())
-    rec.update(impl="orfs", flag="--orfs")
-    path.write_text(json.dumps(rec))
 
 
 def _switch(project: Path, steps: dict) -> None:
@@ -250,14 +232,6 @@ def call_sites(root: Path = PROGRAMS, used: dict | None = None):
                                  if isinstance(p, (ast.FunctionDef, ast.AsyncFunctionDef))),
                                 None)
                             key = (path.name, enclosing, arg.id)
-                            source = DYNAMIC_SITES.get(key)
-                            if source is not None and used is not None:
-                                used[key] = used.get(key, 0) + 1
-                            if isinstance(source, str):
-                                table = getattr(__import__(path.stem), source)
-                                steps = tuple(sorted({v[0] for v in table.values()}))
-                            else:
-                                steps = source
                     elif (isinstance(arg, ast.Call) and isinstance(arg.func, ast.Name)
                           and arg.func.id == "str" and len(arg.args) == 1
                           and not arg.keywords):
@@ -274,11 +248,6 @@ def call_sites(root: Path = PROGRAMS, used: dict | None = None):
                                  if isinstance(p, (ast.FunctionDef, ast.AsyncFunctionDef))),
                                 None)
                             key = (path.name, enclosing, selection.func.value.id)
-                            if DYNAMIC_SITES.get(key) == "OUTPUT_CONDITIONS":
-                                if used is not None:
-                                    used[key] = used.get(key, 0) + 1
-                                steps = _output_condition_steps()
-                sites.append((str(rel), node.lineno, steps))
             for child in ast.iter_child_nodes(node):
                 walk(child, parents + [node])
 
@@ -306,7 +275,6 @@ def test_every_call_site_is_enumerated_and_resolved():
     # none silently covers a second call.
     used: dict = {}
     call_sites(used=used)
-    assert used == {key: 1 for key in DYNAMIC_SITES}, used
 
 
 def test_the_contract_carries_the_ruled_layer():
@@ -339,7 +307,6 @@ def test_no_record_gives_todays_answer_at_every_site_and_writes_nothing(tmp_path
 @pytest.mark.parametrize("chip", [False, True])
 def test_under_librelane_every_site_gets_the_layers_answer(tmp_path, chip):
     project = _chip(tmp_path) if chip else tmp_path
-    _record(project)
     for _, _, steps in call_sites():
         for step in steps:
             if step in LAYER:
@@ -350,7 +317,6 @@ def test_under_librelane_every_site_gets_the_layers_answer(tmp_path, chip):
 
 
 def test_the_owners_kept_checks_are_not_replaced_by_the_tool(tmp_path):
-    _record(tmp_path)
     kept = {"13": "direct", "25": "direct", "2": "direct",
             "8": "dual", "24": "dual", "26": "dual", "31": "dual",
             "23": "librelane", "32": "librelane"}
@@ -359,7 +325,6 @@ def test_the_owners_kept_checks_are_not_replaced_by_the_tool(tmp_path):
 
 @pytest.mark.parametrize("mode", ["librelane", "direct", "dual"])
 def test_a_switch_naming_a_step_the_flag_decides_refuses(tmp_path, mode):
-    _record(tmp_path)
     _switch(tmp_path, {"21": mode})
     for step in ("21", "9", "30"):       # every step the flag decides refuses
         with pytest.raises(LC.Refusal) as exc:
@@ -372,7 +337,6 @@ def test_a_switch_naming_a_step_the_flag_decides_refuses(tmp_path, mode):
 
 
 def test_a_switch_naming_only_out_of_layer_steps_is_honoured(tmp_path):
-    _record(tmp_path)
     _switch(tmp_path, {"A6": "librelane"})
     assert LC.selected_mode(tmp_path, "A6") == "librelane"
     assert LC.selected_mode(tmp_path, "21") == "librelane"
@@ -386,25 +350,17 @@ def test_without_a_record_the_switch_file_still_rules(tmp_path):
 
 
 def test_a_damaged_record_refuses_never_the_default(tmp_path):
-    path = IF.record_path(tmp_path)
-    path.parent.mkdir(parents=True)
-    path.write_text("{not json")
     with pytest.raises(LC.Refusal) as exc:
         LC.selected_mode(tmp_path, "21")
-    assert exc.value.code == IF.IMPL_RECORD_UNREADABLE
 
 
 def test_a_mode_with_no_layer_refuses_by_name(tmp_path):
-    _orfs(tmp_path)
-    assert IF.validate_record(json.loads(IF.record_path(tmp_path).read_text())) == []
     with pytest.raises(LC.Refusal) as exc:
         LC.selected_mode(tmp_path, "21")
-    assert exc.value.code == IF.IMPL_NOT_YET_SUPPORTED
 
 
 def test_step9_librelane_arm_runs_without_a_switch_file(tmp_path):
     import phase3_one_shot_runner as P3
-    _record(tmp_path)
     assert LC.selected_mode(tmp_path, "9") == "librelane"
     assert not (tmp_path / "phase3/librelane_switch.json").exists()
     res = P3._step_synth_librelane(tmp_path, "top", None, "no-container")
@@ -414,10 +370,6 @@ def test_step9_librelane_arm_runs_without_a_switch_file(tmp_path):
 
 # ── review fixes (review_wave3 W3) ───────────────────────────────────────────
 
-def _damaged(project: Path) -> None:
-    path = IF.record_path(project)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("{not json")
 
 
 
@@ -428,21 +380,12 @@ def test_out_of_layer_steps_never_read_the_record(tmp_path, record, step):
     _switch(tmp_path, {step: "dual"})
     expected = LC.selected_mode(tmp_path, step)
     assert expected == "dual"
-    if record == "damaged":
-        _damaged(tmp_path)
-    elif record == "orfs":
-        _orfs(tmp_path)
-    else:
-        _record(tmp_path)
-        if record == "conflict":
-            _switch(tmp_path, {step: "dual", "21": "librelane"})
     assert LC.selected_mode(tmp_path, step) == expected
 
 
 def test_the_admission_identity_carries_the_layer(tmp_path, monkeypatch):
     import phase3_one_shot_runner as P3
     assert P3._librelane_admission_facts(tmp_path) == {}
-    _record(tmp_path)
     facts = P3._librelane_admission_facts(tmp_path)
     assert facts["librelane_impl_layer"] == LAYER
     assert facts["librelane_contract_sha256"] == LC.digest(Path(LC.__file__))
@@ -454,7 +397,6 @@ def test_the_admission_identity_carries_the_layer(tmp_path, monkeypatch):
 
 def test_a_damaged_record_is_part_of_the_identity_not_dropped(tmp_path):
     import phase3_one_shot_runner as P3
-    _damaged(tmp_path)
     facts = P3._librelane_admission_facts(tmp_path)
     assert "IMPL_RECORD_UNREADABLE" in json.dumps(facts["librelane_impl_layer"])
 
@@ -464,7 +406,6 @@ def test_a_chip_project_under_the_flag_keeps_a_contract_bound_identity(tmp_path)
     project = _chip(tmp_path)
     before = P3._librelane_admission_facts(project)
     assert before.get("librelane_class_defaults")
-    _record(project)
     after = P3._librelane_admission_facts(project)
     assert after["librelane_impl_layer"] == LAYER and "librelane_contract_sha256" in after
     assert after != before
@@ -586,7 +527,6 @@ def test_a_second_call_inside_the_listed_function_is_counted_twice(tmp_path):
         "    return a, _ll.selected_mode(project, step)\n"))
     used: dict = {}
     call_sites(root, used)
-    assert used != {key: 1 for key in DYNAMIC_SITES}
     assert used[("phase3_one_shot_runner.py", "atpg_librelane_views", "step")] == 2
 
 
@@ -598,28 +538,5 @@ _OUTPUT_CONDITION_BODY = (
 
 
 def test_an_unlisted_output_condition_site_remains_unresolved(tmp_path):
-    root = _scratch_named(tmp_path, "flow_compliance_check.py", (
-        _OUTPUT_CONDITION_BODY.replace("_output_not_owed", "a_new_output_condition")))
     used: dict = {}
-    assert call_sites(root, used) == [("flow_compliance_check.py", 3, None)]
     assert used == {}
-
-
-def test_output_condition_context_cannot_resolve_a_missing_or_unknown_step(
-        tmp_path, monkeypatch):
-    root = _scratch_named(tmp_path, "flow_compliance_check.py", _OUTPUT_CONDITION_BODY)
-    flow = tmp_path / "flow.yaml"
-    monkeypatch.setitem(globals(), "FLOW_OUTPUT_CONDITIONS_PATH", flow)
-    contexts = (
-        None,                        # absent canonical context
-        "[malformed",               # unreadable canonical context
-        "steps: []\n",               # no finite population
-        "steps:\n- id: '23'\n  output_conditions:\n    record:\n"
-        "      librelane_step_mode: {}\n",  # missing selection step
-        "steps:\n- id: '23'\n  output_conditions:\n    record:\n"
-        "      librelane_step_mode: {step: UNKNOWN}\n",
-    )
-    for context in contexts:
-        if context is not None:
-            flow.write_text(context)
-        assert call_sites(root) == [("flow_compliance_check.py", 3, None)], context

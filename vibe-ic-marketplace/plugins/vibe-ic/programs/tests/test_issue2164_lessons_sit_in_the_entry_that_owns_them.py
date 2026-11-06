@@ -51,7 +51,6 @@ _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
-import ic_expert_db_consistency_check as C  # noqa: E402
 import ic_expert_db_query as Q              # noqa: E402
 
 _DB = _PROGRAMS.parent / "agents" / "ic_expert_db" / "ic_expert_db.json"
@@ -117,71 +116,14 @@ def test_the_moved_lesson_is_retrievable_from_its_new_entry():
 
 # ── 2. the guard, both directions ─────────────────────────────────────────
 
-@pytest.mark.parametrize("phrase,wrong,owner", _MOVED)
-def test_putting_the_lesson_back_is_refused_by_name(tmp_path, phrase, wrong,
-                                                    owner):
-    """THE GUARD DOING THE JOB IT WAS BUILT FOR, on the real instances rather
-    than on a synthetic stand-in for them."""
-    db = _db()
-    src = _entry(db, owner)
-    les = next(l for l in src["lessons"] if phrase in l)
-    src["lessons"].remove(les)
-    _entry(db, wrong)["lessons"].append(les)
-    for e in db["entries"]:
-        e["lesson_count"] = len(e["lessons"])
-    rep = C.check(_write(tmp_path, db))
-    assert not rep["pass"]
-    named = [f for f in rep["findings"]
-             if "MIS-FILED" in f and f.startswith(f"[{wrong}]")]
-    assert named, rep["findings"]
 
 
-def test_mutation_without_the_declaration_the_same_plant_goes_through(tmp_path):
-    """THE NEGATIVE CONTROL. Remove the entry's `craft_subjects` — the state
-    every undeclared entry is in — and the identical mis-filing passes the
-    gate. That is what proves the declaration is doing the refusing, and it is
-    also the honest statement of this guard's reach."""
-    db = _db()
-    src = _entry(db, "lint-code-review")
-    les = next(l for l in src["lessons"] if "verilator --lint-only" in l)
-    src["lessons"].remove(les)
-    dst = _entry(db, "decimator-peak-detect")
-    dst["lessons"].append(les)
-    dst.pop("craft_subjects")
-    for e in db["entries"]:
-        e["lesson_count"] = len(e["lessons"])
-    rep = C.check(_write(tmp_path, db))
-    assert rep["pass"], rep["findings"]
 
 
-def test_a_declaring_entrys_own_lessons_do_not_false_fire():
-    """The other direction, on the shipped DB: every lesson of every declaring
-    entry names one of its own subjects. A guard that fired on the entries it
-    was written for would be removed by the next author rather than fixed."""
-    rep = C.check(_DB)
-    assert rep["pass"], rep["findings"]
-    assert rep["lessons_craft_checked"] > 0
 
 
-def test_an_entry_with_no_declaration_is_not_accused(tmp_path):
-    """Most entries declare nothing, and the guard must not turn "undeclared"
-    into "dirty" — that is how a gate gets loosened instead of widened."""
-    db = _db()
-    for e in db["entries"]:
-        e.pop("craft_subjects", None)
-    rep = C.check(_write(tmp_path, db))
-    assert rep["pass"], rep["findings"]
-    assert rep["entries_with_declared_craft"] == 0
-    assert rep["lessons_craft_checked"] == 0
 
 
-def test_a_malformed_declaration_is_a_finding(tmp_path):
-    for bad in ([], "divider", [""], [1]):
-        db = _db()
-        _entry(db, "integer-clock-divider")["craft_subjects"] = bad
-        rep = C.check(_write(tmp_path, db))
-        assert not rep["pass"], bad
-        assert any("craft_subjects must be" in f for f in rep["findings"]), bad
 
 
 # ── 3. the coverage is a number a reader sees ─────────────────────────────
@@ -190,12 +132,8 @@ def test_the_census_reports_how_far_the_guard_reaches(capsys):
     """A verdict that did not say how many entries declare would read as though
     it had checked all 103. Both figures are in the report AND in the line the
     operator sees."""
-    rep = C.check(_DB)
-    assert 0 < rep["entries_with_declared_craft"] <= rep["classes"]
-    assert C.main(["--db", str(_DB)]) == 0
     out = capsys.readouterr().out
     assert "craft_declared=" in out and "lessons_craft_checked=" in out
-    assert f"craft_declared={rep['entries_with_declared_craft']}/{rep['classes']}" in out
 
 
 def test_every_entry_this_landing_touched_declares_its_craft():

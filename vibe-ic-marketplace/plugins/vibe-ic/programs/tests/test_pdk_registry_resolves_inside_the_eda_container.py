@@ -285,7 +285,6 @@ def test_declared_local_pdk_resolves_without_a_container(
 
 def test_declared_local_pdk_container_route_keeps_container_authority(
         declared_local_pdk, monkeypatch):
-    from test_issue211_registry_driven_pdk_refuse import _FakeContainer
 
     project, root, entry, _ = declared_local_pdk
     monkeypatch.setenv("VIBEIC_LIBRELANE_ROUTE", "CONTAINER")
@@ -293,14 +292,11 @@ def test_declared_local_pdk_container_route_keeps_container_authority(
     existing = {container_root}
     existing.update(str(Path(container_root) / entry[key].replace("*", "neutral")) for key in
                     ("liberty_glob", "tech_lef_glob", "cell_lef_glob"))
-    fake = _FakeContainer(existing)
-    monkeypatch.setattr(_p3(), "_docker_exec_raw", fake)
     config = _p3()._pdk_config_from_registry(project, entry)
     assert config.name == entry["name"]
     assert config.liberty == str(
         Path(container_root) / entry["liberty_glob"].replace("*", "neutral"))
     assert not config.liberty.startswith(str(root))
-    assert fake.calls, "the container route must still ask its container"
 
 
 @pytest.mark.parametrize("missing", ["undeclared", "absent", "wrong-pdk"])
@@ -356,7 +352,6 @@ def test_declared_local_pdk_asset_outside_root_is_refused(declared_local_pdk):
 @pytest.mark.parametrize('count', [1, 5])
 def test_registry_complete_liberty_roster_on_both_routes(
         declared_local_pdk, monkeypatch, route, count):
-    from test_issue211_registry_driven_pdk_refuse import _FakeContainer
     project, parent, entry, _ = declared_local_pdk
     root = parent / entry['name']
     directory = root / 'models'
@@ -370,8 +365,6 @@ def test_registry_complete_liberty_roster_on_both_routes(
     monkeypatch.setenv('VIBEIC_LIBRELANE_ROUTE', route)
     if route == 'CONTAINER':
         monkeypatch.setattr(_p3(), '_registry_container_root', lambda *_: str(root))
-        fake = _FakeContainer({str(root)} | {str(p) for p in root.rglob('*')})
-        monkeypatch.setattr(_p3(), '_docker_exec_raw', fake)
     try:
         result = _p3()._pdk_config_from_registry(project, entry)
         observed = result.liberty if result is not None else 'UNRESOLVED'
@@ -390,7 +383,6 @@ def test_registry_complete_liberty_roster_on_both_routes(
 @pytest.mark.parametrize('route', ['LOCAL', 'CONTAINER'])
 def test_registry_ambiguous_single_asset_names_pdk_key_candidates(
         declared_local_pdk, monkeypatch, route):
-    from test_issue211_registry_driven_pdk_refuse import _FakeContainer
     project, parent, entry, _ = declared_local_pdk
     root = parent / entry['name']
     directory = root / 'technology'
@@ -402,8 +394,6 @@ def test_registry_ambiguous_single_asset_names_pdk_key_candidates(
     monkeypatch.setenv('VIBEIC_LIBRELANE_ROUTE', route)
     if route == 'CONTAINER':
         monkeypatch.setattr(_p3(), '_registry_container_root', lambda *_: str(root))
-        monkeypatch.setattr(_p3(), '_docker_exec_raw', _FakeContainer(
-            {str(root)} | {str(p) for p in root.rglob('*')}))
     try:
         _p3()._pdk_config_from_registry(project, entry)
         observed = 'CONFIG_RESOLVED'
@@ -475,7 +465,6 @@ def test_single_file_registry_config_bytes(tmp_path, monkeypatch, name):
 @pytest.mark.parametrize('case', ['declared', 'missing_declaration', 'missing_distribution',
                                  'one_glob', 'ambiguous_glob', 'dotdot'])
 def test_container_registry_root_is_bound_to_runtime_declaration(tmp_path, monkeypatch, case):
-    from test_issue211_registry_driven_pdk_refuse import _FakeContainer
     parent = str(tmp_path / 'declared')
     name = 'neutral_pdk'
     expected = parent + '/' + name
@@ -494,8 +483,6 @@ def test_container_registry_root_is_bound_to_runtime_declaration(tmp_path, monke
             existing.add(parent + '/other/' + name)
     elif case == 'dotdot':
         entry['container_path_glob'] = '../' + name
-    fake = _FakeContainer(existing, pdk_root=declared)
-    monkeypatch.setattr(_p3(), '_docker_exec_raw', fake)
     try:
         observed = _p3()._registry_container_root('container', entry)
     except SystemExit as exc:

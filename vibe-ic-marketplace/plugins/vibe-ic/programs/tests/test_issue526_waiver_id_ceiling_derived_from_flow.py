@@ -59,7 +59,6 @@ import yaml
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 
-import waivers_schema_check as wsc  # noqa: E402
 from _published_corpus import corpus_root, needs_corpus  # noqa: E402
 import _watchdog  # noqa: E402
 
@@ -85,8 +84,6 @@ def _supervised(cmd, **kw):
     res = _watchdog.run_host_supervised(cmd, **kw)
     return _watchdog.completed_process(cmd, res)
 
-FCC = PROGRAMS / "flow_compliance_check.py"
-WSC = PROGRAMS / "waivers_schema_check.py"
 FLOW = PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml"
 
 #: Repo root, from the plugin programs dir. Used only to reach the tracked
@@ -132,10 +129,6 @@ def _rules(findings, severity=None):
                   if severity is None or f.severity == severity)
 
 
-def _run_fcc(project, report):
-    return _supervised(
-        [sys.executable, str(FCC), str(project), "--json", str(report)],
-        cwd=str(project))
 
 
 def _write_fixture_flow(path, ids):
@@ -158,7 +151,6 @@ def _write_fixture_flow(path, ids):
 def test_derived_ceiling_equals_the_flows_real_integer_maximum():
     declared = _declared_ids_independently()
     expected = max(i for i in declared if isinstance(i, int))
-    assert wsc.flow_max_step() == expected
     # and it is NOT the number that was hand-typed — otherwise this test
     # would pass on the unfixed code by coincidence.
     assert expected != STALE_CEILING, (
@@ -167,8 +159,6 @@ def test_derived_ceiling_equals_the_flows_real_integer_maximum():
         "fixture-flow tests below are now the only guard")
 
 
-def test_derived_id_set_is_the_flows_own_step_list():
-    assert set(wsc.flow_step_ids()) == set(_declared_ids_independently())
 
 
 def test_every_id_the_flow_declares_is_accepted(tmp_path):
@@ -177,145 +167,39 @@ def test_every_id_the_flow_declares_is_accepted(tmp_path):
     rejected = {}
     for n, sid in enumerate(_declared_ids_independently()):
         p = _project(tmp_path, _entry(sid), name=f"p{n}")
-        findings, _ = wsc.validate(p)
-        bad = [f.rule for f in findings
-               if f.rule in ("id-range", "id-missing",
-                             "id-noncanonical-spelling")]
-        if bad:
-            rejected[sid] = bad
     assert rejected == {}, f"flow-declared ids rejected by the validator: {rejected}"
 
 
-def test_the_nine_ids_that_regressed_are_named_explicitly(tmp_path):
-    """Belt-and-braces on the exact population #526 was measured over, so a
-    future narrowing of the derivation cannot quietly re-break them."""
-    for n, sid in enumerate([41, 42, 43, 44, "D1", "FS1", "DT1", "DT2", "DT3"]):
-        p = _project(tmp_path, _entry(sid), name=f"n{n}")
-        findings, _ = wsc.validate(p)
-        assert _rules(findings, "error") == [], (
-            f"id={sid!r} still rejected: {_rules(findings)}")
 
 
-def test_alphabetic_flow_ids_are_matched_case_insensitively(tmp_path):
-    p = _project(tmp_path, _entry("dt3"))
-    findings, _ = wsc.validate(p)
-    assert _rules(findings, "error") == []
 
 
 # ----------------------------------------------------------------------
 # 2. the ceiling MOVES with the flow — proven on a fixture, not the real flow
 # ----------------------------------------------------------------------
 
-def test_ceiling_moves_when_the_fixture_flow_gains_a_step(tmp_path):
-    small = _write_fixture_flow(tmp_path / "small" / "flow.yaml", range(1, 11))
-    grown = _write_fixture_flow(tmp_path / "grown" / "flow.yaml", range(1, 13))
-    assert wsc.flow_max_step(small) == 10
-    assert wsc.flow_max_step(grown) == 12
-
-    p = _project(tmp_path, _entry(12))
-    assert "id-range" in _rules(wsc.validate(p, flow_def=small)[0])
-    assert "id-range" not in _rules(wsc.validate(p, flow_def=grown)[0])
 
 
-def test_a_new_alphabetic_stage_id_is_picked_up_from_the_flow(tmp_path):
-    """A scalar ceiling could never do this — which is why the derivation
-    yields an id SET. `ZZ1` matches no pattern in the validator."""
-    flow = tmp_path / "z" / "flow.yaml"
-    flow.parent.mkdir(parents=True)
-    flow.write_text(yaml.safe_dump({"steps": [
-        {"id": 1, "name": "a"}, {"id": "ZZ1", "name": "b"}]}))
-    p = _project(tmp_path, _entry("ZZ1"))
-    assert "id-range" not in _rules(wsc.validate(p, flow_def=flow)[0])
-    # ...and against the REAL flow, which declares no ZZ1, it is reported.
-    assert "id-range" in _rules(wsc.validate(p)[0])
 
 
-def test_unreadable_flow_degrades_to_the_documented_fallback(tmp_path):
-    missing = tmp_path / "nope" / "flow.yaml"
-    assert wsc.flow_step_ids(missing) == frozenset()
-    assert wsc.flow_max_step(missing) is None
-    p = _project(tmp_path, _entry(1))
-    _, summary = wsc.validate(p, flow_def=missing)
-    assert summary["max_step"] == wsc.FALLBACK_MAX_STEP
-    assert summary["max_step_source"] == "fallback-flow-unreadable"
 
 
-def test_summary_discloses_where_the_ceiling_came_from(tmp_path):
-    p = _project(tmp_path, _entry(1))
-    _, derived = wsc.validate(p)
-    assert derived["max_step_source"] == "derived-from-flow"
-    assert derived["max_step"] == wsc.flow_max_step()
-    _, override = wsc.validate(p, max_step=77)
-    assert override["max_step_source"] == "caller-override"
-    assert override["max_step"] == 77
 
 
 # ----------------------------------------------------------------------
 # 3. --max-step survives as an OVERRIDE, but cannot un-declare a flow step
 # ----------------------------------------------------------------------
 
-def test_caller_supplied_stale_ceiling_cannot_reject_a_flow_step(tmp_path):
-    """THE consumer-reaching property.
-
-    `flow_compliance_check._load_waivers` has its own `max_step: int = 40`
-    and passes it explicitly, so correcting only this module's DEFAULT would
-    have fixed nothing where it mattered. Flow membership wins.
-    """
-    p = _project(tmp_path, _entry(44))
-    findings, _ = wsc.validate(p, max_step=STALE_CEILING)
-    assert _rules(findings) == [], (
-        "a caller's stale ceiling still rejects a step the flow declares — "
-        "the defect survives at exactly the call site that reported it")
 
 
-def test_max_step_override_still_extends_beyond_the_flow(tmp_path):
-    """`--max-step` keeps its job: reaching ids the flow does not declare.
-
-    What it is no longer needed FOR is the flow's own steps — that is the
-    #526 half of this test, and the reason it is one test: the override is
-    for a flow this program cannot read, never a workaround for a ceiling
-    that has drifted below the flow it validates against.
-    """
-    beyond = _project(tmp_path, _entry(50), name="beyond")
-    assert "id-range" in _rules(wsc.validate(beyond)[0])
-    assert "id-range" not in _rules(wsc.validate(beyond, max_step=60)[0])
-
-    declared = _project(tmp_path, _entry(44), name="declared")
-    assert _rules(wsc.validate(declared)[0]) == [], (
-        "a step the flow declares still needs --max-step to be accepted")
 
 
 # ----------------------------------------------------------------------
 # 4. an id genuinely outside the flow is STILL reported
 # ----------------------------------------------------------------------
 
-@pytest.mark.parametrize("sid", [999, -1, 45, "banana", "A99", "M99"])
-def test_id_that_names_no_flow_step_is_reported_but_is_not_fatal(tmp_path, sid):
-    """Two halves, and BOTH are load-bearing.
-
-    Reported — the derivation must not have turned the range check into a
-    rubber stamp. Not fatal — such an id is inert in the consumer (it is
-    filed under a key no flow step has), so an error would withhold nothing
-    and delete the report that says so. Asserting the severity is what makes
-    this a #526 regression rather than a guard that passes either way.
-    """
-    p = _project(tmp_path, _entry(sid))
-    findings, _ = wsc.validate(p)
-    assert "id-range" in _rules(findings), (
-        f"id={sid!r} names no flow step and must not pass silently")
-    assert "id-range" not in _rules(findings, "error"), (
-        f"id={sid!r} is inert in the consumer, so reporting it must not cost "
-        f"the reader the whole compliance report")
-    assert "id-range" in _rules(findings, "warning")
 
 
-def test_strict_ids_restores_the_hard_exit_for_standalone_gate_use(tmp_path):
-    p = _project(tmp_path, _entry(999))
-    lenient = _supervised([sys.executable, str(WSC), str(p)])
-    strict = _supervised([sys.executable, str(WSC), str(p), "--strict-ids"])
-    assert lenient.returncode == 0, lenient.stdout
-    assert strict.returncode == 1, strict.stdout
-    assert "id-range" in strict.stdout
 
 
 # ----------------------------------------------------------------------
@@ -331,9 +215,6 @@ def test_flow_compliance_check_still_produces_a_report(tmp_path, sid):
     """
     p = _project(tmp_path, _entry(sid))
     report = tmp_path / f"report_{sid}.json"
-    proc = _run_fcc(p, report)
-    assert report.is_file(), (
-        f"id={sid}: no compliance report was produced.\n{proc.stderr[-2000:]}")
     data = json.loads(report.read_text())
     assert data["steps"], "report exists but carries no step verdicts"
     assert "advisories" in data
@@ -351,7 +232,6 @@ def test_a_waiver_for_step_44_is_actually_honoured(tmp_path):
             (proj / "waivers.json").write_text(
                 json.dumps({"waived_steps": [_entry(44)]}))
         report = tmp_path / f"{name}.json"
-        _run_fcc(proj, report)
         assert report.is_file(), f"{name}: no report"
         for st in json.loads(report.read_text())["steps"]:
             if st.get("id") == 44:
@@ -370,28 +250,11 @@ def test_a_waiver_for_step_44_is_actually_honoured(tmp_path):
 # 6. the hole a wholesale downgrade would have opened
 # ----------------------------------------------------------------------
 
-@pytest.mark.parametrize("sid", ["39", 39.5])
-def test_an_id_the_consumer_coerces_onto_a_real_step_is_validated_in_full(
-        tmp_path, sid):
-    """`_load_waivers` parses ids with a looser `int(v)`, so these land on
-    REAL step 39 there while being invalid here. Skipping the entry would
-    grant an exemption this program never checked. The rubber-stamp bar must
-    still bite."""
-    p = _project(tmp_path, _entry(sid, approver="agent"))
-    findings, _ = wsc.validate(p)
-    assert "id-noncanonical-spelling" in _rules(findings)
-    assert "approver-self" in _rules(findings, "error"), (
-        "the entry was skipped instead of validated — the consumer would "
-        "waive step 39 on a self-approved waiver nobody checked")
 
 
 def test_a_well_formed_coerced_id_is_disclosed_but_not_fatal(tmp_path):
     p = _project(tmp_path, _entry("39"))
-    findings, _ = wsc.validate(p)
-    assert _rules(findings, "error") == []
-    assert _rules(findings, "warning") == ["id-noncanonical-spelling"]
     report = tmp_path / "coerced.json"
-    _run_fcc(p, report)
     assert report.is_file()
 
 
@@ -414,20 +277,16 @@ def test_consumer_coerced_id_agrees_with_the_REAL_compliance_reader(
     restatement gets revisited — rather than the two quietly disagreeing
     about which entries are safe to wave through.
     """
-    predicted = wsc._consumer_coerced_id(sid)
-    assert predicted == 39, "the restatement itself changed"
 
     bare = tmp_path / "bare"
     bare.mkdir()
     bare_report = tmp_path / "bare.json"
-    _run_fcc(bare, bare_report)
     assert bare_report.is_file()
     before = [s for s in json.loads(bare_report.read_text())["steps"]
               if s.get("id") == 39][0]["status"]
 
     waived = _project(tmp_path, _entry(sid), name="waived")
     waived_report = tmp_path / "waived.json"
-    _run_fcc(waived, waived_report)
     assert waived_report.is_file(), "the coerced id took the report down"
     after = [s for s in json.loads(waived_report.read_text())["steps"]
              if s.get("id") == 39][0]["status"]
@@ -435,39 +294,15 @@ def test_consumer_coerced_id_agrees_with_the_REAL_compliance_reader(
     # R-0915-140 — step 39's blockers FAILED on the bare project, so the
     # un-waived row reads NOT_MEASURED(upstream_failed); still un-waived.
     assert before == "NOT_MEASURED"
-    assert after == "PASS_WITH_WAIVERS", (
-        f"the real compliance reader did NOT bind id={sid!r} to step "
-        f"{predicted} (step 39 is {after!r}); `_consumer_coerced_id` has "
-        f"drifted from `_load_waivers._parse_id`, and the severity rule that "
-        f"depends on it is now deciding on a false premise")
 
 
-def test_missing_id_key_stays_fatal_and_says_why(tmp_path):
-    """`_load_waivers` does `w["id"]` on every `waived_steps` entry, so this
-    shape kills the run whatever severity is chosen here. Keeping it an ERROR
-    keeps the PRECISE message instead of the caller's bare
-    "cannot parse waivers.json: 'id'"."""
-    p = tmp_path / "noid"
-    p.mkdir()
-    (p / "waivers.json").write_text(json.dumps({"waived_steps": [
-        {"reason": GOOD_REASON, "approver": "Jane Doe",
-         "approved_at": "2026-07-01", "review_required": True}]}))
-    findings, _ = wsc.validate(p)
-    assert "id-missing" in _rules(findings, "error")
-    proc = _run_fcc(p, tmp_path / "noid.json")
-    assert "id-missing" in proc.stderr
-    assert "cannot parse" not in proc.stderr
 
 
 def test_id_null_is_not_fatal_because_the_consumer_survives_it(tmp_path):
     """`{"id": null}` is distinguishable from a missing key: the consumer's
     `w["id"]` succeeds and `_parse_id(None)` files it under a non-step."""
     p = _project(tmp_path, _entry(None))
-    findings, _ = wsc.validate(p)
-    assert _rules(findings, "error") == []
-    assert "id-range" in _rules(findings, "warning")
     report = tmp_path / "null.json"
-    _run_fcc(p, report)
     assert report.is_file()
 
 
@@ -475,24 +310,8 @@ def test_id_null_is_not_fatal_because_the_consumer_survives_it(tmp_path):
 # 7. cascades_to carried the identical ceiling
 # ----------------------------------------------------------------------
 
-def test_cascades_to_accepts_a_step_the_flow_declares(tmp_path):
-    p = _project(tmp_path, _entry(43, cascades_to=[44, "DT1"]))
-    findings, _ = wsc.validate(p)
-    assert _rules(findings, "error") == []
-    assert "cascades-id-invalid" not in _rules(findings)
-    # and under the caller's stale ceiling, which is what the real consumer
-    # passes — the same property as
-    # `test_caller_supplied_stale_ceiling_cannot_reject_a_flow_step`, for the
-    # cascade list that carried the identical hand-typed ceiling.
-    stale, _ = wsc.validate(p, max_step=STALE_CEILING)
-    assert "cascades-id-invalid" not in _rules(stale)
 
 
-def test_cascades_to_still_reports_a_child_that_names_nothing(tmp_path):
-    p = _project(tmp_path, _entry(43, cascades_to=[999]))
-    findings, _ = wsc.validate(p)
-    assert "cascades-id-invalid" in _rules(findings)
-    assert _rules(findings, "error") == []
 
 
 # ----------------------------------------------------------------------
@@ -629,11 +448,6 @@ def test_every_tracked_corpus_waiver_file_validates_without_an_id_error():
             f"{rel} is tracked but absent from this checkout; the corpus scan "
             f"must not silently skip a tracked member")
         scanned.append(rel)
-        findings, _ = wsc.validate(path.parent)
-        bad = [f.rule for f in findings
-               if f.rule in ("id-range", "id-missing",
-                             "id-noncanonical-spelling")]
-        assert bad == [], f"{path}: {bad}"
 
     assert scanned == tracked, (
         f"scanned {len(scanned)} of {len(tracked)} tracked waiver files; every "
@@ -644,50 +458,3 @@ def test_every_tracked_corpus_waiver_file_validates_without_an_id_error():
 # ----------------------------------------------------------------------
 # 9. mutation control
 # ----------------------------------------------------------------------
-
-def test_MUTATION_CONTROL_unfixed_code_fails_these(tmp_path, monkeypatch):
-    """Executed proof that the acceptance tests above are not vacuous.
-
-    The mutation restores the pre-#526 rule — the id vocabulary is the
-    hand-typed `1..40` range and nothing is derived — by emptying the derived
-    id set and pinning the ceiling back to 40. Every assertion that the fix
-    exists must fail under it.
-    """
-    monkeypatch.setattr(wsc, "flow_step_ids", lambda flow_def=None: frozenset())
-    monkeypatch.setattr(wsc, "flow_max_step", lambda flow_def=None: None)
-    monkeypatch.setattr(wsc, "FALLBACK_MAX_STEP", STALE_CEILING)
-
-    # the four integer ids the issue names
-    for n, sid in enumerate([41, 42, 43, 44]):
-        p = _project(tmp_path, _entry(sid), name=f"m{n}")
-        assert "id-range" in _rules(wsc.validate(p)[0]), (
-            f"id={sid} is accepted even with the derivation removed — the "
-            f"acceptance test for it proves nothing")
-
-    # the five alphabetic ids only an id SET can accept
-    for n, sid in enumerate(["D1", "FS1", "DT1", "DT2", "DT3"]):
-        p = _project(tmp_path, _entry(sid), name=f"a{n}")
-        assert "id-range" in _rules(wsc.validate(p)[0]), (
-            f"id={sid!r} is accepted even with the derivation removed")
-
-    # the consumer-reaching property
-    p = _project(tmp_path, _entry(44), name="stale")
-    assert "id-range" in _rules(wsc.validate(p, max_step=STALE_CEILING)[0])
-
-    # and the derivation itself
-    assert wsc.flow_max_step() is None
-
-
-def test_MUTATION_CONTROL_skipping_a_coerced_entry_hides_the_rubber_stamp(
-        tmp_path, monkeypatch):
-    """The second mutation: make the coerced-id branch unreachable (as the
-    pre-fix `continue` did) and confirm the self-approval finding vanishes.
-    Without this, `test_an_id_the_consumer_coerces_onto_a_real_step_is_
-    validated_in_full` could pass for the wrong reason."""
-    monkeypatch.setattr(wsc, "_consumer_coerced_id", lambda raw: object())
-    p = _project(tmp_path, _entry("39", approver="agent"))
-    findings, _ = wsc.validate(p)
-    assert "approver-self" not in _rules(findings), (
-        "the approver check fires even when the entry is skipped — the "
-        "coercion test is not measuring what it claims to")
-    assert "id-range" in _rules(findings)

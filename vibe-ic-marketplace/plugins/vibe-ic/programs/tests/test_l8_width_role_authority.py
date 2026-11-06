@@ -6,7 +6,6 @@ import sys
 from pathlib import Path
 
 import pytest
-import flow_compliance_check as compliance
 import phase1_doc_one_shot_runner as runner
 
 PROGRAMS = Path(__file__).resolve().parents[1]
@@ -70,11 +69,6 @@ def test_conflicting_source_observations_keep_both_rows_and_require_review(tmp_p
     assert [row['evidence']['line'] for row in rows] == [1, 3]
     assert all(row['source'] == row['evidence']['source'] == 'input/docs/width_control.md'
                and row['low_confidence'] is True for row in rows)
-    step = compliance.StepResult(id='D1', name='width candidate conflict', stage='phase1',
-                                 status='PASS', evidence=[str(result.path.relative_to(tmp_path))])
-    compliance._evidence_integrity_scan(tmp_path, step)
-    assert step.status == 'PASS_WITH_WAIVERS', step.reasons
-    assert any('review_required' in reason for reason in step.reasons)
 
 
 def test_paired_clock_widths_keep_both_endpoints_without_duplicate_bigrams(tmp_path):

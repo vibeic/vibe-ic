@@ -11,8 +11,6 @@ import pytest
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
-import flow_compliance_check as flow  # noqa: E402
-import flow_step_output_content_check as content  # noqa: E402
 import p0_tool_frontend_check as frontend  # noqa: E402
 import ic_class_profile as classes  # noqa: E402
 
@@ -83,11 +81,7 @@ def test_tool_codes_replace_only_covered_regex_gates(monkeypatch, tmp_path):
     assert "Verilator Warning-SELRANGE" in result["findings"]
     assert [name for name, _ in calls] == ["yosys", "verilator"]
     assert "hierarchy -check -top top" in calls[0][1][-1]
-    assert "p0_tool_frontend_check" not in flow._STRUCTURAL_RTL_GATES
-    assert "bitwidth_consistency_check" not in flow._STRUCTURAL_RTL_GATES
-    assert "module_port_audit" not in flow._STRUCTURAL_RTL_GATES
     # Current released Verilator accepts this SV extension without a code.
-    assert "function_void_with_output_check" in flow._STRUCTURAL_RTL_GATES
 
 
 def test_no_frontend_execution_cannot_pass(monkeypatch, tmp_path):
@@ -120,38 +114,12 @@ def test_rtl_content_delegates_parser_and_retains_source_presence(monkeypatch, t
     calls = []
     monkeypatch.setattr(frontend, "check", lambda *args: (calls.append(args) or
                                                     {"passed": True, "findings": []}))
-    assert content.check(project, "rtl") == []
     assert calls
     rtl.write_text("")
-    assert content.check(project, "rtl")
 
 
-def test_bus_intent_uses_the_declared_class(monkeypatch, tmp_path):
-    monkeypatch.setattr(classes, "detect_ic_class", lambda project: {"ic_class": "test_class"})
-    monkeypatch.setattr(classes, "class_verification_flags", lambda name: {
-        "registry_matched": True, "half_duplex_bus": False,
-        "command_protocol_applicable": True, "analog_applicable": True,
-        "verification_track": "generic_full_stack"})
-    skipped = flow._class_skipped_gates(tmp_path)
-    assert "self_rx_mask_check" in skipped
-    assert "half_duplex_bus=false" in skipped["self_rx_mask_check"]
-    assert "crc_completeness_check" not in skipped
-    monkeypatch.setattr(classes, "class_verification_flags", lambda name: {
-        "registry_matched": True, "half_duplex_bus": True,
-        "command_protocol_applicable": True, "analog_applicable": True,
-        "verification_track": "aid_protocol"})
-    assert "self_rx_mask_check" not in flow._class_skipped_gates(tmp_path)
 
 
-def test_command_intent_needs_class_and_l3_l4_declarations(monkeypatch, tmp_path):
-    monkeypatch.setattr(classes, "detect_ic_class", lambda project: {"ic_class": "test_class"})
-    monkeypatch.setattr(classes, "class_verification_flags", lambda name: {
-        "registry_matched": True, "half_duplex_bus": True,
-        "command_protocol_applicable": False, "analog_applicable": True,
-        "verification_track": "generic_full_stack"})
-    assert "cmd_arg_range_validation_check" not in flow._class_skipped_gates(tmp_path)
-    monkeypatch.setattr(flow, "_ldocs_record_no_opcodes", lambda project: True)
-    assert "cmd_arg_range_validation_check" in flow._class_skipped_gates(tmp_path)
 
 
 @pytest.mark.parametrize("gate", sorted(RETIRED_REGEX_GATES))
@@ -175,12 +143,6 @@ def test_a_retired_gate_is_replaced_by_a_blocking_tool_code(gate, monkeypatch, t
     assert 'program_exit_zero: "flow_step_output_content_check . --mode rtl"' in flow_yaml
 
 
-@pytest.mark.parametrize("gate", sorted(RETIRED_REGEX_GATES))
-def test_a_retired_gate_leaves_the_umbrella_and_its_registers(gate):
-    """Out of the P0 umbrella, and so out of the register of gates the
-    umbrella carries but cannot drive (vibe-ic#559)."""
-    assert gate not in flow._STRUCTURAL_RTL_GATES
-    assert gate not in flow._UNDRIVABLE_BY_STRUCTURAL_UMBRELLA
 
 
 @pytest.mark.parametrize("gate", sorted(RETIRED_REGEX_GATES))

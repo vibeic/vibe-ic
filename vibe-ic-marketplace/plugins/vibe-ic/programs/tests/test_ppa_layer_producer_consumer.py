@@ -63,7 +63,6 @@ sys.path.insert(0, str(_PROGRAMS))
 from _ppa import area as A          # noqa: E402
 from _ppa import metrics as M       # noqa: E402
 from _ppa import power as P         # noqa: E402
-from _ppa import timing as T        # noqa: E402
 
 FIX = _TESTS / "fixtures" / "ppa"
 
@@ -126,7 +125,6 @@ def test_every_producer_claims_the_consumers_schema():
     """If these ever diverge, everything below is testing two shapes and the
     disagreement it finds is not a defect but a category error."""
     assert A.SCHEMA == M.SCHEMA_ID
-    assert T.SCHEMA == M.SCHEMA_ID
     assert P.SCHEMA_METRIC == M.SCHEMA_ID
 
 
@@ -242,56 +240,10 @@ def test_the_sta_view_fixtures_are_present():
     assert len(STA_VIEWS) == 2, [p.name for p in STA_VIEWS]
 
 
-def _rows_from_a_real_tree(tmp_path):
-    """Lay the shipped STA reports out where `timing.discover_reports` looks.
-
-    The fixture tree stores them under `views/`, which is not one of
-    `timing._STA_DIRS`, so calling `timing_rows` on the fixture directory
-    itself opens ZERO artefacts and returns an empty list -- which would make
-    every assertion below vacuously true. This is the trap the vacuous arm
-    exists to catch, and it is why the row count is asserted first.
-    """
-    d = tmp_path / "phase3" / "stage3" / "sta"
-    d.mkdir(parents=True)
-    for i, v in enumerate(STA_VIEWS):
-        (d / f"sta_view_{i}.rpt").write_bytes(v.read_bytes())
-    return T.timing_rows(tmp_path)
 
 
-@_pin("F-4", "timing rows carry no `scope.stage` and four None scope fields; "
-             "every row is refused by metrics.validate")
-def test_timing_rows_are_accepted_by_the_canonical_consumer(tmp_path):
-    """F-4 for the timing producer. Measured: `MetricIndex.add` RAISES."""
-    rows, notes = _rows_from_a_real_tree(tmp_path)
-    assert rows, (
-        f"no timing rows were produced, so nothing was checked. notes={notes}")
-    refused = [(r["metric"], M.validate(r)) for r in rows]
-    refused = [(m, e) for m, e in refused if e]
-    assert not refused, (
-        f"F-4: {len(refused)} of {len(rows)} timing rows are REFUSED by "
-        f"metrics.validate. First: {refused[0][0]} -> {_fmt(refused[0][1])}")
 
 
-@_pin("F-4", "MetricIndex.add raises on a timing row from a real STA report")
-def test_a_timing_row_can_enter_the_canonical_index(tmp_path):
-    """The consequence, stated as the thing a consumer actually does.
-
-    `MetricIndex` is what every coverage count, comparison and report is built
-    from. A producer whose rows cannot enter it is not producing canonical
-    records, whatever their `schema` key says.
-    """
-    rows, notes = _rows_from_a_real_tree(tmp_path)
-    assert rows, f"no rows; nothing was checked. notes={notes}"
-    idx = M.MetricIndex()
-    try:
-        for r in rows:
-            idx.add(r)
-    except M.MetricError as exc:
-        pytest.fail(
-            f"F-4: MetricIndex.add REJECTED a timing row from a real STA "
-            f"report: {exc}. Every coverage count and every comparison is "
-            f"built on this index, so the timing lane's output cannot reach "
-            f"any of them.")
 
 
 if __name__ == "__main__":

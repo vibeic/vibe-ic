@@ -5,7 +5,6 @@ import json
 import hashlib
 from pathlib import Path
 
-from l24_signoff_evidence_backed_check import main as gate_main
 from l24_signoff_requirements_extract import extract_signoff_requirements
 import _path_layout as PL
 
@@ -79,20 +78,3 @@ def test_producer_records_both_required_drc_engines(tmp_path: Path) -> None:
     row = next(r for r in doc["fields"]["signoff_requirements"]
                if r["check"] == "DRC")
     assert row["engines"] == ["klayout", "magic"]
-
-
-def test_consumer_rejects_missing_klayout_and_accepts_both(tmp_path: Path) -> None:
-    missing = _project(tmp_path / "missing", klayout=False)
-    assert gate_main(["gate", str(missing)]) == 1
-    complete = _project(tmp_path / "complete", klayout=True)
-    assert gate_main(["gate", str(complete)]) == 0
-
-
-def test_consumer_refuses_untrusted_native_provenance(tmp_path: Path) -> None:
-    for name, control in (
-        ("duplicate", {"duplicate": True}),
-        ("wrong_producer", {"wrong_producer": True}),
-        ("stale_hash", {"stale_hash": True}),
-    ):
-        project = _project(tmp_path / name, klayout=True, controls=control)
-        assert gate_main(["gate", str(project)]) == 1

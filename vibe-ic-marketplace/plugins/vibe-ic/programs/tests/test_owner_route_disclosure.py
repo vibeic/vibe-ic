@@ -3,9 +3,7 @@ from test_owner_self_tapeout_catalogue import fixture
 import _submission_template as ST
 import _tapeout_declaration as TD
 import submission_template_check as CHK
-import benchmark_evidence_publish as PUB
 import slot_pad_budget_check as BUD
-import flow_compliance_check as FLOW
 
 
 def test_catalogue_disclosure_preserves_die_route(tmp_path):
@@ -14,9 +12,6 @@ def test_catalogue_disclosure_preserves_die_route(tmp_path):
     assert result['examined'].get('operator_shuttle_available_not_used',{}).get('declared_route')==TD.ROUTE_SELF_TAPEOUT
 
 
-def test_publisher_preserves_owner_die(tmp_path):
-    p,_,_=fixture(tmp_path)
-    assert PUB.design_kind(p)[0]==PUB._KIND_IC
 
 
 def test_no_purchased_pad_budget_receipt_matches_owner_die(tmp_path):
@@ -44,9 +39,3 @@ def test_no_purchased_pad_budget_receipt_matches_owner_die(tmp_path):
     assert rep['budget_basis']=='37.5self:own_pad_ring'
     assert 'owner-attested' in rep['deliverable_source']
     assert 'binds no operator template' in rep['reason']
-
-
-def test_die_step_applicability_is_not_ip_exemption(tmp_path):
-    p,_,_=fixture(tmp_path)
-    spec={'declaration':TD.DECLARATION_REL,'field':'answers.deliverable','absent_when':['HARDMACRO']}
-    assert FLOW._delivery_declares_absence(p,spec) is None

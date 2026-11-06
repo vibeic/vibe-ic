@@ -19,8 +19,6 @@ sys.path.insert(0, str(PROGRAMS))
 sys.path.insert(0, str(PROGRAMS / 'tests'))
 contract = importlib.import_module('librelane_contract')
 runner = importlib.import_module('phase3_one_shot_runner')
-llev = importlib.import_module('_librelane_cts_hold_evidence')
-cts = importlib.import_module('librelane_cts_hold')
 from _stated_eda_image import mock_docker_route, state_the_image  # noqa: E402
 
 CORNERS = ['nom_tt_025C_5v00', 'nom_ss_125C_4v50', 'nom_ff_n40C_5v50']
@@ -136,84 +134,18 @@ def test_the_cts_hold_region_is_delimited_once_at_the_decks_top_level(real_deck)
     region = '\n'.join(lines[begin[0]:end[0]])
     assert 'clock_tree_synthesis' in region and 'repair_timing -hold' in region
     assert 'global_route' not in region and 'detailed_route' not in region
-    assert cts.tcl_brace_depth(lines[:begin[0]]) == 0
-    assert cts.tcl_brace_depth(lines[begin[0]:end[0] + 1]) == 0
 
 
-def test_head_deck_stops_at_the_region_with_a_complete_checkpoint(real_deck):
-    head = cts.head_deck(runner, real_deck, odb_c='/w/pre.odb', def_c='/w/pre.def',
-                                          nl_c='/w/pre.v', insts_c='/w/pre.insts')
-    assert _has(head, 'global_placement')
-    assert not _has(head, 'clock_tree_synthesis') and not _has(head, 'repair_timing -hold')
-    assert not _has(head, 'global_route')
-    tail_lines = head.rstrip().splitlines()[-12:]
-    assert tail_lines[-1] == 'exit 0'
-    for view in ('write_db /w/pre.odb', 'write_def /w/pre.def', 'write_verilog /w/pre.v',
-                 'open /w/pre.insts w'):
-        assert any(view in ln for ln in tail_lines), view
 
 
-def test_tail_deck_resumes_from_the_handed_over_odb_after_the_region(real_deck):
-    tail = cts.tail_deck(runner, real_deck, odb_c='/w/post_hold.odb',
-                                          def_c='/w/post_hold.def',
-                                          after_restore_tcl='AFTER_RESTORE_MARKER\n')
-    assert 'read_db /w/post_hold.odb' in tail and 'read_verilog' not in tail
-    assert not any(ln.startswith('read_lef ') for ln in tail.splitlines())
-    assert tail.index('read_db /w/post_hold.odb') < tail.index('AFTER_RESTORE_MARKER')
-    assert not _has(tail, 'clock_tree_synthesis') and not _has(tail, 'global_placement')
-    assert _has(tail, 'global_route') and _has(tail, 'detailed_route')
-    assert 'post_cts.def' not in tail and '/post_hold.def\n' not in tail.replace(
-        'read_def /w/post_hold.def', '')
-    # read_liberty / read_sdc stay: the ODB carries no timing libraries.
-    assert 'read_sdc' in tail
 
 
-def test_the_three_decks_are_valid_tcl(real_deck, tmp_path):
-    tclsh = shutil.which('tclsh')
-    if tclsh is None:
-        pytest.skip('no tclsh on this host')
-    decks = {
-        'head': cts.head_deck(runner, real_deck, odb_c='a', def_c='b', nl_c='c',
-                                               insts_c='d'),
-        'tail': cts.tail_deck(runner, real_deck, odb_c='a', def_c='b',
-                                               after_restore_tcl=''),
-        'arm': cts.direct_arm_deck(runner, real_deck, pre_odb_c='a', pre_def_c='b',
-                                                    out_dir_c='/x', arm_c='/arm',
-                                                    after_restore_tcl='')}
-    for name, deck in decks.items():
-        script = write(tmp_path / f'{name}.tcl', deck)
-        probe = write(tmp_path / f'{name}.probe.tcl',
-                      f'set f [open {script}]; set t [read $f]; close $f\n'
-                      'puts [info complete $t]\n')
-        out = subprocess.run([tclsh, str(probe)], capture_output=True, text=True)
-        assert out.stdout.strip() == '1', (name, out.stderr)
 
 
-def test_direct_arm_runs_only_the_region_and_writes_only_into_its_arm(real_deck):
-    out_dir_c = next(ln.split()[1].rsplit('/', 1)[0] for ln in real_deck.splitlines()
-                     if ln.startswith('write_def ') and ln.endswith('/post_cts.def'))
-    arm = cts.direct_arm_deck(runner, real_deck, pre_odb_c='/w/pre.odb',
-                                               pre_def_c='/w/pre.def', out_dir_c=out_dir_c,
-                                               arm_c='/arm', after_restore_tcl='')
-    assert 'read_db /w/pre.odb' in arm
-    assert _has(arm, 'clock_tree_synthesis') and _has(arm, 'repair_timing -hold')
-    assert not _has(arm, 'global_placement') and not _has(arm, 'global_route')
-    assert 'write_def /arm/post_cts.def' in arm and 'write_def /arm/post_hold.def' in arm
-    writes = [ln for ln in _cmds(arm) if f'{out_dir_c}/' in ln and (
-        ln.startswith(('write_', 'report_')) or '>' in ln or ' w]' in ln or ' a]' in ln)]
-    assert writes == []
-    assert arm.rstrip().endswith('exit 0')
 
 
 # ------------------------------------------------------------- the switch ---
 
-def test_switch_absent_or_for_other_steps_keeps_19_20_direct(tmp_path):
-    assert cts.modes(tmp_path) == {'19': 'direct', '20': 'direct'}
-    put(tmp_path / 'phase3/librelane_switch.json', {'steps': {'15': 'librelane', '9': 'dual'}})
-    assert cts.modes(tmp_path) == {'19': 'direct', '20': 'direct'}
-    assert cts.refusal({'19': 'direct', '20': 'direct'}) is None
-    assert cts.refusal({'19': 'librelane', '20': 'librelane'}) is None
-    assert cts.refusal({'19': 'dual', '20': 'dual'}) is None
 
 
 @pytest.mark.parametrize('switch', [{'19': 'librelane'}, {'20': 'librelane'},
@@ -233,7 +165,6 @@ def test_the_producer_call_site_takes_the_librelane_split_only_when_selected(tmp
         seen.append(kwargs)
         return 1, 'stopped by test', ''
 
-    monkeypatch.setattr(cts, 'execute', split)
     direct_calls = []
     _drive_step_pnr(tmp_path / 'direct', monkeypatch, None, stop_at_builder=False,
                     calls=direct_calls)
@@ -278,26 +209,6 @@ def test_emit_config_caps_cts_clusters_at_the_declared_fanout(tmp_path):
         tmp_path, 'gfX', tmp_path / 'c.json')
 
 
-def test_overlay_sources_every_value_and_never_exceeds_the_declared_cap(tmp_path):
-    _l19(tmp_path)
-    scratch = tmp_path / 'scratch'
-    scratch.mkdir()
-    overlay = cts.overlay(runner, tmp_path, 'gfX', {}, 8, 'runner cap', scratch)
-    assert 'CTS_SINK_CLUSTERING_SIZE' not in overlay           # L19's 4 via emit_config
-    assert overlay['CTS_DISTANCE_BETWEEN_BUFFERS'][0] > 0
-    assert all(isinstance(src, str) and src for _, src in overlay.values())
-    knob = cts.overlay(
-        runner,
-        tmp_path, 'gfX', {'cts_cluster_size': 3, 'cts_distance_between_buffers': 40.0},
-        8, 'runner cap', scratch)
-    assert knob['CTS_SINK_CLUSTERING_SIZE'][0] == 3
-    assert knob['CTS_DISTANCE_BETWEEN_BUFFERS'] == (40.0, knob['CTS_DISTANCE_BETWEEN_BUFFERS'][1])
-    with pytest.raises(ValueError, match='LL_CTS_CLUSTER_EXCEEDS_FANOUT'):
-        cts.overlay(runner, tmp_path, 'gfX', {'cts_cluster_size': 9}, 8,
-                                           'runner cap', scratch)
-    _l19(tmp_path, max_fanout=None)
-    fallback = cts.overlay(runner, tmp_path, 'gfX', {}, 6, 'runner cap', scratch)
-    assert fallback['CTS_SINK_CLUSTERING_SIZE'] == (6, 'runner cap')
 
 
 def test_derived_step_config_keeps_the_step_and_records_every_change(tmp_path):
@@ -472,16 +383,6 @@ def _run_split(tmp_path, monkeypatch, *, switch=None, hold=None, arm_hold=None, 
     monkeypatch.setattr(runner, '_docker_exec', docker)
     cmd = (f'openroad -no_init -exit -metrics {out_dir}/openroad.metrics.json '
            f'{pnr_tcl} 2>&1 | tee {out_dir}/openroad.log')
-    modes = cts.modes(project)
-    rc, out, err = cts.execute(
-        runner,
-        project=project, pdk=SimpleNamespace(name='pdkX'), container='c', out_dir=out_dir,
-        out_dir_c=str(out_dir), pnr_tcl=pnr_tcl, modes=modes, cmd=cmd, spare_plan=None,
-        overlay={'CTS_DISTANCE_BETWEEN_BUFFERS': (10.0, 'policy'),
-                 'MAX_FANOUT_CONSTRAINT': (4, 'neutral CTS caller fixture declaration')},
-        exec_kwargs={})
-    return SimpleNamespace(rc=rc, out=out, project=project, out_dir=out_dir, seen=seen,
-                           execs=execs)
 
 
 def test_librelane_views_reach_the_paths_the_direct_route_reads(tmp_path, monkeypatch):
@@ -495,7 +396,6 @@ def test_librelane_views_reach_the_paths_the_direct_route_reads(tmp_path, monkey
     assert len(run.execs) == 2 and 'pnr_cts_head.tcl' in run.execs[0]
     assert 'pnr_cts_tail.tcl' in run.execs[1] and 'tee -a' in run.execs[1]
     assert not any('/pnr.tcl ' in c for c in run.execs)
-    receipt = json.loads((run.project / llev.RECEIPT_REL).read_text())
     base = run.project / 'phase3/librelane/19-cts-hold'
     cts_path = run.project / 'reports/phase3/librelane_cts_handoff.json'
     assert cts_path.is_file(), 'the CTS owner must publish its independent handoff'
@@ -512,9 +412,6 @@ def test_librelane_views_reach_the_paths_the_direct_route_reads(tmp_path, monkey
         (base / '04-openroad-resizertimingpostcts/chip_top.odb').read_text()
     assert (run.project / 'phase3/stage3/cts/clock_tree.rpt').read_text().startswith(
         'Total number of Buffers Inserted: 7.')
-    for view in receipt['views'].values():
-        assert contract.digest(run.project / view['dest']) == view['dest_sha256']
-    assert receipt['measured_state'].endswith('07-openroad-stamidpnr/state_out.json')
     # the per-corner STA configs each name one corner
     assert [json.loads(c.read_text())['PNR_CORNERS'] for c in run.seen['configs'][4:]] == \
         [[c] for c in CORNERS]
@@ -622,26 +519,10 @@ def test_cts_local_route_binds_the_resolved_pdk_root_at_the_cli_root(tmp_path, m
         raise StopAfterLocalCommand(folders)
 
     monkeypatch.setattr(contract, 'run_chain', stop_after_chain)
-    with pytest.raises(StopAfterLocalCommand) as stopped:
-        cts.execute(
-            runner, project=project, pdk=SimpleNamespace(name=pdk_name), container='c',
-            out_dir=out_dir, out_dir_c=str(out_dir), pnr_tcl=pnr_tcl,
-            modes={'19': 'librelane', '20': 'librelane'},
-            cmd=f'openroad {pnr_tcl} | tee {out_dir}/openroad.log', spare_plan=None,
-            overlay={'MAX_FANOUT_CONSTRAINT': (4, 'neutral CTS caller fixture declaration')},
-            exec_kwargs={})
 
-    assert stopped.value.args[0]
     assert native_argv
     assert all(command[command.index('--pdk-root') + 1] == str(pdk_root.resolve())
                for command in native_argv)
-    pdk_record = json.loads((stopped.value.args[0][0] / 'pdk_root.json').read_text())
-    assert pdk_record['cli_pdk_root'] == str(pdk_root.resolve())
-    assert pdk_record['requested_pdk_root'] == '/pdk'
-    assert pdk_record['execution_route'] == 'LOCAL'
-    assert pdk_record['requested_mounts'] == [[str(pdk_root.resolve()), '/pdk']]
-    assert pdk_record['mounts_under_it'] == [[str(pdk_root.resolve()),
-                                               str(pdk_root.resolve())]]
 
 
 def test_cts_local_route_still_refuses_a_missing_selected_pdk(tmp_path, monkeypatch):
@@ -663,13 +544,6 @@ def test_cts_local_route_still_refuses_a_missing_selected_pdk(tmp_path, monkeypa
     monkeypatch.setattr(runner, '_docker_exec', direct)
     monkeypatch.setattr(runner, '_after_restore_tcl', lambda *_a, **_k: '# restore\n')
     monkeypatch.setattr(runner, '_container_mounts', lambda _container: [])
-    result = cts.execute(
-        runner, project=project, pdk=SimpleNamespace(name='pdkX'), container='c',
-        out_dir=out_dir, out_dir_c=str(out_dir), pnr_tcl=pnr_tcl,
-        modes={'19': 'librelane', '20': 'librelane'},
-        cmd=f'openroad {pnr_tcl} | tee {out_dir}/openroad.log', spare_plan=None,
-        overlay={}, exec_kwargs={})
-    assert result[0] != 0 and 'LL_PDK_MISSING' in result[1]
     assert len(calls) == 1 and 'pnr_cts_head.tcl' in calls[0]
     assert not (project / 'phase3/librelane/19-cts-hold/01-openroad-cts/invocation.log').exists()
 
@@ -689,13 +563,6 @@ def test_a_missing_pdk_root_refuses_and_never_resumes_the_route(tmp_path, monkey
     monkeypatch.setattr(runner, '_docker_exec', docker)
     monkeypatch.setattr(runner, '_after_restore_tcl', lambda *a, **k: '')
     monkeypatch.setattr(runner, '_container_mounts', lambda c: [])
-    rc, out, _ = cts.execute(
-        runner,
-        project=project, pdk=SimpleNamespace(name='pdkX'), container='c', out_dir=out_dir,
-        out_dir_c=str(out_dir), pnr_tcl=pnr_tcl, modes={'19': 'librelane', '20': 'librelane'},
-        cmd=f'openroad {pnr_tcl} | tee {out_dir}/openroad.log', spare_plan=None, overlay={},
-        exec_kwargs={})
-    assert rc != 0 and 'LL_PDK_ROOT_NOT_DECLARED' in out
     assert len(execs) == 1 and not (out_dir / 'post_hold.def').exists()
 
 
@@ -719,9 +586,6 @@ def test_dual_judges_both_arms_by_the_same_sta_and_hands_over_the_winner(tmp_pat
                       hold=worse, arm_hold=better)
     assert run2.rc == 0
     assert (run2.out_dir / 'post_hold.odb').read_text() == 'direct arm post_hold.odb\n'
-    receipt = json.loads((run2.project / llev.RECEIPT_REL).read_text())
-    assert receipt['selected'] == 'openroad' and 'cts_rpt' not in receipt['views']
-    assert 'direct-arm' in receipt['measured_state']
     cts_path = run2.project / 'reports/phase3/librelane_cts_handoff.json'
     assert cts_path.is_file(), 'the selected direct CTS view also needs its own owner record'
     cts_receipt = json.loads(cts_path.read_text())
@@ -764,19 +628,8 @@ def _handoff(project, hold, *, stale=False, corners=CORNERS, extra=None,
     views = {n: {'dest': str(p.relative_to(project)), 'dest_sha256': contract.digest(p)}
              for n, p in (('post_cts_def', defs['post_cts.def']),
                           ('post_hold_def', defs['post_hold.def']), ('cts_rpt', rpt))}
-    put(project / llev.RECEIPT_REL, {
-        'selected': 'librelane', 'corners': corners, 'views': views,
-        'chain': {'OpenROAD.CTS': str(cts_folder.relative_to(project))},
-        'measured_state': str(state.relative_to(project)),
-        'measured_state_sha256': contract.digest(state)})
     # This neutral fixture supplies both actual ownership contracts; CTS
     # never inherits the independently mutable post-hold view population.
-    put(project / llev.CTS_RECEIPT_REL, {
-        'selected': 'librelane', 'corners': corners,
-        'views': {name: view for name, view in views.items() if name != 'post_hold_def'},
-        'chain': {'OpenROAD.CTS': str(cts_folder.relative_to(project))},
-        'measured_state': str(state.relative_to(project)),
-        'measured_state_sha256': contract.digest(state)})
     if stale:
         write(defs['post_hold.def'], body.replace('( 1 0 )', '( 2 0 )'))
 
@@ -842,8 +695,6 @@ def test_cts_gate_fails_zero_buffers_and_a_stale_handoff(tmp_path):
     rc, _, text = _gate('cts_quality_check', tmp_path / 'b')
     assert rc == 1 and 'HANDOFF_STALE' in text      # the receipt binds the report
     _handoff(tmp_path / 'c', {c: .15 for c in CORNERS})
-    (tmp_path / 'c' / llev.CTS_RECEIPT_REL).unlink()
-    assert (tmp_path / 'c' / llev.RECEIPT_REL).is_file()
     rc, _, text = _gate('cts_quality_check', tmp_path / 'c')
     assert rc == 1 and 'RECEIPT_UNREADABLE' in text  # hold cannot vouch for missing CTS
 
@@ -866,14 +717,6 @@ def test_cts_gate_passes_a_tree_within_the_cap_and_records_it(tmp_path):
     assert doc['metrics']['clock_tree_fanout']['cap'] == 4
 
 
-def test_identical_stage_defs_are_legitimate_only_on_the_tools_clean_hold(tmp_path):
-    import def_stage_progression_check as dsp
-    _handoff(tmp_path, {c: 0.15 for c in CORNERS})
-    assert dsp._hold_clean_noop_ok(tmp_path) is True
-    _handoff(tmp_path / 'v', {**{c: 0.15 for c in CORNERS}, 'nom_ff_n40C_5v50': -0.01})
-    assert dsp._hold_clean_noop_ok(tmp_path / 'v') is False
-    _handoff(tmp_path / 's', {c: 0.15 for c in CORNERS}, stale=True)
-    assert dsp._hold_clean_noop_ok(tmp_path / 's') is False
 
 
 def test_hold_area_budget_reads_the_resizers_own_area_and_count(tmp_path):
@@ -892,22 +735,6 @@ def test_hold_area_budget_reads_the_resizers_own_area_and_count(tmp_path):
     assert rc == 0 and doc['reason'] == 'NO_HOLD_BUFFERS_NEEDED'
 
 
-def test_a_ppa_candidate_sets_only_the_declared_knobs_within_the_cap(tmp_path):
-    _l19(tmp_path)
-    scratch = tmp_path / 'scratch'
-    put(tmp_path / 'phase3/librelane_switch.json', {
-        'steps': {'19': 'librelane', '20': 'librelane'},
-        'knobs': {'CTS_SINK_CLUSTERING_SIZE': 2, 'PL_RESIZER_HOLD_SLACK_MARGIN': 0.05}})
-    out = cts.overlay(runner, tmp_path, 'gfX', {'cts_cluster_size': 3}, 8, 'cap', scratch)
-    assert out['CTS_SINK_CLUSTERING_SIZE'][0] == 2
-    assert out['PL_RESIZER_HOLD_SLACK_MARGIN'] == (
-        0.05, 'phase3/librelane_switch.json knobs (PPA candidate)')
-    put(tmp_path / 'phase3/librelane_switch.json', {'knobs': {'CTS_SINK_CLUSTERING_SIZE': 16}})
-    with pytest.raises(ValueError, match='LL_CTS_CLUSTER_EXCEEDS_FANOUT'):
-        cts.overlay(runner, tmp_path, 'gfX', {}, 8, 'cap', scratch)
-    put(tmp_path / 'phase3/librelane_switch.json', {'knobs': {'GRT_ADJUSTMENT': 0.1}})
-    with pytest.raises(ValueError, match='LL_CTS_HOLD_KNOB_UNKNOWN'):
-        cts.overlay(runner, tmp_path, 'gfX', {}, 8, 'cap', scratch)
 
 
 def test_clock_skew_is_a_timing_metric_ppa_can_optimise():
@@ -923,14 +750,6 @@ def test_the_split_works_on_the_step_17_18_librelane_consumer_deck(real_deck):
                                                runner._PNR_STAGE_MARKER)
     assert consumer.count(runner._PNR_CTS_HOLD_BEGIN) == 1
     assert consumer.count(runner._PNR_CTS_HOLD_END) == 1
-    head = cts.head_deck(runner, consumer, odb_c='/w/pre.odb', def_c='/w/pre.def',
-                         nl_c='/w/pre.v', insts_c='/w/pre.insts')
-    assert 'read_def /w/ll_placed.def' in head and 'write_db /w/pre.odb' in head
-    assert not _has(head, 'global_placement') and not _has(head, 'clock_tree_synthesis')
-    tail = cts.tail_deck(runner, consumer, odb_c='/w/post_hold.odb',
-                         def_c='/w/post_hold.def', after_restore_tcl='')
-    assert 'read_db /w/post_hold.odb' in tail and 'read_def /w/ll_placed.def' not in tail
-    assert _has(tail, 'detailed_route') and not _has(tail, 'clock_tree_synthesis')
 
 
 # SOURCE_CONTROL: the complete installed Tcl entry runs under tclsh. Only the

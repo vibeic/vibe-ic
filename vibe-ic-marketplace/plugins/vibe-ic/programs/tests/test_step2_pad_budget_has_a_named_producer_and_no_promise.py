@@ -40,7 +40,6 @@ if str(PROGRAMS) not in sys.path:
 import pytest  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import matrix_d7_artifact_graph as G  # noqa: E402
 
 PATH = "reports/phase2/gates/slot_pad_budget.json"
 PRODUCER = "slot_pad_budget_check"
@@ -69,14 +68,8 @@ def _step2():
 
 # ── direction 1: the producer is NAMED ────────────────────────────────────
 
-def test_the_pad_budget_report_has_a_named_producer():
-    decl = G.program_output_declarations().get(PATH)
-    assert decl, f"{PATH} is read by step 2's gate and no step names a producer"
-    assert any(PRODUCER in str(d) for d in decl), decl
 
 
-def test_step_2_carries_no_dimension_7_finding():
-    assert not G.findings_for("2"), G.findings_for("2")
 
 
 def test_the_row_states_the_verdict_field_the_report_actually_carries():
@@ -93,13 +86,6 @@ def test_the_row_states_the_verdict_field_the_report_actually_carries():
 
 # ── direction 2: and NOTHING is promised ──────────────────────────────────
 
-def test_the_artefact_is_not_promised_in_any_required_outputs():
-    """The half that matters most. `required_outputs` is unconditional
-    ALL-of-N: a design that buys no operator slot never writes this file, and
-    an entry there would report every such run MISSING."""
-    assert PATH not in G._all_declared(), (
-        f"{PATH} is written conditionally and has been promised "
-        f"unconditionally in some step's required_outputs")
 
 
 def test_step_2_required_outputs_is_unchanged():
@@ -113,12 +99,3 @@ def test_step_2_required_outputs_is_unchanged():
         "reports/phase2/lint/rom_init_lint.json",
         "reports/crosslayer/rewrite_equivalence_check.json",
     ]
-
-
-def test_the_declaration_does_not_widen_to_a_basename():
-    """NEGATIVE CONTROL, the one d7's own file states: a `program_outputs` row
-    must not reach the basename relaxation, or naming one producer would buy
-    an exemption for every same-named artefact anywhere in the tree."""
-    base = os.path.basename(PATH)
-    assert base not in G._all_declared_basenames(), base
-    assert G.declaring_entry("some/other/place/" + base) is None

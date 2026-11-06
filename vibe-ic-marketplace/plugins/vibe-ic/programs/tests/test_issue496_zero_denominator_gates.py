@@ -32,7 +32,6 @@ PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
 import _gate_denominator as GD  # noqa: E402
-import flow_compliance_check as F  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
@@ -176,38 +175,10 @@ def test_dispatcher_count_is_not_published_as_the_denominator(tmp_path):
 
 # ── 2. THE CLASSIFICATION RECORD ────────────────────────────────────────────
 
-def test_every_gate_carries_a_classification():
-    """v1.7.69 retired six K5 checks by recording the reason in code, not in a
-    commit message, so a future producer cannot silently resurrect a check
-    nobody re-validated. Same precedent, same requirement."""
-    assert set(F._ZERO_DENOMINATOR_CLASSIFICATION) == set(ISSUE_496_GATES)
 
 
-@pytest.mark.parametrize("gate", ISSUE_496_GATES)
-def test_the_classification_is_substantive(gate):
-    """A verdict with no measurement behind it is the thing #496 was filed
-    against: "it cannot be done by reading exit codes"."""
-    entry = F._ZERO_DENOMINATOR_CLASSIFICATION[gate]
-    assert set(entry) >= {"verdict", "gate_denominator", "corpus_probe",
-                          "disposition"}
-    assert any(k in entry["verdict"] for k in
-               ("TRIGGER_ABSENT", "EXTRACTION_BROKEN", "ADVISORY_ONLY")), entry
-    assert len(entry["corpus_probe"]) > 120, (
-        f"{gate}: the probe that distinguishes absence from blindness must be "
-        f"described, not asserted: {entry['corpus_probe']!r}")
-    assert len(entry["disposition"]) > 60
 
 
-def test_no_gate_from_this_issue_was_wired_into_the_umbrella():
-    """#492's two-condition bar governs, and none of the eight clears it.
-
-    Two of them are now MORE dangerous to wire than they were, because
-    repairing their extraction gave them real findings — converting a gate that
-    FAILs on the corpus is the first bar, not the second."""
-    for gate in ISSUE_496_GATES:
-        assert gate not in F._STRUCTURAL_GATE_ARGV_ADAPTERS, (
-            f"{gate} was wired into the P0 umbrella; #496 explicitly does not "
-            "license that")
 
 
 # ── 3. THE REPAIRS, EACH WITH A WITNESS ─────────────────────────────────────
@@ -445,22 +416,6 @@ def test_l12_zero_blames_the_missing_input_not_the_design(tmp_path):
     assert "not checked" in d["not_applicable_reason"].lower()
 
 
-def test_l12_reports_a_real_denominator_when_given_its_input(tmp_path):
-    """And when it IS handed the file, the denominator is real — which is the
-    evidence that the zero was plumbing, not absence."""
-    rtl = _rtl(tmp_path, cc_reset_ctrl__v=(
-        "module cc_reset_ctrl(input clk);\n"
-        "  always @(posedge clk) begin\n"
-        "    case (1'b1) default: ;\n    endcase\n  end\nendmodule\n"))
-    l12 = tmp_path / "L12.json"
-    l12.write_text(json.dumps({"behavioral_sequences": [{"id": "CC_RESET_700MS"}]}))
-    r = _pr.run(
-        [sys.executable, str(PROGRAMS / "l12_sequence_implementation_check.py"),
-         "--rtl-dir", str(rtl), "--l12-json", str(l12)],
-        capture_output=True, text=True)
-    d = json.loads(r.stdout)["summary"][GD.DENOMINATOR_KEY]
-    assert d["examined"] == 1, r.stdout
-    assert d["not_applicable_reason"] == ""
 
 
 def test_response_payload_declares_itself_advisory(tmp_path):

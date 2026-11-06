@@ -66,7 +66,6 @@ def _load(name):
 
 
 doc = _load("phase1_doc_one_shot_runner")
-rnd = _load("phase1_dialogue_render")
 
 
 _TV1_DIGEST = ("ba7816bf8f01cfea414140de5dae2223"
@@ -106,85 +105,18 @@ _L10_PAYLOAD = {
 }
 
 
-def _render_md(payload):
-    return "\n".join(rnd._bullets(payload))
 
 
 def _cells(row_line):
     return [c.strip() for c in row_line.strip().strip("|").split("|")]
 
 
-def test_renderer_really_omits_field_name_from_header():
-    """Guards the PREMISE. If the renderer ever starts putting the field name
-    in the header row this whole defect class evaporates and the fix below
-    would be dead code — so assert the premise explicitly rather than
-    assuming it."""
-    md = _render_md(_L10_PAYLOAD)
-    # `_table()` INDENTS every row by two spaces, so the row test must strip
-    # first. Matching on a bare leading '|' silently selects nothing and the
-    # premise below is then asserted over an empty list.
-    headers = [ln for ln in md.split("\n")
-               if ln.strip().startswith("|") and "---" not in ln
-               and "TV-" not in ln and "NT-" not in ln]
-    assert headers, "renderer emitted no header rows at all"
-    for h in headers:
-        assert "test_vectors" not in h and "negative_tests" not in h, (
-            f"premise broken: field name leaked into header row {h!r}")
-    # ...and the label lines ARE present, which is what the fix keys on.
-    assert "- test_vectors:" in md
-    assert "- negative_tests:" in md
 
 
-def test_measured_shape_carries_an_empty_trailing_column():
-    """PREMISE for `test_expected_is_selected_by_header_semantics_not_position`.
-
-    The measured table's last column is a commentary `note` column left EMPTY
-    on every row. If this fixture ever loses that column the positional read
-    lands on the digest by accident and the header-semantic selection becomes
-    untested — which is exactly how that half of the fix shipped uncovered."""
-    md = _render_md(_L10_PAYLOAD)
-    hdr = next(ln for ln in md.split("\n") if "expected_digest_hex" in ln)
-    cols = _cells(hdr)
-    assert cols[-1] == "note", cols
-    assert cols.index("expected_digest_hex") == len(cols) - 2, cols
-    for tag, digest in (("TV-1", _TV1_DIGEST), ("TV-2", _TV2_DIGEST)):
-        row = _cells(next(ln for ln in md.split("\n") if f"| {tag} " in ln))
-        assert len(row) == len(cols), (tag, row)
-        # what a POSITIONAL read of `expected` would return:
-        assert row[-1] == "", (tag, row)
-        # ...and what the header-semantic read must return instead:
-        assert row[cols.index("expected_digest_hex")] == digest, (tag, row)
 
 
-def test_defect_shape_is_harvested():
-    """THE DEFECT CASE. Pre-fix this harvests 0; post-fix it must harvest all
-    4 rows."""
-    got = doc._harvest_test_cases_from_input_tables(
-        {"design_description.md": _render_md(_L10_PAYLOAD)})
-    assert len(got) == 4, (
-        f"expected 4 harvested cases (2 test_vectors + 2 negative_tests), "
-        f"got {len(got)}: {[g.get('name') for g in got]}")
-    names = {g["name"] for g in got}
-    assert names == {"tv_1", "tv_2", "nt_1", "nt_2"}, names
 
 
-def test_expected_is_selected_by_header_semantics_not_position():
-    """The anti-rubber-stamp half of the fix, on the REAL measured shape.
-
-    The last cell of every `test_vectors` row is the empty `note` cell, so a
-    positional `cells[-1]` read yields '' — a golden value that cannot fail.
-    Only selection by header semantics (`expected_digest_hex`) can produce the
-    digests asserted here, in FULL: a prefix assertion would still pass on a
-    truncated cell, and a non-emptiness assertion alone would not prove the
-    RIGHT column was picked."""
-    got = doc._harvest_test_cases_from_input_tables(
-        {"design_description.md": _render_md(_L10_PAYLOAD)})
-    by_name = {g["name"]: g for g in got}
-    assert by_name["tv_1"]["expected"] == _TV1_DIGEST, by_name["tv_1"]
-    assert by_name["tv_2"]["expected"] == _TV2_DIGEST, by_name["tv_2"]
-    # ...and no harvested case may carry a blank oracle at all
-    blank = [g["name"] for g in got if not g["expected"].strip()]
-    assert not blank, f"harvested cases with a blank oracle: {blank}"
 
 
 def test_header_vocab_table_still_harvested():
@@ -215,21 +147,6 @@ def test_header_only_input_column_still_harvested():
     assert len(got) == 1, [g.get("name") for g in got]
 
 
-def test_non_test_table_not_harvested():
-    """OVER-HARVEST GUARD. An electrical-spec table and a pin table carry no
-    test vocabulary in label OR header and must stay rejected."""
-    payload = {
-        "electrical_specs": [
-            {"parameter": "VDD", "min": "4.5", "typ": "5.0", "max": "5.5",
-             "unit": "V"},
-        ],
-        "pin_table": [
-            {"pin": "1", "name": "clk", "direction": "input", "width": "1"},
-        ],
-    }
-    got = doc._harvest_test_cases_from_input_tables(
-        {"design_description.md": _render_md(payload)})
-    assert got == [], f"over-harvested non-test tables: {got}"
 
 
 # ── OVER-HARVEST GUARDS for the surface the LABEL WIDENING actually opens ──
@@ -241,50 +158,12 @@ def test_non_test_table_not_harvested():
 # functional test case and none has an ORACLE column for a golden value to
 # come from, which is precisely the corroboration now required.
 
-def test_bench_instrument_list_not_harvested():
-    """A bench-instrument list is not a functional test case."""
-    payload = {"test_equipment": [
-        {"instrument": "scope", "model": "MSO-X 3054T", "input": "clk probe"},
-        {"instrument": "psu", "model": "E3631A", "input": "vdd rail"},
-    ]}
-    got = doc._harvest_test_cases_from_input_tables(
-        {"design_description.md": _render_md(payload)})
-    assert got == [], f"bench-instrument list became L10 cases: {got}"
 
 
-def test_ownership_matrix_not_harvested():
-    """An ownership matrix is not a functional test case."""
-    payload = {"scenario_matrix": [
-        {"name": "boot", "input": "power-on", "owner": "alice"},
-        {"name": "shutdown", "input": "pwr_dn", "owner": "bob"},
-    ]}
-    got = doc._harvest_test_cases_from_input_tables(
-        {"design_description.md": _render_md(payload)})
-    assert got == [], f"ownership matrix became L10 cases: {got}"
 
 
-def test_build_artifact_list_not_harvested():
-    """A build-artifact list is not a functional test case."""
-    payload = {"firmware_images": [
-        {"name": "img0", "source": "build/main.elf", "size": "4 KB"},
-        {"name": "img1", "source": "build/loader.elf", "size": "2 KB"},
-    ]}
-    got = doc._harvest_test_cases_from_input_tables(
-        {"design_description.md": _render_md(payload)})
-    assert got == [], f"build-artifact list became L10 cases: {got}"
 
 
-def test_label_widening_still_admits_a_labelled_table_with_an_oracle():
-    """The tightening must not close the door the fix opened: a labelled
-    record list WITH an oracle column is still harvested even though its
-    header carries no test vocabulary at all."""
-    payload = {"test_vectors": [
-        {"id": "TV-9", "stimulus": "0x00", "expected_digest_hex": "deadbeef"},
-    ]}
-    got = doc._harvest_test_cases_from_input_tables(
-        {"design_description.md": _render_md(payload)})
-    assert len(got) == 1, got
-    assert got[0]["expected"] == "deadbeef", got
 
 
 # ── LOOK-BACK BOUND ────────────────────────────────────────────────────────

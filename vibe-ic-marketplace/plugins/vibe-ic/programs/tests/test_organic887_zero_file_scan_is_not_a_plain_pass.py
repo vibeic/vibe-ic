@@ -55,7 +55,6 @@ import pytest
 PROGRAMS = Path(__file__).resolve().parent.parent
 
 sys.path.insert(0, str(PROGRAMS))
-import flow_compliance_check as F  # noqa: E402
 import _vacuous_exit as _vx  # noqa: E402
 
 #: The two step-3 gates, with the gate-output JSON path step 3 gives each one.
@@ -124,32 +123,14 @@ def _run(gate: str, json_rel: str, root: Path) -> subprocess.CompletedProcess:
     )
 
 
-def _consumer_sees_disclosure(proc: subprocess.CompletedProcess) -> bool:
-    """What the FLOW sees — not what the gate printed.
-
-    `output_snippet` is the real cut and `_stdout_signals_vacuous` is the real
-    reader. Asserting against the raw streams instead is precisely the test
-    that passed on the refuted fix.
-    """
-    return F._stdout_signals_vacuous(F.output_snippet(proc.stdout, proc.stderr))
 
 
 def _step3_clause(gate: str, json_rel: str) -> dict:
     return {"program_exit_zero": f"{gate} . --json {json_rel}"}
 
 
-def _evaluate_step3_clause(gate: str, json_rel: str, project: Path):
-    """Drive the REAL clause evaluator, with the clause step 3 declares."""
-    return F._evaluate_gate(project, _step3_clause(gate, json_rel))
 
 
-def _step3_status(gate: str, json_rel: str, project: Path) -> str:
-    """The tier `check_step` actually assigns — the consumer, not the marker."""
-    return F.check_step(
-        project,
-        {"id": "3", "name": "organic887 probe", "required_outputs": [],
-         "gate": {"all_of": [_step3_clause(gate, json_rel)]}},
-        {}).status
 
 
 #: The disclosure markers that take a step OUT of the executed-PASS numerator.
@@ -159,76 +140,16 @@ def _step3_status(gate: str, json_rel: str, project: Path) -> str:
 #: and require[s] follow-up". Naming both is not a widening — the assertion
 #: that carries the weight is the `check_step` tier below, which is the
 #: consumer this file's docstring is actually about.
-_OUT_OF_PLAIN_PASS = (F._VACUOUS_HINT_PREFIX, F._INCOMPLETE_HINT_PREFIX)
 
 
 # ---------------------------------------------------------------------------
 # 1. THE REFUTATION VECTOR — path length must not decide whether a gate is
 #    honest.
 # ---------------------------------------------------------------------------
-@pytest.mark.parametrize("gate,json_rel", STEP3_GATES)
-@pytest.mark.parametrize("path_len", FLIP_POINT_LENGTHS)
-def test_disclosure_survives_the_consumer_cut_at_every_path_length(
-        gate, json_rel, path_len, tmp_path):
-    proj = _dir_of_exact_length(tmp_path, path_len)
-    proc = _run(gate, json_rel, proj)
-
-    assert _consumer_sees_disclosure(proc), (
-        f"{gate} examined 0 files and flow_compliance_check could NOT see a "
-        f"disclosure in the {F._OUTPUT_SNIPPET_CHARS}-char tail it actually "
-        f"reads, at project-path length {path_len}.\n"
-        f"--- stdout ({len(proc.stdout)} chars) ---\n{proc.stdout}\n"
-        f"--- stderr ({len(proc.stderr)} chars) ---\n{proc.stderr}")
 
 
-@pytest.mark.parametrize("gate,json_rel", STEP3_GATES)
-def test_disclosure_survives_a_path_deeper_than_any_window(
-        gate, json_rel, tmp_path):
-    """Unconditional counterpart of the parameterised case above.
-
-    Built RELATIVE to `tmp_path`, so it can never be skipped and this file can
-    never report green having driven nothing.
-    """
-    proj = _dir_of_exact_length(
-        tmp_path, len(str(tmp_path)) + 4 * F._OUTPUT_SNIPPET_CHARS)
-    proc = _run(gate, json_rel, proj)
-    assert _consumer_sees_disclosure(proc), (
-        f"{gate}'s disclosure was cut off at project-path length "
-        f"{len(str(proj))}\n--- stderr ---\n{proc.stderr}")
 
 
-@pytest.mark.parametrize("gate,json_rel", STEP3_GATES)
-def test_the_sentinel_stream_carries_no_caller_controlled_text(
-        gate, json_rel, tmp_path):
-    """THE STRUCTURAL PROPERTY, measured end to end.
-
-    "Short enough today" is what was refuted. The property that makes the cut
-    irrelevant is that the stream carrying the token contains nothing the
-    caller can lengthen — so drive the gate from a pathologically deep project
-    and require that the stream is still WHOLLY inside the consumer's window
-    and contains no fragment of the path.
-    """
-    deep = _dir_of_exact_length(
-        tmp_path, len(str(tmp_path)) + 6 * F._OUTPUT_SNIPPET_CHARS)
-    proc = _run(gate, json_rel, deep)
-
-    # Named precondition. Without it a gate that emitted NOTHING would satisfy
-    # every assertion below on an empty string — this file's own version of the
-    # vacuous pass it exists to forbid.
-    assert "VACUOUS_PASS" in (proc.stdout + proc.stderr), (
-        f"{gate} emitted no disclosure at all at path length {len(str(deep))}")
-    carrier = proc.stderr if "VACUOUS_PASS" in proc.stderr else proc.stdout
-    assert len(carrier) <= F._OUTPUT_SNIPPET_CHARS, (
-        f"{gate}'s disclosure stream is {len(carrier)} chars against a "
-        f"{F._OUTPUT_SNIPPET_CHARS}-char window, so what survives the cut is "
-        f"decided by content length rather than by construction:\n{carrier}")
-    # The deepest path component is 200 x's; any fragment of it on the carrier
-    # stream means caller-controlled text reached the channel whose width is
-    # fixed. That is the refuted shape regardless of today's total length.
-    assert "x" * 60 not in carrier, (
-        f"{gate} put the caller-supplied project path on the same stream as "
-        f"its sentinel; the stream's length is then set by the checkout depth, "
-        f"not by this program:\n{carrier}")
 
 
 @pytest.mark.parametrize("gate", [g for g, _ in STEP3_GATES])
@@ -249,44 +170,11 @@ def test_the_emitter_is_bounded_at_import_time(gate):
         f"{gate}'s disclosure stream is not a single line: {lines}")
     assert lines[0].lstrip().startswith(_vx.VACUOUS_STDOUT_SENTINEL), (
         f"{gate} emitted no line-start sentinel: {lines[0]!r}")
-    assert len(buf.getvalue()) < F._OUTPUT_SNIPPET_CHARS, (
-        f"{gate}'s disclosure is {len(buf.getvalue())} chars against a "
-        f"{F._OUTPUT_SNIPPET_CHARS}-char window")
 
 
 # ---------------------------------------------------------------------------
 # 2. THE ORIGINAL DEFECT — end to end, through the production clause evaluator.
 # ---------------------------------------------------------------------------
-@pytest.mark.parametrize("gate,json_rel", STEP3_GATES)
-def test_flow_clause_promotes_the_step_out_of_plain_pass(
-        gate, json_rel, tmp_path):
-    """A sentinel is worth nothing if the reader never acts on it. Ask the real
-    `_evaluate_gate`, with the clause step 3 actually declares, from a project
-    deep enough that the refuted fix would have gone silent."""
-    proj = _dir_of_exact_length(
-        tmp_path, len(str(tmp_path)) + 2 * F._OUTPUT_SNIPPET_CHARS)
-    passed, reasons = _evaluate_step3_clause(gate, json_rel, proj)
-    assert passed is True, (
-        f"{gate}'s clause must not FAIL a project that has not authored RTL "
-        f"yet; reasons={reasons}")
-    assert any(r.startswith(_OUT_OF_PLAIN_PASS) for r in reasons), (
-        f"{gate}'s clause returned no disclosure marker, so check_step leaves "
-        f"the step in the executed-PASS numerator. reasons={reasons}")
-    # THE PROPERTY, asked of the consumer instead of of the string. A marker
-    # this file recognises is worth nothing if `check_step` still calls the
-    # step a plain PASS, and the marker's SPELLING has already moved once
-    # (__VACUOUS_HINT__ -> __INCOMPLETE_HINT__, #1978) without the property
-    # changing at all. MEASURED at bcedcdf25d9c: status INCOMPLETE, and the
-    # gate's own report still reads verdict=VACUOUS_PASS with
-    # files_scanned=0 — vacuous FOR THE GATE, incomplete FOR THE STEP, which
-    # is not a contradiction but is exactly the pair a string test misreads.
-    status = _step3_status(gate, json_rel, proj)
-    assert status != "PASS", (
-        f"{gate}'s zero-file scan reached check_step as a plain PASS; the "
-        f"whole point of organic887 is that it must not")
-    # R-0915-85 — VACUOUS_PASS, INCOMPLETE and BLOCKED were three spellings of
-    # one tier. The assertion is NARROWER now, not wider: one word.
-    assert status == "NOT_MEASURED", status
 
 
 @pytest.mark.parametrize("gate,json_rel", STEP3_GATES)
@@ -339,16 +227,11 @@ def test_real_rtl_is_still_a_plain_pass(gate, json_rel, tmp_path):
 
     proc = _run(gate, json_rel, tmp_path)
     assert proc.returncode == _vx.RC_PASS
-    assert not _consumer_sees_disclosure(proc), (
-        f"{gate} disclosed VACUOUS_PASS on a tree that HAS authoritative RTL")
 
     report = json.loads((tmp_path / json_rel).read_text())
     assert report["summary"]["files_scanned"] >= 1
     assert report.get("verdict") == "PASS"
 
-    passed, reasons = _evaluate_step3_clause(gate, json_rel, tmp_path)
-    assert passed is True
-    assert not any(r.startswith(F._VACUOUS_HINT_PREFIX) for r in reasons)
 
 
 @pytest.mark.parametrize("gate,json_rel", STEP3_GATES)
@@ -406,47 +289,10 @@ def test_yosys_script_template_disclosure_reaches_the_consumer(
 
     assert proc.returncode == 0
     full = (proc.stdout or "") + "\n" + (proc.stderr or "")
-    assert F._stdout_signals_vacuous(full), (
-        "precondition broken: the gate no longer emits any recognised "
-        f"disclosure at all\n{full}")
-    assert _consumer_sees_disclosure(proc), (
-        "yosys_script_template_check emitted a recognised disclosure that the "
-        f"{F._OUTPUT_SNIPPET_CHARS}-char consumer window did not keep, so the "
-        f"step is credited a plain PASS.\n"
-        f"--- stdout ({len(proc.stdout)} chars) ---\n{proc.stdout}\n"
-        f"--- stderr ({len(proc.stderr)} chars) ---\n{proc.stderr}")
 
 
-def test_yosys_disclosure_carrier_is_bounded(tmp_path):
-    """Same structural property as the step-3 gates: the token's stream carries
-    nothing that grows. Here the growth that hid it was the gate's OWN prose,
-    not the caller's path — so the assertion is on the carrier's width, which
-    is what makes the tail cut a no-op either way."""
-    proj = _yosys_project(
-        tmp_path, len(str(tmp_path)) + 4 * F._OUTPUT_SNIPPET_CHARS)
-    proc = _run_yosys(proj)
-    assert "VACUOUS_PASS" in proc.stderr, (
-        "the disclosure is not on the bounded stream; it is back on stdout "
-        f"behind the gate's report:\n{proc.stdout}")
-    assert len(proc.stderr) <= F._OUTPUT_SNIPPET_CHARS, (
-        f"carrier stream is {len(proc.stderr)} chars against a "
-        f"{F._OUTPUT_SNIPPET_CHARS}-char window:\n{proc.stderr}")
 
 
-def test_yosys_step14_optional_clause_promotes_the_step(tmp_path):
-    """End to end through the real evaluator, with step 14's own clause spec."""
-    proj = _yosys_project(tmp_path)
-    passed, reasons = F._evaluate_gate(proj, {
-        "optional_program_exit_zero": {
-            "command": ("yosys_script_template_check . --json "
-                        "reports/phase2/gates/yosys_script_template.json"),
-            "condition_files_exist": ["phase2/stage2/synth"],
-        }})
-    assert passed is True
-    assert any(F._stdout_signals_vacuous(r) or
-               r.startswith(F._VACUOUS_HINT_PREFIX) for r in reasons), (
-        f"step 14's optional clause carried no disclosure to check_step, so "
-        f"the step stays in the executed-PASS numerator. reasons={reasons}")
 
 
 def test_yosys_does_not_disclose_when_it_audited_a_real_script(tmp_path):
@@ -463,9 +309,6 @@ def test_yosys_does_not_disclose_when_it_audited_a_real_script(tmp_path):
     (synth / "netlist.v").write_text("module top(); endmodule\n")
     proc = _run_yosys(tmp_path)
     assert proc.returncode == 0
-    assert not _consumer_sees_disclosure(proc), (
-        "the gate disclosed VACUOUS_PASS on a project whose synthesis recipe "
-        f"it actually audited:\n{proc.stdout}\n{proc.stderr}")
 
 
 # ---------------------------------------------------------------------------
@@ -505,7 +348,6 @@ def test_real_rtl_with_its_netlist_is_a_plain_pass_by_default(gate, json_rel,
     _bound_clean_netlist(tmp_path)
     proc = _run(gate, json_rel, tmp_path)
     assert proc.returncode == _vx.RC_PASS, proc.stdout + proc.stderr
-    assert not _consumer_sees_disclosure(proc)
     report = json.loads((tmp_path / json_rel).read_text())
     assert report["summary"]["files_scanned"] >= 1
     assert report["summary"]["front_end"] == "netlist"

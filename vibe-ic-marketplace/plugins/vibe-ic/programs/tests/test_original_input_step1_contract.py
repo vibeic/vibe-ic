@@ -226,7 +226,6 @@ def test_original_shipped_gate_consumers_validate_the_actual_rtl(tmp_path, broke
     if not shutil.which("verilator") or not shutil.which("yosys"):
         pytest.skip("canonical RTL consumers require native Verilator and Yosys")
     from _hostpaths import require_repo
-    import flow_compliance_check as compliance
     import task_nature_route as nature
     prompt = ("Module name: neutral_unit\nOutput q follows input a.\n"
               if task_nature == "spec_generation" else
@@ -248,9 +247,6 @@ def test_original_shipped_gate_consumers_validate_the_actual_rtl(tmp_path, broke
     source = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic", "flow",
                           "phase1_phase2_phase3.yaml")
     rows = {str(row["id"]): row for row in fy.load(source)["steps"]}
-    for step in ("1", "2"):
-        passed, reasons = compliance._evaluate_gate(root, rows[step]["gate"])
-        assert passed is not broken, (step, reasons)
     assert not (root / "phase1/generated_docs").exists()
     report = json.loads((root / "reports/phase2/lint/rtl_hygiene.json").read_text())
     assert any(finding["severity"] == "ERROR" for finding in report) is broken

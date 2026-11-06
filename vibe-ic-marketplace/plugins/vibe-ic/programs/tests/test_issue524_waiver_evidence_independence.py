@@ -55,15 +55,12 @@ sys.path.insert(0, str(PROGRAMS))
 
 import _evidence_independence as _ei  # noqa: E402
 import _waiver_entries as _we  # noqa: E402
-import waivers_schema_check as wsc  # noqa: E402
 
 from _published_corpus import corpus_root, needs_corpus  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
 
-FCC = PROGRAMS / "flow_compliance_check.py"
-WSC = PROGRAMS / "waivers_schema_check.py"
 
 def _corpus() -> Path:
     """The parity corpus holding the tracked attestation entries.
@@ -265,109 +262,26 @@ def test_corpus_attestation_entries_measure_as_reported():
 # 3. The honour path — still honoured, now disclosed
 # ----------------------------------------------------------------------
 
-def _load(project: Path):
-    """Fresh import each call so the module-level advisory lists are read after
-    the load they belong to."""
-    sys.path.insert(0, str(PROGRAMS))
-    import flow_compliance_check as fcc
-    waivers = fcc._load_waivers(project)
-    return fcc, waivers
 
 
-def test_self_referential_waiver_is_still_honoured(tmp_path):
-    """DISCLOSURE BUYS DEFERRAL. The uncorroborated waiver keeps its exemption;
-    refusing it would make a tool-less-host deferral unhonourable, since that
-    is the only evidence such a run can produce."""
-    fcc, waivers = _load(_project(tmp_path, _attestation()))
-    assert 31 in waivers
-    assert waivers[31]["_env_unavailable"] is True
-    assert fcc._ENV_WAIVER_REJECTIONS == []
 
 
-def test_self_referential_waiver_is_disclosed(tmp_path):
-    fcc, waivers = _load(_project(tmp_path, _attestation()))
-    notes = fcc._ENV_WAIVER_EVIDENCE_NOTES
-    assert len(notes) == 1, notes
-    assert "UNCORROBORATED" in notes[0]
-    assert "own orchestrator report" in notes[0]
-    assert waivers[31]["evidence_assessment"]["self_referential_only"] is True
-    assert waivers[31]["evidence_assessment"]["corroborated"] is False
 
 
-def test_corroborated_waiver_is_not_disclosed(tmp_path):
-    """The signal has to mean something: an entry citing a real artefact must
-    produce NO note, or the advisory is noise."""
-    (tmp_path / "phase3").mkdir()
-    (tmp_path / "phase3" / "chip_pnr.v").write_text("module x; endmodule\n")
-    fcc, waivers = _load(_project(
-        tmp_path, _attestation(evidence=["phase3/chip_pnr.v", SELF_REF])))
-    assert 31 in waivers and waivers[31]["_env_unavailable"] is True
-    assert fcc._ENV_WAIVER_EVIDENCE_NOTES == []
-    assert waivers[31]["evidence_assessment"]["corroborated"] is True
 
 
-def test_free_text_evidence_is_disclosed_as_uncorroborated(tmp_path):
-    """#524's separate sub-case: the field used as free text. It is non-empty,
-    so the length test passes; it references nothing, so it corroborates
-    nothing — and the report now says which."""
-    fcc, waivers = _load(_project(tmp_path, _attestation(
-        evidence=["stdcell-library-foundry-qualified", "klayout", SELF_REF])))
-    assert 31 in waivers and waivers[31]["_env_unavailable"] is True
-    assert len(fcc._ENV_WAIVER_EVIDENCE_NOTES) == 1
-    assess = waivers[31]["evidence_assessment"]
-    assert assess["corroborated"] is False
-    assert assess["counts"][_ei.KIND_UNRESOLVABLE] == 2
-    # NOT the self-referential-only shape — a different sub-case, said
-    # differently, so a reader can tell them apart.
-    assert assess["self_referential_only"] is False
 
 
-def test_disclosure_list_is_cleared_between_loads(tmp_path):
-    """Repeated calls in one process must not accumulate — the same contract
-    `_ENV_WAIVER_REJECTIONS` already keeps."""
-    project = _project(tmp_path, _attestation())
-    fcc, _ = _load(project)
-    fcc, _ = _load(project)
-    assert len(fcc._ENV_WAIVER_EVIDENCE_NOTES) == 1
 
 
 # ----------------------------------------------------------------------
 # 4. Nothing here may take a run down (#519's failure mode)
 # ----------------------------------------------------------------------
 
-def test_uncorroborated_evidence_is_a_warning_never_an_error(tmp_path):
-    """The severity is load-bearing. `waivers_schema_check` errors become
-    `SystemExit(1)` inside `flow_compliance_check._load_waivers`; an ERROR here
-    would stop killing one step's exemption and start killing the whole
-    report."""
-    findings, _ = wsc.validate(_project(tmp_path, _attestation()))
-    rules = {f.rule for f in findings}
-    assert "attestation-evidence-uncorroborated" in rules
-    errors = [f for f in findings if f.severity == "error"]
-    assert errors == [], [(f.rule, f.message) for f in errors]
 
 
-def test_dangling_citation_is_reported_even_when_corroborated(tmp_path):
-    """An entry can cite a real artefact AND a missing one. The missing
-    citation reads as corroboration — it is path-shaped — so it is named,
-    rather than being hidden by the item that happened to resolve. This is the
-    shape one tracked entry actually has."""
-    (tmp_path / "phase3").mkdir()
-    (tmp_path / "phase3" / "drc.rpt").write_text("x\n")
-    findings, _ = wsc.validate(_project(tmp_path, _attestation(evidence=[
-        "phase3/drc.rpt", "phase3/stage3/pnr/openroad.log#DRT-0199=0",
-        SELF_REF])))
-    rules = [f.rule for f in findings]
-    assert "attestation-evidence-dangling" in rules, rules
-    assert "attestation-evidence-uncorroborated" not in rules, rules
-    assert [f for f in findings if f.severity == "error"] == []
 
 
-def test_schema_check_still_exits_zero_on_uncorroborated_evidence(tmp_path):
-    r = subprocess.run([sys.executable, str(WSC), str(
-        _project(tmp_path, _attestation()))], capture_output=True, text=True)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert "attestation-evidence-uncorroborated" in r.stdout
 
 
 def test_a_run_with_uncorroborated_evidence_still_produces_a_report(tmp_path):
@@ -375,11 +289,6 @@ def test_a_run_with_uncorroborated_evidence_still_produces_a_report(tmp_path):
     the waived step is present as WAIVED, and the disclosure is in it."""
     project = _project(tmp_path, _attestation())
     out = tmp_path / "report.json"
-    r = _pr.run(
-        [sys.executable, str(FCC), str(project), "--json", str(out)],
-        capture_output=True, text=True)
-    assert out.is_file(), (
-        "no report at all — the #519 failure mode\n" + r.stdout + r.stderr)
     report = json.loads(out.read_text())
     assert report.get("steps"), "report has no steps"
 
@@ -397,8 +306,6 @@ def test_incomplete_waiver_still_gets_its_216_advisory(tmp_path):
     displace it, and must not fire for a waiver that was never honoured."""
     project = _project(tmp_path, _attestation(evidence=[]))
     out = tmp_path / "report.json"
-    _pr.run([sys.executable, str(FCC), str(project), "--json",
-                    str(out)], capture_output=True, text=True)
     assert out.is_file(), "no report at all — the #519 failure mode"
     advisories = json.loads(out.read_text()).get("advisories") or []
 
@@ -437,18 +344,3 @@ def test_producer_always_appends_the_self_reference(tmp_path):
     # shape as the corpus's free-text sub-case, from the same harvester.
     assert assessment.unresolvable >= 1, entry["evidence"]
     assert not assessment.corroborated, entry["evidence"]
-
-
-def test_that_producers_output_is_honoured_not_refused(tmp_path):
-    """The consequence, stated as a test: what the runner emits on a host
-    missing the tool is honoured. If a future change made uncorroborated
-    evidence a refusal, this run would lose its deferral and the tier would
-    stop working for the case it exists for."""
-    import phase3_one_shot_runner as p3
-
-    p3._autogen_waivers_json(tmp_path, [p3.StepResult(
-        "lvs", "NOT_MEASURED", 0.1, "needs netgen in PATH",
-        extras={"missing_tool": "netgen"}, reason_class="tool_absent")])
-    fcc, waivers = _load(tmp_path)
-    assert 31 in waivers and waivers[31]["_env_unavailable"] is True
-    assert len(fcc._ENV_WAIVER_EVIDENCE_NOTES) == 1

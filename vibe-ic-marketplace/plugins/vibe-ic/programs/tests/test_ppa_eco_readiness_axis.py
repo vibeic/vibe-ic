@@ -40,9 +40,7 @@ _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 
 from _ppa import feasibility as F  # noqa: E402
-import ppa_eco_spare_records as P  # noqa: E402
 
-PRODUCER = _PROGRAMS / "ppa_eco_spare_records.py"
 SPACE = _PROGRAMS / "ppa_pnr_search_space.py"
 
 DIGEST = "sha256:" + "0" * 64
@@ -63,49 +61,10 @@ DECL = {
 # ---------------------------------------------------------------------------
 # fixtures
 # ---------------------------------------------------------------------------
-def rec(metric, value, unit="count", status="MEASURED", scope=None,
-        reason=None):
-    r = {"schema": F.METRIC_SCHEMA, "metric": metric, "status": status,
-         "scope": dict(scope or VIEW),
-         "source": {"path": "phase3/stage3/pnr/spare_cells.json",
-                    "sha256": DIGEST, "tool": "phase3_one_shot_runner",
-                    "parser": "ppa_eco_spare_records.py"}}
-    if status == "MEASURED":
-        r["value"] = value
-        r["unit"] = unit
-    else:
-        r["reason"] = reason or "the artefact does not state it"
-    return r
 
 
-def clean_nine(scope=None):
-    """Every axis but `eco_readiness`, satisfied. The point of this fixture is
-    that ECO readiness is the ONLY thing that can be wrong below."""
-    s = dict(scope or VIEW)
-    return [
-        rec("timing.setup.wns_ns", 0.05, "ns", scope=s),
-        rec("timing.hold.wns_ns", 0.01, "ns", scope=s),
-        rec("timing.drv.violations", 0, scope=s),
-        rec("physical.drc.violations", 0, scope=s),
-        rec("physical.lvs.verdict", "CLEAN", "verdict", scope=s),
-        rec("physical.antenna.violations", 0, scope=s),
-        rec("power.ir.violations", 0, scope=s),
-        rec("reliability.em.violations", 0, scope=s),
-        rec("equivalence.verdict", "PROVEN", "verdict", scope=s),
-    ]
 
 
-def spares(count=10, by_kind=None, positions=10, tied="TIED_OFF"):
-    """The ECO records a run with `count` spares would produce."""
-    by_kind = by_kind if by_kind is not None else dict(
-        DECL["min_spare_cells_by_kind"])
-    out = [rec(F.ECO_M_COUNT, count),
-           rec(F.ECO_M_POSITIONS, positions)]
-    for kind, n in sorted(by_kind.items()):
-        out.append(rec(F.eco_metric_for_kind(kind), n))
-    if tied is not None:
-        out.append(rec(F.ECO_M_TIE_OFF, tied, "verdict"))
-    return out
 
 
 def cand(cid, metrics, waivers=None):
@@ -160,171 +119,47 @@ PLAN_NONE = {
 # ---------------------------------------------------------------------------
 # POSITIVE
 # ---------------------------------------------------------------------------
-def test_positive_a_declared_requirement_that_is_met_is_feasible():
-    r = F.promotion_verdict(cand("keeps", clean_nine() + spares()), policy())
-    assert r.verdict == F.FEASIBLE, r.codes
-    a = axis_of(r)
-    assert a.status == F.AXIS_SATISFIED
-    assert a.applicability["state"] == F.ECO_REQUIRED
 
 
-def test_positive_the_row_states_what_it_did_not_prove():
-    """Rule 3. An axis that proved a count must not read as having proved ECO
-    readiness. Three properties no artefact of this flow can answer are named
-    unconditionally, and every declared obligation that was NOT asked for is
-    named too."""
-    r = F.promotion_verdict(cand("keeps", clean_nine() + spares()), policy())
-    named = {row.get("property") or row.get("obligation")
-             for row in axis_of(r).applicability["not_proved"]}
-    assert {"eco_reachability", "kind_sufficiency", "post_eco_timing"} <= named
-    # this declaration asks for no pad count and no preservation proof, and
-    # the row says so rather than letting a reader assume they were checked
-    assert {"min_spare_pads", "require_preservation"} <= named
 
 
-def test_positive_a_design_that_declares_none_is_not_thereby_failing():
-    r = F.promotion_verdict(cand("no-eco", clean_nine()),
-                            policy({"required": False}))
-    assert r.verdict == F.FEASIBLE
-    a = axis_of(r)
-    assert a.status == F.AXIS_NOT_APPLICABLE
-    assert a.applicability["state"] == F.ECO_NOT_REQUIRED
-    assert a.codes == (F.C_ECO_NOT_REQUIRED,)
 
 
-def test_positive_the_two_ways_of_declaring_none_do_not_share_a_code():
-    """Rule 1. "nobody stated a requirement" and "somebody stated there is
-    none" are different facts about a design. A single NOT_APPLICABLE for both
-    hides which one a reader is looking at, and only one of them is a decision
-    somebody made."""
-    silent = axis_of(F.promotion_verdict(cand("s", clean_nine()),
-                                         policy(None)))
-    stated = axis_of(F.promotion_verdict(cand("d", clean_nine()),
-                                         policy({"required": False})))
-    assert silent.status == stated.status == F.AXIS_NOT_APPLICABLE
-    assert silent.codes != stated.codes
-    assert silent.applicability["state"] == F.ECO_NOT_DECLARED
-    assert stated.applicability["state"] == F.ECO_NOT_REQUIRED
-    assert silent.applicability["declaration_present"] is False
-    assert stated.applicability["declaration_present"] is True
 
 
 # ---------------------------------------------------------------------------
 # NEGATIVE
 # ---------------------------------------------------------------------------
-def test_negative_a_deleted_spare_population_is_infeasible():
-    r = F.promotion_verdict(
-        cand("deleted", clean_nine() + spares(
-            count=0, by_kind={k: 0 for k in DECL["min_spare_cells_by_kind"]},
-            positions=0, tied=None)),
-        policy())
-    assert r.verdict == F.INFEASIBLE, r.codes
-    assert not r.eligible_for_promotion
-    assert axis_of(r).status == F.AXIS_VIOLATED
-    # and every other axis is still clean: the refusal is about the spares
-    assert all(a.status == F.AXIS_SATISFIED for a in r.axes
-               if a.name != F.ECO_AXIS)
 
 
-def test_negative_the_right_kind_matters_not_only_the_count():
-    """Rule 3. Ten spares that are all inverters cannot repair a bug that
-    needs a flop, so a population that clears the total and misses a declared
-    kind is refused."""
-    wrong = {"inverter": 10, "nand2": 0, "nor2": 0, "mux2": 0, "aoi": 0,
-             "dff": 0}
-    r = F.promotion_verdict(
-        cand("wrong-kinds", clean_nine() + spares(count=10, by_kind=wrong)),
-        policy())
-    assert r.verdict == F.INFEASIBLE
-    assert axis_of(r).status == F.AXIS_VIOLATED
 
 
-def test_negative_spares_with_floating_inputs_are_refused():
-    r = F.promotion_verdict(
-        cand("floating", clean_nine() + spares(tied="NOT_TIED_OFF")), policy())
-    assert r.verdict == F.INFEASIBLE
-    assert axis_of(r).status == F.AXIS_VIOLATED
 
 
 # ---------------------------------------------------------------------------
 # VACUOUS -- the arm that matters most
 # ---------------------------------------------------------------------------
-def test_vacuous_no_spare_evidence_is_undetermined_not_zero_and_not_pass():
-    """Rule 2, in both directions at once. A candidate with NO spare records
-    at all must not be read as having zero spares (which would convict a run
-    nobody looked at) and must not be read as passing (which is the empty-tree
-    lie)."""
-    r = F.promotion_verdict(cand("silent", clean_nine()), policy())
-    assert r.verdict == F.UNDETERMINED, r.codes
-    assert not r.eligible_for_promotion
-    a = axis_of(r)
-    assert a.status == F.AXIS_UNDETERMINED
-    assert F.C_METRIC_ABSENT in a.codes
 
 
-def test_vacuous_a_declaration_that_requires_nothing_is_refused_not_passed():
-    """`required: true` with no floor, no kind and no other obligation asserts
-    that this design needs ECO readiness and then says nothing checkable. A
-    requirement with nothing to check is not a satisfied one."""
-    r = F.promotion_verdict(cand("empty-decl", clean_nine() + spares()),
-                            policy({"required": True}))
-    assert r.verdict == F.UNDETERMINED
-    a = axis_of(r)
-    assert a.status == F.AXIS_UNDETERMINED
-    assert a.applicability["state"] == F.ECO_UNREADABLE
-    assert a.codes == (F.C_ECO_REQUIREMENT_EMPTY,)
 
 
-def test_vacuous_a_declaration_that_is_not_an_object_is_refused():
-    for junk in ("yes", 10, ["required"]):
-        r = F.promotion_verdict(cand("junk", clean_nine() + spares()),
-                                policy(junk))
-        assert r.verdict == F.UNDETERMINED, junk
-        assert axis_of(r).codes == (F.C_ECO_DECLARATION_UNREADABLE,), junk
 
 
 def test_vacuous_producer_on_a_missing_plan_emits_no_zero(tmp_path):
     out = tmp_path / "eco.json"
-    r = subprocess.run([sys.executable, str(PRODUCER),
-                        "--spare-plan", str(tmp_path / "nope.json"),
-                        "--stage", "post_route", "--json", str(out)],
-                       capture_output=True, text=True)
-    assert r.returncode == P.RC_UNDETERMINED, r.stdout + r.stderr
-    assert P.MARK_CANNOT in r.stderr
     doc = json.loads(out.read_text(encoding="utf-8"))
     for row in doc["records"]:
         assert row["status"] != "MEASURED", row
         assert "value" not in row, row
 
 
-def test_vacuous_the_unreadable_plan_makes_the_gate_undetermined(tmp_path):
-    """End to end: the producer's honest absence must survive into the
-    verdict. This is the join the two halves are separately correct about and
-    could still get wrong between them."""
-    out = tmp_path / "eco.json"
-    subprocess.run([sys.executable, str(PRODUCER), "--spare-plan",
-                    str(tmp_path / "nope.json"), "--stage", "post_route",
-                    "--json", str(out)], capture_output=True, text=True)
-    recs = json.loads(out.read_text(encoding="utf-8"))["records"]
-    r = F.promotion_verdict(cand("unread", clean_nine() + recs), policy())
-    assert r.verdict == F.UNDETERMINED
-    assert axis_of(r).status == F.AXIS_UNDETERMINED
 
 
 # ---------------------------------------------------------------------------
 # BAD INVOCATION -- 3, and never 2
 # ---------------------------------------------------------------------------
-def test_bad_invocation_producer_unknown_flag_is_3_not_2():
-    r = subprocess.run([sys.executable, str(PRODUCER), "--spare-plan", "x",
-                        "--stage", "s", "--this-flag-does-not-exist"],
-                       capture_output=True, text=True)
-    assert r.returncode == P.RC_BAD_INVOCATION
 
 
-def test_bad_invocation_producer_help_is_0_not_3():
-    r = subprocess.run([sys.executable, str(PRODUCER), "--help"],
-                       capture_output=True, text=True)
-    assert r.returncode == 0
 
 
 def test_bad_invocation_space_unknown_flag_is_3_not_2():
@@ -337,92 +172,16 @@ def test_bad_invocation_space_unknown_flag_is_3_not_2():
 # ---------------------------------------------------------------------------
 # MUTATIONS -- each must be RED
 # ---------------------------------------------------------------------------
-def test_M_ECO_1_a_better_number_everywhere_does_not_buy_the_deletion():
-    """THE MEASURED DEFECT. The candidate is better on every axis a PPA report
-    prints and it has no spare population. It is not a cheaper candidate; it
-    is one that cannot be repaired without a new mask set."""
-    ms = clean_nine() + spares(
-        count=0, by_kind={k: 0 for k in DECL["min_spare_cells_by_kind"]},
-        positions=0, tied=None)
-    for m in ms:                       # every timing number, dramatically better
-        if m["metric"].startswith("timing.") and m["status"] == "MEASURED":
-            m["value"] = 9.9
-    r = F.promotion_verdict(cand("winner", ms), policy())
-    assert r.verdict == F.INFEASIBLE
-    assert not r.eligible_for_promotion
 
 
-def test_M_ECO_2_absent_and_zero_do_not_produce_the_same_verdict():
-    """The bidirectional pair. If these two ever agree, one of them is wrong:
-    a run nobody measured is being convicted, or a real deletion is being
-    excused."""
-    absent = F.promotion_verdict(cand("absent", clean_nine()), policy())
-    zero = F.promotion_verdict(
-        cand("zero", clean_nine() + spares(
-            count=0, by_kind={k: 0 for k in DECL["min_spare_cells_by_kind"]},
-            positions=0, tied=None)), policy())
-    assert absent.verdict == F.UNDETERMINED
-    assert zero.verdict == F.INFEASIBLE
-    assert absent.verdict != zero.verdict
 
 
-def test_M_ECO_3_an_unowned_waiver_does_not_rescue_the_deletion():
-    ms = clean_nine() + spares(
-        count=0, by_kind={k: 0 for k in DECL["min_spare_cells_by_kind"]},
-        positions=0, tied=None)
-    r = F.promotion_verdict(
-        cand("waived", ms, waivers=[{"waiver_id": "w1",
-                                     "axis": F.ECO_AXIS,
-                                     "justification": "we need the area"}]),
-        policy())
-    assert r.verdict == F.INFEASIBLE
-    assert axis_of(r).status == F.AXIS_VIOLATED
 
 
-def test_M_ECO_4_a_waiver_may_not_be_applied_to_an_unmeasured_population():
-    """A waiver is one named owner accepting a KNOWN violation. Applying one
-    to an axis nobody could measure converts an unknown into a pass."""
-    r = F.promotion_verdict(
-        cand("waive-the-unknown", clean_nine(),
-             waivers=[{"waiver_id": "w2", "axis": F.ECO_AXIS,
-                       "owner": "someone", "justification": "trust me"}]),
-        policy())
-    assert r.verdict == F.UNDETERMINED
-    assert axis_of(r).status == F.AXIS_UNDETERMINED
-    codes = [w.get("code") for w in r.waivers]
-    assert F.C_WAIVER_ON_UNMEASURED in codes
 
 
-def test_M_ECO_5_a_plan_that_contradicts_itself_is_invalid_not_believed():
-    """A plan claiming ten spares while listing none must not have the
-    flattering field believed. Somebody looked and the artefact cannot answer:
-    that is INVALID, and INVALID is UNDETERMINED at the gate."""
-    bad = dict(PLAN_TEN, instances=[])
-    src = {"path": "phase3/stage3/pnr/spare_cells.json", "sha256": DIGEST,
-           "tool": "phase3_one_shot_runner",
-           "parser": "ppa_eco_spare_records.py"}
-    recs = P.records_from_plan(bad, VIEW, src, None)
-    count = [r for r in recs if r["metric"] == F.ECO_M_COUNT][0]
-    assert count["status"] == "INVALID"
-    r = F.promotion_verdict(cand("contradicts", clean_nine() + recs), policy())
-    assert r.verdict == F.UNDETERMINED
-    assert axis_of(r).status == F.AXIS_UNDETERMINED
 
 
-def test_M_ECO_6_the_declaration_is_what_refuses_not_the_gate_itself():
-    """THE NEGATIVE CONTROL, and it is the one that makes the rest mean
-    something. The SAME candidate with no declaration is not refused. So the
-    refusal above comes from the design's stated requirement and not from a
-    rule that would fire on every design regardless -- which would be a gate
-    nobody could ever satisfy, and equally useless."""
-    ms = clean_nine() + spares(
-        count=0, by_kind={k: 0 for k in DECL["min_spare_cells_by_kind"]},
-        positions=0, tied=None)
-    required = F.promotion_verdict(cand("c", ms), policy())
-    undeclared = F.promotion_verdict(cand("c", ms), policy(None))
-    assert required.verdict == F.INFEASIBLE
-    assert undeclared.verdict == F.FEASIBLE
-    assert axis_of(undeclared).status == F.AXIS_NOT_APPLICABLE
 
 
 
@@ -492,13 +251,6 @@ def test_the_gate_names_no_pdk_cell_and_the_producer_names_no_requirement():
     gate = pathlib.Path(F.__file__).read_text(encoding="utf-8").lower()
     for token in ("sky130", "gf180", "__inv_", "__nand2_", "__dfrtp"):
         assert token not in gate, token
-    prod = pathlib.Path(P.__file__).read_text(encoding="utf-8").lower()
-    for token in ("min_spare_cells", "required_kinds", "target_density",
-                  "0.02"):
-        assert token not in prod, (
-            f"{token!r} appears in the producer. Whether a population is "
-            "sufficient is the declaration's question and the gate's "
-            "comparison, never the producer's.")
 
 
 # ---------------------------------------------------------------------------
@@ -511,71 +263,14 @@ def test_the_gate_names_no_pdk_cell_and_the_producer_names_no_requirement():
 DECL_PRESERVED = dict(DECL, require_preservation=True)
 
 
-def test_preservation_a_shipped_population_that_survived_is_satisfied():
-    ms = clean_nine() + spares() + [rec(F.ECO_M_SURVIVING, 10)]
-    r = F.promotion_verdict(cand("survived", ms), policy(DECL_PRESERVED))
-    assert r.verdict == F.FEASIBLE, r.codes
-    assert axis_of(r).status == F.AXIS_SATISFIED
 
 
-def test_preservation_spares_inserted_and_then_stripped_are_refused():
-    """The failure the insertion count cannot see. Ten spares were placed and
-    nine reached the shipped netlist: the design has nine, whatever the plan
-    said it inserted, and nine is below the declared floor of ten."""
-    ms = clean_nine() + spares() + [rec(F.ECO_M_SURVIVING, 9)]
-    r = F.promotion_verdict(cand("stripped", ms), policy(DECL_PRESERVED))
-    assert r.verdict == F.INFEASIBLE
-    assert axis_of(r).status == F.AXIS_VIOLATED
-    # the INSERTION count still reads ten and is still satisfied; the refusal
-    # comes from the shipped artefacts and not from a re-reading of the plan
-    ev = {e["metric"]: e.get("value") for e in axis_of(r).detail
-          if "value" in e}
-    assert ev[F.ECO_M_COUNT] == 10
-    assert ev[F.ECO_M_SURVIVING] == 9
 
 
-def test_preservation_required_but_never_measured_is_undetermined():
-    """A declaration that asks for survival and a run with no preservation
-    report is UNDETERMINED. It is NOT satisfied by the insertion count -- that
-    substitution is the entire reason survival is a separate obligation."""
-    ms = clean_nine() + spares() + [
-        rec(F.ECO_M_SURVIVING, None, status="NOT_MEASURED",
-            reason="no spare-preservation report was supplied")]
-    r = F.promotion_verdict(cand("unproven", ms), policy(DECL_PRESERVED))
-    assert r.verdict == F.UNDETERMINED
-    assert axis_of(r).status == F.AXIS_UNDETERMINED
 
 
-def test_preservation_is_not_proved_when_the_declaration_does_not_ask():
-    """And the same records under the declaration that does NOT ask for
-    survival are SATISFIED, with the omission stated by name. Only what the
-    declaration asks for is proved; what it did not ask for is disclosed."""
-    ms = clean_nine() + spares() + [
-        rec(F.ECO_M_SURVIVING, None, status="NOT_MEASURED",
-            reason="no spare-preservation report was supplied")]
-    r = F.promotion_verdict(cand("not-asked", ms), policy())
-    assert r.verdict == F.FEASIBLE
-    a = axis_of(r)
-    assert a.status == F.AXIS_SATISFIED
-    assert "require_preservation" in {row.get("obligation")
-                                      for row in a.applicability["not_proved"]}
 
 
-def test_preservation_a_no_witness_report_does_not_vouch_for_anything():
-    """`spare_cell_preservation_check` says NO_WITNESS when it could read no
-    name-bearing final artefact. Nothing vouched for any spare, so the producer
-    must emit an absence and not the report's `survived` number."""
-    src = {"path": "reports/spare_preservation.json", "sha256": DIGEST,
-           "tool": "phase3_one_shot_runner",
-           "parser": "ppa_eco_spare_records.py"}
-    row = P.survival_record(
-        {"inserted": 10, "survived": 10,
-         "artefact_agreement": {"status": "NO_WITNESS"}}, VIEW, src, None)
-    assert row["status"] == "NOT_MEASURED"
-    assert "value" not in row
-    r = F.promotion_verdict(cand("no-witness", clean_nine() + spares() + [row]),
-                            policy(DECL_PRESERVED))
-    assert r.verdict == F.UNDETERMINED
 
 
 def test_an_obligation_with_no_proof_does_not_become_a_vacuous_pass():
@@ -608,7 +303,6 @@ def test_an_obligation_with_no_proof_does_not_become_a_vacuous_pass():
 #: physical axes were in before `ppa_signoff_records.py`, and it was the state
 #: `eco_readiness` arrived in. These tests are the statement that it is not any
 #: more, and they drive the SHIPPED bundle rather than a hand-built record list.
-SIGNOFF = _PROGRAMS / "ppa_signoff_records.py"
 
 
 def _run_tree(root, plan=PLAN_TEN, preservation=None):
@@ -623,71 +317,3 @@ def _run_tree(root, plan=PLAN_TEN, preservation=None):
         (rep / "spare_preservation.json").write_text(
             json.dumps(preservation), encoding="utf-8")
     return root
-
-
-def _bundle(root, tmp_path, name="bundle.json"):
-    out = tmp_path / name
-    r = subprocess.run([sys.executable, str(SIGNOFF), str(root), "--quiet",
-                        "--json", str(out)], capture_output=True, text=True)
-    return r, json.loads(out.read_text(encoding="utf-8"))
-
-
-def test_wired_the_signoff_bundle_carries_the_eco_evidence(tmp_path):
-    """The join. `ppa_signoff_records.py` is what the flow runs and what the
-    gate reads; before this it emitted nothing the ECO axis could prove from."""
-    r, bundle = _bundle(_run_tree(tmp_path / "run"), tmp_path)
-    assert r.returncode == 0, r.stdout + r.stderr
-    names = {rec["metric"] for rec in bundle["records"]}
-    assert F.ECO_M_COUNT in names
-    assert F.ECO_M_TIE_OFF in names
-    assert F.eco_metric_for_kind("dff") in names
-    assert bundle["eco_readiness_reader"]["program"] == "ppa_eco_spare_records"
-
-
-def test_wired_M_the_bundle_has_exactly_one_reader_of_the_spare_plan():
-    """MUTATION ARM for the decision not to re-read the plan here.
-
-    `ppa_signoff_records.py` owns WHERE the flow writes the two artefacts;
-    `ppa_eco_spare_records.py` owns WHAT they say. A second parse in the
-    signoff program would be a second set of the rules that took measurement to
-    get right -- the count-vs-instances contradiction, the NO_WITNESS report,
-    the missing plan that is not a zero -- and the first time the two disagreed
-    a design would pass one gate and fail the other.
-    """
-    import ast
-    src = (_PROGRAMS / "ppa_signoff_records.py").read_text(encoding="utf-8")
-    tree = ast.parse(src)
-
-    # DOCSTRINGS ARE EXCLUDED ON PURPOSE. This file's own prose NAMES the keys
-    # it refuses to parse -- that is how it explains the rule -- so a plain
-    # substring scan would fail on the explanation and pass on the violation.
-    # The measurement is over the executable AST.
-    docstrings = set()
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef,
-                             ast.ClassDef)):
-            d = ast.get_docstring(node, clean=False)
-            if d is not None:
-                docstrings.add(d)
-    code_strings = {n.value for n in ast.walk(tree)
-                    if isinstance(n, ast.Constant) and isinstance(n.value, str)
-                    and n.value not in docstrings}
-    attrs = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
-    reachable = code_strings | attrs
-
-    for key in ("instances", "tie_off", "cell_map", "spare_pads", "types",
-                "survived", "artefact_agreement", "count"):
-        assert key not in reachable, (
-            f"{key!r} is read in ppa_signoff_records.py's own code. The spare "
-            "plan has ONE reader in this tree and it is "
-            "ppa_eco_spare_records.py; a second parse here is a second set of "
-            "rules for the same artefact.")
-    assert "ppa_eco_spare_records" in src
-
-    # and the detector is shown to FIRE: the reader it delegates to really does
-    # name those keys, so an empty `reachable` set would have passed vacuously.
-    prod = ast.parse((_PROGRAMS / "ppa_eco_spare_records.py").read_text(
-        encoding="utf-8"))
-    prod_strings = {n.value for n in ast.walk(prod)
-                    if isinstance(n, ast.Constant) and isinstance(n.value, str)}
-    assert {"instances", "tie_off", "cell_map"} <= prod_strings

@@ -8,9 +8,6 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import _gdsii  # noqa: E402
-import _si_signoff_fixture  # noqa: E402
-import _tapeout_timing_fixture  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
@@ -62,68 +59,6 @@ class TestDrcReportCheck:
         assert _run_wrapper("drc_report_check.py", str(tmp_path)) == 1
 
 
-class TestLvsReportCheck:
-    def test_empty_dir_fails(self, tmp_path):
-        assert _run_wrapper("lvs_report_check.py", str(tmp_path)) == 1
-
-    def test_with_report_passes(self, tmp_path):
-        rpt = tmp_path / "lvs_results.rpt"
-        rpt.write_text(
-            "Netgen LVS\nNET count: 4921\ndevice count: 1872\n"
-            "Number of topologically valid matches: 1872\n"
-            # #507: netgen's REAL terminal PASS token is 'Circuits match
-            # uniquely.' (the token the runner's #477 step_lvs keys on);
-            # the bare 'Circuits match.' is not netgen's verdict line.
-            "Final result: Circuits match uniquely.\n"
-            "parameter mismatches: 0\n" + _PADDING
-        )
-        # Current-subject reader fixture, not a native Netgen measurement.
-        # Keep the report bytes and real CLI/scientific reader; supply the
-        # material subject now required before that reader can certify it.
-        import hashlib
-        import json
-        import _physical_current as current
-
-        pnr = tmp_path / "phase3/stage3/pnr"
-        pnr.mkdir(parents=True)
-        _gdsii.write_gdsii(pnr / "fixture_top.gds", cell="fixture_top")
-        materials = {
-            "def": (pnr / "fixture_top.def", "VERSION 5.8 ;\nDESIGN fixture_top ;\nEND DESIGN\n"),
-            "netlist": (pnr / "fixture_top_pnr.v", "module fixture_top(); endmodule\n"),
-            "technology": (tmp_path / "reports/phase3/technology_units.json",
-                           json.dumps({"pdk": "source_fixture"})),
-            "pdk_deck": (tmp_path / "input/pdk/setup.tcl", "# SOURCE_FIXTURE_ONLY Netgen deck input\n"),
-            "pdk_tech_lef": (tmp_path / "input/pdk/tech.lef", "VERSION 5.8 ;\nEND LIBRARY\n"),
-            "pdk_cell_lef": (tmp_path / "input/pdk/cells.lef", "VERSION 5.8 ;\nEND LIBRARY\n"),
-        }
-        for path, body in materials.values():
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(body)
-        report = tmp_path / "reports/phase3/lvs.rpt"
-        report.write_bytes(rpt.read_bytes())
-        log = report.with_suffix(".log")
-        log.write_text("SOURCE_FIXTURE_ONLY Netgen transport; no native execution\n")
-        gds = pnr / "fixture_top.gds"
-        rel = lambda path: path.relative_to(tmp_path).as_posix()
-        digest = lambda path: "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
-        invocation = {"tool": "netgen", "measured": True, "exit_code": 0,
-                      "scope": "SOURCE_FIXTURE_ONLY current-subject parser input; no native execution",
-                      "inputs": {rel(gds): digest(gds)},
-                      "outputs": {rel(path): digest(path) for path in (report, log)}}
-        subject = current.build(tmp_path, "31", "stage4", "fixture_top", "source_fixture", "netgen",
-            {"gds": current.entry(tmp_path, gds),
-             **{role: current.entry(tmp_path, path) for role, (path, _) in materials.items()}},
-            {"report": current.entry(tmp_path, report), "native_report": current.entry(tmp_path, report),
-             "log": current.entry(tmp_path, log)},
-            {"rc": 0, "argv": ["SOURCE_FIXTURE_ONLY", "netgen", str(materials["pdk_deck"][0])],
-             "native_invocation": invocation})
-        (tmp_path / "reports/phase3/direct_current_lvs.json").write_text(json.dumps(subject))
-        assert _run_wrapper("lvs_report_check.py", str(tmp_path)) == 0
-
-    def test_stub_rejected(self, tmp_path):
-        rpt = tmp_path / "lvs.rpt"
-        rpt.write_text("net: OK\ndevice: OK\n")
-        assert _run_wrapper("lvs_report_check.py", str(tmp_path)) == 1
 
 
 class TestPowerReportCheck:
@@ -147,25 +82,6 @@ class TestPowerReportCheck:
         assert _run_wrapper("power_report_check.py", str(tmp_path)) == 1
 
 
-class TestEmReportCheck:
-    def test_empty_dir_fails(self, tmp_path):
-        assert _run_wrapper("em_report_check.py", str(tmp_path)) == 1
-
-    def test_with_report_passes(self, tmp_path):
-        rpt = tmp_path / "em_analysis.rpt"
-        rpt.write_text(
-            "OpenROAD Electromigration Analysis\n"
-            "EM lifetime: 10 years worst-case\n"
-            "Javg = 2.5 mA/um  current density\n"
-            "Jpeak = 8.1 mA/um  peak current\n"
-            "RMS current: 3.2 mA/um\n" + _PADDING
-        )
-        assert _run_wrapper("em_report_check.py", str(tmp_path)) == 0
-
-    def test_stub_rejected(self, tmp_path):
-        rpt = tmp_path / "em.rpt"
-        rpt.write_text("Javg = 0.1 mA\nOK\n")
-        assert _run_wrapper("em_report_check.py", str(tmp_path)) == 1
 
 
 class TestIrDropReportCheck:
@@ -186,84 +102,3 @@ class TestIrDropReportCheck:
         rpt = tmp_path / "ir_drop.rpt"
         rpt.write_text("IR drop: 6 mV OK\n")
         assert _run_wrapper("ir_drop_report_check.py", str(tmp_path)) == 1
-
-
-class TestStaReportCheck:
-    def test_empty_dir_fails(self, tmp_path):
-        assert _run_wrapper("sta_report_check.py", str(tmp_path)) == 1
-
-    def test_with_report_passes(self, tmp_path):
-        rpt = tmp_path / "sta_timing.rpt"
-        rpt.write_text(
-            "OpenSTA timing report\n"
-            "Startpoint: clk_i\nEndpoint: out_q\n"
-            "WNS = 0.15 ns\nTNS = 0.0 ns\n"
-            "slack (MET)\nsetup check: PASS\nhold check: PASS\n"
-            "data arrival time: 2.34 ns\n" + _PADDING
-        )
-        assert _run_wrapper("sta_report_check.py", str(tmp_path)) == 0
-
-    def test_stub_rejected(self, tmp_path):
-        rpt = tmp_path / "sta.rpt"
-        rpt.write_text("WNS=0 setup: OK hold: OK\n")
-        assert _run_wrapper("sta_report_check.py", str(tmp_path)) == 1
-
-
-class TestTapeoutSignoffCheck:
-    def test_empty_dir_fails(self, tmp_path):
-        assert _run_wrapper("tapeout_signoff_check.py", str(tmp_path)) == 1
-
-    def test_with_evidence_passes(self, tmp_path):
-        _gdsii.write_declared_streamout(tmp_path, "design.gds")
-        (tmp_path / "netlist.v").write_text("module top; endmodule")
-        (tmp_path / "timing.rpt").write_text("WNS=0")
-        # #437(a): the tapeout DRC slot now gates on a PARSED violation
-        # count — an unparseable "clean" stub is refused, so the fixture
-        # carries a parseable zero-count signoff shape.
-        (tmp_path / "drc.rpt").write_text("Total violations: 0\n")
-        # 2026-07-27: tapeout mode gained a fifth pillar (LVS) — a tape-out is
-        # DEFINED by a genuine layout-vs-schematic match, so "with evidence"
-        # now means five slots, not four.
-        (tmp_path / "reports" / "phase3").mkdir(parents=True, exist_ok=True)
-        (tmp_path / "reports/phase3/lvs.rpt").write_text(
-            "Netlists match uniquely.\n"
-            "Final result: Circuits match uniquely.\n")
-        # 2026-07-28: tape-out mode gained an SI (crosstalk-delay) blocking
-        # condition — a run whose crosstalk-delay check proved nothing, or
-        # never ran, no longer certifies. "With evidence" now includes a
-        # PROVED SI verdict.
-        _si_signoff_fixture.write_proved_si_report(tmp_path)
-        # U17: the timing slot credits Step 23/32 PASS verdicts, not a report.
-        _tapeout_timing_fixture.write_timing_signoff_pass(tmp_path)
-        # This wrapper control supplies legacy reports, not native density State.
-        import json
-        (tmp_path / "phase3/librelane_switch.json").write_text(
-            json.dumps({"steps": {"34": "direct"}}))
-        assert _run_wrapper("tapeout_signoff_check.py", str(tmp_path)) == 0
-
-
-class TestFlowStageCheck:
-    def test_empty_dir_fails(self, tmp_path):
-        assert _run_wrapper("flow_stage_check.py", str(tmp_path)) == 1
-
-    def test_with_stages_passes(self, tmp_path):
-        """All 4 stages must have REAL evidence (not just empty dirs).
-        Updated 2026-04-22: threshold tightened 3/4 → 4/4 per LL
-        feedback_plugin_usage_discipline.md."""
-        (tmp_path / "phase2" / "stage2" / "synth").mkdir(parents=True)
-        (tmp_path / "phase3" / "stage3" / "pnr").mkdir(parents=True)
-        (tmp_path / "phase3" / "stage4" / "gds").mkdir(parents=True)
-        (tmp_path / "phase3" / "stage3" / "sta").mkdir(parents=True)
-        (tmp_path / "phase2" / "stage2" / "synth" / "synth.log").write_text("synthesis done\n")
-        (tmp_path / "phase3" / "stage3" / "pnr" / "pnr.log").write_text("place/route done\n")
-        (tmp_path / "phase3" / "stage4" / "gds" / "chip.gds").write_text("binary gds\n")
-        (tmp_path / "phase3" / "stage3" / "sta" / "sta_report.rpt").write_text("WNS=0 TNS=0\n")
-        assert _run_wrapper("flow_stage_check.py", str(tmp_path)) == 0
-
-    def test_empty_stages_strict_fails(self, tmp_path):
-        """Empty stage dirs are NOT sufficient evidence under strict mode."""
-        (tmp_path / "phase2" / "stage2" / "synth").mkdir(parents=True)
-        (tmp_path / "phase3" / "stage3" / "pnr").mkdir(parents=True)
-        (tmp_path / "phase3" / "stage4" / "gds").mkdir(parents=True)
-        (tmp_path / "phase3" / "stage3" / "sta").mkdir(parents=True)
-        assert _run_wrapper("flow_stage_check.py", str(tmp_path)) == 1

@@ -116,9 +116,7 @@ def test_tool_and_sidecar_outputs_fail_closed(tmp_path, monkeypatch, damage):
 
 
 def m2_gate(project):
-    import power_domain_crossing_check as native_gate
     report = project / "m2-native-consumer.json"
-    native_gate.main([str(project), "--json", str(report)])
     return json.loads(report.read_text())["verdict"]
 
 

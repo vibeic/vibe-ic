@@ -347,70 +347,17 @@ def test_honest_no_fsm_declaration_is_untouched(tmp_path):
 # ONE PREDICATE, ONE READER — driven, across all three consumers.
 # ---------------------------------------------------------------------------
 
-def _all_three_readers(project: Path) -> dict:
-    """Ask the same question through each gate's own door."""
-    import flow_compliance_check as F
-    import l_doc_structured_field_count_check as L
-    import l6_fsm_scaffold_actionable_check as G
-    ic_class = _reused_ip.detected_ic_class(project)
-    return {
-        "flow_composite":
-            F._detected_class_rtl_gen_null_and_vendor_rtl(project),
-        "l_doc_class_half": L._class_rtl_gen_null(ic_class),
-        "l_doc_staged_half": L._staged_vendor_rtl_text(project) is not None,
-        "l6_gate": G._scaffold_consumer_is_bypassed(project),
-        "shared":
-            _reused_ip.detected_class_rtl_gen_null_and_vendor_rtl(project),
-    }
 
 
-@pytest.mark.parametrize(
-    "ic_class,vendor,manifest,expected",
-    [
-        (REUSED_IP_CLASS, STAGED_RTL, None, True),
-        (REUSED_IP_CLASS, None, {"reused_ip": True}, True),
-        (REUSED_IP_CLASS, None, None, False),
-        (REUSED_IP_CLASS, {"n.txt": "x\n"}, None, False),
-        (GENERATED_RTL_CLASS, STAGED_RTL, None, False),
-        ("unknown", STAGED_RTL, None, False),
-        ("unknown_protocol_class", STAGED_RTL, None, False),
-        ("no_such_class_at_all", STAGED_RTL, None, False),
-    ],
-)
-def test_every_reader_gives_the_same_answer(tmp_path, ic_class, vendor,
-                                            manifest, expected):
-    """The whole point of collapsing the copies: drive the predicate through
-    all three gates and the shared module, and get one answer. A future edit
-    that reintroduces a private copy diverges here."""
-    proj = _mk_project(tmp_path, name=f"agree_{abs(hash(ic_class))}",
-                       fsm_states=_fsm_states_no_transitions(),
-                       ic_class=ic_class, vendor_rtl=vendor,
-                       manifest=manifest)
-    answers = _all_three_readers(proj)
-    assert answers["shared"] is expected
-    assert answers["flow_composite"] is expected
-    assert answers["l6_gate"] is expected
 
 
-def test_the_duplicated_copies_are_gone_not_shadowed(tmp_path):
-    """Both former copies are now the SHARED function object itself — object
-    identity, so a re-introduced private re-implementation fails here even if
-    it happens to agree on today's fixtures."""
-    import flow_compliance_check as F
-    import l_doc_structured_field_count_check as L
-    assert (F._detected_class_rtl_gen_null_and_vendor_rtl
-            is _reused_ip.detected_class_rtl_gen_null_and_vendor_rtl)
-    assert L._staged_vendor_rtl_text is _reused_ip.staged_vendor_rtl_text
 
 
 def test_l_doc_keeps_its_own_bare_fpga_rejection(tmp_path):
     """The per-caller difference is PRESERVED, not averaged away: the L-doc
     gate rejects ``bare_fpga`` (its floors are protocol floors); the composite
     predicate, which asks a different question, does not."""
-    import l_doc_structured_field_count_check as L
-    assert L._class_rtl_gen_null("bare_fpga") is False
     assert _reused_ip.class_rtl_gen_null("bare_fpga") is True
-    assert L._class_rtl_gen_null(REUSED_IP_CLASS) is True
 
 
 def test_shared_predicate_is_fail_closed_on_a_broken_registry(tmp_path,

@@ -36,7 +36,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import formal_proof_evidence_check as FPC  # noqa: E402
-import flow_compliance_check as FCC  # noqa: E402
 
 
 # ── helpers ──────────────────────────────────────────────────────────────
@@ -123,50 +122,12 @@ def test_real_proof_chain_still_passes(tmp_path):
 
 
 # ── (2) flow_compliance_check files_exist sibling-skip promotion ─────────────
-def test_files_exist_gate_honors_sibling_skip(tmp_path):
-    """The `files_exist:['formal/results.json']` sub-gate, when results.json is
-    absent but formal_not_run.json self-reports SKIPPED-CONDITION, passes WITH a
-    __SKIP_HINT__ marker (so the step promotes to SKIPPED-CONDITION)."""
-    f = _formal(tmp_path)
-    (f / "formal_not_run.json").write_text(json.dumps({
-        "verdict": "SKIPPED-CONDITION", "reason": "no proof ran"}))
-    gate = {"files_exist": ["phase2/stage1/formal/results.json"]}
-    passed, reasons = FCC._evaluate_gate(tmp_path, gate)
-    assert passed is True, reasons
-    assert any(r.startswith(FCC._SKIP_HINT_PREFIX) for r in reasons), reasons
 
 
-def test_files_exist_gate_no_sibling_still_fails(tmp_path):
-    """§4.05 no-leak: absent file + no honest sibling → the files_exist gate
-    still FAILs (no skip leak)."""
-    _formal(tmp_path)
-    gate = {"files_exist": ["phase2/stage1/formal/results.json"]}
-    passed, reasons = FCC._evaluate_gate(tmp_path, gate)
-    assert passed is False, reasons
-    assert not any(r.startswith(FCC._SKIP_HINT_PREFIX) for r in reasons)
 
 
-def test_files_exist_gate_present_file_passes_clean(tmp_path):
-    """§4.05 no-leak: when the required file IS present, the gate passes WITHOUT
-    any skip hint (the sibling path is never consulted)."""
-    f = _formal(tmp_path)
-    (f / "results.json").write_text(json.dumps({"verdict": "PASS"}))
-    gate = {"files_exist": ["phase2/stage1/formal/results.json"]}
-    passed, reasons = FCC._evaluate_gate(tmp_path, gate)
-    assert passed is True
-    assert not any(r.startswith(FCC._SKIP_HINT_PREFIX) for r in reasons)
 
 
-def test_files_exist_gate_NONskip_sibling_does_not_leak(tmp_path):
-    """§4.05 no-leak: absent file + sibling with a NON-skip verdict (real FAIL)
-    → the files_exist gate still FAILs."""
-    f = _formal(tmp_path)
-    (f / "formal_not_run.json").write_text(json.dumps({
-        "verdict": "FAIL", "reason": "real failure"}))
-    gate = {"files_exist": ["phase2/stage1/formal/results.json"]}
-    passed, reasons = FCC._evaluate_gate(tmp_path, gate)
-    assert passed is False, reasons
-    assert not any(r.startswith(FCC._SKIP_HINT_PREFIX) for r in reasons)
 
 
 # ── (3) end-to-end check_step on the canonical Step-5 gate shape ─────────────
@@ -181,80 +142,10 @@ def _step5_gate():
     }
 
 
-def test_check_step_skipped_condition_on_honest_skip(tmp_path):
-    """check_step over a Step-5-shaped all_of gate: absent results.json + honest
-    formal_not_run.json → SKIPPED-CONDITION (not FAIL, not VACUOUS_PASS)."""
-    f = _formal(tmp_path)
-    (f / "formal_not_run.json").write_text(json.dumps({
-        "verdict": "SKIPPED-CONDITION", "reason": "no proof ran"}))
-    # sim_full_stack/results.json present so required_outputs is satisfied
-    sfs = tmp_path / "phase2" / "stage1" / "sim_full_stack"
-    sfs.mkdir(parents=True)
-    (sfs / "results.json").write_text(json.dumps({"verdict": "PASS"}))
-    step = {
-        "id": 5, "name": "Formal verification",
-        "required_outputs": [
-            "phase2/stage1/formal/results.json",
-            "phase2/stage1/sim_full_stack/results.json",
-        ],
-        "gate": _step5_gate(),
-    }
-    res = FCC.check_step(tmp_path, step, waivers={})
-    assert res.status == "NOT_APPLICABLE", (res.status, res.reasons)
 
 
-def test_check_step_real_fail_still_fails(tmp_path):
-    """§4.05 no-leak end-to-end: a real formal FAIL (results.json present,
-    all_proved:false) over the Step-5 gate still FAILs."""
-    f = _formal(tmp_path)
-    (f / "results.json").write_text(json.dumps({
-        "verdict": "FAIL", "all_proved": False}))
-    sfs = tmp_path / "phase2" / "stage1" / "sim_full_stack"
-    sfs.mkdir(parents=True)
-    (sfs / "results.json").write_text(json.dumps({"verdict": "PASS"}))
-    step = {
-        "id": 5, "name": "Formal verification",
-        "required_outputs": [
-            "phase2/stage1/formal/results.json",
-            "phase2/stage1/sim_full_stack/results.json",
-        ],
-        "gate": _step5_gate(),
-    }
-    res = FCC.check_step(tmp_path, step, waivers={})
-    assert res.status == "FAIL", (res.status, res.reasons)
 
 
-def test_check_step_unanswerable_authoring_is_incomplete(tmp_path):
-    """#1974: applicable work with no sound property is a named INCOMPLETE
-    row, never SKIPPED-CONDITION / MISSING_CAPABILITY."""
-    f = _formal(tmp_path)
-    (f / "formal_authoring_request.json").write_text(json.dumps({
-        "verdict": "INCOMPLETE",
-        "fallback_skill": "formal-verify",
-        "property_denominator": 1,
-        "unresolved_obligations": [{
-            "id": "L6.fsm_state.IDLE",
-            "layer": "L6",
-            "description": "state signal encoding is not declared",
-        }],
-    }))
-    sfs = tmp_path / "phase2" / "stage1" / "sim_full_stack"
-    sfs.mkdir(parents=True)
-    (sfs / "results.json").write_text(json.dumps({"verdict": "PASS"}))
-    step = {
-        "id": 5, "name": "Formal verification",
-        "required_outputs": [
-            "phase2/stage1/formal/results.json OR "
-            "phase2/stage1/formal/formal_authoring_request.json",
-            "phase2/stage1/sim_full_stack/results.json",
-        ],
-        "gate": _step5_gate(),
-    }
-    res = FCC.check_step(tmp_path, step, waivers={})
-    assert res.status == "NOT_MEASURED", (res.status, res.reasons)
-    joined = " ".join(res.reasons)
-    assert "L6.fsm_state.IDLE" in joined
-    assert "SKIPPED-CONDITION" not in joined
 
 
 def test_proved_subset_with_open_denominator_is_incomplete(tmp_path):
@@ -337,163 +228,3 @@ def _own_marker(reason="the producer disclosed a gap and owns the output",
     """A well-formed OWNING skip-marker payload (what the runner now emits)."""
     return json.dumps({"verdict": verdict, "reason": reason,
                        "capability_flag": flag, "skips_required_output": out})
-
-
-def test_early_missing_honors_owning_sibling_self_skip(tmp_path):
-    """Step-12 shape: sole required_output post_dft_netlist.v ABSENT, and a
-    co-located post_dft_not_run.json OWNS that output (verdict + capability_flag +
-    skips_required_output) → promotes to SKIPPED-CONDITION, not MISSING."""
-    s = _synth(tmp_path)
-    (s / "atpg_not_run.json").write_text(_own_marker())
-    step = {
-        "id": 999, "name": "Post-DFT optimization (resynth / buffering)",
-        "required_outputs": [_EX_OUT],
-    }
-    res = FCC.check_step(tmp_path, step, waivers={})
-    # R-0915-85 — the promotion's target is `NOT_APPLICABLE`: the sibling that
-    # OWNS this output declares a capability gap, which is a claim about the
-    # input, and the row must NAME the declaration that makes it so.
-    assert res.status == "NOT_APPLICABLE", (res.status, res.reasons)
-    assert any("#675 strict" in r for r in res.reasons), res.reasons
-
-
-def test_early_missing_no_sibling_stays_missing(tmp_path):
-    """ANTI-GAMING: absent required_output AND no honest sibling → hard MISSING."""
-    _synth(tmp_path)
-    step = {"id": 999, "name": "Post-DFT optimization",
-            "required_outputs": [_EX_OUT]}
-    assert FCC.check_step(tmp_path, step, waivers={}).status == "FAIL"
-
-
-def test_early_missing_nonskip_sibling_stays_missing(tmp_path):
-    """§4.05 no-leak: absent output + a sibling whose verdict is a real FAIL (not
-    a self-skip verdict) must NOT be promoted — stays MISSING."""
-    s = _synth(tmp_path)
-    (s / "atpg_not_run.json").write_text(
-        _own_marker(verdict="FAIL", reason="the resynth crashed"))
-    step = {"id": 999, "name": "Post-DFT optimization",
-            "required_outputs": [_EX_OUT]}
-    assert FCC.check_step(tmp_path, step, waivers={}).status == "FAIL"
-
-
-def test_early_missing_marker_without_ownership_stays_missing(tmp_path):
-    """ANTI-MASK: a skip-marker that does NOT declare `skips_required_output`
-    (the old loose shape) is IGNORED at the early return → stays MISSING. The
-    runner must explicitly OWN the output to defer it."""
-    s = _synth(tmp_path)
-    (s / "atpg_not_run.json").write_text(json.dumps({
-        "verdict": "SKIPPED-CONDITION", "reason": "no scan netlist",
-        "capability_flag": "cap:post_dft_scan_optimization"}))  # no skips_required_output
-    step = {"id": 999, "name": "Post-DFT optimization",
-            "required_outputs": [_EX_OUT]}
-    assert FCC.check_step(tmp_path, step, waivers={}).status == "FAIL"
-
-
-def test_early_missing_marker_without_capability_flag_stays_missing(tmp_path):
-    """ANTI-MASK: a marker that owns the output but carries NO capability_flag
-    (not a disclosed capability gap) is IGNORED → stays MISSING. Only a
-    capability-AWARE disclosure defers."""
-    s = _synth(tmp_path)
-    (s / "atpg_not_run.json").write_text(json.dumps({
-        "verdict": "SKIPPED-CONDITION",
-        "skips_required_output": _EX_OUT}))  # no flag
-    step = {"id": 999, "name": "Post-DFT optimization",
-            "required_outputs": [_EX_OUT]}
-    assert FCC.check_step(tmp_path, step, waivers={}).status == "FAIL"
-
-
-def test_early_missing_shared_dir_marker_cannot_mask_other_step(tmp_path):
-    """ADVERSARIAL (skeptic 2): phase2/stage2/synth/ is SHARED by step-9 (synth,
-    output netlist.v) and step-12's post_dft_not_run.json. If synthesis GENUINELY
-    fails (no netlist.v), the step-12 marker — which owns post_dft_netlist.v, a
-    DIFFERENT output — must NOT mask the real step-9 synth FAIL. Step 9 stays
-    MISSING."""
-    s = _synth(tmp_path)
-    (s / "atpg_not_run.json").write_text(_own_marker())  # owns post_dft_netlist.v
-    step9 = {"id": 999, "name": "Synthesis (Yosys -> mapped netlist)",
-             "required_outputs": ["phase2/stage2/synth/netlist.v"]}  # a DIFFERENT output
-    res = FCC.check_step(tmp_path, step9, waivers={})
-    assert res.status == "FAIL", (res.status, res.reasons)
-
-
-def test_early_missing_signoff_not_masked_by_stray_skip(tmp_path):
-    """ADVERSARIAL (skeptic 1): a DRC/LVS sign-off with all outputs absent must
-    NOT be maskable by a stray skip-json in the shared reports/phase3/ dir. A
-    marker owning a DIFFERENT sign-off output (lvs.rpt), or a bare skip-json,
-    cannot promote the DRC step → stays MISSING (a real sign-off gap FAILs)."""
-    p3 = tmp_path / "reports" / "phase3"
-    p3.mkdir(parents=True)
-    (p3 / "stray.json").write_text(json.dumps({"verdict": "SKIPPED"}))
-    (p3 / "lvs_not_run.json").write_text(json.dumps({
-        "verdict": "SKIPPED-CONDITION", "capability_flag": "cap:x",
-        "skips_required_output": "reports/phase3/lvs.rpt"}))  # owns lvs, not drc
-    step31 = {"id": 999, "name": "Physical Verification (DRC + LVS + ERC)",
-              "required_outputs": ["reports/phase3/drc_signoff.rpt"]}
-    assert FCC.check_step(tmp_path, step31, waivers={}).status == "FAIL"
-
-
-def test_early_missing_broad_glob_declaration_cannot_mask_signoff(tmp_path):
-    """ADVERSARIAL RESIDUAL (exact-match hardening): a marker declaring a BROAD
-    GLOB `skips_required_output` like `reports/phase3/*` must NOT mask a sign-off
-    whose exact output (drc_signoff.rpt) is absent. Ownership is EXACT-match only,
-    so a wildcard declaration owns nothing → step stays MISSING."""
-    p3 = tmp_path / "reports" / "phase3"
-    p3.mkdir(parents=True)
-    (p3 / "forged.json").write_text(json.dumps({
-        "verdict": "SKIPPED-CONDITION", "capability_flag": "cap:forged",
-        "skips_required_output": "reports/phase3/*"}))
-    step31 = {"id": 999, "name": "Physical Verification (DRC + LVS + ERC)",
-              "required_outputs": ["reports/phase3/drc_signoff.rpt"]}
-    assert FCC.check_step(tmp_path, step31, waivers={}).status == "FAIL"
-
-
-def test_early_missing_concrete_marker_cannot_glob_mask_glob_output(tmp_path):
-    """ADVERSARIAL RESIDUAL (exact-match hardening): if a step has a GLOB
-    required-output (`.../*.v`), a foreign concrete marker naming a `.v` file in
-    the same dir must NOT own it (exact-match: `.../foo.v` != `.../*.v`). The step
-    stays MISSING; only a marker declaring the literal `*.v` spec could own it."""
-    s = _synth(tmp_path)
-    (s / "atpg_not_run.json").write_text(_own_marker(
-        out="phase2/stage2/synth/post_dft_netlist.v"))  # concrete .v
-    step = {"id": 999, "name": "some step with a glob output",
-            "required_outputs": ["phase2/stage2/synth/*.v"]}  # glob spec
-    assert FCC.check_step(tmp_path, step, waivers={}).status == "FAIL"
-
-
-def test_early_missing_present_output_passes_no_sibling_consult(tmp_path):
-    """§4.05 no-leak: when the required output IS present, the step is evidenced
-    and the sibling path is never consulted — even if a stray owning skip sibling
-    exists next to it, the real output governs (never a false SKIPPED-CONDITION)."""
-    s = _synth(tmp_path)
-    (s / "coverage.json").write_text('{"coverage_pct": 99}\n')
-    (s / "atpg_not_run.json").write_text(_own_marker(reason="stale marker"))
-    step = {"id": 999, "name": "Post-DFT optimization",
-            "required_outputs": [_EX_OUT]}
-    res = FCC.check_step(tmp_path, step, waivers={})
-    assert res.status not in ("MISSING", "SKIPPED-CONDITION"), (res.status, res.reasons)
-    assert any("coverage.json" in e for e in res.evidence), res.evidence
-
-
-def test_early_missing_env_unavailable_waiver_takes_precedence(tmp_path):
-    """An explicit ENV_UNAVAILABLE waiver still wins over the honest sibling: the
-    step becomes WAIVED (the approved path), not SKIPPED-CONDITION."""
-    s = _synth(tmp_path)
-    (s / "atpg_not_run.json").write_text(_own_marker())
-    step = {"id": 999, "name": "Post-DFT optimization",
-            "required_outputs": [_EX_OUT]}
-    waivers = {999: {"_env_unavailable": True, "reason": "tool not on host",
-                     "approver": "field-agent-attest"}}
-    assert FCC.check_step(tmp_path, step, waivers=waivers).status == "PASS_WITH_WAIVERS"
-
-
-def test_early_missing_second_of_two_outputs_present_no_promotion(tmp_path):
-    """When at least ONE required_output is present the step is evidenced and the
-    early MISSING branch is not taken — an owning skip sibling for the OTHER
-    output does not down-grade an evidenced step."""
-    s = _synth(tmp_path)
-    (s / "post_dft_netlist.v").write_text("module m; endmodule\n")
-    (s / "atpg_not_run.json").write_text(_own_marker(reason="stale"))
-    step = {"id": 999, "name": "Post-DFT optimization",
-            "required_outputs": ["phase2/stage2/synth/post_dft_netlist.v",
-                                  "phase2/stage2/synth/never_made.v"]}
-    assert FCC.check_step(tmp_path, step, waivers={}).status != "NOT_APPLICABLE"

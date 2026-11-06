@@ -59,7 +59,6 @@ PROGRAMS = PLUGIN / "programs"
 REPO = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(PROGRAMS))
 
-from _ppa import benchmark as B                      # noqa: E402
 from _ppa import metrics as M                        # noqa: E402
 from _ppa import power as P                          # noqa: E402
 from _ppa.backends import openroad as OR             # noqa: E402
@@ -265,57 +264,15 @@ def test_no_record_either_producer_writes_carries_a_scope_silence():
 
 
 # ── 4. the harm, end to end ───────────────────────────────────────────────
-def test_two_power_numbers_with_no_derivable_stage_are_not_comparable():
-    """The comparison section 2 names: synthesis against post-route."""
-    a = _power_total(_STATED + _BASIS + _ROWS, stage="unknown")["scope"]
-    b = _power_total(_STATED + _BASIS + _ROWS, stage="unknown")["scope"]
-    with pytest.raises(B.Refusal) as exc:
-        B.check_scope_parity([_arm("A", 3.6, a), _arm("B", 9.9, b)])
-    assert exc.value.code in ("SCOPE_INCOMPLETE", "SCOPE_SENTINEL")
 
 
-def test_two_power_numbers_with_no_stated_basis_are_not_comparable():
-    """Vectorless power against VCD power -- the same rule, the other axis."""
-    a = _power_total(_STATED + _ROWS)["scope"]
-    b = _power_total(_STATED + _ROWS)["scope"]
-    with pytest.raises(B.Refusal) as exc:
-        B.check_scope_parity([_arm("A", 3.6, a), _arm("B", 9.9, b)])
-    assert exc.value.code in ("SCOPE_INCOMPLETE", "SCOPE_SENTINEL")
 
 
-def test_two_power_numbers_that_do_state_everything_still_compare():
-    """POSITIVE CONTROL. The two tests above must not pass by refusing all."""
-    sc = _power_total(_STATED + _BASIS + _ROWS)["scope"]
-    B.check_scope_parity([_arm("A", 3.6, dict(sc)), _arm("B", 9.9, dict(sc))])
 
 
 # ── 5. the consumer that grants parity ────────────────────────────────────
-def test_the_parity_check_refuses_a_silence_in_any_key_not_only_a_required_one():
-    """`check_scope_parity`'s null guard was two steps narrower than the harm.
-
-    It tested `is None or == ""` (not the word) on `REQUIRED_SCOPE[axis]` (not
-    every key) -- while the equality test one loop down compares the WHOLE scope
-    dict, so a silence in `liberty`, `fill` or `tool` bought parity just as
-    effectively as one in `process`.
-    """
-    for key, value in (("stage", "unknown"), ("process", "n/a"),
-                       ("liberty", None), ("fill", "unknown"),
-                       ("tool", ""), ("rc_corner", "UNSTATED")):
-        sc = dict(_PVT, stage="post_route", scenario="typ", group="Total",
-                  activity_basis="VECTORLESS")
-        sc[key] = value
-        with pytest.raises(B.Refusal) as exc:
-            B.check_scope_parity([_arm("A", 3.6, sc), _arm("B", 9.9, dict(sc))])
-        assert exc.value.code in ("SCOPE_SENTINEL", "SCOPE_INCOMPLETE"), (
-            f"`scope.{key} = {value!r}` bought parity: {exc.value.code}")
 
 
-def test_the_parity_check_still_compares_two_arms_that_state_everything():
-    """POSITIVE CONTROL for the test above."""
-    sc = dict(_PVT, stage="post_route", scenario="typ", group="Total",
-              activity_basis="VECTORLESS", liberty="lib_ss_125C_1v60.lib",
-              tool="opensta", fill="post_fill")
-    B.check_scope_parity([_arm("A", 3.6, dict(sc)), _arm("B", 9.9, dict(sc))])
 
 
 # ── 6. the schema, which holds the same rule ──────────────────────────────

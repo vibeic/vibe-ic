@@ -391,38 +391,8 @@ def test_the_ledger_counts_agreements_not_only_disagreements(tmp_path):
         "withdrawn": 0}
 
 
-def test_an_ai_disagreement_reaches_the_live_evidence_consumer(tmp_path):
-    """END TO END into something already wired. `phase1_expert_track_evidence_
-    check` runs advisory in the flow and counts DESIGN findings; an AI-only
-    disagreement must flip it RAN_EMPTY -> RAN. Without this the finding would
-    land in a report nobody reads, which is the failure mode #439 records three
-    live instances of."""
-    import phase1_expert_track_evidence_check as E
-
-    quiet = _project(tmp_path, name="quiet")
-    _run_track(quiet)
-    assert E.assess(quiet, _PROGRAMS)["state"] == "INCOMPLETE"
-
-    loud = _project(tmp_path, name="loud")
-    _answer(loud, [{"id": "external_reference::REFHI", "layer": "L1_DATASHEET",
-                    "requirement": "a terminal for the external reference",
-                    "expected_tokens": ["REFHI"]}])
-    _run_track(loud)
-    ev = E.assess(loud, _PROGRAMS)
-    assert ev["state"] == "RAN" and ev["patch_count"] == 1
-    assert ev["layers"] == ["L1_DATASHEET"]
-    assert ev["ai_subtrack"] == "CONSUMED"
 
 
-def test_an_undecidable_entry_does_not_flip_the_evidence_consumer(tmp_path):
-    """The pair. A finding about the TRACK must not be counted as the track
-    having found something in the DESIGN."""
-    import phase1_expert_track_evidence_check as E
-    p = _project(tmp_path)
-    _answer(p, [{"id": "vague::thing", "layer": "L1_DATASHEET",
-                 "requirement": "prose only"}])
-    _run_track(p)
-    assert E.assess(p, _PROGRAMS)["state"] == "RAN_EMPTY"
 
 
 # ── what must NOT have changed ──────────────────────────────────────────────

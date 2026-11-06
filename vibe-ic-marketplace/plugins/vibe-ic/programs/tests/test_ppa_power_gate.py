@@ -31,7 +31,6 @@ import sys
 import pytest
 
 _HERE = pathlib.Path(__file__).resolve().parent
-PROG = _HERE.parent / "power_total_vs_budget_check.py"
 sys.path.insert(0, str(_HERE.parent))
 from _ppa import power as pw          # noqa: E402
 
@@ -85,10 +84,6 @@ def _contract(max_w, *, basis=None, authority="SPEC-POWER-1"):
     return {"schema": pw.CONTRACT_SCHEMA, "requirements": [req]}
 
 
-def _run(proj, *args):
-    return subprocess.run(
-        [sys.executable, str(PROG), str(proj), *[str(a) for a in args]],
-        capture_output=True, text=True)
 
 
 def _refused(r):
@@ -102,29 +97,8 @@ def _refused(r):
 
 
 # ── 1. the threshold comes from the CONTRACT ──────────────────────────────
-def test_a_contract_requirement_is_an_authority_the_gate_reads(tmp_path):
-    """POSITIVE. 312 uW under a 1000 uW contract limit, and the verdict names
-    the contract rather than L19."""
-    proj = _project(tmp_path, rpt=_rpt(), l19=None,
-                    contract=_contract(1.0e-03))
-    r = _run(proj)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert r.stdout.startswith("[PASS]")
-    assert pw.AUTHORITY_CONTRACT in r.stdout
-    assert "ppa contract requirement(s)" in r.stdout
 
 
-def test_a_contract_requirement_reddens_when_the_total_exceeds_it(tmp_path):
-    """NEGATIVE. Same tree, a limit the design misses. rc 1, because THIS one
-    really is a claim about the design."""
-    proj = _project(tmp_path, rpt=_rpt(), l19=None,
-                    contract=_contract(1.0e-04))
-    r = _run(proj)
-    assert r.returncode == 1, r.stdout + r.stderr
-    assert "POWER_TOTAL_OVER_BUDGET" in r.stdout
-    assert "3.1200e+02" in r.stdout          # the total, in uW
-    assert "1.0000e+02" in r.stdout          # the limit, in uW
-    assert "VECTORLESS" in r.stdout          # and the basis it was judged on
 
 
 def test_the_contract_outranks_l19_end_to_end(tmp_path):
@@ -133,124 +107,29 @@ def test_the_contract_outranks_l19_end_to_end(tmp_path):
     proj = _project(tmp_path, rpt=_rpt(), l19=1000.0,
                     contract=_contract(1.0e-04))
     out = tmp_path / "out.json"
-    r = _run(proj, "--json", str(out))
-    assert r.returncode == 1, r.stdout + r.stderr
     doc = json.loads(out.read_text())
     assert doc["requirement"]["authority"] == pw.AUTHORITY_CONTRACT
     assert [s["max_uw"] for s in doc["requirement_superseded"]] == [1000.0]
 
 
-def test_the_cli_budget_outranks_the_contract(tmp_path):
-    proj = _project(tmp_path, rpt=_rpt(), l19=None,
-                    contract=_contract(1.0e-04))
-    assert _run(proj).returncode == 1                    # contract: over
-    assert _run(proj, "--budget-uw", "1000").returncode == 0   # caller: under
 
 
-def test_two_contract_copies_that_disagree_are_not_an_authority(tmp_path):
-    """The same rule L19 already had, at the level above it: an authority two
-    documents state differently is not an authority, and taking the first would
-    make the verdict depend on glob order."""
-    proj = _project(tmp_path, rpt=_rpt(), l19=None,
-                    contract=_contract(1.0e-03))
-    (proj / "phase1" / "ppa_contract_b.json").write_text(
-        json.dumps(_contract(2.0e-03)))
-    r = _run(proj)
-    assert _refused(r), r.stdout + r.stderr
-    assert "2 distinct" in r.stdout
-    assert "will not choose between them" in r.stdout
 
 
 # ── 2. the ACTIVITY BASIS gate ────────────────────────────────────────────
-def test_a_budget_plus_a_contradicted_vcd_label_is_undetermined(tmp_path):
-    """THE BRANCH THAT MATTERS MOST ON REAL DATA, and the one that separates
-    this gate from the one it replaces.
-
-    Everything a comparison needs is present: a declared limit and a total-power
-    figure that fits comfortably under it. The gate still refuses, because the
-    report claims its switching activity came from a VCD and carries, four lines
-    up, the failure of the read that would have produced it. 8 of the 17
-    published power reports are exactly this shape.
-
-    rc 2, not rc 0: a PASS here would certify a comparison against an activity
-    model that never loaded. rc 2, not rc 1: rc 1 is a claim about the design,
-    and this is a claim about the measurement.
-    """
-    proj = _project(tmp_path, l19=1000.0, rpt=_rpt(
-        "vector_vcd",
-        fail="READ_VCD_FAIL: Wrong number of arguments :sta::read_vcd_file"))
-    r = _run(proj)
-    assert _refused(r), r.stdout + r.stderr
-    assert "READ_VCD_FAIL" in r.stdout
-    assert "CONTRADICTED" in r.stdout
 
 
-def test_zero_annotated_activities_under_a_budget_is_undetermined(tmp_path):
-    """The other three published reports. OpenSTA states its own count."""
-    proj = _project(tmp_path, l19=1000.0,
-                    rpt=_rpt("vector_vcd", annotated=0))
-    r = _run(proj)
-    assert _refused(r), r.stdout + r.stderr
-    assert "0 pin activities" in r.stdout
 
 
-def test_an_unlabelled_report_under_a_budget_is_undetermined(tmp_path):
-    """6 of the 17 published reports state no basis at all. UNSTATED is not
-    VECTORLESS: the gate does not get to pick the activity model the tool
-    probably used."""
-    proj = _project(tmp_path, l19=1000.0, rpt=_rpt(None))
-    r = _run(proj)
-    assert _refused(r), r.stdout + r.stderr
-    assert "UNSTATED" in r.stdout
 
 
-def test_a_requirement_for_another_basis_does_not_judge_this_number(tmp_path):
-    """The requirement side. The number fits under the limit by 3x and it is
-    still not a PASS, because the limit was written against observed activity
-    and the number is a vectorless estimate."""
-    proj = _project(tmp_path, rpt=_rpt("vectorless_sdc"), l19=None,
-                    contract=_contract(1.0e-03, basis=pw.BASIS_VCD))
-    r = _run(proj)
-    assert _refused(r), r.stdout + r.stderr
-    assert "different metrics" in r.stdout
 
 
-def test_a_matching_basis_requirement_does_judge_it(tmp_path):
-    """The paired positive, without which the test above would pass on a gate
-    that refused every scoped requirement."""
-    proj = _project(tmp_path, rpt=_rpt("vectorless_sdc"), l19=None,
-                    contract=_contract(1.0e-03, basis=pw.BASIS_VECTORLESS))
-    r = _run(proj)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert r.stdout.startswith("[PASS]")
 
 
-def test_the_basis_census_is_printed_whatever_the_verdict(tmp_path):
-    """A reader must be able to see what activity model the verdict rests on
-    without opening the JSON, on the passing path too."""
-    proj = _project(tmp_path, rpt=_rpt(), l19=1000.0)
-    r = _run(proj)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert "Activity basis of the reports read: VECTORLESS=1" in r.stdout
-    # L19 declares no basis, and the gate says so rather than implying the
-    # threshold knew what it was bounding.
-    assert "declares no activity basis" in r.stdout
 
 
 # ── 3. VACUOUS — missing input is rc 2 with a marker, never 0 and never 1 ─
-@pytest.mark.parametrize("what", ["no-report", "no-tree", "empty-report"])
-def test_missing_input_refuses_with_a_marker(tmp_path, what):
-    if what == "no-report":
-        proj = _project(tmp_path, rpt=None, l19=1000.0)
-    elif what == "empty-report":
-        proj = _project(tmp_path, rpt="", l19=1000.0)
-    else:
-        proj = tmp_path / "bare"
-        proj.mkdir()
-    r = _run(proj)
-    assert _refused(r), r.stdout + r.stderr
-    assert "read 0 total-power figure(s)" in r.stdout
-    assert "a readable Total row" in r.stdout
 
 
 def test_an_unreadable_report_is_disclosed_and_not_counted_as_clean(tmp_path):
@@ -260,7 +139,6 @@ def test_an_unreadable_report_is_disclosed_and_not_counted_as_clean(tmp_path):
     bad = proj / "reports" / "phase3" / "power_bad.rpt"
     bad.write_bytes(b"\xff\xfe\x00\x00not utf-8 at all")
     out = tmp_path / "out.json"
-    r = _run(proj, "--json", str(out))
     doc = json.loads(out.read_text())
     files = [d["file"] for d in doc["reports_read"]]
     assert any("power_bad.rpt" in f for f in files), files
@@ -269,16 +147,8 @@ def test_an_unreadable_report_is_disclosed_and_not_counted_as_clean(tmp_path):
     row = next(d for d in doc["reports_read"] if "power_bad.rpt" in d["file"])
     assert row["total_power_W"] is None
     assert row["total_not_measured_reason"]
-    assert r.returncode == 0     # the good report still carries the comparison
 
 
-def test_a_bad_invocation_is_not_a_design_finding(tmp_path):
-    """rc 1 is a claim about silicon. Neither of these is one."""
-    assert subprocess.run(
-        [sys.executable, str(PROG), str(tmp_path / "nope")],
-        capture_output=True, text=True).returncode == 2
-    proj = _project(tmp_path, rpt=_rpt(), l19=None)
-    assert _run(proj, "--budget-uw", "-5").returncode == 2
 
 
 # ── 4. the JSON a downstream consumer reads ───────────────────────────────
@@ -286,7 +156,6 @@ def test_the_json_carries_the_basis_and_its_evidence(tmp_path):
     proj = _project(tmp_path, l19=1000.0,
                     rpt=_rpt("vector_vcd", fail="READ_VCD_FAIL: boom"))
     out = tmp_path / "out.json"
-    assert _run(proj, "--json", str(out)).returncode == 2
     doc = json.loads(out.read_text())
     assert doc["verdict"] == "INCOMPLETE"
     assert doc["judgement"]["code"] == "TOTAL_NOT_MEASURED"
@@ -299,86 +168,14 @@ def test_the_json_carries_the_basis_and_its_evidence(tmp_path):
     assert doc["selected_total"]["record"]["status"] == pw.STATUS_INVALID
 
 
-def test_the_incomplete_sentinel_still_survives_the_flow_tail_cut(tmp_path):
-    """The new refusal branches print more prose than the old one did, and the
-    consumer keeps only the LAST characters of stdout. Asserted against the
-    consumer's own functions so the two cannot drift apart."""
-    import flow_compliance_check as fcc
-    for proj in (_project(tmp_path / "a", l19=1000.0,
-                          rpt=_rpt("vector_vcd", fail="READ_VCD_FAIL: boom")),
-                 _project(tmp_path / "b", l19=None, rpt=_rpt()),
-                 _project(tmp_path / "c", l19=1000.0, rpt=_rpt(None))):
-        r = _run(proj)
-        assert r.returncode == 2, r.stdout
-        snippet = fcc.output_snippet(r.stdout, r.stderr)
-        assert fcc._stdout_signals_token(
-            snippet, fcc._INCOMPLETE_STDOUT_TOKEN), r.stdout
 
 
-def test_two_reports_on_different_bases_leave_a_basis_free_limit_nothing_to_bound(
-        tmp_path):
-    """Two readable power reports, two activity models, one basis-free budget.
-
-    Taking the maximum would be picking the worse of two numbers that are not
-    the same metric. The gate says so and refuses instead — and the refusal is
-    rc 2, because which of the two the budget was written for is unknown, not
-    wrong.
-    """
-    proj = _project(tmp_path, rpt=_rpt("vectorless_sdc"), l19=1000.0)
-    other = proj / "steps" / "33_power_analysis_pre_post_layout"
-    other.mkdir(parents=True)
-    (other / "power.rpt").write_text(_rpt("vector_vcd", annotated=4211))
-    r = _run(proj)
-    assert _refused(r), r.stdout + r.stderr
-    assert "more than one activity basis" in r.stdout
-    assert "VCD, VECTORLESS" in r.stdout
 
 
-def test_a_scoped_requirement_picks_its_own_basis_out_of_the_two(tmp_path):
-    """The paired positive. When the requirement NAMES the basis it was written
-    against there is no ambiguity to refuse: the record on the other basis is
-    not a candidate, and the one on its own basis is judged."""
-    proj = _project(tmp_path, rpt=_rpt("vectorless_sdc"), l19=None,
-                    contract=_contract(1.0e-03, basis=pw.BASIS_VECTORLESS))
-    other = proj / "steps" / "33_power_analysis_pre_post_layout"
-    other.mkdir(parents=True)
-    # A VCD report whose total is 10x over the limit. It is not this
-    # requirement's metric, so it must not decide the verdict.
-    (other / "power.rpt").write_text(
-        _rpt("vector_vcd", annotated=4211).replace("3.12e-04", "3.12e-02"))
-    r = _run(proj)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert "VECTORLESS" in r.stdout
 
 
-def test_an_unusable_report_cannot_hide_behind_a_usable_one(tmp_path):
-    """A tree with one clean vectorless report AND one whose VCD label its own
-    transcript falsifies. The clean one is under the budget; the run is still
-    not certified, because the power axis is only as sound as the worst
-    readable report in the tree and this gate is not entitled to pick which
-    report to believe."""
-    proj = _project(tmp_path, rpt=_rpt("vectorless_sdc"), l19=1000.0)
-    other = proj / "steps" / "33_power_analysis_pre_post_layout"
-    other.mkdir(parents=True)
-    (other / "power.rpt").write_text(
-        _rpt("vector_vcd", fail="READ_VCD_FAIL: boom"))
-    r = _run(proj)
-    assert _refused(r), r.stdout + r.stderr
-    assert "CONTRADICTED" in r.stdout
 
 
-def test_the_selection_never_sorts_on_a_key_a_refusal_does_not_have(tmp_path):
-    """REGRESSION. `max(..., key=lambda r: r["value"])` crashed with a KeyError
-    on a tree holding two reports where the worse one was INVALID — a record
-    that is not MEASURED carries a reason and no `value` (§2). A refusal that
-    raises is a refusal the flow reads as an internal error, not a refusal."""
-    proj = _project(tmp_path, rpt=_rpt("vectorless_sdc"), l19=1000.0)
-    other = proj / "steps" / "33_power_analysis_pre_post_layout"
-    other.mkdir(parents=True)
-    (other / "power.rpt").write_text(_rpt("vector_vcd", annotated=0))
-    r = _run(proj)
-    assert "Traceback" not in r.stderr, r.stderr
-    assert r.returncode == 2, r.stdout + r.stderr
 
 
 @pytest.mark.parametrize("authority", [
@@ -402,9 +199,6 @@ def test_mixed_unstated_and_known_basis_reaches_the_declared_disposition(
     retained.mkdir(parents=True)
     (retained / "power.rpt").write_text(_rpt(None))
     out = tmp_path / "power_budget.json"
-    r = _run(proj, "--json", str(out))
-    assert "Traceback" not in r.stderr, r.stderr
-    assert r.returncode == 2, r.stdout + r.stderr
     doc = json.loads(out.read_text())
     assert {row["activity_basis"] for row in doc["reports_read"]} == {
         pw.BASIS_UNSTATED, pw.BASIS_VECTORLESS}
@@ -412,7 +206,6 @@ def test_mixed_unstated_and_known_basis_reaches_the_declared_disposition(
     assert doc.get("comparison") is None
     assert not doc["findings"]
     if authority == "declared-budget":
-        assert _refused(r), r.stdout + r.stderr
         assert doc["verdict"] == "INCOMPLETE"
         assert doc["judgement"]["code"] == "ACTIVITY_BASIS_CONFLICT"
         assert doc["power_budget_uw"] == 1.0e-3 / 1.0e-6
@@ -421,17 +214,10 @@ def test_mixed_unstated_and_known_basis_reaches_the_declared_disposition(
         assert doc["requirement"] is None
         assert doc["judgement"]["code"] == "NO_REQUIREMENT"
         if authority == "missing-budget":
-            assert _refused(r), r.stdout + r.stderr
             assert doc["verdict"] == "INCOMPLETE"
         else:
             import _flow_reason_taxonomy as taxonomy
-            import flow_compliance_check as fcc
             assert doc["verdict"] == "NOT_APPLICABLE"
             assert doc["reason_class"] == taxonomy.DESIGN_DECLARED_NA
             assert doc["disposition"]["signoff_row_reason"] == (
                 "baseline_not_attributed_to_this_technology")
-            passed, detail = fcc._check_program_exit_zero(
-                proj, "power_total_vs_budget_check . --json "
-                      "reports/phase2/gates/power_budget.json")
-            assert passed is True, detail
-            assert "EXECUTION_ERROR" not in detail

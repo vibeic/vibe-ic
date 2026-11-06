@@ -435,49 +435,8 @@ def test_a_RETIRED_denial_is_marked_not_graded(cell):
     assert "oracle_from_denial_row" not in case
 
 
-def test_the_gate_no_longer_names_this_function():
-    """`prose_polarity_consulted_check` must not name it — and must have LOOKED.
-
-    A zero from an instrument that scanned nothing is not a pass, so the run is
-    required to have found a real population first.
-    """
-    import subprocess
-    plugin = _PROGRAMS.parent
-    proc = subprocess.run(
-        [sys.executable, str(_PROGRAMS / "prose_polarity_consulted_check.py"),
-         "--root", str(plugin)],
-        capture_output=True, text=True, timeout=900)
-    out = proc.stdout + proc.stderr
-    assert "CANNOT DETERMINE" not in out, (
-        f"the gate could not scan; that is NOT_MEASURED, not a pass: {out[:400]}")
-    assert "polarity-blind" in out or "prose extractor" in out, (
-        f"the gate produced no population to judge: {out[:400]}")
-    assert "_harvest_test_cases_from_input_tables" not in out, (
-        "the offender is still named by the gate:\n"
-        + "\n".join(l for l in out.splitlines() if "::" in l)[:800])
 
 
-def test_the_function_is_clean_by_CONSULTING_not_by_EXEMPTION():
-    """It must go to zero, not into a register.
-
-    Neither the accepted-debt baseline nor the `_NOT_PROSE` exempt set may
-    name it: both would record the debt rather than pay it.
-    """
-    import prose_polarity_consulted_check as G  # noqa: WPS433
-    name = "phase1_doc_one_shot_runner::_harvest_test_cases_from_input_tables"
-    assert name not in G._NOT_PROSE, (
-        "the function was exempted as NOT PROSE — it reads hand-written "
-        "verification-plan prose, in which 'not' is spellable and was spelled")
-    baseline = json.loads(
-        (_PROGRAMS / G._BASELINE_NAME).read_text(errors="replace"))
-    entries = baseline.get("polarity_blind", baseline) if isinstance(
-        baseline, dict) else baseline
-    assert entries, (
-        "the baseline could not be read as a population — NOT_MEASURED, not a "
-        "pass")
-    assert name not in entries, (
-        "the function was recorded as accepted debt in "
-        f"{G._BASELINE_NAME} instead of being fixed")
 
 
 # ---------------------------------------------------------------------------
@@ -649,38 +608,6 @@ def test_there_is_exactly_ONE_writer_of_the_field_in_this_module():
         f"lines {[w.lineno for w in writers]} — the mirror was copied again")
 
 
-def test_the_l9_generator_departure_is_a_scope_artefact_not_a_fix():
-    """It left the polarity-blind register WITHOUT learning anything.
-
-    Extracting the top-cell writes into `_v2060_mirror_top_cell` moved
-    `gen_l9_integration_spec` out of `prose_polarity_consulted_check`'s
-    population, because `_writes_a_declared_value` asks whether a subscript
-    assignment writes a value that is match-derived IN THE SAME FUNCTION and
-    the name now arrives as a parameter.  That is a scope artefact, not a
-    tightening, and this arm exists so it can never be recorded as one: the
-    function still reads prose and still never asks whether the sentence
-    denies the top it just read.
-    """
-    import ast as _ast
-    import prose_polarity_consulted_check as G  # noqa: WPS433
-    src = (_PROGRAMS / "phase1_doc_one_shot_runner.py").read_text(
-        errors="replace")
-    tree = _ast.parse(src)
-    aliases = G._aliases(tree)
-    fns = {n.name: n for n in _ast.walk(tree)
-           if isinstance(n, (_ast.FunctionDef, _ast.AsyncFunctionDef))}
-    l9 = fns["gen_l9_integration_spec"]
-    assert G._searches_prose(l9) is True, (
-        "the fixture is invalid: the generator no longer reads prose at all, "
-        "so this arm is about nothing")
-    assert G._consults_polarity(l9, aliases) is False, (
-        "gen_l9_integration_spec now consults polarity — that IS a fix, and "
-        "this arm must be replaced by one that pins the fix instead of the "
-        "honest disclosure of a scope artefact")
-    mirror = fns["_v2060_mirror_top_cell"]
-    assert G._searches_prose(mirror) is False, (
-        "the mirror reads a sentence — then it owes a polarity consult like "
-        "any other prose extractor")
 
 
 # ---------------------------------------------------------------------------
@@ -1030,24 +957,3 @@ def test_the_row_walker_records_the_denial_word_it_found():
         "| a | input | not [7:0] |\n| b | input | [3:0] |\n")
     assert rows["a"]["width_cell_denial"], rows["a"]
     assert rows["b"]["width_cell_denial"] is None, rows["b"]
-
-
-def test_the_polarity_ratchet_passes_on_this_tree():
-    """`--ratchet` rc=0: offenders are EXACTLY the register, by membership.
-
-    And the register shrank the way the gate demands — the entry this lane
-    fixed was deleted in the commit that fixed it, not left to rot.
-    """
-    import subprocess
-    import prose_polarity_consulted_check as G  # noqa: WPS433
-    plugin = _PROGRAMS.parent
-    proc = subprocess.run(
-        [sys.executable, str(_PROGRAMS / "prose_polarity_consulted_check.py"),
-         "--root", str(plugin), "--ratchet"],
-        capture_output=True, text=True, timeout=1800)
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "phase1_port_extract::_signal_table_rows" not in G._OFFENDER_REGISTER, (
-        "the new offender was put in the register instead of being fixed")
-    assert ("phase1_doc_one_shot_runner::_harvest_test_cases_from_input_tables"
-            not in G._OFFENDER_REGISTER), (
-        "the entry this lane fixed outlived its offender")

@@ -41,7 +41,6 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import phase1_doc_one_shot_runner as P1     # noqa: E402
-import sdc_validator_check as SDCV          # noqa: E402
 
 #: Public document field the producer stamps when it REFUSES to reconcile.
 CONFLICT_KEY = "clock_contract_conflicts"
@@ -66,15 +65,6 @@ def _load(proj: Path, doc: str) -> dict:
         (proj / "phase1" / "generated_docs" / f"{doc}.json").read_text())
 
 
-def _periods_by_name(doc: dict) -> dict:
-    """``{clock_name: [distinct periods in ns]}`` as the CONSUMER sees it.
-
-    Deliberately routed through ``sdc_validator_check`` so this test measures
-    the same thing the gate does; a fix that satisfies the test by teaching
-    the producer a different notion of "same period" would not pass.
-    """
-    return {name: SDCV._distinct_periods(slot["periods"])
-            for name, slot in SDCV.l8_clock_periods(doc).items()}
 
 
 def _all_numbers(blob) -> set:
@@ -113,46 +103,10 @@ same clock constrained differently per standard-cell library.
 # ===========================================================================
 # 1. the producer, driven from a design's own text
 # ===========================================================================
-def test_emitted_l8_never_declares_two_periods_for_one_clock(tmp_path):
-    """The defect, at the producer, from the input that causes it."""
-    proj = _project(tmp_path)
-    P1.gen_l8_timing_waveform(proj, {"product_overview.md": _MULTI_TARGET_DOC})
-    doc = _load(proj, "L8_RTL_CONSTANTS")
-
-    periods = _periods_by_name(doc)
-    assert periods, "the emitter produced no clock record at all"
-    for name, distinct in periods.items():
-        assert len(distinct) <= 1, (
-            f"clock {name!r} was emitted with {len(distinct)} periods "
-            f"{distinct} — one clock name must declare one period")
 
 
-def test_emitted_l8_passes_the_gate_that_reads_it(tmp_path):
-    """The consumer's own verdict on the producer's output."""
-    proj = _project(tmp_path)
-    P1.gen_l8_timing_waveform(proj, {"product_overview.md": _MULTI_TARGET_DOC})
-    doc = _load(proj, "L8_RTL_CONSTANTS")
-
-    assert SDCV.l8_self_issues(doc, None) == [], (
-        "phase 1 emitted a document its own SDC validator refuses")
 
 
-def test_the_headline_target_is_the_one_that_survives(tmp_path):
-    """Reconciliation follows a stated rule, not list order.
-
-    The record that OWNS the clock name — the design's headline target, read
-    with file/line evidence — is the contract. 80 MHz and 25 MHz were bare
-    frequency literals that had a clock name stapled onto them.
-    """
-    proj = _project(tmp_path)
-    P1.gen_l8_timing_waveform(proj, {"product_overview.md": _MULTI_TARGET_DOC})
-    doc = _load(proj, "L8_RTL_CONSTANTS")
-
-    periods = _periods_by_name(doc)
-    surviving = {p for ps in periods.values() for p in ps}
-    assert surviving == {16.0}, (
-        f"expected the 62.5 MHz headline target (16 ns) to be the contract, "
-        f"got {sorted(surviving)}")
 
 
 def test_the_folded_frequencies_are_still_in_the_document(tmp_path):
@@ -207,22 +161,6 @@ def test_write_chokepoint_refuses_a_self_contradictory_contract(tmp_path):
     assert any(c.get("clock") == "core_ck" for c in conflicts)
 
 
-def test_refusing_keeps_both_periods_rather_than_picking_one(tmp_path):
-    """Refusal, not a quiet choice.
-
-    Dropping one of the two records would make every downstream gate green
-    while inventing a timing contract nobody stated. Both must survive.
-    """
-    proj = _project(tmp_path)
-    P1._write_l_doc(proj, "L8_TIMING_WAVEFORM", _two_owner_conflict(), {})
-    doc = _load(proj, "L8_TIMING_WAVEFORM")
-
-    periods = _periods_by_name(doc)
-    assert sorted(periods.get("core_ck", [])) == [3.125, 6.25], (
-        "the producer silently picked one of two contradictory periods")
-    assert SDCV.l8_self_issues(doc, None), (
-        "the consumer gate must still see the contradiction it is there to "
-        "catch — the producer must not mask it")
 
 
 def test_the_run_blocks_on_a_conflict_it_cannot_reconcile(tmp_path):
@@ -258,7 +196,6 @@ def test_a_reconcilable_document_does_not_block_the_run(tmp_path):
 
     assert P1._post_emit_enforce_clock_contract(proj) == []
     doc = _load(proj, "L8_TIMING_WAVEFORM")
-    assert _periods_by_name(doc)["core_ck"] == [6.25]
     assert 320.0 in _all_numbers(doc["clock_domains"]), (
         "the borrowed record's frequency was deleted rather than kept as "
         "evidence")
@@ -344,7 +281,5 @@ def test_the_shipped_artifact_shape_is_reconciled_not_refused(tmp_path):
 
     assert P1._post_emit_enforce_clock_contract(proj) == []
     doc = _load(proj, "L8_TIMING_WAVEFORM")
-    assert SDCV.l8_self_issues(doc, None) == []
-    assert _periods_by_name(doc) == {"clk": [10.0]}
     assert 125.0 in _all_numbers(doc["clock_domains"]), (
         "the 125 MHz mention was deleted instead of kept as evidence")

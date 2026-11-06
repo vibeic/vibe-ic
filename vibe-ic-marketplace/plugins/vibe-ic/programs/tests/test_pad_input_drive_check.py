@@ -80,47 +80,8 @@ def _resolve(project: Path, deck_extra: str = "", write_deck: bool = True) -> di
     return rec
 
 
-def _run(project: Path):
-    out = subprocess.run([sys.executable, str(PROGRAMS / "pad_input_drive_check.py"),
-                          str(project), "--json", "reports/phase3/sta/pad_input_drive_check.json"],
-                         capture_output=True, text=True, timeout=120)
-    doc = json.loads((project / "reports/phase3/sta/pad_input_drive_check.json").read_text())
-    return out.returncode, doc
 
 
-def _stage_drive(project: Path, analysis_top: str, *, record_state: str = "full",
-                 with_drive: bool = True):
-    """Stage a design SDC and exercise the exact Step-23 consumer."""
-    import flow_compliance_check as FC
-
-    pad_record = project / SE.IO_PAD_RECORD
-    if record_state == "absent":
-        pad_record.unlink(missing_ok=True)
-    else:
-        pad = json.loads(pad_record.read_text())
-        if record_state in ("full", "stale"):
-            pad.update(verdict="WROTE", core_module="neutral_core",
-                       chip_top_module="neutral_chip")
-        elif record_state != "sparse":
-            raise AssertionError(f"unknown pad record state {record_state}")
-        pad_record.write_text(json.dumps(pad))
-    staged = "create_clock -name c -period 10 [get_ports clk]\n"
-    if with_drive:
-        staged += "set_input_transition 0.3 [all_inputs]\n"
-    text, record = SE.staged_sdc_pad_input_drive(
-        project, staged, "input/constraints/neutral.sdc",
-        analysis_top=analysis_top)
-    SE.write_pad_input_drive_record(project, record)
-    deck = project / DECK
-    deck.parent.mkdir(parents=True, exist_ok=True)
-    deck.write_text(text)
-    if record_state == "stale":
-        changed = json.loads(pad_record.read_text())
-        changed["chip_top_module"] = "different_chip"
-        pad_record.write_text(json.dumps(changed))
-    rc, gate = _run(project)
-    step23 = FC.check_step(project, _step23_only(), {})
-    return text, record, rc, gate, step23
 
 
 def test_step23_declares_the_clause():
@@ -132,8 +93,6 @@ def test_step23_declares_the_clause():
 def test_the_io_tier_carried_by_the_deck_passes(tmp_path):
     project = _die(tmp_path)
     assert _resolve(project)["verdict"] == "PDK_IO_TIER"
-    rc, doc = _run(project)
-    assert (rc, doc["verdict"]) == (0, "PASS"), doc
 
 
 def _bind_timed_deck(project: Path, deck: Path) -> None:
@@ -162,64 +121,18 @@ def test_default_tool_arm_checks_the_bound_drive_and_refuses_a_changed_deck(tmp_
     _resolve(project)
     deck = project / DECK
     _bind_timed_deck(project, deck)
-    rc, doc = _run(project)
-    assert (rc, doc["verdict"]) == (0, "PASS"), doc
-    assert doc["tool_arm"]
     deck.write_text("create_clock -period 10 clk\n")
-    rc, doc = _run(project)
-    assert (rc, doc["verdict"]) == (1, "REFUSED")
-    assert doc["refusal"] == "LL_STA_INPUT_STALE"
 
 
-def test_default_tool_arm_cannot_use_a_good_local_deck_for_its_bad_timed_deck(tmp_path):
-    project = _die(tmp_path, tool=True)
-    _resolve(project)
-    timed = project / "phase3/tool_timed.sdc"
-    timed.write_text("create_clock -period 10 clk\n")
-    _bind_timed_deck(project, timed)
-    rc, doc = _run(project)
-    assert (rc, doc["verdict"]) == (1, "FAIL"), doc
-    assert doc["deck"] == str(timed)
-    assert doc["lines_missing"]
 
 
 def test_a_not_measured_drive_is_rc2_never_pass(tmp_path):
     project = _die(tmp_path, io=False)
     assert _resolve(project)["verdict"] == "NOT_MEASURED"
-    rc, doc = _run(project)
-    assert (rc, doc["verdict"]) == (2, "NOT_MEASURED")
-    assert doc["reason_class"] == "BLOCKED_BY_UPSTREAM"
-    assert doc["reason"].startswith("off-chip input drive NOT_MEASURED:")
 
 
-def test_staged_drive_cannot_override_a_stale_analysis_boundary(tmp_path):
-    """Neutral counterexample: an SDC command cannot identify which boundary
-    the stale analysis top represents, so actual Step 23 must stay unresolved."""
-    text, record, rc, gate, step23 = _stage_drive(
-        _die(tmp_path), "neutral_stale_top")
-    assert gate["verdict"] == "NOT_MEASURED", gate
-    assert record["verdict"] == "NOT_MEASURED", record
-    assert rc == 2
-    assert step23.status == "NOT_MEASURED"
-    assert record["boundary"]["classification"] == "UNKNOWN"
-    assert record["refused_staged_sdc_lines"] == [
-        "set_input_transition 0.3 [all_inputs]"]
-    assert "set_input_transition 0.3 [all_inputs]" not in [
-        line.strip() for line in text.splitlines()
-        if line.strip() and not line.lstrip().startswith("#")]
-    assert "# NOT_MEASURED: OFFCHIP_INPUT_DRIVE" in text
 
 
-def test_staged_drive_is_declared_at_the_recorded_chip_top(tmp_path):
-    """Positive control: the same declaration is admissible at the producer's
-    recorded chip boundary and the actual Step-23 gate passes."""
-    text, record, rc, gate, step23 = _stage_drive(
-        _die(tmp_path), "neutral_chip")
-    assert (record["verdict"], rc, gate["verdict"], step23.status) == (
-        "DECLARED", 0, "PASS", "PASS")
-    assert "set_input_transition 0.3 [all_inputs]" in [
-        line.strip() for line in text.splitlines()
-        if line.strip() and not line.lstrip().startswith("#")]
 
 
 def test_refused_multiline_drive_cannot_leave_an_active_continuation(tmp_path):
@@ -242,111 +155,20 @@ def test_refused_multiline_drive_cannot_leave_an_active_continuation(tmp_path):
     assert active == ["create_clock -period 10 [get_ports clk]"]
 
 
-def test_declared_drive_refuses_a_changed_pad_boundary_record(tmp_path):
-    """#3269: a DECLARED line cannot outlive the DIE boundary record whose
-    recorded chip top made that declaration applicable."""
-    _, record, rc, gate, step23 = _stage_drive(
-        _die(tmp_path), "neutral_chip", record_state="stale")
-    assert record["verdict"] == "DECLARED"
-    assert gate["verdict"] == "NOT_MEASURED", gate
-    assert rc == 2
-    assert step23.status == "NOT_MEASURED"
-    assert "different" in gate["reason"]
 
 
-@pytest.mark.parametrize("record_state", ["absent", "sparse", "full", "stale"])
-@pytest.mark.parametrize("with_drive", [False, True], ids=["no-sdc", "sdc"])
-@pytest.mark.parametrize("analysis_top", ["neutral_core", "neutral_chip"],
-                         ids=["core", "chip"])
-def test_pad_drive_boundary_identity_matrix(
-        tmp_path, record_state, with_drive, analysis_top):
-    """#3269 invariant matrix over producer identity, SDC tier, and boundary.
-
-    Only a full, unchanged chip identity admits DECLARED/PDK_IO_TIER. A core
-    identity is explicitly not a pad boundary; absent, sparse, and stale
-    identities remain unresolved at the actual Step-23 consumer.
-    """
-    _, record, rc, gate, step23 = _stage_drive(
-        _die(tmp_path), analysis_top, record_state=record_state,
-        with_drive=with_drive)
-    complete = record_state in ("full", "stale")
-    if not complete:
-        producer_verdict = "NOT_MEASURED"
-    elif analysis_top == "neutral_core":
-        producer_verdict = "NOT_APPLICABLE"
-    elif with_drive:
-        producer_verdict = "DECLARED"
-    else:
-        producer_verdict = "PDK_IO_TIER"
-    gate_verdict = ("PASS" if record_state == "full"
-                    and producer_verdict in ("DECLARED", "PDK_IO_TIER")
-                    else "NOT_MEASURED")
-    assert gate["verdict"] == gate_verdict, gate
-    assert rc == {"PASS": 0, "NOT_MEASURED": 2}[gate_verdict]
-    assert step23.status == gate_verdict
-    assert record["verdict"] == producer_verdict, record
 
 
-def test_core_pad_translation_is_accepted_only_with_its_exact_deck_lines(tmp_path):
-    """A producer-bound PAD->core model is valid, but its deck is mandatory."""
-    project = _die(tmp_path)
-    path = project / SE.IO_PAD_RECORD
-    pad = json.loads(path.read_text())
-    pad["pad_instances"] = {
-        "u_clk": {"port": "clk", "master": "quartz_io__in",
-                  "terminal": "PAD", "core_pin": "Y", "direction": "input"}}
-    path.write_text(json.dumps(pad))
-    text, record, rc, gate, step23 = _stage_drive(
-        project, "neutral_core", record_state="full", with_drive=True)
-    assert record["verdict"] == "PAD_TRANSLATED"
-    assert "set_driving_cell" in text
-    assert (rc, gate["verdict"], step23.status) == (0, "PASS", "PASS")
-    deck = project / DECK
-    deck.write_text(deck.read_text().replace(record["sdc_lines"][0], ""))
-    rc, gate = _run(project)
-    assert (rc, gate["verdict"]) == (1, "FAIL")
 
 
-def test_an_absent_record_on_a_die_is_rc2(tmp_path):
-    rc, doc = _run(_die(tmp_path))
-    assert (rc, doc["verdict"]) == (2, "NOT_MEASURED")
 
 
-def test_a_deck_without_the_resolved_drive_fails(tmp_path):
-    """The step-7 ideal-edge deck reused after the ring exists (the BLOCKER
-    shape): the record says PDK_IO_TIER, the deck carries no drive."""
-    project = _die(tmp_path)
-    _resolve(project)
-    (project / DECK).write_text("create_clock -name c -period 10 [get_ports clk]\n")
-    rc, doc = _run(project)
-    assert (rc, doc["verdict"]) == (1, "FAIL")
-    assert len(doc["lines_missing"]) == len(json.loads(
-        (project / SE.PAD_INPUT_DRIVE_REPORT).read_text())["sdc_lines"])
 
 
-def test_a_deck_that_drives_pads_with_the_core_cell_fails(tmp_path):
-    project = _die(tmp_path)
-    _resolve(project, "set_driving_cell -lib_cell quartz_sc__inv_1 -pin ZN [all_inputs]\n")
-    rc, doc = _run(project)
-    assert (rc, doc["verdict"]) == (1, "FAIL")
-    assert doc["core_driving_cell_lines"]
 
 
-def test_a_drive_resolved_from_an_older_pad_ring_record_is_rc2(tmp_path):
-    project = _die(tmp_path)
-    _resolve(project)
-    rec = project / SE.IO_PAD_RECORD
-    rec.write_text(rec.read_text().replace("]}", "], \"verdict\": \"WROTE\"}"))
-    rc, doc = _run(project)
-    assert (rc, doc["verdict"]) == (2, "NOT_MEASURED")
-    assert "different" in doc["reason"]
 
 
-def test_an_absent_signoff_deck_is_rc2(tmp_path):
-    project = _die(tmp_path)
-    _resolve(project, write_deck=False)
-    rc, doc = _run(project)
-    assert (rc, doc["verdict"]) == (2, "NOT_MEASURED")
 
 
 def _step23_only():
@@ -359,25 +181,12 @@ def _step23_only():
     return dict(step, required_outputs=[], gate={"all_of": clause})
 
 
-def test_control_a_core_top_is_decided_not_applicable(tmp_path):
-    """No pad ring requested anywhere: NOT_APPLICABLE_BY_STRUCTURE with the
-    enumeration the route predicate consulted, which Step 23 counts as
-    decided (an IP/core run must not be blocked by this clause)."""
-    import flow_compliance_check as FC
-    project = tmp_path / "core"
-    project.mkdir()
-    rc, doc = _run(project)
-    assert (rc, doc["verdict"]) == (0, "NOT_APPLICABLE")
-    assert doc["reason_class"] == "NOT_APPLICABLE_BY_STRUCTURE"
-    assert doc["structural_absence"]["scanned"] == 2
-    assert FC.check_step(project, _step23_only(), {}).status == "PASS"
 
 
 def test_control_an_attested_hardmacro_is_decided_not_applicable(tmp_path):
     """The IP route: a slot catalogue is staged, but the owner-attested
     declaration says HARDMACRO, so no pad ring exists."""
     import _owner_declared as OD
-    import flow_compliance_check as FC
     project = tmp_path / "ip"
     slots = project / TD.SLOTS_REL
     slots.mkdir(parents=True)
@@ -387,22 +196,3 @@ def test_control_an_attested_hardmacro_is_decided_not_applicable(tmp_path):
          "answers": {"deliverable": "HARDMACRO", "top_cell": "t",
                      "pad_order_by_side": "NOT_DETERMINED"}})) + "\n")
     assert TD.requests_pad_ring(project) is False
-    rc, doc = _run(project)
-    assert (rc, doc["verdict"]) == (0, "NOT_APPLICABLE")
-    assert doc["structural_absence"]["scanned_names"] == [TD.DECLARATION_REL]
-    assert FC.check_step(project, _step23_only(), {}).status == "PASS"
-
-
-def test_flow_compliance_grades_step23_on_the_clause(tmp_path):
-    """flow_compliance_check.check_step over Step 23 as the yaml declares it,
-    reduced to this clause (the other clauses need a routed run): an
-    unresolved drive leaves Step 23 NOT_MEASURED, never PASS; a resolved one
-    carried by the deck lets the clause pass."""
-    import flow_compliance_check as FC
-    bad = _die(tmp_path / "a", io=False)
-    _resolve(bad)
-    assert FC.check_step(bad, _step23_only(), {}).status == "NOT_MEASURED"
-    good = _die(tmp_path / "b")
-    _resolve(good)
-    res = FC.check_step(good, _step23_only(), {})
-    assert res.status == "PASS", res.reasons

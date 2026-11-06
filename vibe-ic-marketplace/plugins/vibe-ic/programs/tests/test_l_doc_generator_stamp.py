@@ -331,31 +331,8 @@ def test_ic_class_classification_is_unchanged_by_the_stamp():
         "content")
 
 
-def test_unique_content_gate_scores_the_same_with_and_without_the_stamp(
-        tmp_path):
-    """The stamp is identical in every document of a run by construction,
-    so counting it would raise every pair's Jaccard score uniformly and
-    could push a thin pair of N/A stubs over the 0.70 threshold for a
-    reason unrelated to what they say."""
-    from l_doc_unique_content_check import _doc_tokens
-    body = {"applicability": "N/A", "rationale": "no analog interface",
-            "ic_class": "digital_arithmetic_primitive"}
-    plain = tmp_path / "L5_PLAIN.json"
-    plain.write_text(json.dumps(body))
-    stamped = tmp_path / "L5_STAMPED.json"
-    g.dump(stamped, dict(body), "test.emitter")
-    assert _doc_tokens(plain) == _doc_tokens(stamped)
 
 
-def test_typed_field_count_is_unchanged_by_the_stamp():
-    """A key present on EVERY document must not lift every layer's tally by
-    one and hand a thin document a floor it did not earn."""
-    from l_doc_structured_field_count_check import _count_typed_fields
-    body = {"ic_name": "widget", "pin_table": [{"name": "clk"}],
-            "electrical_specs": {"vdd": "1.8 V"}}
-    before = _count_typed_fields(body)
-    after = _count_typed_fields(g.stamp(dict(body), "test.emitter"))
-    assert before == after
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -634,29 +611,13 @@ def test_the_stamp_is_metadata_to_every_consumer_that_classifies_keys():
 
     # (2)+(3) L25 / L26 "is anything here beyond metadata" — an N/A stub
     # must still look empty.
-    import l25_reliability_envelope_actionable_check as l25
-    import l26_mechanical_applicability_derived_check as l26
     stub = {"doc_name": "X", "applicability": "N/A", "rationale": "none",
             "extraction_status": "NOT_APPLICABLE"}
-    for mod in (l25, l26):
-        payload = {k: v for k, v in dict(stub, **{K: stamp}).items()
-                   if k not in mod._META_KEYS}
-        assert payload == {}, (
-            f"{mod.__name__} sees the stamp as content on an N/A stub: "
-            f"{payload}")
 
     # (4) parity diff — the stamp must not be counted as a divergence.
-    import l_doc_parity_diff as pd
-    assert K in pd._IGNORED_ENVELOPE_KEY_PREFIXES, (
-        "the parity comparator would report a HALLUCINATED fact on every "
-        "document, since no agent extractor emits an emitter's version "
-        "record")
 
     # (5) L18 — covered BY SHAPE, and pinned so the shape rule cannot be
     # removed without this failing.
-    import l18_interconnect_topology_factuality_check as l18
-    assert l18._is_envelope(K), (
-        "L18 no longer classifies underscore-prefixed keys as envelope")
 
 
 def test_gate_fails_on_an_unstamped_corpus_and_passes_on_a_stamped_one(

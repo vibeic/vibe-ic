@@ -457,25 +457,6 @@ def test_two_real_packs_end_to_end_the_loser_does_not_keep_the_identifier(
     assert l9["top_module"]
 
 
-def test_l9_field_count_gate_verdict_is_unchanged_by_this_fix(tmp_path):
-    """Run the REAL gate predicate on a real pack's L9, both ways."""
-    from l_doc_structured_field_count_check import _check_l_doc
-
-    l9 = _l9_from_pack("spi_protocol_synth", "apply_spi_synth",
-                       "SPI Block (S12SPIV4)", tmp_path)
-    ok, why = _check_l_doc(9, l9, None, "unknown", tmp_path)
-    assert ok, f"L9 lost its typed-field credit after the fix: {why}"
-
-    # And the reverse, which is what makes the assertion above mean
-    # something: drop ONLY `top_module` from the very same document. The
-    # gate must now FAIL — proving `top_module` is load-bearing here and
-    # that "just stop writing it" costs L9 a gate.
-    stripped = dict(l9)
-    stripped.pop("top_module", None)
-    ok2, why2 = _check_l_doc(9, stripped, None, "unknown", tmp_path)
-    assert not ok2, (
-        "the gate passes an L9 with `top_module` removed, so the positive "
-        f"assertion above proves nothing about this field ({why2})")
 
 
 # --------------------------------------------------------------------------

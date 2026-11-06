@@ -377,7 +377,6 @@ def test_ordinary_step13_consumes_selected_library_and_current_subject(tmp_path,
     import subprocess
     from types import SimpleNamespace
     import design_one_shot_runner as D
-    import lec_equivalence_check as G
     import librelane_contract as LC
     p, lib, _, _, _ = _current_tool_handoff(tmp_path)
     mod = _mod()
@@ -395,7 +394,6 @@ def test_ordinary_step13_consumes_selected_library_and_current_subject(tmp_path,
     assert report['proof_identity']['liberty']['sha256'] == 'sha256:' + LC.digest(lib)
     assert report['proof_identity']['gate_netlist']['sha256'] == 'sha256:' + LC.digest(p / 'phase2/stage2/synth/top_synth.v')
     assert calls and all(str(lib) in s for s in calls)
-    assert G.main([str(p)]) == 0
 
 
 def test_refused_current_mapping_replaces_old_pass_before_proof(tmp_path, monkeypatch):

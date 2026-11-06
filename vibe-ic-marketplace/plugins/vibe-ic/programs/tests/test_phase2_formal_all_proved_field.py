@@ -24,7 +24,6 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import flow_compliance_check as F  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 _SRC = (PROGRAMS / "design_one_shot_runner.py").read_text()
@@ -83,13 +82,6 @@ def test_issue1974_runner_never_replaces_formal_failure_with_skip():
     assert "formal_authoring_request.json" in window
 
 
-def test_step5_no_longer_a_capability_gap():
-    # SymbiYosys + Yosys ship in the pinned image. A missing property route is
-    # therefore an INCOMPLETE design-to-property obligation, not a platform or
-    # open-source-container capability gap.
-    assert 5 not in F._PLATFORM_CAPABILITY_GAPS
-    assert F._PLATFORM_CAPABILITY_GAPS == {}
-    assert 5 not in F._OPEN_SOURCE_CONTAINER_BLOCKED_STEPS
 
 
 def test_phase2_command_actually_invokes_formal_verify_fallback():

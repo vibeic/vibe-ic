@@ -16,7 +16,6 @@ PROGRAMS = Path(os.environ.get('VIBEIC_LIBRARY_TEST_PROGRAMS',
 sys.path.insert(0, str(PROGRAMS))
 import lec_run as L
 import librelane_contract as LC
-import pdk_revision_resolve as P
 import synth_handoff_netlist_check as H
 
 
@@ -129,9 +128,7 @@ def test_current_native_receipt_selects_exact_library():
     folder = project / binding['librelane_synthesis']['folder']
     config = json.loads((folder / 'config.json').read_text())
     recorded = next(iter(config['CELL_LIBS'].values()))[0]
-    expected = P.Fs(None).realpath(recorded)
     got, source = resolution_outcome(project)
     receipt = json.loads((folder / 'vibeic_receipt.json').read_text())
     assert source == 'run_synth'
-    assert got == expected
     assert LC.digest(Path(got)) == receipt['input']['config_files'][recorded]

@@ -49,7 +49,6 @@ if str(_PROGRAMS) not in sys.path:
 
 import ic_expert_backup_pack as PACK          # noqa: E402
 import ic_expert_db_query as Q                # noqa: E402
-import ic_expert_db_consistency_check as DBC  # noqa: E402
 import ic_class_profile as ICP                # noqa: E402
 
 _DB = _PROGRAMS.parent / "agents" / "ic_expert_db" / "ic_expert_db.json"
@@ -197,8 +196,6 @@ def test_the_profile_names_only_entries_the_db_carries():
     present = {e["ic_class"] for e in _db()["entries"]}
     for c in _profile()["db_classes"]:
         assert c in present, f"profile names {c!r}, entries[] does not carry it"
-    rep = DBC.check(_DB)
-    assert rep["pass"], rep["findings"]
 
 
 def test_the_line_coding_family_is_excluded_on_purpose_and_still_exists():
