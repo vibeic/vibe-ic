@@ -111,7 +111,9 @@ def test_cvc_uses_native_report_not_process_success(tmp_path, monkeypatch, total
         calls.append(list(map(str, argv)))
         if argv[0] == "cvc_rv":
             (tmp_path / "report.rpt").write_text(report)
-        return SimpleNamespace(returncode=0, stdout="native converted input")
+        stdout = ("supply power 1.8\nground power 0\n" if argv[0] == "awk" and argv[-1] == "actual.v"
+                  else "native converted input")
+        return SimpleNamespace(returncode=0, stdout=stdout)
     monkeypatch.setattr(Commands, "run", run)
     step = SimpleNamespace(step_dir=str(tmp_path), config={"PDK_ROOT": str(tmp_path),
         "PDK": "technology", "STD_CELL_LIBRARY": "cells", "VDD_NETS": ["supply"],

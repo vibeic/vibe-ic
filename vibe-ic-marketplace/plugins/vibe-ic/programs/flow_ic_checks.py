@@ -110,6 +110,7 @@ class ElectricalRules(Step):
     def run(self, state_in, **kwargs):
         from flow_native_adapters import Commands
         from flow109_final_perc import _parse_native_cvc_report
+        from _cvc_pdk import normalize_cdl, power_setup
 
         root = Path(self.step_dir).resolve()
         pdk = Path(str(self.config["PDK_ROOT"])) / self.config["PDK"]
@@ -121,17 +122,21 @@ class ElectricalRules(Step):
             raise StepException("NOT_MEASURED: selected PDK CVC recipe or standard-cell CDL is unavailable")
         power = self.config.get("VDD_NETS") or [self.config["VDD_PIN"]]
         ground = self.config.get("GND_NETS") or [self.config["GND_PIN"]]
-        if len(power) != 1 or len(ground) != 1:
-            raise StepException("NOT_MEASURED: PDK CVC recipe needs one declared supply pair")
         commands = Commands(root)
         cleaned = completed(commands.run(["awk", "-f", recipe / "cdl.awk", state_in[DesignFormat.SPICE]]), "CDL conversion")
-        (root / "design.cdl").write_text(cleaned.stdout + "\n" + cdl.read_text())
+        models = (recipe / "models").read_text()
+        netlist, models = normalize_cdl(cleaned.stdout + "\n" + cdl.read_text(), pdk, models)
+        (root / "design.cdl").write_text(netlist)
+        (root / "models").write_text(models)
         supplies = completed(commands.run(["awk", "-v", f"vdd={power[0]}", "-v", f"gnd={ground[0]}",
             "-f", recipe / "power.awk", state_in[DesignFormat.NETLIST]]), "CVC power declaration")
-        (root / "top.power").write_text(supplies.stdout)
+        try:
+            (root / "top.power").write_text(power_setup(supplies.stdout, self.config))
+        except ValueError as exc:
+            raise StepException(f"NOT_MEASURED: PDK CVC power setup: {exc}") from exc
         top = self.config["DESIGN_NAME"]
         text = (recipe / "cvcrc").read_text()
-        for old, new in (("$CVC_SCRIPTS_DIR/models", recipe / "models"),
+        for old, new in (("$CVC_SCRIPTS_DIR/models", root / "models"),
                          ("$signoff_tmpfiles/$DESIGN_NAME.cdl", root / "design.cdl"),
                          ("$signoff_tmpfiles/$CVC_TOP.power", root / "top.power"),
                          ("$signoff_reports/$CVC_TOP.rpt", root / "report.rpt"),
