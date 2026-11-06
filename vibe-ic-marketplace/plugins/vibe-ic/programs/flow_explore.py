@@ -128,7 +128,7 @@ def explore(project, output, *, cpus=8, jobs=2, flow_args=(), ppa_level=None, sp
     baseline = variants(project, level=0)[0]
     report_path = output / "results.json"
     if spool:
-        from flow_ppa_spool import collect, publish
+        from flow_ppa_spool import collect, discard_job, publish
         from _eda_pin import image_reference
         outbox, result_directory = (Path(path).resolve() for path in spool)
         if outbox == result_directory or any(path.is_relative_to(project)
@@ -151,7 +151,7 @@ def explore(project, output, *, cpus=8, jobs=2, flow_args=(), ppa_level=None, sp
         if not reference["rows"]:
             report_path.write_text(json.dumps({"state": "REFERENCE_NOT_MEASURED", "ppa_level": level,
                 "executor": "spool", "variants": [reference]}, indent=2) + "\n")
-            shutil.rmtree(outbox / reference_job)
+            discard_job(outbox, reference_job)
             raise ValueError("The reference job produced no native public report; see its returned diagnostics")
     else:
         reference = run_variant(project, output, baseline, groups[0], flow_args, level)
@@ -183,7 +183,7 @@ def explore(project, output, *, cpus=8, jobs=2, flow_args=(), ppa_level=None, sp
             pending_jobs[index] = job
             rows[index].update(state="QUEUED", spool_job=job)
             report_path.write_text(json.dumps(report, indent=2) + "\n")
-        shutil.rmtree(outbox / reference_job)
+        discard_job(outbox, reference_job)
         while pending_jobs:
             for index, job in list(pending_jobs.items()):
                 completed = collect(job, result_directory, output / rows[index]["name"])
@@ -191,7 +191,7 @@ def explore(project, output, *, cpus=8, jobs=2, flow_args=(), ppa_level=None, sp
                     rows[index] = completed
                     del pending_jobs[index]
                     report_path.write_text(json.dumps(report, indent=2) + "\n")
-                    shutil.rmtree(outbox / job)
+                    discard_job(outbox, job)
             if pending_jobs:
                 time.sleep(1)
     else:

@@ -8,6 +8,45 @@ import sys
 import pytest
 
 import flow_ppa_spool as spool
+import flow_explore
+
+
+def test_spool_driver_collects_after_dispatcher_consumed_the_outbox(tmp_path, monkeypatch):
+    project = tmp_path / 'project'
+    project.mkdir()
+    outbox, results = tmp_path / 'outbox', tmp_path / 'returned'
+    outbox.mkdir()
+    published = []
+
+    def publish(project, output, variant, **kwargs):
+        name, overrides = variant
+        job = 'job-' + name
+        published.append(name)
+        # A dispatcher may consume the author copy before returning a result.
+        folder = output / job
+        folder.mkdir()
+        folder.rmdir()
+        return job
+
+    def collect(job, directory, destination):
+        return {'name': job.removeprefix('job-'), 'project': str(destination),
+                'overrides': {}, 'exit_code': 0, 'all_pass': True, 'state': 'COMPLETED',
+                'rows': [{'name': 'native_mapping', 'status': 'PASS'}], 'metrics': {},
+                'resolved_settings': {}, 'native_activity': {}}
+
+    monkeypatch.setattr(spool, 'publish', publish)
+    monkeypatch.setattr(spool, 'collect', collect)
+    monkeypatch.setattr(flow_explore, 'variants', lambda *args, **kwargs:
+                        [('reference', {}), ('candidate', {})])
+    monkeypatch.setattr(flow_explore, 'compare_native', lambda *args:
+                        {'eligible': True, 'score': 0})
+    report = flow_explore.explore(project, tmp_path / 'output', cpus=2,
+                                  ppa_level=2, spool=(outbox, results))
+    assert report['state'] == 'COMPLETE'
+    assert report['public_invocations'] == 2
+    assert report['selected'] == 'reference'
+    assert published == ['reference', 'candidate']
+    assert list(outbox.iterdir()) == []
 
 
 @pytest.mark.parametrize("native_exit", [0, 2])

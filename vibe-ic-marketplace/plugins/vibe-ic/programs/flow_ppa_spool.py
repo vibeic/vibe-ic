@@ -69,6 +69,15 @@ def publish(project, outbox, variant, *, cpus, flow_args, level, image):
     return job
 
 
+def discard_job(outbox, job):
+    """Delete an author's used job even if its consumer already removed it."""
+    def on_error(function, path, error):
+        if not isinstance(error[1], FileNotFoundError):
+            raise error[1]
+
+    shutil.rmtree(Path(outbox) / job, onerror=on_error)
+
+
 def worker(root):
     from flow_explore import run_variant
 
