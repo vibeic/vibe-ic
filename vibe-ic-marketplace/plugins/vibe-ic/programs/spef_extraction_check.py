@@ -102,7 +102,6 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List, Tuple
 import _path_layout as _pl
-import _gate_authorship as _ga
 
 
 @dataclass
@@ -350,7 +349,7 @@ def main(argv: list = None) -> int:
         return 2
 
     findings, stats = audit(project_dir)
-    report = _ga.stamp(build_report(findings, stats, str(project_dir)))
+    report = build_report(findings, stats, str(project_dir))
     out = json.dumps(report, indent=2, ensure_ascii=False)
 
     if args.json:

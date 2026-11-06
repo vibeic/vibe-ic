@@ -69,7 +69,6 @@ import sta_corner_record_completeness_check as _sta_slack
 
 import _sta_basis
 from _mcp_measurement import strip_stamp as _meas_strip
-import _gate_authorship as _ga  # R-0915-152 (who invoked this writer)
 
 
 # ---------------------------------------------------------------------------
@@ -4742,14 +4741,10 @@ def main(argv: list = None) -> int:
     if not report.get("verdict"):
         report.pop("verdict", None)
 
-    # R-0915-152 -- the document states WHO INVOKED this writer, beside the
-    # verdict it already composes. Unstated role == producer, so the run's
-    # own path is unchanged.
     # ONE EDIT FOR SIX WRAPPERS: `drc_report_check`, `sta_report_check`,
     # `em_report_check`, `ir_drop_report_check`, `antenna_report_check` and
     # `lvs_report_check` all import this `main`, and between them own 8 of the
     # shared pairs -- drc and sta each serve two steps.
-    _ga.stamp(report)
     report_json = json.dumps(report, indent=2, ensure_ascii=False)
 
     if args.json:

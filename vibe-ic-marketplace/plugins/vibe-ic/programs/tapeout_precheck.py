@@ -162,7 +162,6 @@ import general_precheck as _ours                             # noqa: E402
 import plugin_manifest_discovery as _pmd                     # noqa: E402
 import tapeout_readiness_check as _theirs                    # noqa: E402
 from _atomic_artefact import write_text as atomic_write_text  # noqa: E402
-import _gate_authorship as _ga  # R-0915-152 (who invoked this writer)
 
 ATTRIBUTION = "tapeout_precheck"
 
@@ -1254,21 +1253,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     out_json = args.out_json or (args.project / MERGED_ARTEFACT)
-    # The auditor already isolated this invocation's result. Its child reports
-    # belong beside that receipt, never over the producer's canonical evidence.
-    report_args = ({"report_dir": out_json.parent}
-                   if _ga.caller_role() == _ga.ROLE_AUDIT else {})
     rep = evaluate(project=args.project, pdk=args.pdk, layout=args.layout,
                    declaration_path=args.declaration, slot=args.slot,
                    cob=args.cob, top=args.top, die_id=args.die_id,
                    image=args.image, allow_pull=args.pull,
-                   timeout=args.timeout, pdk_container=args.pdk_container,
-                   **report_args)
+                   timeout=args.timeout, pdk_container=args.pdk_container)
     payload = rep.as_dict()
-    # R-0915-152 -- the document states WHO INVOKED this writer, beside the
-    # verdict it already composes. Unstated role == producer, so the run's
-    # own path is unchanged.
-    _ga.stamp(payload)
     out_json.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(out_json, json.dumps(payload, indent=2) + "\n",
                       encoding="utf-8")

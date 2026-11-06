@@ -162,7 +162,6 @@ _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
 
 import _flow_reason_taxonomy as _reason_taxonomy  # noqa: E402
-import _gate_authorship as _ga  # R-0915-152 (who invoked this writer)
 
 TOOL = "em_peak_current_authority_check"
 VERSION = "1.0.1"
@@ -541,7 +540,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         # R-0915-152 -- the document states WHO INVOKED this writer, beside the
         # verdict it already composes. Unstated role == producer, so the run's
         # own path is unchanged.
-        _ga.stamp(rep)
         out.write_text(json.dumps(rep, indent=2, ensure_ascii=False) + "\n")
 
     ss = rep["supply_current_screen"]

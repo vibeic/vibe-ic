@@ -201,7 +201,6 @@ import _pdk_layer_authority as _pdkauth                         # noqa: E402
 import _tapeout_declaration as _decl                            # noqa: E402
 import _submission_template as _template                       # noqa: E402
 import submission_template_check as _template_check            # noqa: E402
-import _gate_authorship as _ga
 import plugin_manifest_discovery as _pmd                        # noqa: E402
 from _atomic_artefact import write_text as atomic_write_text    # noqa: E402
 
@@ -1924,12 +1923,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     out_json = args.out_json or (args.project / PRECHECK_ARTEFACT)
-    # Keep this audit's delegates in its existing receipt tree as well.
-    report_args = ({"report_dir": out_json.parent / Path(DELEGATE_REPORT_DIR).name}
-                   if _ga.caller_role() == _ga.ROLE_AUDIT else {})
     rep = evaluate(project=args.project, layout=args.layout, pdk=args.pdk,
                    declaration_path=args.declaration, timeout=args.timeout,
-                   pdk_container=args.pdk_container, **report_args)
+                   pdk_container=args.pdk_container)
     payload = rep.as_dict()
     out_json.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(out_json, json.dumps(payload, indent=2) + "\n",

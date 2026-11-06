@@ -83,7 +83,6 @@ import re
 import sys
 from pathlib import Path
 from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
-import _gate_authorship as _ga  # R-0915-152 (who invoked this writer)
 import _foundry_signoff_pdk as _fsp
 import _gds_geometry as _geometry
 
@@ -1084,7 +1083,6 @@ def main(argv=None):
         # own path is unchanged.
         report.setdefault("scope", "DESIGN_RELEASE" if args.design_release else "LEGACY_SKELETON")
         report.setdefault("technical_release_complete", False)
-        _ga.stamp(report)
         out = json.dumps(report, indent=2, ensure_ascii=False)
         if args.json:
             Path(args.json).parent.mkdir(parents=True, exist_ok=True)
@@ -1127,7 +1125,6 @@ def main(argv=None):
                   "findings": findings, "stale_layout_members": stale}
         report.setdefault("scope", "DESIGN_RELEASE" if args.design_release else "LEGACY_SKELETON")
         report.setdefault("technical_release_complete", False)
-        _ga.stamp(report)
         out = json.dumps(report, indent=2, ensure_ascii=False)
         if args.json:
             Path(args.json).parent.mkdir(parents=True, exist_ok=True)
@@ -1150,7 +1147,6 @@ def main(argv=None):
                   "findings": findings, "tool_layout_binding": unbound}
         report.setdefault("scope", "DESIGN_RELEASE" if args.design_release else "LEGACY_SKELETON")
         report.setdefault("technical_release_complete", False)
-        _ga.stamp(report)
         out = json.dumps(report, indent=2, ensure_ascii=False)
         if args.json:
             Path(args.json).parent.mkdir(parents=True, exist_ok=True)
@@ -1441,7 +1437,6 @@ def main(argv=None):
         # own path is unchanged.
         report.setdefault("scope", "DESIGN_RELEASE" if args.design_release else "LEGACY_SKELETON")
         report.setdefault("technical_release_complete", False)
-        _ga.stamp(report)
         out = json.dumps(report, indent=2, ensure_ascii=False)
         if args.json:
             Path(args.json).parent.mkdir(parents=True, exist_ok=True)
@@ -1548,7 +1543,6 @@ def main(argv=None):
     }
     # R-0915-152 -- the THIRD write path in this program, and the one a real run
     # takes: measured, the two early-return branches above are the refusal paths.
-    _ga.stamp(out)
     if args.json:
         out_path = Path(args.json)
         out_path.parent.mkdir(parents=True, exist_ok=True)

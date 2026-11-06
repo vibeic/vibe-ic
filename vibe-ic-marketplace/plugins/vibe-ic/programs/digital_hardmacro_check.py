@@ -241,7 +241,6 @@ from typing import Dict, List, Optional, Set, Tuple
 import _path_layout as _pl
 import _vacuous_exit as _vx
 from _atomic_artefact import write_text as atomic_write_text
-import _gate_authorship as _ga  # R-0915-152 (who invoked this writer)
 
 # ── SHARED PARSERS ────────────────────────────────────────────────────────
 # Imported, never re-typed. Guarded the way `analog_hardmacro_check` guards
@@ -1471,7 +1470,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         # R-0915-152 -- the document states WHO INVOKED this writer, beside the
         # verdict it already composes. Unstated role == producer, so the run's
         # own path is unchanged.
-        atomic_write_text(out, json.dumps(_ga.stamp(asdict(result)), indent=2,
+        atomic_write_text(out, json.dumps(asdict(result), indent=2,
                                           ensure_ascii=False) + "\n")
 
     skipped = _vx.summary_is_skipped(result.summary)
