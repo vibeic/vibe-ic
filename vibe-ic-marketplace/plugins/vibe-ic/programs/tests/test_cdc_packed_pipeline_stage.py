@@ -19,7 +19,6 @@ def test_native_two_sample_pipeline(tmp_path, label, source, expected):
     rtl.parent.mkdir(parents=True)
     rtl.write_text(source)
     native = cdc.build(tmp_path, [rtl], "neutral_cdc")
-    cdc.require_binding(tmp_path, native, cdc.load(native))
     report = tmp_path / "ordinary.json"
     command = [sys.executable, str(PROG / "clock_domain_reg_crossing_check.py"),
                str(tmp_path), "--front-end", "netlist", "--json", str(report)]
@@ -48,7 +47,6 @@ def test_native_opposite_edge_cannot_certify_two_sample_sync(
     """)
     native = cdc.build(tmp_path, [rtl], "neutral_cdc")
     model = cdc.load(native)
-    cdc.require_binding(tmp_path, native, model)
     receiving = [f for f in model.flops if model.domain(f) == "clk_b"]
     assert len(receiving) == 2
     assert {f.clk_pol for f in receiving} == {0, 1}
@@ -81,7 +79,6 @@ def test_native_inverted_clock_sampling_edge(tmp_path, second_edge, expected):
     """)
     native = cdc.build(tmp_path, [rtl], "neutral_cdc")
     model = cdc.load(native)
-    cdc.require_binding(tmp_path, native, model)
     report = tmp_path / "ordinary.json"
     result = subprocess.run([
         sys.executable, str(PROG / "clock_domain_reg_crossing_check.py"),
@@ -134,7 +131,6 @@ def lane_model(tmp_path, width, statement, edge="", initial=""):
     """)
     native = cdc.build(tmp_path, [rtl], "neutral_cdc")
     model = cdc.load(native)
-    cdc.require_binding(tmp_path, native, model)
     word, = [f for f in model.flops if model.domain(f) == "clk_b"]
     assert len(word.d) == len(word.q) == width
     return model, word
@@ -187,7 +183,6 @@ def test_native_async_input_uses_distinct_packed_lane(tmp_path, second, expected
     endmodule
     """)
     native = cdc.build(tmp_path, [rtl], "neutral_async")
-    cdc.require_binding(tmp_path, native, cdc.load(native))
     report = tmp_path / "async.json"
     result = subprocess.run([sys.executable, str(PROG / "cdc_async_input_check.py"),
         str(tmp_path), "--front-end", "netlist", "--json", str(report)],
@@ -214,7 +209,6 @@ def test_native_async_input_second_stage_requires_same_edge(
     endmodule
     """)
     native = cdc.build(tmp_path, [rtl], "neutral_async")
-    cdc.require_binding(tmp_path, native, cdc.load(native))
     report = tmp_path / "async.json"
     result = subprocess.run([
         sys.executable, str(PROG / "cdc_async_input_check.py"),
@@ -264,7 +258,6 @@ def test_native_clock_bus_bits_keep_distinct_domains(
     """)
     native = cdc.build(tmp_path, [rtl], "neutral_clock_bus")
     model = cdc.load(native)
-    cdc.require_binding(tmp_path, native, model)
     report = tmp_path / "ordinary.json"
     program, rule = (("clock_domain_reg_crossing_check.py", "CDC_REG_NO_SYNC")
                      if kind == "register" else

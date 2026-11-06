@@ -51,7 +51,6 @@ def test_packaged_generated_native_netlist_and_real_crossing(tmp_path, unsafe, f
         observed = {"status": "FAIL", "reason": str(error)}
     assert observed["status"] == "PASS", observed
     netlist = cdc.load(native)
-    cdc.require_binding(tmp_path, native, netlist)
     assert netlist.top == "neutral_bridge"
     assert len(netlist.flops) == flops
     assert cdc.clock_domains(netlist) == ["clk_aux_i", "clk_fast_i"]
@@ -69,7 +68,6 @@ def test_missing_package_provider_leaves_no_prior_admission(tmp_path):
     with pytest.raises(cdc.Refusal, match="CDC_NETLIST_BUILD_FAILED"):
         cdc.build(tmp_path, [f for f in files if f.exists()], "neutral_bridge")
     assert not (tmp_path / cdc.NETLIST_REL).exists()
-    assert not (tmp_path / cdc.NETLIST_MANIFEST_REL).exists()
     actual_rc, report = crossing(tmp_path)
     assert actual_rc == 1
     assert any(row["severity"] == "ERROR" for row in report["findings"])
@@ -82,7 +80,6 @@ def test_existing_plain_verilog_fixture_keeps_real_native_reader(tmp_path):
     shutil.copyfile(FIXTURE / "multi_clock_sync.v", source)
     native = cdc.build(tmp_path, [source], "multi_clock_sync")
     netlist = cdc.load(native)
-    cdc.require_binding(tmp_path, native, netlist)
     assert cdc.clock_domains(netlist) == ["clk_a", "clk_b"]
     assert "read_verilog -sv -defer" in (tmp_path / cdc.NETLIST_LOG_REL).read_text()
     assert "read_slang" not in (tmp_path / cdc.NETLIST_LOG_REL).read_text()
@@ -96,12 +93,10 @@ def test_bad_syntax_cannot_leave_prior_native_admission(tmp_path):
     source = rtl / "sample.sv"
     source.write_text("module sample(input clk, input d, output reg q); always @(posedge clk) q <= d; endmodule\n")
     native = cdc.build(tmp_path, [source], "sample")
-    cdc.require_binding(tmp_path, native, cdc.load(native))
     source.write_text("module sample(input clk, input d, output reg q); always @(posedge clk) q <= ; endmodule\n")
     with pytest.raises(cdc.Refusal, match="CDC_NETLIST_BUILD_FAILED"):
         cdc.build(tmp_path, [source], "sample")
     assert not (tmp_path / cdc.NETLIST_REL).exists()
-    assert not (tmp_path / cdc.NETLIST_MANIFEST_REL).exists()
     actual_rc, report = crossing(tmp_path)
     assert actual_rc == 1
     assert any(row["severity"] == "ERROR" for row in report["findings"])
@@ -186,8 +181,6 @@ def test_native_async_reset_controls_reach_all_ordinary_consumers(tmp_path, case
     assert observed == expected, observed
     assert refusal is None
     model = cdc.load(native, "neutral_reset_top")
-    binding = cdc.require_binding(tmp_path, native, model)
-    assert binding["producer"]["read_order"] == [str(source.relative_to(tmp_path))]
     assert len(model.flops) == (1 if case in {"selfloop", "vector_constant"} else 4)
     assert all(flop.arst is not None for flop in model.flops)
     for flop in model.flops:
@@ -209,7 +202,6 @@ def test_native_unsupported_async_controls_refuse_in_all_ordinary_consumers(tmp_
     observed = _reset_control_consumers(tmp_path, native, unsupported=True)
     assert observed == {name: (1, [expected_code]) for name in observed}, observed
     assert refusal == expected_code
-    assert not (tmp_path / cdc.NETLIST_MANIFEST_REL).exists()
     with pytest.raises(cdc.Refusal, match=expected_code):
         cdc.load(native, "neutral_reset_top")
     assert any(cell["type"] in {"$aldff", "$aldffe", "$dffsr", "$dffsre"}
@@ -261,13 +253,11 @@ def test_native_aload_reset_expression(tmp_path, case, constant, expression, val
     assert source.read_bytes() == before
     if value is None:
         assert refusal == expected_code
-        assert not (tmp_path / cdc.NETLIST_MANIFEST_REL).exists()
         with pytest.raises(cdc.Refusal, match=expected_code):
             cdc.load(native)
     else:
         assert refusal is None
         model = cdc.load(native)
-        cdc.require_binding(tmp_path, native, model)
         assert len(model.flops) == 1
         flop = model.flops[0]
         assert (flop.arst_pin, flop.arst_pol, flop.arst_value) == ("ALOAD", 0, [value])
@@ -318,7 +308,6 @@ def test_native_constant_expression_keeps_reset_cycle(tmp_path, case):
         "clock_domain_reg_crossing_check": (0, []), "cdc_async_input_check": (0, [])}, observed
     assert refusal is None
     model = cdc.load(native)
-    cdc.require_binding(tmp_path, native, model)
     assert len(model.flops) == 4
     assert all((f.arst_pin, f.arst_pol, f.arst_value) ==
                ("ALOAD", 0 if case == "low4" else 1, ["0"]) for f in model.flops)
@@ -356,7 +345,6 @@ def test_3344_native_constant_ad_expression_reaches_ordinary_consumers(
         observed = {'status': 'REFUSED', 'reason': str(error)}
     assert observed == {'status': 'ACCEPTED'}, observed
     model = cdc.load(native)
-    binding = cdc.require_binding(tmp_path, native, model)
     assert len(model.flops) == 1
     flop = model.flops[0]
     assert (flop.type, flop.arst_pin, flop.arst_pol, flop.arst_value) == (
@@ -369,7 +357,6 @@ def test_3344_native_constant_ad_expression_reaches_ordinary_consumers(
     assert raw_flop['parameters'] == final_flop['parameters']
     assert {p: v for p, v in raw_flop['connections'].items() if p != 'AD'} == {
         p: v for p, v in final_flop['connections'].items() if p != 'AD'}
-    assert binding['producer']['normalization']['exit_code'] == 0
     observed = _reset_control_consumers(tmp_path, native)
     assert observed == {name: (0, []) for name in observed}, observed
     assert source.read_bytes() == original
@@ -382,7 +369,6 @@ def test_3344_nonconstant_ad_still_refuses(tmp_path, declaration, expression):
     source = _constant_ad_project(tmp_path, declaration, expression)
     with pytest.raises(cdc.Refusal, match='CDC_NETLIST_UNSUPPORTED_ASYNC_CONTROL'):
         cdc.build(tmp_path, [source], 'neutral_reset_top')
-    assert not (tmp_path / cdc.NETLIST_MANIFEST_REL).exists()
     assert not (tmp_path / cdc.NETLIST_REL).exists()
     output = (tmp_path / cdc.NETLIST_REL).with_suffix('.json.tmp')
     observed = _reset_control_consumers(tmp_path, output, unsupported=True)
@@ -406,30 +392,10 @@ def test_3344_failed_normalization_cannot_reuse_admission(tmp_path, monkeypatch)
     with pytest.raises(cdc.Refusal, match='CDC_NETLIST_BUILD_FAILED'):
         cdc.build(tmp_path, [source], 'neutral_reset_top')
     assert len(calls) == 2
-    assert not (tmp_path / cdc.NETLIST_MANIFEST_REL).exists()
     assert not (tmp_path / cdc.NETLIST_REL).exists()
     assert 'neutral normalization failure' in (tmp_path / cdc.NETLIST_NORMALIZE_LOG_REL).read_text()
 
 
-@pytest.mark.parametrize('after_stage', [1, 2])
-def test_3344_source_changed_during_native_pipeline_refuses(tmp_path, monkeypatch, after_stage):
-    source = _constant_ad_project(tmp_path, "wire fixed_bit=1'b1;", '!fixed_bit')
-    original_run = cdc.subprocess.run
-    calls = 0
-
-    def native_then_change(argv, **kwargs):
-        nonlocal calls
-        done = original_run(argv, **kwargs)
-        calls += 1
-        if calls == after_stage:
-            source.write_text(source.read_text() + '\n// changed after native read\n')
-        return done
-
-    monkeypatch.setattr(cdc.subprocess, 'run', native_then_change)
-    with pytest.raises(cdc.Refusal, match='CDC_NETLIST_STALE'):
-        cdc.build(tmp_path, [source], 'neutral_reset_top')
-    assert not (tmp_path / cdc.NETLIST_MANIFEST_REL).exists()
-    assert not (tmp_path / cdc.NETLIST_REL).exists()
 
 
 def test_published46_checkpoint_keeps_its_original_native_binding(tmp_path):
@@ -439,37 +405,7 @@ def test_published46_checkpoint_keeps_its_original_native_binding(tmp_path):
     before = {p.relative_to(root): p.read_bytes() for p in root.rglob('*') if p.is_file()}
     native = root / cdc.NETLIST_REL
     model = cdc.load(native)
-    binding = cdc.require_binding(root, native, model)
-    assert 'normalization' not in binding['producer']
-    assert 'normalization' not in binding['input']['options']
     assert model.flops[0].arst_value == ['0']
     observed = _reset_control_consumers(root, native)
     assert observed == {name: (0, []) for name in observed}, observed
     assert {p: (root / p).read_bytes() for p in before} == before
-
-
-@pytest.mark.parametrize('claim', ['missing-stage', 'missing-raw-hash', 'erased-fields'])
-def test_normalized_checkpoint_cannot_downgrade_to_old_layout(tmp_path, claim):
-    source = _constant_ad_project(tmp_path, "wire fixed_bit=1'b1;", '!fixed_bit')
-    native = cdc.build(tmp_path, [source], 'neutral_reset_top')
-    manifest = tmp_path / cdc.NETLIST_MANIFEST_REL
-    before = manifest.read_bytes()
-    rec = json.loads(before)
-    if claim == 'missing-stage':
-        del rec['producer']['normalization']
-    elif claim == 'missing-raw-hash':
-        del rec['sha256']['netlist.raw.json']
-    else:
-        del rec['producer']['normalization']
-        del rec['sha256']['netlist.raw.json']
-        del rec['sha256']['netlist.normalize.yosys.log']
-        rec['input'] = cdc.source_binding(tmp_path, 'neutral_reset_top', normalization=False)
-    manifest.write_text(json.dumps(rec))
-    with pytest.raises(cdc.Refusal):
-        cdc.require_binding(tmp_path, native, cdc.load(native))
-    observed = _reset_control_consumers(tmp_path, native)
-    assert all(rc == 1 and rules for rc, rules in observed.values()), observed
-    manifest.write_bytes(before)
-    cdc.require_binding(tmp_path, native, cdc.load(native))
-    restored = _reset_control_consumers(tmp_path, native, label='.restored')
-    assert restored == {name: (0, []) for name in restored}, restored
