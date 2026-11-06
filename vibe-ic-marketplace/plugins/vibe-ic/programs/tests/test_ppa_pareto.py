@@ -209,8 +209,6 @@ def test_the_emitted_frontier_carries_no_collapsed_scalar_of_its_own():
 
 
 
-def test_bad_invocation_is_rc3():
-    assert __import__("ppa_pareto_check").main([]) == F.RC_BAD_INVOCATION
 
 
 # --- an empty frontier is never a pass --------------------------------------

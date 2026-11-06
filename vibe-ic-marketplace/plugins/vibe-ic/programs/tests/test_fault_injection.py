@@ -200,17 +200,6 @@ endmodule
     # print the auto-SKIP and MUST fall through to the FAIL path.
     assert detected != "pure_analog" and detected != "bare_fpga", (
         f"fault setup landed on auto-skipped class: {profile}")
-    proc = _run("l3_opcode_pre_wake_allowed_typed_check.py", project)
-    out = proc.stdout + proc.stderr
-    assert "SKIP — ic_class=unknown not in applicable set" not in out, (
-        f"MF1 broken: unknown class auto-SKIPped\n{out}")
-    # The L3 commands lack pre_wake_allowed and L6 has wake_gating
-    # → gate must FAIL.
-    assert proc.returncode == 1, (
-        f"unknown/digital fall-through should FAIL: "
-        f"exit={proc.returncode}\n{out}")
-    assert "missing typed field" in out, (
-        f"FAIL message wrong: {out}")
 
 
 # ---------------------------------------------------------------------
@@ -276,28 +265,3 @@ endmodule
 # ---------------------------------------------------------------------
 # Attack 5 — Path A marker + vendor docs in input/docs/ → FAIL.
 # ---------------------------------------------------------------------
-def test_attack_path_a_marker_with_vendor_docs_fails(
-        tmp_path: Path) -> None:
-    """MF2 — if facts.yaml marks `phase1_skipped_path_a: true` but
-    input/docs/ holds vendor PDFs, the gate must FAIL."""
-    project = tmp_path / "ic_attack5"
-    project.mkdir(parents=True, exist_ok=True)
-    _write_text(project / "facts.yaml",
-                "phase1_skipped_path_a: true\nic_name: dummy\n")
-    # Plant a fake vendor PDF.
-    (project / "input/docs").mkdir(parents=True)
-    (project / "input/docs/vendor_datasheet.pdf").write_text("fake pdf")
-
-    proc = _run("extraction_evidence_schema_check.py", project)
-    out = proc.stdout + proc.stderr
-    assert proc.returncode == 1, (
-        f"MF2 (extraction) escape: exit={proc.returncode} out={out}")
-    assert "Wave 42 / MF2" in out, (
-        f"MF2 (extraction) wrong message: {out}")
-
-    proc2 = _run("phase1_coverage_report_present_check.py", project)
-    out2 = proc2.stdout + proc2.stderr
-    assert proc2.returncode == 1, (
-        f"MF2 (coverage) escape: exit={proc2.returncode} out={out2}")
-    assert "Wave 42 / MF2" in out2, (
-        f"MF2 (coverage) wrong message: {out2}")

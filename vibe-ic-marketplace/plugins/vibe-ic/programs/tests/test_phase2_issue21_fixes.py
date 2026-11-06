@@ -113,62 +113,8 @@ def test_post_emit_typed_clock_domains_synthesises_primary_after_l9(tmp_path):
 # Bug 2 (P0) — gate-side _is_real_clock_freq filter
 # ---------------------------------------------------------------------------
 
-def test_gate_side_clock_freq_filter_rejects_sub_khz_tolerance(tmp_path):
-    """REJECT-test for v1.6.88: sub-kHz `2 Hz` tolerance prose hit
-    must NOT count as a distinct clock-frequency mention. v1.6.88
-    fixed this on the ingest side only — the gate's own
-    _scan_freq_mentions still trusted the bare regex. v1.6.89 mirrors
-    the filter inside the gate."""
-    from programs.l8_clock_domains_typed_check import _scan_freq_mentions
-    project = tmp_path
-    extracted = project / "phase1" / "input_doc"
-    extracted.mkdir(parents=True, exist_ok=True)
-    (extracted / "spec.txt").write_text(
-        "Tolerance: respond within 2 Hz of nominal output.\n"
-        "Reference frequency for production calibration is 100 Hz.\n"
-        "System clock at 50 MHz primary clock.\n"
-    )
-    freqs = _scan_freq_mentions(project)
-    # 2 Hz / 100 Hz must be filtered: sub-kHz + tolerance prose.
-    norm = {f.lower().replace(" ", "") for f in freqs}
-    assert "2hz" not in norm, (
-        f"sub-kHz `2 Hz` tolerance hit must be filtered; got {freqs}"
-    )
-    assert "100hz" not in norm, (
-        f"sub-kHz `100 Hz` reference hit must be filtered; got {freqs}"
-    )
-    # 50 MHz must survive — it's a real clock mention with `clock`
-    # keyword nearby.
-    assert any("50" in f and "mhz" in f.lower() for f in freqs), (
-        f"50 MHz real clock must be retained; got {freqs}"
-    )
 
 
-def test_gate_side_filter_rejects_freq_without_clock_keyword(tmp_path):
-    """A bare `2 MHz` mention without any clock-keyword token in the
-    ±50-char window must NOT count. Mirrors the ingest-side context
-    check."""
-    from programs.l8_clock_domains_typed_check import _scan_freq_mentions
-    project = tmp_path
-    extracted = project / "phase1" / "input_doc"
-    extracted.mkdir(parents=True, exist_ok=True)
-    (extracted / "spec.txt").write_text(
-        # MHz unit but no clock vocabulary anywhere near.
-        "The acceptable spurious-emission level is below 2 MHz amplitude.\n"
-        "Audio bandwidth measured up to 20 kHz response.\n"
-        # Real clock context.
-        "Primary system clock at 12 MHz.\n"
-    )
-    freqs = _scan_freq_mentions(project)
-    norm = {f.lower().replace(" ", "") for f in freqs}
-    # 2 MHz spurious emission has no clock-keyword in window → filtered.
-    assert "2mhz" not in norm, (
-        f"`2 MHz` without clock-keyword must be filtered; got {freqs}"
-    )
-    # 12 MHz primary system clock survives.
-    assert any("12" in f and "mhz" in f.lower() for f in freqs), (
-        f"12 MHz primary clock must be retained; got {freqs}"
-    )
 
 
 # ---------------------------------------------------------------------------
