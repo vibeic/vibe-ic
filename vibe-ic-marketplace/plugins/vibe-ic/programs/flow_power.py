@@ -8,7 +8,14 @@ def intent(project, directory, tool):
     from l_doc_consumer_contract import load_l_doc, l_doc_fields
 
     _, document = load_l_doc(project, "L9")
-    top = tool.get("top") or l_doc_fields(document).get("top_module")
+    top = tool.get("top")
+    if not top and (project / "phase2/stage1/rtl").is_dir():
+        from flow_config import resolve_rtl_inputs
+        try:
+            _, top = resolve_rtl_inputs(project)
+        except FileNotFoundError as exc:
+            return {"ran": False, "exit_code": None, "detail": str(exc)}
+    top = top or l_doc_fields(document).get("top_module")
     if not top:
         return {"ran": False, "exit_code": None, "detail": "The documented design top is missing."}
     commands = Commands(directory)
