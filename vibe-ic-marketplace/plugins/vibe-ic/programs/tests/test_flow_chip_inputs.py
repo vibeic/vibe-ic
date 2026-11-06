@@ -794,9 +794,9 @@ def test_native_timing_environment_and_pad_edge_bracket_reach_sdc(inputs):
     assert "set_timing_derate -early 0.949999" in text
     assert "set_clock_uncertainty 0.25" in text
     assert "set_clock_transition 0.15" in text
-    assert "set_max_transition 3 [current_design]" in text
-    assert "set_max_capacitance 0.2 $_chip_core_pins" in text
-    assert "set_max_capacitance 0.2 [current_design]" not in text
+    assert "set_max_transition [sta::time_sta_ui [expr {3 * 1e-9}]] [current_design]" in text
+    assert "set_max_capacitance [sta::capacitance_sta_ui [expr {0.2 * 1e-12}]] $_chip_core_pins" in text
+    assert "set_max_capacitance [sta::capacitance_sta_ui [expr {0.2 * 1e-12}]] [current_design]" not in text
     assert "set_load 0.01" in text
     assert "set _chip_pad_max 1" in text
     assert "set _chip_pad_min 0.08" in text

@@ -617,7 +617,10 @@ def _electrical_sdc(config: dict) -> list[str]:
     for key, command in (("MAX_FANOUT_CONSTRAINT", "set_max_fanout"),
                          ("MAX_TRANSITION_CONSTRAINT", "set_max_transition")):
         if config.get(key) is not None:
-            lines.append(f"{command} {float(config[key]):g} [current_design]")
+            value = f"{float(config[key]):g}"
+            if key == "MAX_TRANSITION_CONSTRAINT":
+                value = f"[sta::time_sta_ui [expr {{{value} * 1e-9}}]]"
+            lines.append(f"{command} {value} [current_design]")
     if config.get("MAX_CAPACITANCE_CONSTRAINT") is not None:
         lines.extend((
             "set _chip_bond_nets [dict create]",
@@ -639,7 +642,7 @@ def _electrical_sdc(config: dict) -> list[str]:
             "  }",
             "}",
             "if {[llength $_chip_core_pins]} {",
-            f"  set_max_capacitance {float(config['MAX_CAPACITANCE_CONSTRAINT']):g} $_chip_core_pins",
+            f"  set_max_capacitance [sta::capacitance_sta_ui [expr {{{float(config['MAX_CAPACITANCE_CONSTRAINT']):g} * 1e-12}}]] $_chip_core_pins",
             "}"))
     return lines
 

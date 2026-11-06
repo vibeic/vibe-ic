@@ -191,11 +191,13 @@ def test_native_child_records_missing_dependency(tmp_path, monkeypatch):
         "status": "NOT_MEASURED", "reason": "native package absent"}
 
 
+@pytest.mark.parametrize("time_unit,cap_unit,scale", [("ns", "pf", 1), ("ps", "ff", 1000)])
 @pytest.mark.parametrize("original_fanout,original_slew,original_cap", [
     (None, None, None), (10, 2, .9), (.5, .00001, .01),
 ])
 def test_supplied_sdc_enforces_declared_limits_without_weakening_original_rules(
-        tmp_path, monkeypatch, original_fanout, original_slew, original_cap):
+        tmp_path, monkeypatch, original_fanout, original_slew, original_cap,
+        time_unit, cap_unit, scale):
     sta = shutil.which("sta")
     if sta is None:
         pytest.skip("Native OpenSTA required for supplied-SDC electrical limits")
@@ -203,36 +205,38 @@ def test_supplied_sdc_enforces_declared_limits_without_weakening_original_rules(
     write(install / "flow/platforms/process/config.mk", "")
     write(install / "tools/AutoTuner/src/autotuner/__init__.py", "")
     space = write(tmp_path / "space.json", "{}")
-    liberty = write(tmp_path / "cells.lib", '''library (cells) {
+    liberty_text = f'''library (cells) {{
       delay_model : table_lookup;
-      time_unit : "1ns";
+      time_unit : "1{time_unit}";
       voltage_unit : "1V";
       current_unit : "1mA";
-      capacitive_load_unit (1,pf);
+      capacitive_load_unit (1,{cap_unit});
       nom_voltage : 1; nom_temperature : 25; nom_process : 1;
       default_fanout_load : 1; default_max_fanout : 10;
-      default_max_transition : 2;
-      cell (buffer) {
-        pin (A) { direction : input; capacitance : 0.2; }
-        pin (Z) { direction : output; function : "A"; max_capacitance : 0.9; }
-      }
-    }''')
+      default_max_transition : {2 * scale};
+      cell (buffer) {{
+        pin (A) {{ direction : input; capacitance : {.2 * scale}; }}
+        pin (Z) {{ direction : output; function : "A"; max_capacitance : {.9 * scale}; }}
+      }}
+    }}'''
+    liberty = write(tmp_path / "cells.lib", liberty_text)
     netlist = write(tmp_path / "unit.v", '''module unit(input a, spare, output y, z);
       wire n;
       buffer u1(.A(a), .Z(n));
       buffer u2(.A(n), .Z(y));
       buffer u3(.A(n), .Z(z));
     endmodule''')
-    original = ["set_max_fanout 0.25 [get_ports spare]",
-                "set_max_transition 0.000001 [get_ports spare]",
-                "set_max_capacitance 0.8 [get_pins u2/Z]"]
+    original = [f"set_units -time {time_unit} -capacitance {cap_unit}",
+                "set_max_fanout 0.25 [get_ports spare]",
+                f"set_max_transition {0.000001 * scale:g} [get_ports spare]",
+                f"set_max_capacitance {.8 * scale:g} [get_pins u2/Z]"]
     for value, command, objects in (
         (original_fanout, "set_max_fanout", "[current_design]"),
         (original_slew, "set_max_transition", "[current_design]"),
         (original_cap, "set_max_capacitance", "[get_pins u1/Z]"),
     ):
         if value is not None:
-            original.append(f"{command} {value} {objects}")
+            original.append(f"{command} {value if command == 'set_max_fanout' else value * scale:g} {objects}")
     sdc = write(tmp_path / "original.sdc", "\n".join(original) + "\n")
     before = sdc.read_bytes()
     config = Config(DESIGN_NAME="unit", VERILOG_FILES=[str(netlist)],
@@ -257,6 +261,7 @@ puts "ORIGINAL_CAP_VIOLATIONS [sta::max_capacitance_violation_count]"
 read_sdc {{{translated}}}
 puts "NATIVE_FANOUT_VIOLATIONS [sta::max_fanout_violation_count]"
 puts "NATIVE_CAP_VIOLATIONS [sta::max_capacitance_violation_count]"
+create_clock -name subsequent -period {2 * scale:g} [get_ports a]
 write_sdc -digits 9 {{{tmp_path / 'effective.sdc'}}}
 set sta_report_default_digits 6
 report_check_types -max_fanout -max_count 20 -verbose
@@ -282,7 +287,11 @@ exit
         ("set_max_capacitance", .8, r"\[get_pins \{u2/Z\}\]"),
     ):
         match = re.search(command + r" ([\d.eE+-]+) " + objects, effective)
-        assert match and float(match[1]) == pytest.approx(expected), effective
+        assert match, effective
+        physical_value = float(match[1]) / (1 if command == "set_max_fanout" else scale)
+        assert physical_value == pytest.approx(expected), effective
+    clock = re.search(r"create_clock -name subsequent -period ([\d.eE+-]+)", effective)
+    assert clock and float(clock[1]) / scale == pytest.approx(2), effective
     assert sdc.read_bytes() == before
     assert (translated.parent / "constraint-original.sdc").read_bytes() == before
 
