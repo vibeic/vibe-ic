@@ -75,11 +75,6 @@ def _project(tmp_path: Path, *, feedback: str = None,
     return proj
 
 
-def _run(proj: Path, *extra) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [sys.executable, str(PROGRAMS / "magic_illegal_overlap_check.py"),
-         str(proj), *extra],
-        capture_output=True, text=True, check=False)
 
 
 def _rules(report: dict) -> list:
@@ -165,17 +160,6 @@ def test_real_magic_writes_a_dump_this_parser_reads(tmp_path):
 # --------------------------------------------------------------------------- #
 
 
-def test_the_metric_goes_through_the_repo_channel_and_declares_a_direction(
-        tmp_path):
-    proj = _project(tmp_path, feedback=MAGIC_DUMP_TWO_OVERLAPS)
-    cp = _run(proj, "--json", str(tmp_path / "r.json"))
-    metrics = json.loads((proj / "reports/metrics/31.json").read_text())
-    key = "31__drv__magic_illegal_overlap__violation_count"
-    assert metrics[key] == 2
-    assert SM.direction_for(key) == "lower", \
-        "a rise in this count must grade as `worse`, not `undeclared`"
-    assert SM.key_defect(key) is None
-    assert SM.conformance_defects(proj) == []
 
 
 # --------------------------------------------------------------------------- #

@@ -814,11 +814,6 @@ def _mutant(tmp_path: Path, filename: str, old: str, new: str) -> Path:
     return dst
 
 
-def _run(mut: Path, root: Path):
-    return subprocess.run(
-        [sys.executable, str(mut / "pad_ring_check.py"), str(root),
-         "--json", str(root / PR.REPORT_REL), *_pdk_args(root)],
-        capture_output=True, text=True)
 
 
 

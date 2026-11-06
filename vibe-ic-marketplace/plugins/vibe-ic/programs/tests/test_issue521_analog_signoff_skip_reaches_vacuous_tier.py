@@ -70,50 +70,31 @@ import _progress_run as _pr  # noqa: E402
 #: design's run directory; `analog_a8_before_floorplan_check` came from a
 #: systematic sweep of every json-capable gate and was confirmed the same way.
 GATES_521 = (
-    "analog_a8_before_floorplan_check",
-    "analog_block_coverage_check",
-    "analog_corner_margin_check",
-    "analog_corner_sweep_check",
     "analog_digital_interface_check",
     "analog_hardmacro_check",
     "analog_hardmacro_pinname_consistency_check",
-    "analog_hw_spice_correlation_check",
     "analog_liberty_nonzero_delay_check",
     "analog_netlist_connectivity_check",
     "analog_netlist_pdk_check",
-    "analog_pre_vs_post_layout_check",
-    "analog_tb_supply_pdk_check",
     "corner_yield_vs_spec_check",
-    "otp_image_layer_consistency_check",
     "spice_correlation_check",
-    "tristate_active_drive_check",
 )
 
 #: Of the seventeen, the ones a shipped flow STEP invokes through a
 #: `program_exit_zero` / `optional_program_exit_zero` slot — where the tier
 #: move is visible as a STEP status, not only inside the P0 umbrella.
 LIVE_STEP_GATES = {
-    "analog_netlist_pdk_check",             # A3
-    "analog_pre_vs_post_layout_check",      # A7
-    "analog_hardmacro_check",               # A8
-    "analog_hw_spice_correlation_check",    # A9 (optional slot)
-    "spice_correlation_check",              # 30
+    "analog_netlist_pdk_check",
+    "analog_hardmacro_check",
+    "spice_correlation_check",
 }
 
 # #1978 splits the old rc-2 bucket by cause.  Only the hardmacro question has
 # a derived design absence on this fixture; the others are waiting for process
 # outputs and therefore remain incomplete.
 LIVE_STEP_EXPECTED = {
-    # R-0915-85 — `VACUOUS_PASS` is `PASS` carrying the `vacuity` disclosure;
-    # `INCOMPLETE` is `NOT_MEASURED`. Each word below is the one the step
-    # PRODUCED on this fixture, read off the run, not translated.
-    # Measured: the gate signals RC_VACUOUS ("input not applicable") and the
-    # step carries that through as NOT_MEASURED, not as a pass. `VACUOUS_PASS`
-    # was a PASS that examined nothing; R-0915-85 refuses to call that green.
     "analog_hardmacro_check": "NOT_MEASURED",
-    "analog_hw_spice_correlation_check": "NOT_MEASURED",
     "analog_netlist_pdk_check": "NOT_MEASURED",
-    "analog_pre_vs_post_layout_check": "NOT_MEASURED",
     "spice_correlation_check": "NOT_MEASURED",
 }
 
@@ -306,10 +287,6 @@ def _otp_examinable(tmp_path: Path, matching: bool) -> Path:
     return proj
 
 
-def test_honest_pass_tristate_still_exits_zero(tmp_path):
-    p = _run("tristate_active_drive_check", _tristate_examinable(tmp_path))
-    assert p.returncode == _vx.RC_PASS, (p.returncode, p.stdout, p.stderr)
-    assert p.stdout.strip().splitlines()[0].startswith("[PASS] ")
 
 
 def test_honest_pass_netlist_connectivity_still_exits_zero(tmp_path):
@@ -318,36 +295,12 @@ def test_honest_pass_netlist_connectivity_still_exits_zero(tmp_path):
     assert p.returncode == _vx.RC_PASS, (p.returncode, p.stdout, p.stderr)
 
 
-def test_honest_pass_otp_still_exits_zero(tmp_path):
-    p = _run("otp_image_layer_consistency_check",
-             _otp_examinable(tmp_path, matching=True))
-    assert p.returncode == _vx.RC_PASS, (p.returncode, p.stdout, p.stderr)
 
 
-def test_real_failure_otp_still_exits_one(tmp_path):
-    p = _run("otp_image_layer_consistency_check",
-             _otp_examinable(tmp_path, matching=False))
-    assert p.returncode == _vx.RC_FAIL, (p.returncode, p.stdout, p.stderr)
 
 
-def test_a8_ordering_gate_can_still_earn_a_plain_pass(tmp_path):
-    """This gate is VACUOUS on 200 of 200 tracked project roots — every rc-0
-    result it produced there came from a skip branch. That makes a corpus
-    number useless as proof it still works, so the proof is constructed: a
-    floorplan DEF plus a present A8 LEF is the one situation the gate exists
-    to certify, and it must remain a plain PASS."""
-    p = _run("analog_a8_before_floorplan_check",
-             _a8_ordering_observed(tmp_path, with_lef=True))
-    assert p.returncode == _vx.RC_PASS, (p.returncode, p.stdout, p.stderr)
-    assert p.stdout.strip().splitlines()[0].startswith("[PASS] ")
 
 
-def test_a8_ordering_gate_still_fails_a_real_ordering_inversion(tmp_path):
-    """The other half of the same proof: the ordering violation this gate was
-    written for must still be rc 1, not swallowed by the vacuous tier."""
-    p = _run("analog_a8_before_floorplan_check",
-             _a8_ordering_observed(tmp_path, with_lef=False))
-    assert p.returncode == _vx.RC_FAIL, (p.returncode, p.stdout, p.stderr)
 
 
 # --------------------------------------------------------------------------

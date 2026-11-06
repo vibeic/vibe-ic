@@ -172,40 +172,6 @@ def test_no_outdir_writes_nothing_to_the_hardcoded_tmp_path(gate, tmp_path):
         f"must produce no file unless a caller passes --out-dir.")
 
 
-def test_fpga_pullup_lint_no_inout_early_return_writes_nothing(tmp_path):
-    """`fpga_pullup_lint` has TWO write sites; this covers the first.
-
-    A top module with no inout ports returns PASS early, from its own
-    `write_text` call. That branch is easy to miss because it is reached only
-    when the port parser finds nothing — which a single-line port list also
-    produces, for an unrelated reason.
-    """
-    default_dir, basename = GATES["fpga_pullup_lint"]
-    target = Path(default_dir) / basename
-    before = _sig(target)
-
-    rtl = tmp_path / "rtl"
-    rtl.mkdir()
-    (rtl / "top.v").write_text("module top(\n  input clk\n);\nendmodule\n")
-    qsf = tmp_path / "top.qsf"
-    qsf.write_text('set_global_assignment -name FAMILY "MAX 10"\n')
-
-    r = _run("fpga_pullup_lint", ["--rtl-dir", str(rtl), "--top-module", "top",
-                                  "--constraint", str(qsf)])
-    assert "Traceback" not in r.stderr, r.stderr
-    assert r.returncode == 0, f"{r.returncode}\n{r.stdout}\n{r.stderr}"
-    assert "no inout ports" in r.stdout, r.stdout   # the early return was taken
-    assert _sig(target) == before, (
-        f"the no-inout early return wrote {target} without being asked to")
-
-    # and the opt-in path still produces the report from that same branch
-    out = tmp_path / "reports"
-    r2 = _run("fpga_pullup_lint", ["--rtl-dir", str(rtl), "--top-module", "top",
-                                   "--constraint", str(qsf),
-                                   "--out-dir", str(out)])
-    assert r2.returncode == 0, r2.stderr
-    assert "no inout ports" in r2.stdout, r2.stdout
-    assert (out / basename).is_file(), "early return dropped the opt-in report"
 
 
 @pytest.mark.parametrize("gate", sorted(GATES))

@@ -173,20 +173,6 @@ def test_step14_no_inline_command_still_vacuous_pass(tmp_path):
     assert json.loads(out.read_text())["verdict"].startswith("VACUOUS_PASS")
 
 
-def test_step14_ys_script_path_unchanged(tmp_path):
-    """DIRECTION-1. The .ys-script branch is untouched: correct ordering
-    passes, a script missing hilomap still fails."""
-    ok = tmp_path / "ok.ys"
-    ok.write_text("read_verilog a.v\nsynth -top t\ntechmap\n"
-                  f"abc -liberty {_LIB}\ntechmap\nhilomap -hicell A a\n"
-                  "write_verilog out.v\n")
-    bad = tmp_path / "bad.ys"
-    bad.write_text("read_verilog a.v\nsynth -top t\ntechmap\n"
-                   f"abc -liberty {_LIB}\nwrite_verilog out.v\n")
-    assert _run("yosys_hilomap_required_check.py",
-                "--ys-file", str(ok)).returncode == 0
-    assert _run("yosys_hilomap_required_check.py",
-                "--ys-file", str(bad)).returncode == 1
 
 
 

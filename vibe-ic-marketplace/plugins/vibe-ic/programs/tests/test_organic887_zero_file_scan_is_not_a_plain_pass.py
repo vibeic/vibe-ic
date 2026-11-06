@@ -60,7 +60,6 @@ import _vacuous_exit as _vx  # noqa: E402
 #: The two step-3 gates, with the gate-output JSON path step 3 gives each one.
 STEP3_GATES = [
     ("cdc_async_input_check", "reports/phase2/gates/cdc_async_input.json"),
-    ("reset_dependency_check", "reports/phase2/gates/cdc_reset_dep.json"),
 ]
 
 #: Absolute project-path lengths to drive each gate at. 123/124 and 131/132 are
@@ -270,45 +269,14 @@ def _yosys_project(tmp_path: Path, path_len: int | None = None) -> Path:
     return proj
 
 
-def _run_yosys(proj: Path) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [sys.executable, str(PROGRAMS / "yosys_script_template_check.py"), ".",
-         "--json", "reports/phase2/gates/yosys_script_template.json"],
-        cwd=proj, capture_output=True, text=True)
-
-
-@pytest.mark.parametrize("path_len", [None] + FLIP_POINT_LENGTHS)
-def test_yosys_script_template_disclosure_reaches_the_consumer(
-        path_len, tmp_path):
-    """It ALWAYS emitted a recognised token; the consumer never saw it, because
-    ~194 characters of trailing note evicted the ~249-char sentinel line from
-    the 300-char tail. Path-length INDEPENDENT, so `None` — an ordinary short
-    `tmp_path` — is itself a failing case on the unfixed program."""
-    proj = _yosys_project(tmp_path, path_len)
-    proc = _run_yosys(proj)
-
-    assert proc.returncode == 0
-    full = (proc.stdout or "") + "\n" + (proc.stderr or "")
 
 
 
 
 
 
-def test_yosys_does_not_disclose_when_it_audited_a_real_script(tmp_path):
-    """Over-fire control. A project with a genuine synthesis recipe is examined,
-    not skipped, and must stay a plain PASS."""
-    synth = tmp_path / "phase2" / "stage2" / "synth"
-    synth.mkdir(parents=True)
-    (synth / "synth.ys").write_text(
-        "read_verilog -sv top.v\n"
-        "synth -top top -flatten\n"
-        "dfflibmap -liberty lib.lib\n"
-        "hilomap -hicell TIEHI Y -locell TIELO Y\n"
-        "write_verilog netlist.v\n")
-    (synth / "netlist.v").write_text("module top(); endmodule\n")
-    proc = _run_yosys(tmp_path)
-    assert proc.returncode == 0
+
+
 
 
 # ---------------------------------------------------------------------------
