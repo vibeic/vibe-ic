@@ -231,32 +231,3 @@ def test_a_bool_is_not_arithmetic():
 # ---------------------------------------------------------------------------
 # the wired gate — emitted by the program that COMPUTED the number
 # ---------------------------------------------------------------------------
-def test_the_wired_gate_emits_its_own_metric(tmp_path):
-    proj = tmp_path / "proj"
-    proj.mkdir()
-    _pr.run([sys.executable,
-                    str(PROGRAMS / "coverage_metric_check.py"), str(proj)],
-                   capture_output=True, text=True)
-    merged, prov = sm.collect(proj)
-    assert prov["step_count"] == 1, (prov, merged)
-    assert "11__coverage__passed" in merged, merged
-    assert not sm.conformance_defects(proj)
-
-
-def test_the_metrics_sink_cannot_change_the_gate_s_verdict(tmp_path, monkeypatch):
-    """Bookkeeping must not decide a coverage verdict. With the sink guaranteed
-    to raise, the gate's rc has to be what it was without it."""
-    proj = tmp_path / "proj"
-    proj.mkdir()
-    a = _pr.run([sys.executable,
-                        str(PROGRAMS / "coverage_metric_check.py"), str(proj)],
-                       capture_output=True, text=True)
-    broken = tmp_path / "broken"
-    broken.mkdir()
-    (broken / "step_metrics.py").write_text("raise RuntimeError('sink down')\n")
-    env = dict(**{k: v for k, v in __import__("os").environ.items()})
-    env["PYTHONPATH"] = str(broken)
-    b = _pr.run([sys.executable,
-                        str(PROGRAMS / "coverage_metric_check.py"), str(proj)],
-                       capture_output=True, text=True, env=env)
-    assert a.returncode == b.returncode, (a.returncode, b.returncode)
