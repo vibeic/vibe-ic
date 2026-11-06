@@ -297,11 +297,19 @@ def resolve_rtl_inputs(project: Path | str) -> tuple[list[Path], str]:
     return _resolve_rtl_inputs(Path(project).resolve(), {})
 
 
+def _pdk_name(value: str) -> str:
+    from pdk_family_identity import canonical_family
+    value = str(value).strip()
+    family = canonical_family(value)
+    return family if family and family.casefold().startswith(value.casefold()) else value
+
+
 def declared_clocks(project: Path, pdk: str) -> list[dict]:
     docs = project / "phase1/generated_docs"
     clocks = [clock for clock in _load(docs / "L8_TIMING_WAVEFORM.json").get("clock_domains", [])
               if (clock.get("domain_kind") == "primary" or clock.get("role") in {"primary", "master"})
-              and clock.get("pdk_scoped_target") in {None, pdk}]
+              and (clock.get("pdk_scoped_target") is None
+                   or _pdk_name(clock["pdk_scoped_target"]) == _pdk_name(pdk))]
     return clocks or _load(docs / "L8_RTL_CONSTANTS.json").get("clock_domains", [])
 
 
@@ -333,8 +341,7 @@ def build_config(project: Path | str, *, route: str | None = None, pdk: str | No
                 break
     if not pdk:
         raise FileNotFoundError("Top module and PDK must be declared in design documents")
-    registered = [row["name"] for row in _load(PROGRAMS / "pdk_registry.json").get("pdks", [])]
-    pdk = next((name for name in registered if name.casefold() == str(pdk).strip().casefold()), str(pdk).strip())
+    pdk = _pdk_name(pdk)
     config: dict[str, Any] = {"DESIGN_NAME": top, "PDK": pdk,
                               "VERILOG_FILES": [str(path) for path in rtl]}
     config["VERILOG_INCLUDE_DIRS"] = sorted({str(path.parent) for path in

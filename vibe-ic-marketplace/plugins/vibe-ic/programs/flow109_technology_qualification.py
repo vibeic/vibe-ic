@@ -43,7 +43,7 @@ def execute(project: Path, directory: Path) -> dict:
     started, reports, metrics = False, [], {}
     before = time.perf_counter()
     try:
-        from flow_config import _load, _input_docs
+        from flow_config import _load, _input_docs, _pdk_name
         docs = project / "phase1/generated_docs"
         l19 = _load(docs / "L19_CONSTRAINTS_PDK.json")
         pdk = l19.get("fields", {}).get("pdk_target") or l19.get("pdk_target")
@@ -56,8 +56,7 @@ def execute(project: Path, directory: Path) -> dict:
                     break
         if not pdk:
             return {"ran": False, "exit_code": None, "detail": "No PDK declared in design documents."}
-        registered = _load(Path(__file__).with_name("pdk_registry.json")).get("pdks", [])
-        pdk = next((row["name"] for row in registered if row["name"].casefold() == str(pdk).strip().casefold()), str(pdk).strip())
+        pdk = _pdk_name(pdk)
         import librelane_contract as native
         config_path = project / "phase3/librelane/config.json"
         if not config_path.exists():

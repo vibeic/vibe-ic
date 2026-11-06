@@ -40,6 +40,23 @@ def test_pre_rtl_native_resolution_without_context_or_image(project):
     assert not list(project.rglob('*.v'))
 
 
+@pytest.mark.parametrize(('family', 'distribution'), [
+    ('sky130', 'sky130A'), ('gf180mcu', 'gf180mcuD'),
+])
+def test_documented_family_resolves_installed_native_distribution(project, family, distribution):
+    path = project / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json'
+    path.write_text(json.dumps({'fields': {'pdk_target': family, 'constraint_declarations': [
+        {'kind': 'flow_setting', 'token': 'MAX_FANOUT_CONSTRAINT', 'value': 4, 'scope': family},
+    ]}}))
+    before = path.read_bytes()
+    result, status = run(project)
+    assert status == 'PASS', result
+    assert result['metrics']['pdk'] == distribution
+    resolved = json.loads((project / 'technology/resolved.json').read_text())
+    assert resolved['MAX_FANOUT_CONSTRAINT'] == 4
+    assert path.read_bytes() == before
+
+
 @pytest.mark.parametrize('damage', ['missing_library', 'missing_rtl'])
 def test_native_configuration_errors_still_fail(project, damage):
     path = project / 'phase3/librelane/config.json'
