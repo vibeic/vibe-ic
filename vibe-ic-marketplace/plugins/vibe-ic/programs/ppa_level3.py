@@ -157,6 +157,20 @@ def _declared_checks(project: Path, config, metrics) -> None:
             raise RuntimeError(f"Native {check['metric']} violates original limit {check.get('declaration', bounds)}")
 
 
+def _native_violation_checks(metrics) -> None:
+    """Read native zero-threshold counts, including corners that only warn."""
+    for name in ("design__max_slew_violation__count", "design__max_cap_violation__count",
+                 "design__max_fanout_violation__count", "timing__setup_vio__count",
+                 "timing__hold_vio__count"):
+        values = {key: value for key, value in metrics.items()
+                  if key == name or key.startswith(name + "__corner:")}
+        if not values or any(value is None for value in values.values()):
+            raise _Unavailable(f"No native metric for {name}")
+        for key, value in values.items():
+            if Decimal(str(value)) > 0:
+                raise RuntimeError(f"Native {key}={value} violates original limit (violation count > 0)")
+
+
 def _export(completed: dict, original: Path, destination: Path, run_dir: Path) -> NativeBest:
     groups = {key: _files(completed.get(key)) for key in
               ("settings", "odb", "def", "netlist", "sdc", "liberty", "spef", "reports", "metrics")}
@@ -198,6 +212,7 @@ def _ll_complete(owner, config, project: Path, root: Path) -> dict:
     closure = type(owner)(config, design_dir=str(project))
     state = closure.start(_force_run_dir=str(root))
     raw = state.to_raw_dict()
+    _native_violation_checks(raw["metrics"])
     _declared_checks(project, closure.config, raw["metrics"])
     settings = root / "resolved.json"
     _write(settings, closure.config.to_raw_dict())

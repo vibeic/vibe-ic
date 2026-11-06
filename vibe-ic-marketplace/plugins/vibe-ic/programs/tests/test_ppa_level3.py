@@ -102,6 +102,9 @@ class Config(dict):
     def copy(self, **changes):
         return Config({**self, **changes})
 
+    def to_raw_dict(self):
+        return dict(self)
+
 
 def test_failed_attractive_synthesis_candidate_is_never_exported(tmp_path, monkeypatch):
     candidates = [SimpleNamespace(id="sta-AREA 0", config=Config(SYNTH_STRATEGY="AREA 0"),
@@ -122,6 +125,67 @@ def test_failed_attractive_synthesis_candidate_is_never_exported(tmp_path, monke
     assert attempted == ["AREA 0", "AREA 1"]
     assert result["odb"] == "native selected odb"
     assert "synthesis area" in json.loads((tmp_path / "selection.json").read_text())["criterion"]
+
+
+NATIVE_VIOLATION_METRICS = (
+    "design__max_slew_violation__count", "design__max_cap_violation__count",
+    "design__max_fanout_violation__count", "timing__setup_vio__count",
+    "timing__hold_vio__count",
+)
+
+
+@pytest.mark.parametrize("metric", NATIVE_VIOLATION_METRICS)
+@pytest.mark.parametrize("scope", ["", "__corner:slow"])
+def test_native_warning_candidate_is_skipped_without_document_electrical_declarations(
+        tmp_path, monkeypatch, metric, scope):
+    candidates = [SimpleNamespace(id="sta-AREA " + str(i),
+                  config=Config(SYNTH_STRATEGY="AREA " + str(i)),
+                  state_out=SimpleNamespace(metrics={"design__instance__area": i + 1}))
+                  for i in range(2)]
+    search = SimpleNamespace(step_objects=candidates, start=lambda **kwargs: None)
+    native_modules(monkeypatch, SimpleNamespace(factory=SimpleNamespace(get=lambda tool: lambda config: search)))
+    attempted = []
+    class Closure:
+        def __init__(self, config, design_dir):
+            self.config = config
+        def start(self, **kwargs):
+            attempted.append(self.config["SYNTH_STRATEGY"])
+            metrics = {name + suffix: 0 for name in NATIVE_VIOLATION_METRICS
+                       for suffix in ("", "__corner:slow")}
+            metrics[metric + scope] = 5 if self.config["SYNTH_STRATEGY"] == "AREA 0" else 0
+            return SimpleNamespace(to_raw_dict=lambda: {"metrics": metrics, "odb": self.config["SYNTH_STRATEGY"]})
+    original = Config(MAX_TRANSITION_CONSTRAINT=.75, MAX_CAPACITANCE_CONSTRAINT=.2,
+                      MAX_SLEW_VIOLATION_CORNERS=[""], MAX_CAP_VIOLATION_CORNERS=[""])
+    before = dict(original)
+    result = level3._librelane(Closure(original, str(tmp_path)), {}, tmp_path,
+                               "SynthesisExploration", tmp_path)
+    assert attempted == ["AREA 0", "AREA 1"]
+    assert result["odb"] == "AREA 1"
+    assert original == before
+
+
+@pytest.mark.parametrize("metric", NATIVE_VIOLATION_METRICS)
+@pytest.mark.parametrize("value", [None, "absent"])
+def test_missing_native_violation_count_is_not_measured(metric, value):
+    metrics = {name: 0 for name in NATIVE_VIOLATION_METRICS}
+    if value == "absent":
+        del metrics[metric]
+    else:
+        metrics[metric] = value
+    with pytest.raises(level3._Unavailable, match=metric):
+        level3._native_violation_checks(metrics)
+
+
+def test_native_violation_reader_ignores_informational_counts_and_keeps_corner_failures():
+    metrics = {name: 0 for name in NATIVE_VIOLATION_METRICS}
+    metrics.update({"design__instance__count__hold_buffer": 7,
+                    "timing__setup_r2r__ws": float("inf"),
+                    "design__lint_warning__count": 3,
+                    "design__max_slew_violation__count_extra": 99})
+    level3._native_violation_checks(metrics)
+    metrics["design__max_slew_violation__count__corner:slow"] = 5
+    with pytest.raises(RuntimeError, match="design__max_slew_violation__count__corner:slow=5"):
+        level3._native_violation_checks(metrics)
 
 
 @pytest.mark.parametrize("tool,fixed", [("SynthesisExploration", {"SYNTH_STRATEGY": "AREA 1"}),
