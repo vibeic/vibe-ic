@@ -98,6 +98,66 @@ def test_native_formal_retries_an_unsupported_sv_read_without_changing_propertie
         assert "(* anyseq *)" in lowered and "assert (q == 0)" in lowered
 
 
+@pytest.mark.parametrize("case", ["synthesis_good", "synthesis_bad", "formal_bad", "missing", "temporal"])
+def test_native_formal_uses_supplied_include_branch_and_keeps_properties(tmp_path, case):
+    if not all(shutil.which(name) for name in ("sby", "yosys", "sv2v", "yices-smt2")):
+        pytest.skip("Native formal tools are required")
+    from formal_property_run import emit_invariant_sby
+
+    root = tmp_path / "phase2/stage1/formal"
+    root.mkdir(parents=True)
+    vendor = tmp_path / "input/vendor_rtl/includes"
+    vendor.mkdir(parents=True)
+    headers = {
+        "checks.svh": '`ifdef SYNTHESIS\n`include "synthesis_checks.svh"\n'
+                      '`else\n`include "formal_checks.svh"\n`endif\n',
+        "synthesis_checks.svh": "`define LOCAL_CHECK\n",
+    }
+    if case == "formal_bad":
+        headers["formal_checks.svh"] = "`define LOCAL_CHECK assert(1'b0);\n"
+    elif case == "temporal":
+        headers["formal_checks.svh"] = "`define LOCAL_CHECK assert(q |-> q);\n"
+    elif case == "missing":
+        del headers["synthesis_checks.svh"]
+    for name, text in headers.items():
+        (vendor / name).write_text(text)
+    package = root / "unit_pkg.sv"
+    package.write_text("package unit_pkg; parameter RESET=0; endpackage\n")
+    rtl = root / "unit.sv"
+    rtl.write_text('`include "checks.svh"\n'
+        "module unit import unit_pkg::*; (input clk,rst_n,output reg q);\n"
+        f"always @(posedge clk) begin if(!rst_n) q<={int(case == 'synthesis_bad')}; else q<=!q;\n"
+        "`LOCAL_CHECK\nend endmodule\n")
+    harness = root / "proof.sv"
+    harness.write_text("module proof import unit_pkg::*; (input clk);\n"
+        "(* anyseq *) reg rst_n; reg valid=0; wire q; unit dut(clk,rst_n,q);\n"
+        "always @(posedge clk) begin valid<=1; if(valid && !$past(rst_n)) assert(q==RESET); end endmodule\n")
+    deck = root / "proof.sby"
+    deck.write_text(emit_invariant_sby([str(package), str(rtl)], str(harness),
+        "proof", [], [], prove_depth=8, bmc_depth=8))
+    originals = {p: p.read_bytes() for p in [package, rtl, harness, deck, *vendor.iterdir()]}
+    output = tmp_path / "output"
+    output.mkdir()
+    commands = Commands(output)
+    result = formal(tmp_path, output, {"top": "system"}, commands)
+    rows = [r for r in result["native_steps"] if r["name"] in {"SymbiYosys.prove", "SymbiYosys.bmc"}]
+    expected = ("NOT_MEASURED" if case in {"missing", "temporal"} else
+                "FAIL" if case.endswith("bad") else "PASS")
+    assert len(rows) == 2 and {r["status"] for r in rows} == {expected}, result
+    assert {p: p.read_bytes() for p in originals} == originals
+    scope = json.loads((output / "formal_scope.json").read_text())
+    assert scope["proves_declared_top"] is False
+    if case.startswith("synthesis_"):
+        assert result["exit_code"] == (2 if case.endswith("bad") else 0), result
+        assert "SYNTHESIS" in result["detail"] and "implementation macro" in result["detail"]
+    if case in {"formal_bad", "temporal"}:
+        assert not any("-DSYNTHESIS" in r["command"] for r in commands.records), commands.records
+    if case == "missing":
+        assert "unproved_required_properties" not in result["metrics"]
+    for path in output.rglob("sv_frontend.v"):
+        assert "assert (q == RESET)" in path.read_text() or "assert (q == 0)" in path.read_text()
+
+
 def test_native_formal_keeps_an_uncompilable_sv_model_unmeasured(tmp_path):
     if not all(shutil.which(name) for name in ("sby", "yosys", "sv2v")):
         pytest.skip("Native formal tools are required")
