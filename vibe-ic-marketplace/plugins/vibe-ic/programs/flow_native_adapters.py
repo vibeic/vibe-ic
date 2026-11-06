@@ -620,9 +620,16 @@ def formal(project, directory, tool, commands):
     return result
 
 
-def macro_views(project, directory, tool, commands):
+def macro_views(project, directory, tool, commands, route=None):
     """Use the existing pre-netlist macro integration component's own verdict."""
     from ip_integration_check import audit
+    from flow_macro_views import produce
+    try:
+        produced = produce(project, directory, commands, route or {})
+    except (OSError, ValueError, ImportError) as exc:
+        return {**commands.result(detail=str(exc)), "ran": False, "exit_code": None}
+    if produced is not None:
+        return produced
     started = time.perf_counter()
     report = audit(project)
     path = directory / "macro_views.json"
@@ -788,6 +795,8 @@ def execute(project, directory, tool, route, *, state=None, config=None):
     directory.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="native_", dir=directory))
     commands = Commands(work)
+    if tool.get("adapter") == "macro_views":
+        return macro_views(project, work, tool, commands, route)
     if tool.get("adapter") == "path_delay_atpg":
         from flow_atpg import path_delay
         return path_delay(project, work, state=state, config=config)
