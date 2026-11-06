@@ -727,7 +727,7 @@ def test_native_core_cap_limit_and_pad_liberty_limit_both_remain(tmp_path, hiera
     pad_pin = "pad_out/io_inst/PAD" if hierarchical else "pad_out/PAD"
     ports = [{"name": name, "direction": direction, "indexed": False}
              for name, direction in (("bond_in", "input"), ("bond_out", "output"))]
-    config = {"CLOCK_PORT": ["bond_in"], "CLOCK_PERIOD": 24, "IO_DELAY_CONSTRAINT": 20,
+    config = {"PDK": "gf180mcuD", "CLOCK_PORT": ["bond_in"], "CLOCK_PERIOD": 24, "IO_DELAY_CONSTRAINT": 20,
               "MAX_CAPACITANCE_CONSTRAINT": .2, "OUTPUT_CAP_LOAD": 3530}
     sdc = tmp_path / "constraints.sdc"
     sdc.write_text(chip._sdc(tmp_path, config, ports))
