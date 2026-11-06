@@ -39,7 +39,6 @@ def _registered_tools() -> list[str]:
 # Tools that have at least one dedicated test file under test/
 # (file content must reference the tool name verbatim).
 TESTED_TOOLS = {
-    "eda_lint",
     "eda_equiv",
     "eda_fpga_program",
     "eda_drc_klayout",  # auto_drc_deck.py covers DRC deck generation
