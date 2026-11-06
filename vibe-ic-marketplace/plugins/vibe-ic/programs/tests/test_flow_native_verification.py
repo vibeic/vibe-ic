@@ -98,8 +98,8 @@ def test_native_formal_retries_an_unsupported_sv_read_without_changing_propertie
         assert "(* anyseq *)" in lowered and "assert (q == 0)" in lowered
 
 
-@pytest.mark.parametrize("case", ["synthesis_good", "synthesis_bad", "formal_bad", "missing", "temporal"])
-def test_native_formal_uses_supplied_include_branch_and_keeps_properties(tmp_path, case):
+@pytest.mark.parametrize("case", ["missing_formal", "missing_formal_bad", "formal_good", "formal_bad", "missing_both", "temporal"])
+def test_native_formal_preserves_supplied_formal_include_branch(tmp_path, case):
     if not all(shutil.which(name) for name in ("sby", "yosys", "sv2v", "yices-smt2")):
         pytest.skip("Native formal tools are required")
     from formal_property_run import emit_invariant_sby
@@ -115,9 +115,11 @@ def test_native_formal_uses_supplied_include_branch_and_keeps_properties(tmp_pat
     }
     if case == "formal_bad":
         headers["formal_checks.svh"] = "`define LOCAL_CHECK assert(1'b0);\n"
+    elif case == "formal_good":
+        headers["formal_checks.svh"] = "`define LOCAL_CHECK assert(q==q);\n"
     elif case == "temporal":
         headers["formal_checks.svh"] = "`define LOCAL_CHECK assert(q |-> q);\n"
-    elif case == "missing":
+    elif case == "missing_both":
         del headers["synthesis_checks.svh"]
     for name, text in headers.items():
         (vendor / name).write_text(text)
@@ -126,7 +128,7 @@ def test_native_formal_uses_supplied_include_branch_and_keeps_properties(tmp_pat
     rtl = root / "unit.sv"
     rtl.write_text('`include "checks.svh"\n'
         "module unit import unit_pkg::*; (input clk,rst_n,output reg q);\n"
-        f"always @(posedge clk) begin if(!rst_n) q<={int(case == 'synthesis_bad')}; else q<=!q;\n"
+        f"always @(posedge clk) begin if(!rst_n) q<={int(case == 'missing_formal_bad')}; else q<=!q;\n"
         "`LOCAL_CHECK\nend endmodule\n")
     harness = root / "proof.sv"
     harness.write_text("module proof import unit_pkg::*; (input clk);\n"
@@ -141,19 +143,16 @@ def test_native_formal_uses_supplied_include_branch_and_keeps_properties(tmp_pat
     commands = Commands(output)
     result = formal(tmp_path, output, {"top": "system"}, commands)
     rows = [r for r in result["native_steps"] if r["name"] in {"SymbiYosys.prove", "SymbiYosys.bmc"}]
-    expected = ("NOT_MEASURED" if case in {"missing", "temporal"} else
-                "FAIL" if case.endswith("bad") else "PASS")
+    expected = "PASS" if case == "formal_good" else "FAIL" if case == "formal_bad" else "NOT_MEASURED"
     assert len(rows) == 2 and {r["status"] for r in rows} == {expected}, result
     assert {p: p.read_bytes() for p in originals} == originals
     scope = json.loads((output / "formal_scope.json").read_text())
     assert scope["proves_declared_top"] is False
-    if case.startswith("synthesis_"):
-        assert result["exit_code"] == (2 if case.endswith("bad") else 0), result
-        assert "SYNTHESIS" in result["detail"] and "implementation macro" in result["detail"]
-    if case in {"formal_bad", "temporal"}:
-        assert not any("-DSYNTHESIS" in r["command"] for r in commands.records), commands.records
-    if case == "missing":
+    assert "frontend" not in scope and "frontend_notes" not in scope
+    assert not any("-DSYNTHESIS" in r["command"] for r in commands.records), commands.records
+    if case.startswith("missing_"):
         assert "unproved_required_properties" not in result["metrics"]
+        assert "formal_checks.svh" in result["detail"], result
     for path in output.rglob("sv_frontend.v"):
         assert "assert (q ==" in path.read_text()
 
