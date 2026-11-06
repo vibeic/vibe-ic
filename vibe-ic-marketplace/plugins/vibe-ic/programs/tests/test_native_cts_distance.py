@@ -1,4 +1,5 @@
 from decimal import Decimal
+import json
 import shutil
 import subprocess
 
@@ -71,6 +72,18 @@ def test_native_cts_distance_uses_only_selected_master_heights(geometry):
 
     result = native_defaults(geometry.copy(CTS_CLK_BUFFERS=["clock_large"]))
     assert result["CTS_DISTANCE_BETWEEN_BUFFERS"] == 20
+
+
+@pytest.mark.parametrize("excluded", [["*dly*", "*delay*"], ["*dly*", "*delay*", "*_1"]])
+def test_native_cts_geometry_preserves_explored_exclusion_overrides(geometry, tmp_path, excluded):
+    from flow_config import native_defaults
+
+    overrides = tmp_path / "work/flow/native_overrides.json"
+    overrides.parent.mkdir(parents=True)
+    overrides.write_text(json.dumps({"EXTRA_EXCLUDED_CELLS": excluded}))
+    result = native_defaults(geometry.copy(PDK="gf180mcuD", DESIGN_DIR=str(tmp_path)))
+    assert result["CTS_DISTANCE_BETWEEN_BUFFERS"] == 10
+    assert result["EXTRA_EXCLUDED_CELLS"] == excluded
 
 
 @pytest.mark.parametrize("count,layout", [(64, "horizontal"), (64, "vertical"), (64, "grid"), (2, "grid")])

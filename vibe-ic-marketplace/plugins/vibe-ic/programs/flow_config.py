@@ -35,15 +35,19 @@ def implementation_setting(key: str) -> bool:
     return key in IMPLEMENTATION_SETTINGS or key.startswith(("CTS_", "PDN_", "GRT_DESIGN_REPAIR_"))
 
 
-def native_defaults(config):
-    """Apply native cell exclusions and bounded CTS characterization defaults."""
-    from flow_clock_geometry import cts_settings
-
+def native_excluded_cells(config):
     excluded = [*(config.get("EXTRA_EXCLUDED_CELLS") or []), "*dly*", "*delay*"]
     if str(config.get("PDK", "")).lower().startswith("gf180mcu"):
         # OpenROAD-flow-scripts flow/platforms/gf180/config.mk sets DONT_USE_CELLS = *_1.
         excluded.append("*_1")
-    changes = {"EXTRA_EXCLUDED_CELLS": list(dict.fromkeys(excluded))}
+    return list(dict.fromkeys(excluded))
+
+
+def native_defaults(config):
+    """Apply platform defaults, then the project's explicit native overrides."""
+    from flow_clock_geometry import cts_settings
+
+    changes = {"EXTRA_EXCLUDED_CELLS": native_excluded_cells(config)}
     caps = [value for value in (config.get("MAX_CAPACITANCE_CONSTRAINT"),
                                config.get("CTS_MAX_CAP") or None) if value is not None]
     slews = [value for value in (config.get("MAX_TRANSITION_CONSTRAINT"),
@@ -52,6 +56,8 @@ def native_defaults(config):
     if caps and slews:
         changes.update(CTS_MAX_CAP=min(caps), CTS_MAX_SLEW=min(slews))
     changes.update(cts_settings(config))
+    if config.get("DESIGN_DIR"):
+        changes.update(_load(Path(config["DESIGN_DIR"]) / "work/flow/native_overrides.json"))
     return config.copy(**changes)
 
 
@@ -383,6 +389,7 @@ def build_config(project: Path | str, *, route: str | None = None, pdk: str | No
             config["CLOCK_PORT"] = ports[0] if len(ports) == 1 else ports
         if periods:
             config["CLOCK_PERIOD"] = min(periods)
+    config.update(_load(project / "work/flow/native_overrides.json"))
     notes = project / "work/flow/config_sources.json"
     notes.parent.mkdir(parents=True, exist_ok=True)
     notes.write_text(json.dumps({"sources": sources, "assumptions": assumptions}, indent=2) + "\n")
