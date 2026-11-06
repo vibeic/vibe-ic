@@ -64,9 +64,19 @@ def test_current_is_maximum_matched_corner_power_over_voltage(tmp_path, compress
     assert estimated_current(native, {"power__total__corner:slow": .009})[0] is None
 
 
-def test_custom_pdn_script_keeps_its_control(tmp_path):
-    native = {"PDN_CFG": str(tmp_path / "custom.tcl")}
+@pytest.mark.parametrize("script", ["custom.tcl", "work/flow/pdn_cfg.tcl", "work/flow/chip/pdn_cfg.tcl"])
+@pytest.mark.parametrize("selection", ["plugin_output/declaration.json", "work/flow/native_overrides.json"])
+def test_declared_custom_pdn_script_keeps_its_control(tmp_path, script, selection):
+    source = tmp_path / script
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("custom PDN configuration\n")
+    native = {"PDN_CFG": str(source), "PDN_VWIDTH": 1.6}
+    declaration = tmp_path / selection
+    declaration.parent.mkdir(parents=True, exist_ok=True)
+    declaration.write_text(json.dumps({"PDN_CFG": str(source)}))
     assert current_settings(tmp_path, native) == {}
+    assert native == {"PDN_CFG": str(source), "PDN_VWIDTH": 1.6}
+    assert source.read_text() == "custom PDN configuration\n"
 
 
 @pytest.mark.parametrize("current, vertical, horizontal, voffset, hoffset", [

@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 667
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 1 (of 667)
+- **Total programs (excluding helpers / shims):** 668
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 1 (of 668)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 0 |
-| `any` | 666 |
+| `any` | 667 |
 
 ## Alphabetical listing
 
@@ -257,7 +257,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow_activity` | any | — | Run functional activity and native vector power on a captured State. |
 | `flow_atpg` | any | — | Run the existing ATPG programs on native State views. |
 | `flow_chip_inputs` | any | — | Generate native Chip inputs from the elaborated core and active PDK. |
-| `flow_clock_geometry` | any | — | Derive native clock-wire repair length from the core capacitance budget. |
+| `flow_clock_geometry` | any | — | flow_clock_geometry |
 | `flow_condition_reachability_check` | any | — | the self-disabling-condition guard. |
 | `flow_config` | any | — | Translate generated design documents into native LibreLane configuration. |
 | `flow_density_topup` | any | — | flow_density_topup |
@@ -266,6 +266,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow_engine` | any | — | Run the Router-selected window of the native step table. |
 | `flow_engine_frontend` | any | — | flow_engine_frontend |
 | `flow_engine_timing` | any | — | Plain totals of the recorded row durations. |
+| `flow_explore` | any | — | Compare public native runs on copies; adopt the best passing native override. |
 | `flow_ic_checks` | any | — | flow_ic_checks |
 | `flow_ir_corners` | any | — | flow_ir_corners |
 | `flow_native_adapters` | any | — | flow_native_adapters |
@@ -719,7 +720,7 @@ _(no programs in this group)_
 
 _(no programs in this group)_
 
-### `any` (666 programs)
+### `any` (667 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `accumulate_synth` — deterministic SOLVER for the CVDP sequential ACCUMULATOR / running-op family:
@@ -952,7 +953,7 @@ _(no programs in this group)_
 - `flow_activity` — Run functional activity and native vector power on a captured State.
 - `flow_atpg` — Run the existing ATPG programs on native State views.
 - `flow_chip_inputs` — Generate native Chip inputs from the elaborated core and active PDK.
-- `flow_clock_geometry` — Derive native clock-wire repair length from the core capacitance budget.
+- `flow_clock_geometry` — flow_clock_geometry
 - `flow_condition_reachability_check` — the self-disabling-condition guard.
 - `flow_config` — Translate generated design documents into native LibreLane configuration.
 - `flow_density_topup` — flow_density_topup
@@ -961,6 +962,7 @@ _(no programs in this group)_
 - `flow_engine` — Run the Router-selected window of the native step table.
 - `flow_engine_frontend` — flow_engine_frontend
 - `flow_engine_timing` — Plain totals of the recorded row durations.
+- `flow_explore` — Compare public native runs on copies; adopt the best passing native override.
 - `flow_ic_checks` — flow_ic_checks
 - `flow_ir_corners` — flow_ir_corners
 - `flow_native_adapters` — flow_native_adapters

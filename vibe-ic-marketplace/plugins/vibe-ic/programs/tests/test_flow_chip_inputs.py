@@ -16,7 +16,7 @@ def native_inputs(tmp_path):
         pytest.skip("native Chip preparation requires the installed sky130A PDK")
     rtl = _write(tmp_path / "broken.v", "module unit(input clk); invalid syntax; endmodule\n")
     return {"DESIGN_NAME": "unit", "PDK": "sky130A", "VERILOG_FILES": [str(rtl)],
-            "CLOCK_PORT": "clk", "CLOCK_PERIOD": 10}
+            "CLOCK_PORT": "clk", "CLOCK_PERIOD": 10, "SYNTH_STRATEGY": "AREA 0"}
 
 
 def test_native_sizing_reports_failed_yosys_run_to_observer(tmp_path, native_inputs):
@@ -57,6 +57,32 @@ def test_native_sizing_records_the_core_state_for_activity(tmp_path, native_inpu
     state = json.loads(Path(sizing["state_out"]).read_text())
     assert sizing["top"] == "unit"
     assert Path(state["nl"]).is_file()
+
+
+def test_core_sizing_chooses_native_smaller_timing_feasible_strategy(tmp_path, native_inputs):
+    Path(native_inputs["VERILOG_FILES"][0]).write_text(
+        "module unit(input clk, reset_n, output reg [15:0] q);\n"
+        "always @(posedge clk) if (!reset_n) q <= 0; else q <= q + 1; endmodule\n")
+    native_inputs["CLOCK_PERIOD"] = 20
+    baseline, automatic = tmp_path / "baseline", tmp_path / "automatic"
+    baseline.mkdir()
+    automatic.mkdir()
+    _, _, original_area, _ = chip._native_core(tmp_path, native_inputs, baseline)
+    config = {key: value for key, value in native_inputs.items() if key != "SYNTH_STRATEGY"}
+
+    cwd = Path.cwd()
+    native, _, area, runs = chip._native_core(tmp_path, config, automatic)
+
+    assert Path.cwd() == cwd
+    assert area < original_area
+    selection = json.loads(next(automatic.glob("core_*/synthesis_exploration/selection.json")).read_text())
+    feasible = {key: row for key, row in selection["results"].items()
+                if float(row["timing__setup__ws"]) >= 0}
+    assert native["SYNTH_STRATEGY"] == selection["strategy"] == min(
+        feasible, key=lambda key: float(feasible[key]["design__instance__area"]))
+    assert native["CLOCK_PERIOD"] == 20
+    assert any(run["name"] == "LibreLane.SynthesisExploration" for run in runs)
+    assert not list(baseline.glob("core_*/synthesis_exploration"))
 
 
 @pytest.mark.parametrize("failure", [None, "missing_input", "tool_failure"])
@@ -404,6 +430,31 @@ def test_prepare_writes_usable_chip_inputs_and_preserves_pdn(inputs):
     assert result["CORE_AREA"][0] == 22
 
 
+@pytest.mark.parametrize("wide_side", ["N", "E"])
+def test_unbalanced_pad_sides_size_each_die_dimension(inputs, monkeypatch, wide_side):
+    project, config, native, ports, doc = inputs
+    ports = [{**port, "width": 32, "msb": 33} if port["name"] == "data" else port
+             for port in ports]
+    other = "E" if wide_side == "N" else "N"
+    doc.write_text("# Physical Pad Placement\n| Side | Signal |\n|---|---|\n"
+        f"| {chip.SIDES[wide_side]} | `data[33:2]` |\n"
+        f"| {chip.SIDES[other]} | `clk` |\n| South | `reset` |\n| West | `result` |\n")
+    monkeypatch.setattr(chip, "_native_core", lambda *args: (native, ports, 40.0, []))
+
+    result = chip.prepare(project, config)
+
+    die, core = result["DIE_AREA"], result["CORE_AREA"]
+    dimensions = [die[2] - die[0], die[3] - die[1]]
+    wide_axis = 0 if wide_side == "N" else 1
+    assert dimensions[wide_axis] > 2 * dimensions[1 - wide_axis]
+    assert len(result["PAD_" + chip.SIDES[wide_side]]) >= 32
+    assert (core[2] - core[0]) * (core[3] - core[1]) >= 40 / .4
+    assert native["FP_CORE_UTIL"] == config["FP_CORE_UTIL"] == 40
+    (project / "aspect_observation.json").write_text(json.dumps({
+        "die": die, "core": core, "die_area_um2": dimensions[0] * dimensions[1],
+        "pad_sides": {side: result["PAD_" + side] for side in chip.SIDES.values()}}))
+
+
 def test_current_geometry_reaches_floorplan_and_reserves_both_ring_rails(inputs, monkeypatch):
     import flow_pdn_current
     project, config, native, _, _ = inputs
@@ -459,6 +510,52 @@ def test_floorplan_row_reserves_the_ring_sized_after_initial_preparation(inputs,
     error = chain.prepare(floorplan=True, directory=project / "floorplan")
     assert isinstance(error, ValueError)
     assert "cannot fit" in str(error)
+
+
+def test_generated_pad_access_profile_applies_native_current_sizing_at_floorplan(inputs, monkeypatch):
+    pytest.importorskip("odb")
+    pytest.importorskip("librelane")
+    from decimal import Decimal
+    from types import SimpleNamespace
+    from librelane.config import Config
+    from flow_config import _chip_pdn
+    from flow_engine import NativeChain
+
+    project, config, native, _, _ = inputs
+    config.update(_chip_pdn(project, config["PDK"]))
+    native.update(config, DEFAULT_CORNER="nominal", PDN_VERTICAL_LAYER="upper_vertical",
+        PDN_HORIZONTAL_LAYER="upper_horizontal", PDN_VWIDTH=1.6, PDN_HWIDTH=1.6,
+        PDN_CORE_RING_VWIDTH=1.6, PDN_CORE_RING_HWIDTH=1.6,
+        PDN_CORE_RING_VOFFSET=1, PDN_CORE_RING_HOFFSET=1,
+        PDN_CORE_RING_VSPACING=1.7, PDN_CORE_RING_HSPACING=1.7,
+        PDN_VSPACING=1.7, PDN_HSPACING=1.7, PDN_VPITCH=20, PDN_HPITCH=20)
+    tech = Path(native["TECH_LEFS"]["*"])
+    text = "VERSION 5.8 ;\n" + tech.read_text()
+    for layer, direction in (("upper_vertical", "VERTICAL"), ("upper_horizontal", "HORIZONTAL")):
+        text += f"LAYER {layer}\n TYPE ROUTING ;\n DIRECTION {direction} ;\n PITCH 1 ;\n" \
+            " WIDTH 0.28 ;\n SPACING 0.28 ;\n THICKNESS 0.54 ;\n" \
+            f" DCCURRENTDENSITY AVERAGE 0.67 ;\nEND {layer}\n"
+    tech.write_text(text + "END LIBRARY\n")
+    lib = Path(native["LIB"]["*"][0])
+    lib.write_text(lib.read_text().replace("library (fixture) {", "library (fixture) {\n nom_voltage : 5;"))
+    lef = Path(native["PAD_LEFS"][0])
+    lef.write_text(lef.read_text().replace("  USE GROUND ;", "  USE GROUND ;\n"
+        "  PORT\n   LAYER pad_access ;\n   RECT 0 0 10 1 ;\n  END"))
+    generated = chip.prepare(project, config)
+    assert "pad_access upper_vertical" in Path(generated["PDN_CFG"]).read_text()
+    _write(project / "steps/pre_layout_timing/result.json", json.dumps({
+        "native_metrics": {"power__total__corner:nominal": .02}}))
+    monkeypatch.setattr(chip, "netlist_area", lambda *args: 40)
+    chain = NativeChain(project, {"delivery_target": "gds"})
+    chain.owner = SimpleNamespace(config=Config({**native, **generated}))
+    chain.config = chain.owner.config.to_raw_dict()
+
+    assert chain.prepare(floorplan=True, directory=project / "floorplan") is None
+
+    assert chain.config["PDN_VWIDTH"] == Decimal("5.98")
+    assert chain.config["PDN_CORE_RING_VWIDTH"] == Decimal("5.98")
+    core, die = chain.config["CORE_AREA"], chain.config["DIE_AREA"]
+    assert core[0] - die[0] >= 2 + 20 + 1 + 2 * 5.98 + 1.7
 
 
 @pytest.mark.parametrize("route", ["ic", "ip"])

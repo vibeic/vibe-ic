@@ -596,6 +596,43 @@ def test_real_structured_routes_keep_bounded_closure_and_full_physical_windows(
                                        engine.measure(row["checks"], bad, {}, features)) == "FAIL"
 
 
+@pytest.mark.parametrize("declared,value,status", [
+    (None, 1, "PASS"), ("MAX_FANOUT_CONSTRAINT", 1, "FAIL"),
+    ("SYNTH_MAX_FANOUT", 1, "FAIL"), ("MAX_FANOUT_CONSTRAINT", 0, "PASS"),
+    ("MAX_FANOUT_CONSTRAINT", None, "NOT_MEASURED"),
+])
+@pytest.mark.parametrize("fanout_metric", ["design__max_fanout_violation__count",
+    "design__max_fanout_violation__count__corner:slow"])
+def test_final_electrical_enforces_only_document_declared_fanout(
+        tmp_path, physical_step_table, declared, value, status, fanout_metric):
+    docs = tmp_path / "phase1/generated_docs"
+    docs.mkdir(parents=True)
+    (docs / "L19_CONSTRAINTS_PDK.json").write_text(json.dumps({"fields": {
+        "constraint_declarations": ([{"kind": "flow_setting", "token": declared, "value": 4}]
+                                   if declared else [])}}))
+    table = physical_step_table
+    row = next(row for row in table["steps"] if row["name"] == "final_electrical_analysis")
+    features = engine.design_features(tmp_path, {"delivery_target": "ip_hardmacro"}, table)
+    tool = engine.choose_tool(row["tool"], features)
+    metrics = {name + "__corner:slow": 0 for name in (
+        "timing__setup_vio__count", "timing__hold_vio__count",
+        "design__max_slew_violation__count", "design__max_cap_violation__count")}
+    if value is not None:
+        metrics[fanout_metric] = value
+    (tmp_path / "steps/final_electrical_analysis").mkdir(parents=True)
+
+    result = engine.finish_step(tmp_path, row, tool, engine.ToolResult(True, 0, metrics),
+        {"PDK": "fixture", "MAX_FANOUT_CONSTRAINT": 4}, features, elapsed=0)
+
+    assert result["status"] == status
+    fanout = [check for check in result["metrics"] if "fanout" in check["metric"]]
+    if declared is None:
+        assert fanout == []
+    else:
+        assert len(fanout) == 1
+        assert fanout[0]["operator"] == "==" and fanout[0]["limit"] == 0
+
+
 @pytest.mark.parametrize("watts,status,statement", [
     (0.004, "PASS", "< 5 mW"), (0.005, "FAIL", "< 5 mW"),
     (0.0416, "FAIL", "< 5 mW"), (None, "NOT_MEASURED", "< 5 mW"),

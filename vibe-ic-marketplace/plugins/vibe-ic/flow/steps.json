@@ -4511,6 +4511,9 @@
                 "Checker.MaxSlewViolations",
                 "Checker.MaxCapViolations",
                 "Misc.ReportManufacturability"
+              ],
+              "check_readers": [
+                "flow_config.declared_fanout_checks"
               ]
             }
           }

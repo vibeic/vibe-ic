@@ -10,7 +10,7 @@ import sys
 import pytest
 
 
-def native_run(project: Path, programs: Path) -> dict:
+def native_run(project: Path, programs: Path, strategy=None) -> dict:
     sys.path.insert(0, str(programs))
     import flow_engine as engine
     import task_nature_route as router
@@ -31,7 +31,9 @@ def native_run(project: Path, programs: Path) -> dict:
         "L9_INTEGRATION_SPEC.json": {"top_module": "unit"},
         "L8_TIMING_WAVEFORM.json": {"clock_domains": [{
             "domain_kind": "primary", "source_pin": "clk", "period_ns": 20}]},
-        "L19_CONSTRAINTS_PDK.json": {"fields": {"pdk_target": "sky130A"}},
+        "L19_CONSTRAINTS_PDK.json": {"fields": {"pdk_target": "sky130A",
+            "constraint_declarations": ([{"kind": "flow_setting", "token": "SYNTH_STRATEGY",
+                "value": strategy}] if strategy else [])}},
     }.items():
         (docs / name).write_text(json.dumps(value) + "\n")
     route = router.route_decision_receipt(
@@ -44,6 +46,17 @@ def native_run(project: Path, programs: Path) -> dict:
                          if "/librelane/" in (check.get("source") or {}).get("file", "")]
         assert native_checks and all(check["status"] == "PASS" for check in native_checks), steps[name]
         assert all(row["exit_code"] in (None, 0) for row in steps[name]["native_steps"]), steps[name]
+    exploration = project / "steps/synthesis/synthesis_exploration"
+    config = json.loads((project / "steps/synthesis/yosys_synthesis/config.json").read_text())
+    if strategy:
+        assert config["SYNTH_STRATEGY"] == strategy
+        assert not exploration.exists()
+    else:
+        selection = json.loads((exploration / "selection.json").read_text())
+        feasible = {key: row for key, row in selection["results"].items()
+                    if float(row["timing__setup__ws"]) >= 0}
+        assert config["SYNTH_STRATEGY"] == min(feasible,
+            key=lambda key: float(feasible[key]["design__instance__area"]))
     floorplan = steps["die_floorplan_and_macros"]
     actual = [row for row in floorplan["native_steps"] if row["name"] == "OpenROAD.Floorplan"]
     assert len(actual) == 1 and actual[0]["ran"] and actual[0]["exit_code"] == 0, floorplan
@@ -58,11 +71,12 @@ def native_run(project: Path, programs: Path) -> dict:
     return report
 
 
-def test_native_lint_synthesis_floorplan(tmp_path):
+@pytest.mark.parametrize("strategy", [None, "DELAY 4"])
+def test_native_lint_synthesis_floorplan(tmp_path, strategy):
     if importlib.util.find_spec("librelane") is None:
         pytest.skip("LibreLane runtime is required for the real-tool test")
     native_run(tmp_path, Path(os.environ.get(
-        "FLOW_ENGINE_PROGRAMS", str(Path(__file__).resolve().parents[1]))))
+        "FLOW_ENGINE_PROGRAMS", str(Path(__file__).resolve().parents[1]))), strategy)
 
 
 @pytest.mark.parametrize("lint_errors", [None, 0, 2])

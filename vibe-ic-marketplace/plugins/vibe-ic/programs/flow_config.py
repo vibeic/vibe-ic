@@ -20,6 +20,7 @@ SETTING_ALIASES = {
     "FP_PDN_SKIPTRIM": "PDN_SKIPTRIM",
 }
 SETTINGS = {
+    "SYNTH_STRATEGY",
     "MAX_FANOUT_CONSTRAINT", "MAX_TRANSITION_CONSTRAINT",
     "MAX_CAPACITANCE_CONSTRAINT", "FP_CORE_UTIL", "PL_TARGET_DENSITY_PCT",
     "PDN_VOFFSET", "PDN_HOFFSET", "PDN_SKIPTRIM", "PDN_CORE_RING",
@@ -34,13 +35,19 @@ def implementation_setting(key: str) -> bool:
     return key in IMPLEMENTATION_SETTINGS or key.startswith(("CTS_", "PDN_", "GRT_DESIGN_REPAIR_"))
 
 
-def native_defaults(config):
-    """Apply native cell exclusions and bounded CTS characterization defaults."""
+def native_excluded_cells(config):
     excluded = [*(config.get("EXTRA_EXCLUDED_CELLS") or []), "*dly*", "*delay*"]
     if str(config.get("PDK", "")).lower().startswith("gf180mcu"):
         # OpenROAD-flow-scripts flow/platforms/gf180/config.mk sets DONT_USE_CELLS = *_1.
         excluded.append("*_1")
-    changes = {"EXTRA_EXCLUDED_CELLS": list(dict.fromkeys(excluded))}
+    return list(dict.fromkeys(excluded))
+
+
+def native_defaults(config):
+    """Apply platform defaults, then the project's explicit native overrides."""
+    from flow_clock_geometry import cts_settings
+
+    changes = {"EXTRA_EXCLUDED_CELLS": native_excluded_cells(config)}
     caps = [value for value in (config.get("MAX_CAPACITANCE_CONSTRAINT"),
                                config.get("CTS_MAX_CAP") or None) if value is not None]
     slews = [value for value in (config.get("MAX_TRANSITION_CONSTRAINT"),
@@ -48,7 +55,49 @@ def native_defaults(config):
     # Zero requests native auto; CTS resets both axes when either is unspecified.
     if caps and slews:
         changes.update(CTS_MAX_CAP=min(caps), CTS_MAX_SLEW=min(slews))
+    changes.update(cts_settings(config))
+    if config.get("DESIGN_DIR"):
+        changes.update(_load(Path(config["DESIGN_DIR"]) / "work/flow/native_overrides.json"))
     return config.copy(**changes)
+
+
+def explore_synthesis(config, state, directory, on_tool_run=None):
+    """Choose from LibreLane's own exploration results at the configured timing."""
+    import os
+    import time
+    from librelane.flows import Flow
+
+    directory = Path(directory).resolve()
+    explorer = Flow.factory.get("SynthesisExploration")(config)
+    started, code = time.monotonic(), 1
+    directory.mkdir(parents=True, exist_ok=True)
+    cwd = Path.cwd()
+    try:
+        os.chdir(directory)
+        explorer.start(with_initial_state=state, _force_run_dir=str(directory))
+        code = 0
+    finally:
+        os.chdir(cwd)
+        if on_tool_run is not None:
+            on_tool_run({"name": "LibreLane.SynthesisExploration", "ran": True,
+                "exit_code": code, "status": "FAIL" if code else "PASS",
+                "tool_seconds": time.monotonic() - started, "reports": str(directory)})
+    results = {step.id.removeprefix("sta-"): step.state_out.metrics
+               for step in explorer.step_objects
+               if step.id.startswith("sta-") and step.state_out is not None}
+    eligible = [strategy for strategy, metrics in results.items()
+                if metrics["timing__setup__ws"] >= 0]
+    chosen = min(eligible, key=lambda strategy: results[strategy]["design__instance__area"],
+                 default=None)
+    (directory / "selection.json").write_text(json.dumps({
+        "strategy": chosen, "clock_period_ns": config["CLOCK_PERIOD"],
+        "results": {strategy: {key: metrics[key] for key in (
+            "design__instance__area", "timing__setup__ws", "timing__setup__tns")}
+            for strategy, metrics in results.items()},
+        "detail": "Minimum area meeting setup timing." if chosen else
+                  "No timing-feasible strategy; the configured strategy remains for native evaluation."
+    }, indent=2, default=str) + "\n")
+    return chosen
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -81,7 +130,8 @@ def _settings(fields: dict, pdk: str) -> dict:
         if scope and not (fnmatch.fnmatch(pdk.lower(), str(scope).lower())
                           or pdk.lower().startswith(str(scope).lower().rstrip("*_"))):
             continue
-        value = _value(row.get("value"))
+        value = row.get("value")
+        value = (str(value).strip() if value is not None else None) if key == "SYNTH_STRATEGY" else _value(value)
         if value is None:
             continue
         if token == "PL_TARGET_DENSITY":
@@ -127,6 +177,19 @@ def _input_docs(project: Path) -> dict[str, str]:
     return {str(path.relative_to(project)): path.read_text(errors="replace")
             for path in paths if path.is_file()
             and path.suffix.lower() in {".md", ".rst", ".txt", ".markdown"}}
+
+
+def declared_fanout_checks(project: Path, *, config: dict | None = None, metrics: dict | None = None) -> list[dict]:
+    """Require zero native fanout violations only for a document-declared bound."""
+    path = Path(project) / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+    fields = _load(path).get("fields", {})
+    pdk = (config or {}).get("PDK") or fields.get("pdk_target") or ""
+    declared = _settings(fields, pdk).get("MAX_FANOUT_CONSTRAINT")
+    if declared is None:
+        return []
+    return [{"metric": "design__max_fanout_violation__count*", "operator": "==", "limit": 0,
+             "unit": "count", "declared_max_fanout": declared,
+             "source": {"file": str(path.relative_to(project)), "field": "fields.constraint_declarations"}}]
 
 
 def declared_power_checks(project: Path, *, config: dict | None = None, metrics: dict | None = None) -> list[dict]:
@@ -326,6 +389,7 @@ def build_config(project: Path | str, *, route: str | None = None, pdk: str | No
             config["CLOCK_PORT"] = ports[0] if len(ports) == 1 else ports
         if periods:
             config["CLOCK_PERIOD"] = min(periods)
+    config.update(_load(project / "work/flow/native_overrides.json"))
     notes = project / "work/flow/config_sources.json"
     notes.parent.mkdir(parents=True, exist_ok=True)
     notes.write_text(json.dumps({"sources": sources, "assumptions": assumptions}, indent=2) + "\n")
