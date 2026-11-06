@@ -56,7 +56,6 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
 import _atomic_output  # noqa: E402  (#1082 same-dir temp + atomic rename)
-import _audit_receipt  # noqa: E402  (#2057 content-addressed subject digest)
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import lvs_verdict_tokens as _lvt  # #524 — shared netgen terminal-verdict tokens

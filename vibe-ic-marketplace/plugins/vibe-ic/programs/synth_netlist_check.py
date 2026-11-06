@@ -53,7 +53,6 @@ from pathlib import Path, PurePosixPath
 from typing import Dict, List, Optional, Set, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _audit_receipt import emit_receipt  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
