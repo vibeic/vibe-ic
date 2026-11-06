@@ -21,14 +21,7 @@ IMAGE_ID = "sha256:" + "b2" * 32
 IMAGE = "example.invalid/eda@" + DIGEST
 
 
-@pytest.fixture
-def native(monkeypatch):
-    monkeypatch.setattr(bd._challenge_exec, "container_id", lambda name: "c3" * 32)
-    monkeypatch.setattr(bd._runtime_tools, "container_image_id", lambda name: (IMAGE_ID, ""))
-    monkeypatch.setattr(bd._runtime_tools, "container_image_digest", lambda name: (DIGEST, ""))
-
-
-def test_unusable_native_binary_probe_remains_refused(tmp_path, monkeypatch, native):
+def test_unusable_native_binary_probe_remains_refused(tmp_path, monkeypatch):
     source = "module neutral; initial $finish; endmodule\n"
     test = tmp_path / "neutral.sv"
     test.write_text(source)
@@ -38,15 +31,20 @@ def test_unusable_native_binary_probe_remains_refused(tmp_path, monkeypatch, nat
     rtl.write_text("module neutral; endmodule\n")
     completion = bd._candidate_text([rtl])
     candidate = bd._archive_candidate("neutral", project, {"completion": completion}, tmp_path, "PROGRAM")
-    declaration = {"backend": "native", "container": "run-a", "container_id": "c3" * 32,
-                   "image_id": IMAGE_ID, "image_digest": DIGEST}
+    declaration = {"backend": "native", "selection": "explicit existing container",
+                   "container": "run-a"}
     monkeypatch.setattr(bd._progress_run, "run", lambda argv, **kw:
                         subprocess.CompletedProcess(argv, 0, "[]", ""))
-    monkeypatch.setattr(bd._challenge_exec, "run_in_container_supervised", lambda name, command, **kw:
-                        subprocess.CompletedProcess(command, 127, "", "unusable binary"))
+    executed = []
+    def unavailable(name, command, **kwargs):
+        executed.append(name)
+        return subprocess.CompletedProcess(command, 127, "", "unusable binary")
+    monkeypatch.setattr(bd._challenge_exec, "run_in_container_supervised", unavailable)
     result = bd._run_verification_challenge(candidate, {"path": str(test),
         "sha256": bd._sha256_text(source), "execution_backend": declaration})
     assert result["status"] == "UNAVAILABLE"
+    assert executed == ["run-a"]
+    assert result["execution"]["declaration"] == declaration
     assert "rc=127" in " ".join(result["reasons"])
     assert all(c.get("stage") != "compile" for c in result["execution"]["commands"])
 
