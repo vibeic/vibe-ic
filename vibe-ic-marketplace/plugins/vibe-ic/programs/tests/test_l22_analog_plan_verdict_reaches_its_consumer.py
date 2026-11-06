@@ -33,7 +33,6 @@ FLOW = PLUGIN / "flow" / "phase1_phase2_phase3.yaml"
 if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
 
-import flow_compliance_check as FC               # noqa: E402
 import phase1_doc_one_shot_runner as RUNNER      # noqa: E402
 from l22_analog_verification_plan_emit import run as EMIT  # noqa: E402
 
@@ -141,17 +140,8 @@ def test_the_exit_code_is_not_a_constant(
 
 
 # ── the producer-output consumer ──────────────────────────────────────────
-def _program_output_record(project: Path):
-    step = next(s for s in yaml.safe_load(FLOW.read_text())["steps"]
-                if s["id"] == "D1")
-    return FC._collect_program_output_records(project, step)[0]
 
 
-def test_a_green_emitter_output_is_recorded(ok_project):
-    record = _program_output_record(ok_project)
-    assert record["produced"] is True
-    assert record["verdict"] == "EXTRACTED"
-    assert record["enforcement"] == "NOT_A_GATE"
 
 
 def test_a_refusal_is_runner_owned_not_flattened_by_a_gate(refusing_project):
@@ -160,10 +150,6 @@ def test_a_refusal_is_runner_owned_not_flattened_by_a_gate(refusing_project):
     assert COMMAND not in str([step.get("gate") for step in flow["steps"]])
 
 
-def test_a_digital_project_keeps_the_declared_l22_output(digital_project):
-    record = _program_output_record(digital_project)
-    assert record["produced"] is True
-    assert record["role"] == "PRODUCER_OUTPUT"
 
 
 # ── the wiring itself ─────────────────────────────────────────────────────

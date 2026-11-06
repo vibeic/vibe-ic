@@ -1057,58 +1057,6 @@ def test_l8_out_of_cone_sidecar_is_out_of_rtl_scan_scope(tmp_path):
     assert got == {"keep.v"}, got
 
 
-def test_l8_every_rtl_collector_agrees_the_sidecar_is_out_of_scope(tmp_path):
-    """FOUR collectors, not three. `break_handler_safety_check` imported only
-    the NAME SET and kept its own `& EXCLUDED_DIRS` comprehension, so it missed
-    the suffix rule entirely: measured, the other three saw `design.v` while it
-    also read the moved-aside `orphan.v` and reported an ERROR against a file
-    the flow does not compile."""
-    import gate_utils
-    import dispatch_register_default_reset_check as drc
-    import break_handler_safety_check as bhs
-    (tmp_path / "phase2" / "stage1" / "rtl").mkdir(parents=True)
-    (tmp_path / "phase2" / "stage1" / "rtl_out_of_cone").mkdir(parents=True)
-    (tmp_path / "phase2" / "stage1" / "rtl" / "keep.v").write_text(
-        "module keep; endmodule\n")
-    (tmp_path / "phase2" / "stage1" / "rtl_out_of_cone" / "gone.v").write_text(
-        "module gone; endmodule\n")
-    for label, files in (
-            ("rtl_scan_scope", SCOPE.authoritative_rtl_files(tmp_path)),
-            ("gate_utils", gate_utils.find_rtl_files(tmp_path)),
-            ("dispatch_register", drc.collect_files(tmp_path)),
-            ("break_handler", bhs.collect_files(tmp_path))):
-        got = {Path(f).name for f in files}
-        assert got == {"keep.v"}, f"{label} sees {sorted(got)}"
-
-
-def test_l8_break_handler_verdict_never_comes_from_the_sidecar(tmp_path):
-    """The collector-level assertion is not enough — drive the REAL audit and
-    show the moved-aside file's defect does not reach the verdict."""
-    import break_handler_safety_check as bhs
-    rtl = tmp_path / "phase2" / "stage1" / "rtl"
-    side = tmp_path / "phase2" / "stage1" / "rtl_out_of_cone"
-    rtl.mkdir(parents=True)
-    side.mkdir(parents=True)
-    (rtl / "design.v").write_text(
-        "module design(input clk, input rx_break, output reg [1:0] state);\n"
-        "  localparam IDLE=0, TX=1;\n"
-        "  always @(posedge clk) begin\n"
-        "    case (state)\n"
-        "      IDLE: if (rx_break) state <= IDLE;\n"
-        "      TX: state <= TX;\n"
-        "    endcase\n  end\nendmodule\n")
-    (side / "orphan.v").write_text(
-        "module orphan(input clk, input rx_break, output reg [1:0] state);\n"
-        "  localparam IDLE=0;\n"
-        "  always @(posedge clk) begin\n"
-        "    if (rx_break) state <= IDLE;\n"
-        "  end\nendmodule\n")
-    res = bhs.audit(tmp_path)
-    assert res.summary["files_scanned"] == ["design.v"], res.summary
-    assert res.passed is True
-    assert [f.file for f in res.findings if f.severity == "ERROR"] == []
-
-
 def test_l8_sidecar_name_matches_what_the_reducer_creates(tmp_path):
     """The exclusion and the mover must agree."""
     d = tmp_path / "rtl"

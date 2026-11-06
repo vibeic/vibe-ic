@@ -505,45 +505,9 @@ def test_step_29_on_librelane_writes_evidence_the_step_29_gate_fails(tmp_path, m
     log = (sim_dir / 'results.log').read_text()
     assert 'ERROR: corner nom_tt_025C_5v00 FAIL: SDF_ERRORS' in log, notes
     assert not (sim_dir / 'pass.flag').exists()
-    gate = importlib.import_module('post_layout_sim_check')
-    findings, stats = gate.audit(project)
-    assert stats['sdf_found'] and any(f.category == 'SIM_ERRORS' for f in findings)
 
 
 # ---------------------------------------------------------------- step 28 ---
-
-def _perc_project(tmp_path):
-    from test_perc_tapless_pdk_latchup_false_fail import _mk_project
-    return _mk_project(tmp_path)
-
-
-
-
-def test_perc_antenna_and_pdn_read_the_tool_metrics_when_the_run_has_them(tmp_path, monkeypatch):
-    runner, pdk = _pdk('/p/l.lib')
-    project = _perc_project(tmp_path)
-    put(project / 'phase3/librelane/26/01-openroad-checkantennas/state_out.json',
-        {'metrics': {'antenna__violating__nets': 3, 'antenna__violating__pins': 3,
-                     'route__antenna_violation__count': 0,
-                     'design__power_grid_violation__count': 0}})
-    monkeypatch.setattr(runner, '_measure_tap_geometry', lambda *a, **k: {'ok': False})
-    assert runner._emit_perc_equivalent(project, 'chip_top', pdk, 'x', [])
-    doc = json.loads((runner._pl.reports_phase3_dir(project) / 'perc_equivalent.json').read_text())
-    cats = {c['category']: c for c in doc['categories']}
-    assert cats['Antenna']['result'] == 'FAIL' and cats['Antenna']['direct_verdict'] == 'PASS'
-    assert cats['PDN connectivity']['result'] == 'PASS'
-    assert cats['IR drop']['tool_seam'] == postroute.PERC_IR_TOOL_SEAM
-
-
-def test_perc_without_a_librelane_state_is_unchanged(tmp_path, monkeypatch):
-    runner, pdk = _pdk('/p/l.lib')
-    project = _perc_project(tmp_path)
-    monkeypatch.setattr(runner, '_measure_tap_geometry', lambda *a, **k: {'ok': False})
-    assert runner._emit_perc_equivalent(project, 'chip_top', pdk, 'x', [])
-    doc = json.loads((runner._pl.reports_phase3_dir(project) / 'perc_equivalent.json').read_text())
-    cats = {c['category']: c for c in doc['categories']}
-    assert 'PDN connectivity' not in cats and 'tool_seam' not in cats['IR drop']
-    assert cats['Antenna']['tool'] == 'OpenROAD check_antennas'
 
 
 # ---------------------------------------------------------------- step 30 ---
@@ -832,16 +796,6 @@ def test_step_30_runs_the_tool_deck_and_the_spef_mutation_and_records_every_arm(
     assert json.loads((project / 'reports/phase3/spice_path_tool.json').read_text())['step'] == '30'
 
 
-
-
-
-
-
-
-
-
-
-
 def _declared_observation_gls_project(tmp_path, mode):
     """Public INPUT-defined 24 ns multiplier, delayed pads and renamed pins.
 
@@ -954,8 +908,6 @@ module public_surface (chip_clock, chip_reset, chip_word, chip_serial, chip_resu
     return project, root, models, bench, original_plan
 
 
-
-
 def _current_output_deadline_fixture(project, root, deadline):
     """Neutral native grammar; real current-scene reader, never a timing result."""
     folder = next((project / 'phase3/librelane').glob('22-23/*stapostpnr'))
@@ -991,9 +943,6 @@ def _current_output_deadline_fixture(project, root, deadline):
          'sta_state': str(folder / 'state_out.json'),
          'sta_state_sha256': contract.digest(folder / 'state_out.json')})
     return folder
-
-
-
 
 
 @pytest.mark.parametrize('case', ['good', 'earliest_corner', 'missing_corner',

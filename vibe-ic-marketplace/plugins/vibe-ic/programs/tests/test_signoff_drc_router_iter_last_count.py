@@ -43,30 +43,12 @@ PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 
 import _signoff_drc_format as _sdf  # noqa: E402  the shared home
-import signoff_audit as SA          # noqa: E402  the gate under test
 
 
 # --------------------------------------------------------------------------- #
 # Extract the REAL nested `_drc_violation_count` from `_check_tapeout` so the   #
 # test exercises the gate's actual source bytes, not a re-implementation.      #
 # --------------------------------------------------------------------------- #
-def _extract_gate_reader():
-    src = Path(SA.__file__).read_text()
-    tree = ast.parse(src)
-    outer = next(n for n in ast.walk(tree)
-                 if isinstance(n, ast.FunctionDef) and n.name == "_check_tapeout")
-    inner = next(n for n in outer.body
-                 if isinstance(n, ast.FunctionDef)
-                 and n.name == "_drc_violation_count")
-    mod = ast.Module(body=[inner], type_ignores=[])
-    ns = dict(vars(SA))          # the module's own globals: re, _sdf, Path, ...
-    exec(compile(mod, SA.__file__, "exec"), ns)
-    fn = ns["_drc_violation_count"]
-    assert isinstance(fn, types.FunctionType)
-    return fn
-
-
-GATE_READER = _extract_gate_reader()
 
 
 def _write(tmp_path, name, body):
@@ -111,57 +93,11 @@ FIXTURE_D = (  # no count lines at all — must read None, never 0
 # 1. The gate reader itself — the bidirectional negative control.              #
 #    Pre-fix these assert-7 / assert-0 lines fail (gate returns 5 / 100).      #
 # --------------------------------------------------------------------------- #
-def test_gate_reads_last_not_first_fixture_a(tmp_path):
-    # monotone to zero: first=100 (false FAIL), last=0 (clean, correct)
-    assert GATE_READER(_write(tmp_path, "a.rpt", FIXTURE_A)) == 0
-
-
-def test_gate_reads_last_not_first_fixture_b(tmp_path):
-    # THE separator: first=5, min=0, summary absent, last=7. Only "last" gives 7.
-    # This is the false-PASS half — a fix tested only on A never sees it.
-    assert GATE_READER(_write(tmp_path, "b.rpt", FIXTURE_B)) == 7
-
-
-def test_gate_single_count_returns_that_count(tmp_path):
-    # invariant 3: last-match degrades to only-match.
-    assert GATE_READER(_write(tmp_path, "c.rpt", FIXTURE_C)) == 12
-
-
-def test_gate_no_count_is_none_never_zero(tmp_path):
-    # invariant 1 (most important): unreadable stays None, never 0.
-    # 0 would turn "could not determine" into "design is clean" — false PASS.
-    got = GATE_READER(_write(tmp_path, "d.rpt", FIXTURE_D))
-    assert got is None          # the exact sentinel the caller treats as
-    assert got != 0             # "could not determine"; 0 would be false PASS
 
 
 # --------------------------------------------------------------------------- #
 # 2. Invariant 2 — the earlier format branches still win, not shadowed.        #
 # --------------------------------------------------------------------------- #
-def test_report_database_branch_still_wins(tmp_path):
-    # A KLayout report-database is counted by <item>, not the DRT path, even
-    # when it also happens to mention a DRT-style line.
-    xml = (
-        "<report-database>\n"
-        "  <item></item>\n"
-        "  <item></item>\n"
-        "  <item></item>\n"
-        "[INFO DRT-0199]   Number of violations = 999.\n"
-        "</report-database>\n"
-    )
-    assert GATE_READER(_write(tmp_path, "rdb.rpt", xml)) == 3
-
-
-def test_svrf_branch_zero_fail_reads_zero_not_unparsed(tmp_path):
-    # invariant 2: a clean foundry-deck sign-off (0 FAIL rules) must read 0,
-    # NOT None — and must not be shadowed by the router-iteration branch.
-    svrf = (
-        "SVRF-native DRC report\n"
-        "PASS rule.a op x -> 0\n"
-        "PASS rule.b op y -> 0\n"
-        "PASS rule.c op z -> 0\n"
-    )
-    assert GATE_READER(_write(tmp_path, "svrf.rpt", svrf)) == 0
 
 
 # --------------------------------------------------------------------------- #

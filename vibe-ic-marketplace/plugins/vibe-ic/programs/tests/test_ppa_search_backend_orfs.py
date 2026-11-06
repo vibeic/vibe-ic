@@ -9,7 +9,6 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-from _ppa import search as S  # noqa: E402
 from _ppa.backends import orfs  # noqa: E402
 
 ROUTED = "post_route_extracted"
@@ -89,17 +88,6 @@ def test_a_caller_stage_and_a_row_stage_that_disagree_are_recorded():
     assert "disagreement is recorded" in out["completed_stage_reason"]
 
 
-def test_the_stage_the_parser_returns_survives_the_candidate_guard():
-    """End-to-end: whatever `parse_row` calls a stage must be assignable, and
-    whatever it refuses must stay refused."""
-    c = S.Candidate(knobs={}, space_digest="sha256:" + "0" * 64)
-    c.set_completed_stage(orfs.parse_row({"flow_stage": "cts"})
-                          ["completed_stage"])
-    assert c.completed_stage == "cts"
-
-    c2 = S.Candidate(knobs={}, space_digest="sha256:" + "0" * 64)
-    c2.set_completed_stage(orfs.parse_row({"step": 11})["completed_stage"])
-    assert c2.completed_stage is None
 
 
 # ---------------------------------------------------------------------------

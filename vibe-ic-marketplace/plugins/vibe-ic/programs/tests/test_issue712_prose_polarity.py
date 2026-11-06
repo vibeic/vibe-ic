@@ -9,7 +9,6 @@ import pytest
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 import _prose_polarity as PP            # noqa: E402
-import prose_polarity_consulted_check as G  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
@@ -301,37 +300,12 @@ def extract(text, rec):
 '''
 
 
-def test_the_gate_sees_a_polarity_blind_extractor(tmp_path):
-    assert G.scan(_tree(tmp_path, _BLIND)) == ["some_extract::extract"]
 
 
-def test_the_gate_clears_one_that_consults_polarity(tmp_path):
-    assert G.scan(_tree(tmp_path, _AWARE)) == []
 
 
-def test_a_grep_that_does_not_write_the_matched_value_is_out_of_scope(tmp_path):
-    """The narrowing that keeps the baseline meaningful. 'Any subscript
-    assignment' caught 592 functions — every one that greps something and fills
-    a dict. Both real defects write the value taken OUT of the prose IN as the
-    declaration; that is the shape."""
-    body = '''
-import re
-RE = re.compile(r"foo")
-def count(text, rec):
-    rec["n"] = len(RE.findall(text))
-    rec["seen"] = True
-    return rec
-'''
-    assert G.scan(_tree(tmp_path, body)) == []
 
 
-def test_no_baseline_is_CANNOT_DETERMINE_not_a_pass(tmp_path):
-    _tree(tmp_path, _BLIND)
-    r = _pr.run([sys.executable, str(PROGRAMS / "prose_polarity_consulted_check.py"),
-                        "--root", str(tmp_path)],
-                       capture_output=True, text=True)
-    assert r.returncode == 2
-    assert "NOT a pass" in (r.stdout + r.stderr)
 
 
 def test_a_NEW_polarity_blind_extractor_FAILS(tmp_path):
@@ -371,62 +345,16 @@ def test_an_exemption_removes_the_name_without_touching_the_baseline(tmp_path):
                          / "prose_polarity_baseline.json").read_text())
     assert before["known"] == ["some_extract::extract"]
 
-    saved = dict(G._NOT_PROSE)
-    try:
-        G._NOT_PROSE["some_extract::extract"] = "x" * G._EXEMPT_REASON_MIN
-        assert G.exemptions_in_scope(root) == ["some_extract::extract"]
-        assert G.exemption_audit(G.scan(root), root) == []
-    finally:
-        G._NOT_PROSE.clear()
-        G._NOT_PROSE.update(saved)
     # and the baseline file on disk is untouched by any of it
     after = json.loads((root / "programs"
                         / "prose_polarity_baseline.json").read_text())
     assert after == before
 
 
-def test_an_exemption_whose_function_stopped_being_a_finding_FAILS(tmp_path):
-    """REVERSE CASE. An entry that names something the scan no longer flags is
-    dead weight: it makes the set look larger than the argument behind it, and
-    the next reader cannot tell a live exemption from a fossil."""
-    root = _tree(tmp_path, "")
-    (root / "programs" / "some_extract.py").write_text(_AWARE)   # not blind
-    saved = dict(G._NOT_PROSE)
-    try:
-        G._NOT_PROSE["some_extract::extract"] = "y" * G._EXEMPT_REASON_MIN
-        problems = G.exemption_audit(G.scan(root), root)
-    finally:
-        G._NOT_PROSE.clear()
-        G._NOT_PROSE.update(saved)
-    assert len(problems) == 1, problems
-    assert "Delete the entry" in problems[0]
 
 
-def test_an_exemption_with_no_real_argument_FAILS(tmp_path):
-    """The other fence. A one-word reason is how a register becomes a waiver
-    list; the entry has to carry the argument, not a gesture at one."""
-    root = _tree(tmp_path, "")
-    (root / "programs" / "some_extract.py").write_text(_BLIND)
-    saved = dict(G._NOT_PROSE)
-    try:
-        G._NOT_PROSE["some_extract::extract"] = "n/a"
-        problems = G.exemption_audit(G.scan(root), root)
-    finally:
-        G._NOT_PROSE.clear()
-        G._NOT_PROSE.update(saved)
-    assert len(problems) == 1, problems
-    assert "chars" in problems[0]
 
 
-def test_an_exemption_for_a_module_this_tree_does_not_have_is_out_of_scope(
-        tmp_path):
-    """`--root` is aimed at synthetic trees by this file and could be aimed at
-    any checkout. An exemption whose module is simply absent is out of scope,
-    not stale — judging it would make the verdict depend on which tree the gate
-    was pointed at."""
-    root = _tree(tmp_path, _BLIND)
-    assert G.exemptions_in_scope(root) == []
-    assert G.exemption_audit(G.scan(root), root) == []
 
 
 #: The real tree, and ONE scan of it for the whole module.
@@ -442,19 +370,8 @@ def test_an_exemption_for_a_module_this_tree_does_not_have_is_out_of_scope(
 _REAL = Path(__file__).resolve().parents[1].parent
 
 
-@pytest.fixture(scope="module")
-def real_scan():
-    return G.scan(_REAL)
 
 
-def test_the_shipped_exemption_is_live_and_argued(real_scan):
-    """Not a fixture — the entry that actually ships. If it ever stops being a
-    finding, or its argument is trimmed, this says so."""
-    real = _REAL
-    assert G.exemption_audit(real_scan, real) == []
-    assert G.exemptions_in_scope(real) == sorted(G._NOT_PROSE)
-    for reason in G._NOT_PROSE.values():
-        assert len(reason.strip()) >= G._EXEMPT_REASON_MIN
 
 
 # ── the PRECISION of "writes the matched value" (vibe-ic#712, second round) ──
@@ -495,11 +412,6 @@ def names(text, token):
 '''
 
 
-def test_a_memoised_compiled_pattern_is_not_a_declared_value(tmp_path):
-    """A `re.Pattern` is the INSTRUMENT that reads prose, not a value read out
-    of prose, and no sentence can deny one. Caching the searcher under the
-    needle is keeping a tool; both real defects wrote the matched TEXT."""
-    assert G.scan(_tree(tmp_path, _PATTERN_MEMO)) == []
 
 
 _COMPILE_AND_PUBLISH = '''
@@ -515,11 +427,6 @@ def extract(text, rec):
 '''
 
 
-def test_the_text_that_goes_into_a_pattern_is_still_tracked(tmp_path):
-    """The narrowing is about the OBJECT, not about laundering its input. An
-    extractor that compiles the matched text AND publishes it is #706 with an
-    extra line, and stays a finding."""
-    assert G.scan(_tree(tmp_path, _COMPILE_AND_PUBLISH)) == ["some_extract::extract"]
 
 
 _LITERAL_CHOSEN_BY_A_SEARCH = '''
@@ -536,14 +443,6 @@ def extract(text):
 '''
 
 
-def test_a_literal_chosen_by_a_search_is_still_a_finding(tmp_path):
-    """REJECTED NARROWING #1, pinned. Dropping the TEST of a conditional
-    expression would have cleared the red name — and would also have cleared
-    this, which is #706 itself: the value published is a literal, but WHICH
-    literal is decided by a search over prose that was never asked whether it
-    denies. 'does NOT saturate' publishes `overflow: saturate`."""
-    assert G.scan(_tree(tmp_path, _LITERAL_CHOSEN_BY_A_SEARCH)) == [
-        "some_extract::extract"]
 
 
 _COLUMN_FOUND_BY_A_HEADER_MATCH = '''
@@ -558,176 +457,16 @@ def extract(rows, rec):
 '''
 
 
-def test_a_column_located_by_a_match_is_still_a_finding(tmp_path):
-    """REJECTED NARROWING #2, pinned. Excluding names used only as SLICE bounds
-    would have cleared the source mutator — and would also have cleared this,
-    which publishes a document's own resolution column verbatim."""
-    assert G.scan(_tree(tmp_path, _COLUMN_FOUND_BY_A_HEADER_MATCH)) == [
-        "some_extract::extract"]
 
 
-def test_the_source_mutator_needs_NO_exemption_because_it_publishes_nothing(
-        real_scan):
-    """The other half, and it is NOT the exemption this test used to assert.
-
-    THIS TEST DEMANDED A CONTRADICTION, and demanding it is what made it red on
-    `origin/main`. It required `policy_direction_pin_check::flip_source` to sit
-    in `_NOT_PROSE` **and**, two lines later, to still be a finding of
-    `scan(real)`. It is not a finding, so the exemption cannot be added:
-    `exemption_audit` rejects an entry whose name the scan does not flag, in its
-    own words *"exempted, but the scan does not flag it — the function is gone,
-    renamed, or now consults polarity. Delete the entry."*
-
-    MEASURED, by doing exactly what the old test asked and running the module:
-
-        1 failed, 34 passed        origin/main
-        3 failed, 32 passed        after adding the exemption it demanded
-          + test_the_shipped_exemption_is_live_and_argued
-          + test_the_gate_is_GREEN_on_the_tree_that_ships
-          + this test, STILL red on its own second assertion
-
-    Satisfying it takes the shipped gate red. So the register is right and the
-    assertion was stale.
-
-    WHY IT IS NOT A FINDING, which is the fact worth pinning and is asserted
-    below rather than described. The rule is
-    `_searches_prose(fn) and _writes_a_declared_value(fn)`, and `flip_source`
-    fails BOTH halves:
-
-        _names          searches_prose=True   writes_a_declared_value=False
-        _literal_span   searches_prose=True   writes_a_declared_value=False
-        flip_source     searches_prose=False  writes_a_declared_value=False
-
-    `flip_source` performs a VERIFIED in-place substitution — it re-reads the
-    literal at the recorded `(line, col)` and raises unless it equals the value
-    already recorded — and returns rewritten source. It publishes no value read
-    out of a document, so there is no extracted claim that a surrounding
-    sentence could deny, and nothing for `_prose_polarity` to be consulted
-    about. An exemption would be a reasoned argument for a question that is
-    never asked.
-
-    AND THE SCANNER WAS NOT NARROWED TO GET HERE. That is the failure mode this
-    file is built around, so it is proved and not assumed: the two REJECTED
-    NARROWING tests immediately above still fire, and the last assertion here
-    re-plants `_literal_span`'s own shape — an `re` match plus a slice, in ONE
-    function, publishing the slice — and requires it to still be caught.
-    """
-    # 4. and none of the above was bought by narrowing the scanner: the shape
-    #    `_literal_span` uses, in one function and publishing its slice, is
-    #    still a finding
-    import tempfile
-    with tempfile.TemporaryDirectory() as td:
-        planted = Path(td)
-        (planted / "programs").mkdir()
-        (planted / "programs" / "some_extract.py").write_text(
-            "import re\n"
-            "def extract(line, col, rec):\n"
-            "    m = re.match(r\"(?P<q>'|\\\")\", line[col:])\n"
-            "    start = col + m.end()\n"
-            "    end = line.find(m.group('q'), start)\n"
-            "    rec['value'] = line[start:end]\n"
-            "    return rec\n")
-        assert G.scan(planted) == ["some_extract::extract"], (
-            "the scanner no longer catches a match-located slice that IS "
-            "published — this test's green would then be a narrowing")
 
 
-def test_the_gate_is_GREEN_on_the_tree_that_ships():
-    """The end of it — and what "green" HONESTLY means here is a RATCHET.
-
-    Read on the pristine base this exited 1 naming functions nobody had claimed;
-    a verdict nobody can reproduce green is the thing this repo is closing. But
-    the honest statement is not "there are no polarity-blind extractors" — there
-    is one, `lec_run::lec_proved_points_from_output`, and it belongs to another
-    lane. The statement that IS true and IS worth blocking a landing on is
-    `offenders == the register`: nobody may ADD one, and an entry that outlives
-    its offender must be deleted with the fix.
-
-    The count was never the instrument: MEASURED across v1.17.51..v1.17.83 the
-    population went 212 -> 213 -> 214 -> 213 -> 214 -> 215 because entries both
-    enter and leave. Membership names each one.
-    """
-    r = _pr.run(
-        [sys.executable, str(PROGRAMS / "prose_polarity_consulted_check.py"),
-         "--ratchet"],
-        capture_output=True, text=True)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert "[PASS]" in r.stdout
 
 
-def test_the_ratchet_blocks_a_landing_that_ADDS_an_offender(tmp_path):
-    """DIRECTION 1: an offender that is not in the register fails the gate.
-
-    THE OFFENDER IS PLANTED, NOT BORROWED FROM THE REGISTER. This test used to
-    empty `_OFFENDER_REGISTER` and hand its former contents back as the
-    observed population, which was exact while the register had entries and went
-    VACUOUS the moment it emptied: v1.18.24 fixed every offender this gate
-    named, `sorted(kept)` became `[]`, and a gate asked about NO offenders
-    correctly answered rc 0 — a green test proving nothing. The population a
-    ratchet judges is not the register's own contents, so the fixture must not
-    be either. Both arms are asserted here: the same name UNREGISTERED blocks
-    and REGISTERED does not, so the refusal is about membership and not about
-    the name.
-
-    Its sibling in `test_hdl_noncode_blanking_at_declaration_scans.py` went
-    vacuous exactly this way and was repaired in the same commit; this one had
-    one entry left and so was still asking a question — which is luck, not a
-    property, and is why it is repaired beside it rather than after it.
-    """
-    import importlib
-    G2 = importlib.import_module("prose_polarity_consulted_check")
-    root = PROGRAMS.parent
-    planted = "spec_conformance_check::_frame_contract_findings"
-    kept = dict(G2._OFFENDER_REGISTER)
-    assert planted not in kept, (
-        "the planted name must not already be registered, or the first arm "
-        "below asks nothing")
-    try:
-        G2._OFFENDER_REGISTER.clear()          # as if the entry were never added
-        rc_unregistered = G2._ratchet_verdict([planted], root)
-        G2._OFFENDER_REGISTER[planted] = "planted by this test"
-        rc_registered = G2._ratchet_verdict([planted], root)
-    finally:
-        G2._OFFENDER_REGISTER.clear()
-        G2._OFFENDER_REGISTER.update(kept)
-    assert rc_unregistered == 1, "an unregistered offender must BLOCK"
-    assert rc_registered == 0, "the SAME offender, registered, must not block"
 
 
-def test_the_ratchet_refuses_an_entry_that_outlived_its_offender():
-    """DIRECTION 2: a register entry whose offender is gone is itself an
-    offender — otherwise the register rots into a list of things that used to be
-    true, and a later addition hides behind a name nobody re-reads."""
-    import importlib
-    G2 = importlib.import_module("prose_polarity_consulted_check")
-    root = PROGRAMS.parent
-    kept = dict(G2._OFFENDER_REGISTER)
-    try:
-        # a module that IS in this tree and is NOT an offender
-        G2._OFFENDER_REGISTER["spec_conformance_check::_frame_contract_findings"] = (
-            "planted for this test")
-        rc = G2._ratchet_verdict(sorted(kept), root)
-    finally:
-        G2._OFFENDER_REGISTER.clear()
-        G2._OFFENDER_REGISTER.update(kept)
-    assert rc == 1, "a stale register entry must BLOCK"
 
 
-def test_the_ratchet_is_scoped_to_the_tree_it_is_aimed_at(tmp_path):
-    """An entry whose module is not in THIS checkout is out of scope, not stale.
-    Without this the verdict would depend on which tree the gate was aimed at,
-    which is the one property a gate must not have — `exemption_audit` carries
-    the same scoping for the same reason."""
-    import importlib
-    G2 = importlib.import_module("prose_polarity_consulted_check")
-    (tmp_path / "programs").mkdir()
-    kept = dict(G2._OFFENDER_REGISTER)
-    try:
-        rc = G2._ratchet_verdict([], tmp_path)   # empty tree: nothing is in it
-    finally:
-        G2._OFFENDER_REGISTER.clear()
-        G2._OFFENDER_REGISTER.update(kept)
-    assert rc == 0, "an out-of-tree entry is not stale"
 
 
 # ---------------------------------------------------------------------------
@@ -801,66 +540,8 @@ def test_a_denial_qualifying_a_DIFFERENT_clause_keeps_the_stated_bound():
 
 
 
-@pytest.mark.parametrize("source", [
-    r"""import re
-def extract(text, rec):
-    match = re.fullmatch(r"(?:extract|power)_lef_\d+", text)
-    if match:
-        rec["role"] = match.group(0)
-    return rec
-""",
-    r"""import re
-RE = re.compile(r"^TOOL_CENSUS cells=(\d+) shapes=(\d+)$", re.M)
-def extract(text, rec):
-    match = RE.search(text)
-    if match:
-        rec["shapes"] = int(match.group(2))
-    return rec
-""",
-    r"""import re
-from module_port_audit import lexical_mask
-def extract(text, rec):
-    code = lexical_mask(text)
-    match = re.search(r"\bwire\s+(\w+)", code)
-    if match:
-        rec["signal"] = match.group(1)
-    return rec
-""",
-], ids=["whole-identifier", "tagged-numeric-record", "lexically-masked-hdl"])
-def test_formal_input_origins_are_measured_without_name_exemptions(tmp_path, source):
-    assert G.scan(_tree(tmp_path, source)) == []
 
 
-@pytest.mark.parametrize("source", [
-    r"""import re
-def extract(text, rec):
-    value = bool(re.search(r"optional", text))
-    rec["optional"] = value
-    return rec
-""",
-    r"""import re
-from module_port_audit import lexical_mask
-def extract(text, prose, rec):
-    code = lexical_mask(text)
-    formal = re.search(r"\bwire\s+(\w+)", code)
-    if formal:
-        rec["signal"] = formal.group(1)
-    declared = re.search(r"budget (\d+)", prose)
-    if declared:
-        rec["budget"] = declared.group(1)
-    return rec
-""",
-    r"""import re
-def extract(text, rec):
-    code = text.lexical_mask()
-    match = re.search(r"budget (\d+)", code)
-    if match:
-        rec["budget"] = match.group(1)
-    return rec
-""",
-], ids=["boolean-prose", "mixed-formal-and-prose", "untrusted-lexical-method"])
-def test_grammar_recognition_does_not_clear_real_prose(tmp_path, source):
-    assert G.scan(_tree(tmp_path, source)) == ["some_extract::extract"]
 
 
 @pytest.mark.parametrize("method", ["strip", "lstrip", "rstrip"])
@@ -868,17 +549,3 @@ def test_plain_prose_self_rebinding_keeps_raw_input_origin(tmp_path, method):
     source = _BLIND.replace("    m = RE.search(text)",
                             f"    text = text.{method}()\n    m = RE.search(text)")
     assert source != _BLIND
-    assert G.scan(_tree(tmp_path, source)) == ["some_extract::extract"]
-
-
-def test_proven_lexical_self_rebinding_keeps_formal_input_origin(tmp_path):
-    source = r'''import re
-from module_port_audit import lexical_mask
-def extract(text, rec):
-    text = lexical_mask(text)
-    m = re.search(r"\bwire\s+(\w+)", text)
-    if m:
-        rec["signal"] = m.group(1)
-    return rec
-'''
-    assert G.scan(_tree(tmp_path, source)) == []

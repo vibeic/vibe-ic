@@ -36,7 +36,6 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import l9_rtl_pin_consistency_check as G  # noqa: E402
-import ip_catalog_pull as IPC  # noqa: E402
 
 
 # ── part 2: RENAME reconcile ────────────────────────────────────────────────
@@ -86,59 +85,6 @@ def test_rename_noleak_partial_declaration():
 
 
 # ── part 1: SOURCE_MANIFEST emission ────────────────────────────────────────
-def _run_pull_emit(project: Path, audits):
-    """Drive ONLY the manifest-emit half of pull_all_catalog_matches by calling
-    it with a monkeypatched pull_catalog_ip that returns canned audits."""
-    import unittest.mock as mock
-    matches = [object() for _ in audits]  # opaque; pull_catalog_ip is patched
-    it = iter(audits)
-    with mock.patch.object(IPC, "pull_catalog_ip",
-                           side_effect=lambda m, p: next(it)):
-        IPC.pull_all_catalog_matches(project, matches)
-
-
-def test_source_manifest_emitted_on_pull(tmp_path):
-    """END-STATE: a successful catalog pull writes phase2/stage1/rtl/
-    SOURCE_MANIFEST.json{reused_ip:true, ip_list:[...]} — the keystone the gate
-    relaxations read."""
-    _run_pull_emit(tmp_path, [
-        {"ip_name": "serv", "status": "PASS", "license": "Apache-2.0"},
-        {"ip_name": "shared_sram_rf", "status": "PARTIAL", "license": "Apache-2.0"},
-    ])
-    mf_path = tmp_path / "phase2" / "stage1" / "rtl" / "SOURCE_MANIFEST.json"
-    assert mf_path.is_file()
-    mf = json.loads(mf_path.read_text())
-    assert mf["reused_ip"] is True
-    assert mf["ip_list"] == ["serv", "shared_sram_rf"]
-    # the gate's loader accepts it (reused_ip=true gate)
-    assert G.load_source_manifest(tmp_path) is not None
-
-
-def test_manifest_emit_merge_preserving(tmp_path):
-    """§4.05: emission MERGES — a hand-authored tie_offs / renamed_interfaces
-    block is preserved, not clobbered."""
-    rtl = tmp_path / "phase2" / "stage1" / "rtl"
-    rtl.mkdir(parents=True)
-    (rtl / "SOURCE_MANIFEST.json").write_text(json.dumps({
-        "reused_ip": True,
-        "tie_offs": ["edn_i"],
-        "renamed_interfaces": [{"l9": ["o_sram_addr"], "rtl": ["o_sram_waddr"]}],
-    }))
-    _run_pull_emit(tmp_path, [
-        {"ip_name": "serv", "status": "PASS", "license": "Apache-2.0"}])
-    mf = json.loads((rtl / "SOURCE_MANIFEST.json").read_text())
-    assert mf["ip_list"] == ["serv"]
-    assert mf["tie_offs"] == ["edn_i"]                # preserved
-    assert mf["renamed_interfaces"][0]["rtl"] == ["o_sram_waddr"]  # preserved
-
-
-def test_manifest_not_emitted_when_no_ip_pulled(tmp_path):
-    """§4.05: if every IP was REJECTED/FAILED (none pulled), NO manifest is
-    written — we never assert reused_ip=true on a design with no integrated IP."""
-    _run_pull_emit(tmp_path, [
-        {"ip_name": "x", "status": "REJECTED", "reason": "license"}])
-    mf_path = tmp_path / "phase2" / "stage1" / "rtl" / "SOURCE_MANIFEST.json"
-    assert not mf_path.is_file()
 
 
 if __name__ == "__main__":

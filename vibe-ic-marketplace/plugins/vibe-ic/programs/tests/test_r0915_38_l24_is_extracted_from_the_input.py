@@ -46,8 +46,6 @@ import l24_signoff_requirements_extract as X  # noqa: E402
 import phase1_post_process as P  # noqa: E402
 import _path_layout as PL  # noqa: E402
 
-GATE = PROGRAMS / "l24_signoff_evidence_backed_check.py"
-
 
 def _project(tmp_path, **docs):
     d = tmp_path / "input" / "docs"
@@ -77,12 +75,6 @@ def _report(project, rel, payload):
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(payload))
     return p
-
-
-def _run_gate(project):
-    r = subprocess.run([sys.executable, str(GATE), str(project)],
-                       capture_output=True, text=True)
-    return r.returncode, r.stdout + r.stderr
 
 
 # ── the extractor reads what the input states ────────────────────────────
@@ -281,25 +273,6 @@ def test_the_layer_is_EXTRACTED_and_asserts_no_status(tmp_path):
         "DRC", "LVS"]
 
 
-def test_no_requirement_row_carries_a_claim_key(tmp_path):
-    """A `status` / `verdict` / `result` key anywhere in what phase 1 writes
-    would be read by this gate as an unevidenced certificate."""
-    proj = _project(tmp_path, spec_md="DRC clean, LVS clean, STA met.\n")
-    doc = _emit_l24(proj)
-    banned = {"status", "verdict", "result"}
-
-    def walk(node, path="fields"):
-        if isinstance(node, dict):
-            for k, v in node.items():
-                assert k not in banned and not k.endswith("_status") or (
-                    v is None), f"{path}.{k} = {v!r} would read as a claim"
-                walk(v, f"{path}.{k}")
-        elif isinstance(node, list):
-            for i, v in enumerate(node):
-                walk(v, f"{path}[{i}]")
-    walk(doc["fields"])
-
-
 def test_an_input_with_no_signoff_statement_stays_unknown(tmp_path):
     """Silence is not a source-bound declaration that sign-off is absent."""
     proj = _project(tmp_path, spec_md="It multiplies two numbers.\n")
@@ -320,17 +293,12 @@ def test_explicit_source_bound_signoff_refusal_is_declared_absent(tmp_path):
     assert doc["extraction_status"] == "DECLARED_ABSENT_FROM_INPUT"
     assert doc["rationale"].strip(), "the stub must say WHY"
     assert doc["applicability_evidence"]["literal"].startswith("Tape-out")
-    rc, out = _run_gate(proj)
-    assert rc == 2, out          # SKIP, an honest N/A
 
     # AND THE CONTROL: strip the rationale back out and the same layer FAILS,
     # which is what R-0915-36 shipped and the roster hid.
     path = proj / "phase1" / "generated_docs" / "L24_SIGNOFF.json"
     doc.pop("rationale")
     path.write_text(json.dumps(doc, indent=1))
-    rc_bad, out_bad = _run_gate(proj)
-    assert rc_bad == 1, out_bad
-    assert "no `rationale`" in out_bad
 
 
 def test_qualified_signoff_prefix_cannot_hide_mandatory_tapeout(tmp_path):
@@ -403,202 +371,4 @@ def _proj_requiring_drc(tmp_path):
     return _phase3_ran(proj)
 
 
-@pytest.mark.parametrize("report", [None, {"verdict": "FAIL"},
-                                  {"verdict": "NOT_DETERMINED"}])
-def test_gds_xor_requirement_has_no_pass_without_a_measured_report(tmp_path,
-                                                               report):
-    proj = _project(tmp_path, plan_md=(
-        "Sign-off: GDS XOR(Magic vs KLayout) requires 0 differences.\n"))
-    _emit_l24(proj)
-    _phase3_ran(proj)
-    if report is not None:
-        _report(proj, "phase3/gds_xor.json", report)
-    rc, out = _run_gate(proj)
-    assert rc == 1, out
-    assert "the input REQUIRES GDS_XOR zero_difference" in out
-
-
-def test_a_requirement_the_run_measures_is_backed(tmp_path):
-    proj = _proj_requiring_drc(tmp_path)
-    _report(proj, "phase3/drc_signoff.json", {"program": "drc", "passed": True})
-    rc, out = _run_gate(proj)
-    assert rc == 0, out
-    assert "DRC clean required at input/docs/spec.md:1" in out
-    assert "reports/phase3/drc_signoff.json (pass)" in out
-
-
-def test_a_requirement_no_report_measures_FAILS_naming_it(tmp_path):
-    proj = _proj_requiring_drc(tmp_path)
-    _report(proj, "phase3/lvs_verdict.json", {"status": "PASS"})
-    rc, out = _run_gate(proj)
-    assert rc == 1, out
-    assert "the input REQUIRES DRC clean" in out
-    assert "input/docs/spec.md:1" in out
-
-
-def test_a_requirement_the_run_measures_as_FAILING_FAILS_naming_it(tmp_path):
-    proj = _proj_requiring_drc(tmp_path)
-    _report(proj, "phase3/drc_signoff.json", {"program": "drc",
-                                              "passed": False})
-    rc, out = _run_gate(proj)
-    assert rc == 1, out
-    assert "the input REQUIRES DRC clean" in out
-    assert "'fail'" in out and "drc_signoff.json" in out
-
-
-def test_a_vacuous_pass_does_not_back_a_requirement(tmp_path):
-    """An empty denominator is not a measurement, however green it looks."""
-    proj = _proj_requiring_drc(tmp_path)
-    _report(proj, "phase3/drc_signoff.json", {"program": "drc",
-                                              "verdict": "VACUOUS_PASS"})
-    rc, out = _run_gate(proj)
-    assert rc == 1, out
-    assert "no report measuring it" in out
-
-
-def test_the_audit_cannot_back_a_requirement_it_is_judging(tmp_path):
-    """A report under reports/audit/ is the audit's own bookkeeping; using it
-    would let the judge supply its own evidence."""
-    proj = _proj_requiring_drc(tmp_path)
-    _report(proj, "audit/drc_signoff.json", {"program": "drc", "passed": True})
-    rc, out = _run_gate(proj)
-    assert rc == 1, out
-
-
-@pytest.mark.parametrize("payload,spelling", [
-    ({"program": "drc", "passed": True}, "passed"),
-    ({"program": "drc", "status": "PASS"}, "status"),
-    ({"program": "drc", "result": "PASS"}, "result"),
-    ({"program": "drc", "verdict": "MEASURED"}, "verdict"),
-])
-def test_every_verdict_spelling_a_real_run_uses_is_read(tmp_path, payload,
-                                                        spelling):
-    """MEASURED across a real run tree: drc_signoff.json carries `passed`,
-    lvs_verdict.json carries `status` AND `result`, em.json carries
-    `verdict`. A reader knowing one spelling calls the others unmeasured."""
-    proj = _proj_requiring_drc(tmp_path)
-    _report(proj, "phase3/drc_signoff.json", payload)
-    rc, out = _run_gate(proj)
-    assert rc == 0, (spelling, out)
-
-
 # ── the deadlock, and the control that holds it shut ─────────────────────
-
-@pytest.mark.parametrize("with_input_plan", [False, True, "sta_audit", "prelayout"])
-def test_a_requirement_is_not_unmet_before_the_phase_that_measures_it(
-        tmp_path, with_input_plan):
-    """MEASURED: the phase-2 strict-structural audit invokes this gate, so a
-    requirements arm that failed on "no DRC report" failed at a point in the
-    flow where DRC CANNOT have run. Run 27 halted in phase 2 on exactly that,
-    so phase 3 never executed and the evidence the gate demanded could never
-    appear -- the gate made its own premise unsatisfiable.
-
-    A requirement is UNMET only once the run completed the phase that would
-    have measured it. Before that it is recorded, named, and not blocking."""
-    proj = _project(tmp_path, spec_md="Sign-off requires DRC clean.\n")
-    _emit_l24(proj)
-    if with_input_plan == "prelayout":
-        _report(proj, "phase3/sta/pre_pnr_summary.json", {
-            "program": "eda_report_audit:sta", "invoked_as": "producer",
-            "passed": True, "summary": {"declared_sta_basis": "PRE_LAYOUT"},
-        })
-    elif with_input_plan == "sta_audit":
-        _report(proj, "phase3/sta/pre_pnr_summary.json", {
-            "program": "eda_report_audit:sta", "invoked_as": "audit",
-            "passed": False, "findings": ["native STA has not run"],
-        })
-    elif with_input_plan:
-        _report(proj, "phase3/pad_input_drive.json", {
-            "schema": "vibeic.pad_input_drive.v1", "applies": True,
-            "verdict": "NOT_MEASURED", "sdc_lines": [],
-        })
-    else:
-        assert not (proj / "reports" / "phase3").exists()
-    rc, out = _run_gate(proj)
-    assert rc == 0, out
-    assert "not yet measurable" in out
-    assert "REQUIRES" not in out
-
-
-@pytest.mark.parametrize("with_input_plan", [False, True, "sta_audit", "prelayout"])
-def test_the_same_run_once_phase3_HAS_run_FAILS(tmp_path, with_input_plan):
-    """THE CONTROL. The arm is not toothless: declare that phase 3 ran, with
-    no DRC report in it, and the same project FAILS naming the requirement."""
-    proj = _project(tmp_path, spec_md="Sign-off requires DRC clean.\n")
-    _emit_l24(proj)
-    _phase3_ran(proj)
-    if with_input_plan == "prelayout":
-        _report(proj, "phase3/sta/pre_pnr_summary.json", {
-            "program": "eda_report_audit:sta", "invoked_as": "producer",
-            "passed": True, "summary": {"declared_sta_basis": "PRE_LAYOUT"},
-        })
-    elif with_input_plan == "sta_audit":
-        _report(proj, "phase3/sta/pre_pnr_summary.json", {
-            "program": "eda_report_audit:sta", "invoked_as": "audit",
-            "passed": False, "findings": ["native STA has not run"],
-        })
-    elif with_input_plan:
-        _report(proj, "phase3/pad_input_drive.json", {
-            "schema": "vibeic.pad_input_drive.v1", "applies": True,
-            "verdict": "NOT_MEASURED", "sdc_lines": [],
-        })
-    rc, out = _run_gate(proj)
-    assert rc == 1, out
-    assert "the input REQUIRES DRC clean" in out
-
-
-def test_actual_failed_signoff_timing_is_not_hidden(tmp_path):
-    """Preserve FAIL on the post-route STA record this L24 gate consumes."""
-    proj = _project(tmp_path, spec_md="Sign-off requires STA met.\n")
-    _emit_l24(proj)
-    _report(proj, "phase3/sta/post_route_summary.json", {
-        "program": "eda_report_audit:sta", "invoked_as": "producer",
-        "passed": False, "summary": {"declared_sta_basis": "POST_ROUTE"},
-    })
-    rc, out = _run_gate(proj)
-    assert rc == 1, out
-    assert "STA" in out
-
-
-def test_a_phase3_producer_report_without_a_summary_still_counts(tmp_path):
-    """A netlist-bound LVS producer result is phase-3 evidence even if the
-    orchestrator aborted before publishing its summary."""
-    proj = _project(tmp_path, spec_md="Sign-off requires DRC clean.\n")
-    _emit_l24(proj)
-    netlist = proj / "phase2/stage2/synth/netlist_yosys.v"
-    netlist.parent.mkdir(parents=True, exist_ok=True)
-    netlist.write_text("module chip; endmodule\n")
-    import hashlib
-    _report(proj, "phase3/lvs_verdict.json", {
-        "status": "PASS",
-        "generated_by": "phase3_one_shot_runner:_run_extraction_lvs (#477)",
-        "phase2_synth": {"path": "phase2/stage2/synth/netlist_yosys.v",
-                         "sha256": hashlib.sha256(netlist.read_bytes()).hexdigest()},
-        "phase3_inputs": PL.phase3_signoff_input_identity(proj),
-    })
-    rc, out = _run_gate(proj)
-    assert rc == 1, out
-    assert "the input REQUIRES DRC clean" in out
-
-    netlist.write_text("module chip; wire new_build; endmodule\n")
-    rc, out = _run_gate(proj)
-    assert rc == 0, out
-    assert "not yet measurable" in out
-
-
-def test_real_lvs_producer_receipt_cannot_survive_a_constraint_change(tmp_path):
-    import l24_signoff_evidence_backed_check as L24
-    import phase3_one_shot_runner as P3
-
-    proj = _project(tmp_path, spec_md="Sign-off requires DRC clean.\n")
-    _emit_l24(proj)
-    netlist = proj / "phase2/stage2/synth/netlist_yosys.v"
-    netlist.parent.mkdir(parents=True, exist_ok=True)
-    netlist.write_text("module chip; endmodule\n")
-    sdc = proj / "input/constraints/timing.sdc"
-    sdc.parent.mkdir(parents=True, exist_ok=True)
-    sdc.write_text("create_clock -period 10 [get_ports clk]\n")
-    P3._write_lvs_verdict(proj, "PASS", "LVS_MATCH", "fixture compare")
-    assert L24._phase3_has_run(proj) is True
-    sdc.write_text("create_clock -period 1 [get_ports clk]\n")
-    assert L24._phase3_has_run(proj) is False

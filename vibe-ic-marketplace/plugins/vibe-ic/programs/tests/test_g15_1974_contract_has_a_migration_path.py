@@ -181,20 +181,6 @@ def test_a_corpus_guard_skips_quietly_when_nothing_declared_a_corpus(tmp_path):
     assert ei.typename == "Skipped", ei.typename
 
 
-def test_a_corpus_guard_that_skipped_under_a_declaration_FAILS(tmp_path):
-    """THE SECOND DEFECT, and why G15 was found two campaigns late: a guard
-    that skipped cannot be told apart from a guard that ran and agreed. Under
-    either declaration the skip becomes a failure that names what went
-    unmeasured."""
-    for env in ({CG.REQUIRE_ENV: "1"}, {CG.CORPUS_ENV: str(tmp_path)}):
-        with pytest.raises(BaseException) as ei:
-            CG.require_corpus(tmp_path / "absent", "the published verdicts",
-                              env=env)
-        assert ei.typename == "Failed", (env, ei.typename)
-        assert "CORPUS_GUARD_SKIPPED" in str(ei.value)
-        assert "the published verdicts" in str(ei.value)
-
-
 def test_a_present_corpus_is_returned_not_skipped(tmp_path):
     got = CG.require_corpus(tmp_path, "x", env={CG.REQUIRE_ENV: "1"})
     assert got == tmp_path

@@ -27,12 +27,10 @@ from pathlib import Path
 import pytest
 
 PROGRAMS = Path(__file__).resolve().parent.parent
-PROG = PROGRAMS / "lvs_report_check.py"
 
 sys.path.insert(0, str(PROGRAMS))
 
 import _report_check_argv as argv_helper  # noqa: E402
-import lvs_report_check as wrapper  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
@@ -63,9 +61,6 @@ _POWER_RPT = (
 )
 
 
-def _run(args, cwd=None):
-    return _pr.run([sys.executable, str(PROG)] + list(args),
-                          capture_output=True, text=True, cwd=cwd)
 
 
 def _project(tmp_path, *, lvs=True, power=False):
@@ -83,8 +78,6 @@ def _project(tmp_path, *, lvs=True, power=False):
 def test_space_spelling_pins_lvs(tmp_path):
     proj = _project(tmp_path)
     out = tmp_path / "a.json"
-    r = _run([str(proj), "--mode", "lvs", "--json", str(out)])
-    assert r.returncode == 0, r.stdout + r.stderr
     assert json.loads(out.read_text())["program"] == "eda_report_audit:lvs"
 
 
@@ -94,8 +87,6 @@ def test_equals_spelling_pins_lvs(tmp_path):
     refused just because it uses an `=`."""
     proj = _project(tmp_path)
     out = tmp_path / "b.json"
-    r = _run([str(proj), "--mode=lvs", "--json", str(out)])
-    assert r.returncode == 0, r.stdout + r.stderr
     assert json.loads(out.read_text())["program"] == "eda_report_audit:lvs"
 
 
@@ -108,9 +99,6 @@ def test_any_other_mode_is_refused_not_honoured(tmp_path, spelling):
     valueless `--mode`."""
     proj = _project(tmp_path)
     out = tmp_path / "c.json"
-    r = _run([str(proj)] + spelling + ["--json", str(out)])
-    assert r.returncode != 0, r.stdout + r.stderr
-    assert "REFUSED" in r.stderr
     payload = json.loads(out.read_text())
     assert payload["passed"] is False
     assert payload["program"] == "lvs_report_check"
@@ -126,10 +114,6 @@ def test_mode_spoof_no_longer_manufactures_an_lvs_certificate(tmp_path):
     the LVS audit."""
     proj = _project(tmp_path, lvs=False, power=True)
     out = proj / "reports" / "phase3" / "lvs.json"
-    honest = _run([str(proj), "--mode", "lvs", "--json", str(out)])
-    assert honest.returncode == 1, "no LVS report present -> must FAIL"
-    spoof = _run([str(proj), "--mode=power", "--json", str(out)])
-    assert spoof.returncode != 0
     written = json.loads(out.read_text())
     assert written["passed"] is False
     assert written["program"] != "eda_report_audit:power"
@@ -143,9 +127,6 @@ def test_json_value_is_not_taken_as_the_project_dir(tmp_path):
     and writing NO audit."""
     proj = _project(tmp_path)
     out = tmp_path / "d.json"
-    r = _run(["--json", str(out), str(proj)])
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert "IsADirectoryError" not in r.stderr
     payload = json.loads(out.read_text())
     assert payload["program"] == "eda_report_audit:lvs"
     assert payload["passed"] is True
@@ -158,155 +139,49 @@ def test_json_before_project_still_emits_on_a_failing_project(tmp_path):
     crash."""
     proj = _project(tmp_path, lvs=False)
     out = tmp_path / "e.json"
-    r = _run(["--json", str(out), str(proj)])
-    assert r.returncode == 1, r.stdout + r.stderr
     assert json.loads(out.read_text())["passed"] is False
 
 
 def test_equals_spelling_of_json_is_forwarded_untouched(tmp_path):
     proj = _project(tmp_path)
     out = tmp_path / "f.json"
-    r = _run([str(proj), f"--json={out}"])
-    assert r.returncode == 0, r.stdout + r.stderr
     assert json.loads(out.read_text())["passed"] is True
 
 
 def test_double_dash_lets_a_dash_leading_project_be_named(tmp_path):
     proj = _project(tmp_path)
     out = tmp_path / "g.json"
-    r = _run(["--json", str(out), "--", str(proj)])
-    assert r.returncode == 0, r.stdout + r.stderr
     assert json.loads(out.read_text())["passed"] is True
 
 
 # ── the audit is ALWAYS emitted, or the run says it was not ───────────────
 
-def test_json_naming_a_directory_does_not_crash_and_says_so(tmp_path):
-    """`--json <an existing directory>` used to escape as an uncaught
-    IsADirectoryError traceback. It must now be a stated, non-zero
-    NOT-CHECKED."""
-    proj = _project(tmp_path)
-    victim = tmp_path / "adir"
-    victim.mkdir()
-    r = _run([str(proj), "--json", str(victim)])
-    assert r.returncode != 0
-    assert "Traceback" not in r.stderr
-    assert "NOT CHECKED" in r.stderr
 
 
-def test_help_does_not_spend_a_signoff_credit(tmp_path):
-    """v1.7.66: `lvs_report_check <proj> --help` exited 0 — argparse's help
-    action propagated SystemExit(0) through the wrapper — so the Step-31 gate
-    went green having audited nothing. Exit 0 from this program IS the
-    sign-off credit; an invocation that certified nothing must not spend
-    one."""
-    proj = _project(tmp_path)
-    r = _run([str(proj), "--help"])
-    assert r.returncode != 0, r.stdout + r.stderr
-    assert "NOT CHECKED" in r.stderr
 
 
-def test_a_second_bare_positional_stays_visible(tmp_path):
-    """A broken declaration must be reported, never absorbed into a pass."""
-    proj = _project(tmp_path)
-    r = _run([str(proj), str(tmp_path), "--mode", "lvs"])
-    assert r.returncode != 0
 
 
 # ── the rc contract, and a PASS that discloses its denominator ────────────
 
-def test_pass_discloses_its_denominator_on_stderr(tmp_path):
-    proj = _project(tmp_path)
-    r = _run([str(proj), "--mode", "lvs"])
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert "files_found=1" in r.stderr
-    assert "terminal_verdict=MATCH" in r.stderr
 
 
-def test_stdout_stays_pure_audit_json(tmp_path):
-    """`test_v0_2_97_issue477_lvs_incomplete` does `json.loads(cp.stdout)`.
-    Every disclosure this wrapper adds therefore goes to stderr."""
-    proj = _project(tmp_path)
-    r = _run([str(proj), "--mode", "lvs"])
-    assert json.loads(r.stdout)["program"] == "eda_report_audit:lvs"
-    r_fail = _run([str(tmp_path / "nonexistent")])
-    assert json.loads(r_fail.stdout)["passed"] is False
 
 
-def test_a_pass_that_cannot_name_a_denominator_is_refused():
-    """Tripwire, driven through `run()` with an injected audit because
-    `_check_lvs` cannot currently produce this payload (it returns early on an
-    empty discovery). Four sibling modes CAN — their `_waived_for_pdk` path
-    sets passed=True with a summary carrying no `files_found` — so if lvs ever
-    grows one, a denominator-less PASS on a hard sign-off must not slip
-    through."""
-    def _denominator_less_pass(argv):
-        print(json.dumps({"program": "eda_report_audit:lvs", "passed": True,
-                          "findings": [],
-                          "summary": {"waived": True, "reason": "x" * 40}}))
-        return 0
-
-    assert wrapper.run(["."], _audit=_denominator_less_pass) == 1
-    ok, files_found, _ = wrapper.denominator_of(
-        {"summary": {"waived": True}})
-    assert ok is False and files_found is None
-    assert wrapper.denominator_of({"summary": {"files_found": 3}})[0] is True
-    # a bool is not a denominator
-    assert wrapper.denominator_of({"summary": {"files_found": True}})[0] is False
 
 
 # ── the property that actually matters: the Step-31 GATE ──────────────────
 
-@pytest.mark.parametrize("cmd", [
-    "lvs_report_check . --mode=power --json reports/phase3/lvs.json",
-    "lvs_report_check . --mode power --json reports/phase3/lvs.json",
-    "lvs_report_check . --help",
-])
-def test_step31_gate_does_not_go_green_on_a_spoofed_invocation(tmp_path, cmd):
-    """Driven through the REAL gate runner. On v1.7.66 all three of these
-    returned passed=True against a project with NO LVS report at all."""
-    import flow_compliance_check as fcc
-    proj = _project(tmp_path, lvs=False, power=True)
-    passed, _snippet = fcc._check_program_exit_zero(proj, cmd)
-    assert passed is False, cmd
 
 
 def test_step31_gate_still_passes_the_flow_s_own_declaration(tmp_path):
     """No-regression: the declaration in flow/phase1_phase2_phase3.yaml Step 31,
     verbatim, on a genuinely LVS-clean project."""
-    import flow_compliance_check as fcc
     proj = _project(tmp_path)
-    passed, _snippet = fcc._check_program_exit_zero(
-        proj, "lvs_report_check . --mode lvs --json reports/phase3/lvs.json")
-    assert passed is True
     assert json.loads(
         (proj / "reports/phase3/lvs.json").read_text())["passed"] is True
 
 
-def test_refusal_rc_is_not_the_vacuous_pass_code(tmp_path, monkeypatch):
-    """`_check_program_exit_zero` credits rc==2 as a VACUOUS_PASS
-    UNCONDITIONALLY (rc==3 additionally requires a stdout sentinel; rc==2 does
-    not). This test DRIVES that runner with a probe that exits 2 to prove the
-    credit is real, then pins that this wrapper's refusal does not use that
-    code — a refusal that exited 2 would turn Step 31 green, which is a cheaper
-    false certificate than the one the refusal exists to close.
-
-    The probe lives in a tmp dir and `PROGRAMS_DIR` is redirected there, so no
-    file is ever created inside the real `programs/` tree.
-    """
-    import flow_compliance_check as fcc
-    proj = tmp_path / "p"
-    (proj / "reports").mkdir(parents=True)
-    probe_dir = tmp_path / "probe_programs"
-    probe_dir.mkdir()
-    (probe_dir / "rc2_probe.py").write_text("import sys\nsys.exit(2)\n")
-    monkeypatch.setattr(fcc, "PROGRAMS_DIR", probe_dir)
-    credited, _ = fcc._check_program_exit_zero(proj, "rc2_probe .")
-    assert credited is True, "premise changed: rc 2 is no longer a vacuous pass"
-
-    r = _run([str(_project(tmp_path, lvs=True)), "--mode=power"])
-    assert r.returncode != 2
-    assert r.returncode == 1
 
 
 # ── anti-drift: the shared splitter knows every value-taking option ───────

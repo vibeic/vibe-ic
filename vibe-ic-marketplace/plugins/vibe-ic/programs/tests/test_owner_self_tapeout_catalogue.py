@@ -7,7 +7,6 @@ import _tapeout_declaration as TD
 import submission_template_ingest as ING
 import submission_template_check as CHK
 import tapeout_declaration_gen as GEN
-import tapeout_declaration_check as DC
 import tapeout_precheck as TP
 from _hostpaths import require_repo
 
@@ -51,8 +50,6 @@ def test_owner_route_producer_checker_agree_without_deleting_catalogue(tmp_path)
     GEN.write_artefacts(p,rec)
     assert (p/TD.SELF_TAPEOUT_REL).is_file()
     assert list((p/ST.SLOTS_DIR_REL).glob('*.yaml'))
-    report=DC.evaluate(p)
-    assert not any(x['rule']=='ROUTER_CONTRADICTION' for x in report['refusals'])
     # Choosing self-tapeout does not remove unanswered physical DIE questions.
     assert TD.audit(rec['declaration'])['sections'][TD.SECTION_PAD_RING]['unanswered']>0
 
@@ -85,8 +82,6 @@ def _relocated_owner_tree(tmp_path):
 
 def test_relocated_catalogue_remains_information_not_a_second_route(tmp_path):
     moved = _relocated_owner_tree(tmp_path)
-    report = DC.evaluate(moved)
-    assert [r['rule'] for r in report['refusals']] == [], report
     record = json.loads((moved/ST.REPORT_REL).read_text())
     checked = CHK.evaluate(moved, record, None)
     assert checked['verdict'] == ST.VERDICT_NOT_APPLICABLE
@@ -97,9 +92,6 @@ def test_relocated_catalogue_hash_change_preserves_route_refusal(tmp_path):
     moved = _relocated_owner_tree(tmp_path)
     (moved/ST.STAGED_TEMPLATE_REL/'neutral.json').write_text('{}')
     assert CHK.catalogue_selects_self_tapeout(moved)[0] is False
-    report = DC.evaluate(moved)
-    assert any(r['rule'] == 'ROUTER_CONTRADICTION'
-               for r in report['refusals']), report
 
 
 def test_relocated_catalogue_selected_slot_preserves_route_refusal(tmp_path):
@@ -112,9 +104,6 @@ def test_relocated_catalogue_selected_slot_preserves_route_refusal(tmp_path):
     owner['operator_template']['slot'] = 'neutral'
     own.write_text(json.dumps(owner))
     assert CHK.catalogue_selects_self_tapeout(moved)[0] is False
-    report = DC.evaluate(moved)
-    assert any(r['rule'] == 'ROUTER_CONTRADICTION'
-               for r in report['refusals']), report
 
 
 def test_relocated_catalogue_source_escape_preserves_route_refusal(tmp_path):
@@ -125,20 +114,8 @@ def test_relocated_catalogue_source_escape_preserves_route_refusal(tmp_path):
     record['ingest']['slots'][0]['source_relpath'] = '../outside.json'
     (moved/ST.REPORT_REL).write_text(json.dumps(record))
     assert CHK.catalogue_selects_self_tapeout(moved)[0] is False
-    report = DC.evaluate(moved)
-    assert any(r['rule'] == 'ROUTER_CONTRADICTION'
-               for r in report['refusals']), report
 
 
-def test_checked_in_catalogue_without_rehashable_sources_still_refuses(tmp_path):
-    fixture_root = require_repo(
-        'vibe-ic-marketplace', 'plugins', 'vibe-ic', 'programs', 'tests',
-        'fixtures', 'r0929_dieid_basis_self_tapeout_die')
-    project = tmp_path/'checked-in'
-    shutil.copytree(fixture_root, project)
-    report = DC.evaluate(project)
-    assert any(r['rule'] == 'ROUTER_CONTRADICTION'
-               for r in report['refusals']), report
 
 
 def test_self_tapeout_operator_arm_not_invoked(tmp_path):

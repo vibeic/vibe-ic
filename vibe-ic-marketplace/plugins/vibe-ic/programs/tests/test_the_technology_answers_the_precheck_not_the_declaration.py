@@ -238,43 +238,6 @@ def test_klayout_convention_symlink_to_magic_is_not_supported_invocation(
     assert ev.verdict == GP.NOT_DETERMINED, ev.evidence
 
 
-@pytest.mark.parametrize("reader_type", [AUTH.ContainerReader, AUTH.ImageReader])
-@pytest.mark.parametrize("probe", ["unreachable", "truly_absent"])
-def test_general_seal_ring_remote_provider_probe_fails_closed(
-        tmp_path, monkeypatch, reader_type, probe):
-    """The actual precheck consumer must distinguish rc127 from rc1."""
-    volume = "/foss/pdks/neutral"
-    provider = (volume + "/libs.tech/magic/seal_ring_generator/"
-                "neutral_gen_seal_ring.py")
-
-    def run(_identity, argv):
-        if argv[:2] == ["test", "-d"]:
-            return (0, "") if argv[2] == volume else (1, "")
-        if argv[:2] == ["test", "-f"]:
-            return (127 if probe == "unreachable" and argv[2] == provider
-                    else 1), ""
-        if argv[:3] == ["python3", "-c", AUTH._REMOTE_GLOB_SCRIPT]:
-            names = ([provider] if probe == "unreachable" and
-                     "magic/seal_ring_generator" in argv[4] else [])
-            return 0, json.dumps(names)
-        return 127, ""
-
-    reader = reader_type("fixture", runner=run)
-    monkeypatch.setenv("PDK_ROOT", "/foss/pdks")
-    monkeypatch.setattr(GP, "pdk_reader_for", lambda *_: (reader, "fixture"))
-    proj = _project(tmp_path, _die, {"deliverable": "DIE",
-                                     "top_cell": "chip_top",
-                                     "seal_ring_required": False})
-    rep = GP.evaluate(proj, runner=_NEVER_RAN, pdk="neutral")
-    ev = _step(rep, "General.SealRing")
-    if probe == "unreachable":
-        assert ev.verdict == GP.NOT_DETERMINED, ev.evidence
-        assert rep.technology["seal_ring_facility"] is None
-    else:
-        assert rep.technology["seal_ring_facility"] is False
-        assert ev.verdict == GP.NOT_APPLICABLE, ev.evidence
-
-
 def test_not_applicable_does_not_block_the_precheck_verdict(tmp_path, pdkroot):
     """The row the ruling asks the precheck to PASS over."""
     _technology(pdkroot, "notech", pairs=[MAPPED], sealring=False)

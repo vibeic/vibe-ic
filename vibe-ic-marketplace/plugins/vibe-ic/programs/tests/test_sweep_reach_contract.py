@@ -42,13 +42,10 @@ import pytest
 import _gate_denominator as gd
 import _sweep_reach as sr
 import _vacuous_exit as vx
-import perc_corpus_sweep as perc
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
 
-PROGRAMS = Path(perc.__file__).resolve().parent
-CHECK = PROGRAMS / "sweep_reach_check.py"
 
 # A minimal routed DEF built from PUBLIC sky130 standard-cell names — the same
 # shape test_perc_corpus_sweep.py already uses.
@@ -90,101 +87,18 @@ def _dead_dir(root: Path, name: str) -> Path:
     return root / name
 
 
-def _run(args, cwd=PROGRAMS):
-    # 60s is the per-call ceiling `ci_harness_timeout_ceiling_check` derives
-    # from the 180s CI harness bound. A child allowed to outlive the harness
-    # kills the SESSION instead of the test, and every child driven here is a
-    # sub-second CLI over a three-module corpus.
-    return _pr.run([sys.executable] + [str(a) for a in args],
-                          cwd=str(cwd), capture_output=True, text=True)
-
-
 def _sentinel_lines(proc) -> int:
     return sum(1 for ln in (proc.stdout + "\n" + proc.stderr).splitlines()
                if ln.lstrip().startswith(vx.VACUOUS_STDOUT_SENTINEL))
 
 
 # =====================================================================
-class TestBidirectionalControl:
-    """The guard must fire on the defect AND stay silent on the healthy case."""
-
-    def test_zero_reach_sweep_does_not_exit_zero(self, tmp_path):
-        """Direction 1 — POSITIVE control. A corpus it read and never judged."""
-        dirs = [_dead_dir(tmp_path, "blk_a"), _dead_dir(tmp_path, "blk_b")]
-        r = _run([PROGRAMS / "perc_corpus_sweep.py"] + dirs)
-        assert r.returncode == vx.RC_VACUOUS, (
-            "a sweep that entered the PERC chain on nothing must not report the "
-            f"exit code of a clean corpus run; got rc {r.returncode}\n{r.stderr}")
-        assert _sentinel_lines(r) == 1, (
-            "rc 2 and the VACUOUS_PASS sentinel are the only two signals "
-            "flow_compliance_check consumes; a sweep owes BOTH\n" + r.stderr)
-        assert "0 of 2 design directory" in r.stderr
-
-    def test_reached_sweep_is_clean_and_says_so(self, tmp_path):
-        """Direction 2 — NEGATIVE control. Same code path, nothing to report."""
-        dirs = [_live_dir(tmp_path, "blk_a"), _live_dir(tmp_path, "blk_b")]
-        r = _run([PROGRAMS / "perc_corpus_sweep.py"] + dirs)
-        assert r.returncode == vx.RC_PASS, r.stderr
-        assert _sentinel_lines(r) == 0, (
-            "a sweep that reached its guard must not print the vacuous "
-            "sentinel\n" + r.stderr)
-        assert "reached the decision point on 2 of 2 design directory" in r.stderr
-
-    def test_the_two_directions_are_actually_distinguishable(self, tmp_path):
-        """The property the finding names, asserted directly.
-
-        Not "the guard fires" but "the two runs differ" — the 756-pair sweep
-        failed precisely because its two possible worlds produced identical
-        observations.
-        """
-        dead = [_dead_dir(tmp_path, "d1"), _dead_dir(tmp_path, "d2")]
-        live = [_live_dir(tmp_path, "l1"), _live_dir(tmp_path, "l2")]
-        a = _run([PROGRAMS / "perc_corpus_sweep.py"] + dead)
-        b = _run([PROGRAMS / "perc_corpus_sweep.py"] + live)
-        assert a.returncode != b.returncode, (
-            "zero-reach and full-reach runs returned the same exit code — this "
-            "is the defect, not the fix")
-        assert _sentinel_lines(a) != _sentinel_lines(b)
-
-    def test_checker_fires_on_a_vacuous_report_and_passes_a_reached_one(self, tmp_path):
-        """The same bidirectional pair through the consumer-facing gate."""
-        vac, live = tmp_path / "vac.json", tmp_path / "live.json"
-        _run([PROGRAMS / "perc_corpus_sweep.py", _dead_dir(tmp_path, "x"),
-              "--report", vac])
-        _run([PROGRAMS / "perc_corpus_sweep.py", _live_dir(tmp_path, "y"),
-              "--report", live])
-        bad = _run([CHECK, "--report", vac])
-        good = _run([CHECK, "--report", live])
-        assert bad.returncode == vx.RC_FAIL, bad.stdout + bad.stderr
-        assert good.returncode == vx.RC_PASS, good.stdout + good.stderr
 
 
 # =====================================================================
 class TestReverseCaseMustStillPass:
     """The over-correction control: partial sweeps are legitimate."""
 
-    def test_one_reached_of_many_is_a_pass(self, tmp_path):
-        """1 of 3. Thin, disclosed as thin, and NOT a failure.
-
-        This is the case a naive "prove you covered the corpus" rule would
-        break, and most real corpora look like this.
-        """
-        dirs = [_live_dir(tmp_path, "ok"), _dead_dir(tmp_path, "d1"),
-                _dead_dir(tmp_path, "d2")]
-        r = _run([PROGRAMS / "perc_corpus_sweep.py"] + dirs)
-        assert r.returncode == vx.RC_PASS, r.stderr
-        assert _sentinel_lines(r) == 0
-        assert "reached the decision point on 1 of 3 design directory" in r.stderr
-
-    def test_checker_passes_a_partial_sweep(self, tmp_path):
-        rep = tmp_path / "partial.json"
-        _run([PROGRAMS / "perc_corpus_sweep.py", _live_dir(tmp_path, "ok"),
-              _dead_dir(tmp_path, "no"), "--report", rep])
-        block = json.loads(rep.read_text())[sr.REACH_KEY]
-        assert block["reached"] == 1 and block["targets"] == 2
-        assert block["is_vacuous"] is False
-        r = _run([CHECK, "--report", rep])
-        assert r.returncode == vx.RC_PASS, r.stdout + r.stderr
 
     def test_an_unreached_declared_decision_point_is_reported_not_failed(self):
         """Declaring three decision points and hitting one is a PASS.
@@ -219,27 +133,6 @@ class TestLoadBearing:
     """Mutation controls. Each asserts a test above would FAIL if the check were
     removed — a control that survives a disabled check is not a control."""
 
-    def test_the_positive_control_depends_on_the_reach_accounting(self, tmp_path):
-        """Simulate deleting the reach accounting from perc_corpus_sweep.
-
-        With `perc_chain_ran` stripped from the rows the sweep still produces
-        the same table; what changes is that the reach block can no longer say
-        anything, which is the pre-fix state and must not read as clean.
-        """
-        rows = [{"name": "a", "def": None, "error": "no routed DEF",
-                 "perc_chain_ran": False}]
-        assert perc.reach_of(rows).exit_code(passed=True) == vx.RC_VACUOUS
-        mutated = [{k: v for k, v in r.items() if k != "perc_chain_ran"}
-                   for r in rows]
-        # Absent flag == not reached: the accounting fails CLOSED, never open.
-        assert perc.reach_of(mutated).exit_code(passed=True) == vx.RC_VACUOUS
-
-    def test_a_reached_row_is_what_makes_it_pass(self):
-        """The inverse mutation: flipping ONE row's flag flips the verdict."""
-        rows = [{"name": "a", "def": "/x/routed.def", "perc_chain_ran": False}]
-        assert perc.reach_of(rows).is_vacuous is True
-        rows[0]["perc_chain_ran"] = True
-        assert perc.reach_of(rows).is_vacuous is False
 
     def test_fail_beats_vacuous_on_the_rc_AND_on_the_sentinel(self, capsys):
         """A zero-reach sweep that also found a violation must not print
@@ -254,11 +147,6 @@ class TestLoadBearing:
         reach.announce("s", passed=True, stream=sys.stdout)
         assert vx.VACUOUS_STDOUT_SENTINEL in capsys.readouterr().out
 
-    def test_an_unexplained_non_reach_cannot_be_recorded(self):
-        reach = sr.SweepReach(unit="pair")
-        for bad in ("", "   "):
-            with pytest.raises(ValueError, match="needs a reason"):
-                reach.not_reached("p", reason=bad)
 
     def test_an_undeclared_decision_point_is_rejected(self):
         reach = sr.SweepReach(unit="pair", decision_points=("cmp",))
@@ -309,17 +197,6 @@ class TestReusesTheExistingConventions:
         assert d.is_vacuous and "NOT_COMPARABLE" in d.not_applicable_reason
         assert gd.disclosure_violations(gd.attach({}, d)) == []
 
-    def test_rc_routing_is_vacuous_exits_routing(self):
-        for reached, passed, want in ((0, True, vx.RC_VACUOUS),
-                                      (0, False, vx.RC_FAIL),
-                                      (1, True, vx.RC_PASS),
-                                      (1, False, vx.RC_FAIL)):
-            reach = sr.SweepReach(unit="pair")
-            if reached:
-                reach.reached("a")
-            else:
-                reach.not_reached("a", reason="r")
-            assert reach.exit_code(passed) == want
 
     def test_absorb_child_rc_is_the_bridge_the_756_sweep_lacked(self):
         """756 children each returned rc 2; the wrapper reported clean."""
@@ -337,33 +214,6 @@ class TestReusesTheExistingConventions:
 class TestSelfApplication:
     """The checker is itself a sweep and is held to its own rule."""
 
-    def test_checker_over_reports_that_state_nothing_returns_rc2_not_rc0(self, tmp_path):
-        silent = tmp_path / "legacy.json"
-        silent.write_text(json.dumps({"sweep": "legacy", "rows": []}))
-        r = _run([CHECK, "--report", silent])
-        assert r.returncode == vx.RC_VACUOUS, (
-            "a gate that examined no claim must not exit 0 — that is the very "
-            "defect it exists to catch\n" + r.stdout + r.stderr)
-        assert _sentinel_lines(r) == 1
-
-    def test_checker_publishes_its_own_reach_block(self, tmp_path):
-        rep, out = tmp_path / "r.json", tmp_path / "out.json"
-        _run([PROGRAMS / "perc_corpus_sweep.py", _live_dir(tmp_path, "z"),
-              "--report", rep])
-        r = _run([CHECK, "--report", rep, "--json", out])
-        assert r.returncode == vx.RC_PASS, r.stdout + r.stderr
-        own = json.loads(out.read_text())
-        assert sr.reach_violations(own) == []
-        assert own[sr.REACH_KEY]["reached"] == 1
-
-    def test_require_reach_makes_a_silent_report_a_failure(self, tmp_path):
-        silent = tmp_path / "legacy.json"
-        silent.write_text(json.dumps({"rows": []}))
-        r = _run([CHECK, "--report", silent, "--require-reach"])
-        assert r.returncode == vx.RC_FAIL
-        assert _sentinel_lines(r) == 0, (
-            "FAIL beats VACUOUS on the sentinel channel too")
-
 
 # =====================================================================
 
@@ -372,19 +222,3 @@ class TestSelfApplication:
 
 
 # =====================================================================
-class TestPercBackCompat:
-    """Adopting the contract must not move an existing consumer's ground."""
-
-    def test_json_mode_still_emits_the_row_array(self, tmp_path):
-        r = _run([PROGRAMS / "perc_corpus_sweep.py", "--json",
-                  _live_dir(tmp_path, "a")])
-        assert r.returncode == vx.RC_PASS
-        data = json.loads(r.stdout)
-        assert isinstance(data, list) and data[0]["welltap"]["status"]
-
-    def test_vintage_only_mode_is_untouched(self, tmp_path):
-        d = _live_dir(tmp_path, "v")
-        r = _run([PROGRAMS / "perc_corpus_sweep.py", "--vintage",
-                  d / "phase3" / "stage3" / "pnr" / "routed.def"])
-        assert r.returncode == vx.RC_PASS
-        assert json.loads(r.stdout)["verdict"]

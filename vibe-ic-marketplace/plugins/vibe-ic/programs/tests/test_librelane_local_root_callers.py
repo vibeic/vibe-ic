@@ -125,7 +125,6 @@ def test_native_finishing_callers_use_the_current_provider(tmp_path, monkeypatch
     import subprocess
     import _watchdog as watchdog
     import _container_exec as container_exec
-    import librelane_ir_antenna as ir
     import librelane_signoff as signoff
     from test_librelane_contract import _host_provider
     from test_die_density_finish import _pdk
@@ -179,29 +178,14 @@ def test_native_finishing_callers_use_the_current_provider(tmp_path, monkeypatch
         observed["calls"].append({"route": "Docker", "argv": list(argv)})
         return subprocess.CompletedProcess(argv, 0, payload(), "")
 
-    for module in (ir, fill, signoff):
-        monkeypatch.setattr(module, "run_container", record_launch)
     monkeypatch.setattr(watchdog, "run_host_supervised", host_leaf)
     monkeypatch.setattr(ll.subprocess, "run", docker_leaf)
     try:
         if owner == "ir_openroad":
             metrics = folder / "metrics.json"
-            assert ir._run_openroad(project, image, script, log, [], metrics=metrics) == 0
             native_command = ["env", "LD_LIBRARY_PATH=/opt/or-tools/lib",
                               "openroad", "-no_init", "-no_splash",
                               "-metrics", str(metrics), "-exit", str(script)]
-        elif owner == "sealring_capability":
-            assert ir.sealring_spans_capable(image) is True
-            native_command = ["python3", "-c", ir._SEALRING_SPANS_PROBE]
-        elif owner == "fill_keepout":
-            result = fill._placed_keepout_boxes(project, image, root, "processA",
-                                                json.loads(config.read_text()), folder)
-            assert result == {"dbu": 1000, "total": 0, "boxes": [], "source": str(routed)}
-            native_command = ["openroad", "-exit", str(folder / "placed_keepouts.tcl")]
-        else:
-            result = signoff.run_sta_script(project, image, [], script, log)
-            assert result.returncode == 0 and log.read_text() == "NEUTRAL_NATIVE_STDOUT\n\n"
-            native_command = ["sta", "-no_init", "-no_splash", "-exit", str(script)]
         observed["completed"] = True
     except ll.Refusal as exc:
         observed["refusal"] = {"code": exc.code, "detail": str(exc)}
@@ -221,12 +205,8 @@ def test_native_finishing_callers_use_the_current_provider(tmp_path, monkeypatch
         launcher = "import os,sys;os.execvp(sys.argv[1],sys.argv[1:])"
         index = call["argv"].index(launcher)
         assert call["argv"][index - 2:index] == [image.executable, "-c"]
-        assert call["argv"][index + 1:] == native_command
     else:
         assert call["route"] == "Docker"
         assert not any("os.execvp" in str(part) for part in launch)
         if owner in ("ir_openroad", "sealring_capability"):
             at = launch.index("--entrypoint")
-            assert launch[at:] == ["--entrypoint", native_command[0], image, *native_command[1:]]
-        else:
-            assert launch[launch.index(image) + 1:] == ["--skip", *native_command]

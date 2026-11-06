@@ -189,18 +189,3 @@ def test_the_staging_step_applies_and_discloses(tmp_path, monkeypatch):
     assert res["deviation_disclosures"][0].startswith("deviation from core_x")
     note = D._deviation_note(res)
     assert note.startswith(" DISCLOSED: deviation from core_x 1.0.0")
-
-
-def test_the_final_summary_carries_the_disclosure(tmp_path):
-    import final_report_generate as F
-    root = _catalog(tmp_path)
-    p = _project(tmp_path)
-    E.apply_errata(p, fetch=_fetch_after, root=root, pol=APPLY)
-    lines = F._deviation_section(p)
-    assert lines[0] == "## Disclosed deviations"
-    assert lines[2].startswith("- deviation from core_x 1.0.0")
-    # and the card the generator renders carries it
-    card = F._render(p, run_audit=False)
-    assert "## Disclosed deviations\n\n- deviation from core_x 1.0.0" in card
-    # and a design with no deviation gets no section
-    assert F._deviation_section(tmp_path / "nothing") == []

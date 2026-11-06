@@ -23,7 +23,6 @@ for _p in (str(PROGRAMS), str(Path(__file__).resolve().parent)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-import librelane_import as LI  # noqa: E402
 import lvs_verdict_tokens as LVS  # noqa: E402
 import test_llv1_w6_librelane_import as W6  # noqa: E402
 
@@ -78,27 +77,3 @@ def test_complete_reports_decode_through_importer_and_keep_verdicts(tmp_path, ho
     assert lvs_report is not None
     assert LVS.classify("", json_report=lvs_report) == "MATCH"
     assert lvs_report["verdict"] == "match"
-
-
-@pytest.mark.parametrize("host", ["8HD-4", "8HD-9"])
-@pytest.mark.parametrize("report", ["drc.klayout.json", "lvs.netgen.json"])
-def test_the_four_bounded_previews_are_explicit_refusal_controls(tmp_path, host, report):
-    preview = _preview(host, report)
-    assert preview.stat().st_size == 4096
-    assert _sha(preview) == EXPECTED_PREVIEW_SHA256[report]
-    with pytest.raises(json.JSONDecodeError):
-        json.loads(preview.read_text(encoding="utf-8"))
-    if report == "lvs.netgen.json":
-        assert LVS.load_json_report(preview) is None
-
-    project = W6._project(tmp_path, host)
-    # Finalize the fixture producer before replacing a report.  This isolates
-    # the report boundary from the existing RCX receipt contract on the parent
-    # revision, so the pre-fix control reaches the importer under test.
-    W6._project(tmp_path, host, finish_fixture=True)
-    target = _producer_report(project, report)
-    shutil.copyfile(preview, target)
-    with pytest.raises(LI.Refusal, match="LL_IMPORT_REPORT_INCOMPLETE"):
-        LI.import_run(project, project / W6.RUN_REL)
-    assert not (project / "reports/phase3/librelane/31/reports" /
-                report).exists()

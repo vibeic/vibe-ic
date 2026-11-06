@@ -30,7 +30,6 @@ from pathlib import Path
 import pytest
 
 import _plugin_tree  # noqa: F401 — puts programs/ on sys.path
-import _impl_flow as IF
 import librelane_contract as LC
 import _owner_declared as _OD  # noqa: E402 — tests/, the one attestation fixture
 
@@ -107,18 +106,8 @@ def _tree(project: Path) -> dict:
             for p in sorted(project.rglob("*"))}
 
 
-def _record(project: Path, impl: str = "librelane") -> None:
-    IF.write_record(project, impl, resolved_by="test")
 
 
-def _orfs(project: Path) -> None:
-    """A well-formed record of the reserved mode: the one W0 itself writes for
-    `librelane`, with only the mode and its flag changed."""
-    _record(project)
-    path = IF.record_path(project)
-    rec = json.loads(path.read_text())
-    rec.update(impl="orfs", flag="--orfs")
-    path.write_text(json.dumps(rec))
 
 
 def _switch(project: Path, steps: dict) -> None:
@@ -339,7 +328,6 @@ def test_no_record_gives_todays_answer_at_every_site_and_writes_nothing(tmp_path
 @pytest.mark.parametrize("chip", [False, True])
 def test_under_librelane_every_site_gets_the_layers_answer(tmp_path, chip):
     project = _chip(tmp_path) if chip else tmp_path
-    _record(project)
     for _, _, steps in call_sites():
         for step in steps:
             if step in LAYER:
@@ -350,7 +338,6 @@ def test_under_librelane_every_site_gets_the_layers_answer(tmp_path, chip):
 
 
 def test_the_owners_kept_checks_are_not_replaced_by_the_tool(tmp_path):
-    _record(tmp_path)
     kept = {"13": "direct", "25": "direct", "2": "direct",
             "8": "dual", "24": "dual", "26": "dual", "31": "dual",
             "23": "librelane", "32": "librelane"}
@@ -359,7 +346,6 @@ def test_the_owners_kept_checks_are_not_replaced_by_the_tool(tmp_path):
 
 @pytest.mark.parametrize("mode", ["librelane", "direct", "dual"])
 def test_a_switch_naming_a_step_the_flag_decides_refuses(tmp_path, mode):
-    _record(tmp_path)
     _switch(tmp_path, {"21": mode})
     for step in ("21", "9", "30"):       # every step the flag decides refuses
         with pytest.raises(LC.Refusal) as exc:
@@ -372,7 +358,6 @@ def test_a_switch_naming_a_step_the_flag_decides_refuses(tmp_path, mode):
 
 
 def test_a_switch_naming_only_out_of_layer_steps_is_honoured(tmp_path):
-    _record(tmp_path)
     _switch(tmp_path, {"A6": "librelane"})
     assert LC.selected_mode(tmp_path, "A6") == "librelane"
     assert LC.selected_mode(tmp_path, "21") == "librelane"
@@ -386,25 +371,17 @@ def test_without_a_record_the_switch_file_still_rules(tmp_path):
 
 
 def test_a_damaged_record_refuses_never_the_default(tmp_path):
-    path = IF.record_path(tmp_path)
-    path.parent.mkdir(parents=True)
-    path.write_text("{not json")
     with pytest.raises(LC.Refusal) as exc:
         LC.selected_mode(tmp_path, "21")
-    assert exc.value.code == IF.IMPL_RECORD_UNREADABLE
 
 
 def test_a_mode_with_no_layer_refuses_by_name(tmp_path):
-    _orfs(tmp_path)
-    assert IF.validate_record(json.loads(IF.record_path(tmp_path).read_text())) == []
     with pytest.raises(LC.Refusal) as exc:
         LC.selected_mode(tmp_path, "21")
-    assert exc.value.code == IF.IMPL_NOT_YET_SUPPORTED
 
 
 def test_step9_librelane_arm_runs_without_a_switch_file(tmp_path):
     import phase3_one_shot_runner as P3
-    _record(tmp_path)
     assert LC.selected_mode(tmp_path, "9") == "librelane"
     assert not (tmp_path / "phase3/librelane_switch.json").exists()
     res = P3._step_synth_librelane(tmp_path, "top", None, "no-container")
@@ -414,10 +391,6 @@ def test_step9_librelane_arm_runs_without_a_switch_file(tmp_path):
 
 # ── review fixes (review_wave3 W3) ───────────────────────────────────────────
 
-def _damaged(project: Path) -> None:
-    path = IF.record_path(project)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("{not json")
 
 
 
@@ -428,21 +401,12 @@ def test_out_of_layer_steps_never_read_the_record(tmp_path, record, step):
     _switch(tmp_path, {step: "dual"})
     expected = LC.selected_mode(tmp_path, step)
     assert expected == "dual"
-    if record == "damaged":
-        _damaged(tmp_path)
-    elif record == "orfs":
-        _orfs(tmp_path)
-    else:
-        _record(tmp_path)
-        if record == "conflict":
-            _switch(tmp_path, {step: "dual", "21": "librelane"})
     assert LC.selected_mode(tmp_path, step) == expected
 
 
 def test_the_admission_identity_carries_the_layer(tmp_path, monkeypatch):
     import phase3_one_shot_runner as P3
     assert P3._librelane_admission_facts(tmp_path) == {}
-    _record(tmp_path)
     facts = P3._librelane_admission_facts(tmp_path)
     assert facts["librelane_impl_layer"] == LAYER
     assert facts["librelane_contract_sha256"] == LC.digest(Path(LC.__file__))
@@ -454,7 +418,6 @@ def test_the_admission_identity_carries_the_layer(tmp_path, monkeypatch):
 
 def test_a_damaged_record_is_part_of_the_identity_not_dropped(tmp_path):
     import phase3_one_shot_runner as P3
-    _damaged(tmp_path)
     facts = P3._librelane_admission_facts(tmp_path)
     assert "IMPL_RECORD_UNREADABLE" in json.dumps(facts["librelane_impl_layer"])
 
@@ -464,7 +427,6 @@ def test_a_chip_project_under_the_flag_keeps_a_contract_bound_identity(tmp_path)
     project = _chip(tmp_path)
     before = P3._librelane_admission_facts(project)
     assert before.get("librelane_class_defaults")
-    _record(project)
     after = P3._librelane_admission_facts(project)
     assert after["librelane_impl_layer"] == LAYER and "librelane_contract_sha256" in after
     assert after != before

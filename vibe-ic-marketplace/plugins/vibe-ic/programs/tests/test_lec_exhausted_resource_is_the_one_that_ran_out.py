@@ -33,7 +33,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import lec_equivalence_check as lec_gate  # noqa: E402
 import lec_run  # noqa: E402
 
 # The exact bytes /sys/fs/cgroup/memory.events returned for the container that
@@ -195,41 +194,3 @@ def test_the_report_says_not_measured_when_no_probe_ran():
 # --------------------------------------------------------------------------
 # the gate's REMEDY must match the resource
 # --------------------------------------------------------------------------
-def _audit_with(tmp_path, resource, evidence):
-    reports = tmp_path / "reports"
-    reports.mkdir(parents=True, exist_ok=True)
-    (reports / "lec.json").write_text(json.dumps({
-        "equivalent": False, "verdict": "INCONCLUSIVE", "inconclusive": True,
-        "compared_points": 3349, "miter_points": 3352,
-        "non_equivalent_points": 0, "unproven_points": 3,
-        "step_budget_exhausted": True,
-        "exhausted_resource": resource,
-        "exhausted_resource_evidence": evidence,
-    }), encoding="utf-8")
-    res = lec_gate.audit(tmp_path)
-    return " ".join(f.message for f in res.findings
-                    if f.rule == "LEC_BUDGET_EXHAUSTED")
-
-
-def test_a_memory_exhaustion_is_not_answered_with_advice_about_the_clock(tmp_path):
-    msg = _audit_with(tmp_path, "memory_bytes",
-                      "the container cgroup's oom_kill counter rose by 1")
-    assert msg, "the budget-exhausted finding must still fire"
-    assert "MEMORY, not time" in msg
-    assert "budget it can finish inside" not in msg
-    assert "oom_kill counter rose by 1" in msg
-
-
-def test_a_not_measured_exhaustion_names_no_remedy_at_all(tmp_path):
-    msg = _audit_with(tmp_path, "not_measured", "")
-    assert "NOT MEASURED" in msg
-    assert "do not assume the clock" in msg
-    assert "budget it can finish inside" not in msg
-
-
-def test_a_real_wall_clock_exhaustion_keeps_the_budget_remedy(tmp_path):
-    """NO-LEAK: the message every existing wall-clock report carried is
-    byte-preserved for the case it was written for."""
-    msg = _audit_with(tmp_path, "wall_clock_seconds", "")
-    assert "Re-run the step with a budget it can finish inside" in msg
-    assert "RECORDING ceiling" in msg

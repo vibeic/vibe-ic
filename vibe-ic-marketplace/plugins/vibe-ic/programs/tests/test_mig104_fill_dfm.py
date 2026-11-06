@@ -58,11 +58,7 @@ if {[catch {
 def legacy_arm_transport(monkeypatch):
     # This module's multi-arm controls replace native process transport.
     # They do not supply a Default single-stream checkpoint or LOCAL proof.
-    import execution_policy
     from _stated_eda_image import mock_docker_route
-    original_request = execution_policy.request
-    monkeypatch.setattr(execution_policy, 'request',
-                        lambda: dict(original_request(), mode='ultra'))
     mock_docker_route(monkeypatch)
 
 

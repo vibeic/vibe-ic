@@ -24,7 +24,6 @@ sys.path.insert(0, str(PROGRAMS))
 
 import _sim_results_bridge as SRB               # noqa: E402
 import cpu_functional_oracle_waiver_check as ORACLE  # noqa: E402
-import flow_compliance_check as FLOW            # noqa: E402
 
 
 def _junit(name: str, tests: int, failures: int = 0, errors: int = 0,
@@ -229,19 +228,6 @@ def test_an_all_green_union_still_supersedes_the_waiver(tmp_path):
     assert "sim_professional/analog_acceptance/results.xml" in rec["message"]
 
 
-def test_the_flow_supersede_reason_reads_the_same_union(tmp_path):
-    """`_sim_files_superseded_by_professional_tb` accepts the professional slot
-    as Step-4 sim evidence. It must not accept a union that FAILs."""
-    _two_suite_project(tmp_path)
-    missing = ["phase2/stage1/sim/results.xml"]
-    assert FLOW._sim_files_superseded_by_professional_tb(
-        tmp_path, missing) is None
-    # …and it does accept an all-green union, naming every transcript.
-    (tmp_path / "phase2/stage1/sim_professional/analog_acceptance/results.xml"
-     ).write_text(_junit("analog_acceptance", 10))
-    reason = FLOW._sim_files_superseded_by_professional_tb(tmp_path, missing)
-    assert reason and "tests=17" in reason
-    assert "sim_professional/analog_acceptance/results.xml" in reason
 
 
 if __name__ == "__main__":

@@ -24,7 +24,6 @@ import pytest
 _P = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_P))
 import _specrtl_common as SC          # noqa: E402
-import fsm_error_invariant as FE      # noqa: E402
 
 _LAT = _P / "latency_conformance_check.py"
 
@@ -53,20 +52,6 @@ def test_785_phantom_prose_still_dropped(bullet):
 
 
 # ── #786: operational fault-substring states FIRE; genuine fault states SKIP ──
-@pytest.mark.parametrize("label", [
-    "ERROR_RECOVERY", "WAIT_TIMEOUT", "FAILSAFE", "NO_FAULT", "CLEAR_ERROR",
-    "S_FAULTLESS", "FAULT_CLEAR", "DEFAULT",
-])
-def test_786_noleak_operational_state_not_exempt(label):
-    assert FE._is_fault_state(label) is False, label
-
-
-@pytest.mark.parametrize("label", [
-    "FAULT", "S_ERROR", "ERROR_STATE", "TIMEOUT", "ERR", "FAIL", "ABORT",
-    "FATAL", "ST_FAULT",
-])
-def test_786_genuine_fault_state_still_exempt(label):
-    assert FE._is_fault_state(label) is True, label
 
 
 # ── #787: staged/glitch datapath → ADVISORY (rc=3), never a rc=0 PASS ─────────

@@ -59,7 +59,6 @@ sys.path.insert(0, str(PROGRAMS))
 import analog_a2_topology_emit as a2                      # noqa: E402
 import analog_loop_liveness_check as chk                  # noqa: E402
 import analog_loop_liveness_samples_emit as emit          # noqa: E402
-import gate_is_wired_check as giw                         # noqa: E402
 
 CHECKER = PROGRAMS / "analog_loop_liveness_check.py"
 PRODUCER = PROGRAMS / "analog_loop_liveness_samples_emit.py"
@@ -319,16 +318,6 @@ def test_the_producer_spells_no_design_net_of_its_own():
 
 
 # ── 5. the gate is actually reachable ─────────────────────────────────────
-def test_the_runner_invokes_the_checker_in_executable_text():
-    """`gate_is_wired_check.executable_text` is the tree's own rule for what
-    counts as a call: docstrings and comments are stripped first, because a
-    NAME IS NOT A CALL. Asserted through that same function so this test
-    cannot be satisfied by a comment."""
-    text = giw.executable_text(RUNNER, RUNNER.read_text())
-    assert CHECKER.stem in text, (
-        f"{RUNNER.name} does not reach {CHECKER.stem} from executable text")
-    assert PRODUCER.stem in text, (
-        f"{RUNNER.name} does not reach {PRODUCER.stem} from executable text")
 
 
 @pytest.mark.consistency

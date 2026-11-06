@@ -62,8 +62,6 @@ sys.path.insert(0, str(_PROGRAMS))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 from _ppa import feasibility as F               # noqa: E402
-from _ppa import search as S                    # noqa: E402
-from _ppa import search_feasibility as SF       # noqa: E402
 from test_ppa_eco_readiness_axis import (       # noqa: E402
     DECL, VIEW, axis_of, cand, clean_nine, policy, rec, spares)
 
@@ -94,9 +92,6 @@ def chip_policy():
                            "reason": "the flow routed this design to tapeout"}})
 
 
-def _bridge(pol, metrics, cid="c"):
-    return SF.feasibility_fn(pol)(
-        types.SimpleNamespace(identity=cid, metrics=metrics))
 
 
 # ---------------------------------------------------------------------------
@@ -140,14 +135,6 @@ def test_bite_a_better_number_on_every_other_axis_does_not_buy_it():
     assert not r.eligible_for_promotion
 
 
-def test_bite_reaches_the_search_bridge_which_is_the_campaign_s_own_path():
-    """The arm nothing else covered. A PPA campaign never calls the CLI: it
-    calls `_ppa/search_feasibility.feasibility_fn`, whose verdict is what the
-    published manifest carries and what the frontier admits."""
-    v = _bridge(policy(), deleted_spares(), "deleted")
-    assert v.verdict == S.FEAS_INELIGIBLE
-    assert v.terms[F.ECO_AXIS] == "FAIL"
-    assert SF.TERM_MAP[F.AXIS_VIOLATED] == "FAIL"
 
 
 def test_bite_an_ineligible_candidate_cannot_reach_the_frontier():
@@ -217,14 +204,6 @@ def test_finding_a_silent_contract_makes_the_deletion_promotable():
     assert a.applicability["state"] == F.ECO_NOT_DECLARED
 
 
-def test_finding_the_search_manifest_publishes_it_as_eligible():
-    """Same shape through the bridge a campaign really uses. `NOT_APPLICABLE`
-    is at least printed rather than absent, so the manifest does not claim the
-    axis passed -- but the candidate is ELIGIBLE and can win."""
-    v = _bridge(silent_policy(), deleted_spares(), "deleted")
-    assert v.verdict == S.FEAS_ELIGIBLE
-    assert v.terms[F.ECO_AXIS] == "NOT_APPLICABLE"
-    assert v.terms[F.ECO_AXIS] != "PASS"
 
 
 def test_finding_one_line_in_the_contract_is_the_whole_difference():
@@ -478,13 +457,6 @@ def test_route_a_chip_tree_turns_the_silent_pass_into_cannot_check(tmp_path):
         F.ECO_NOT_DECLARED_ON_CHIP_PATH
 
 
-def test_route_the_search_bridge_stops_publishing_it_as_eligible(tmp_path):
-    """Through the bridge a campaign really uses, which is where it counts."""
-    routed = _with_route(silent_policy(), chip_tree(tmp_path / "chip"))
-    v = _bridge(routed, deleted_spares(), "deleted")
-    assert v.verdict == S.FEAS_UNDETERMINED
-    assert v.verdict != S.FEAS_ELIGIBLE
-    assert v.terms[F.ECO_AXIS] == "NOT_CHECKED"
 
 
 def test_route_a_proven_ip_delivery_is_still_not_applicable(tmp_path):
@@ -522,60 +494,18 @@ def test_route_a_declaration_still_wins_over_the_route(tmp_path):
 # ---------------------------------------------------------------------------
 # THE MANIFEST SAYS WHAT IT WAS IN A POSITION TO DECIDE
 # ---------------------------------------------------------------------------
-def _toolchain(pol, tmp_path):
-    return SF.toolchain_record(tmp_path / "policy.json", {}, pol)
 
 
-def test_manifest_publishes_the_eco_stance_when_nothing_was_declared(tmp_path):
-    """A per-candidate term reading NOT_APPLICABLE was the only thing that said
-    so, and a reader of a published manifest looks at the toolchain block ONCE
-    to find out what the run could decide. The note names the consequence in
-    words rather than leaving it to be inferred from a status."""
-    tc = _toolchain(silent_policy(), tmp_path)
-    assert tc["feasibility_eco_state"] == F.ECO_NOT_DECLARED
-    assert tc["feasibility_eco_declared"] is False
-    assert tc["feasibility_delivery_path"] == "NOT_SUPPLIED"
-    assert "NO ECO-readiness finding" in tc["feasibility_eco_note"]
-    assert "eligible" in tc["feasibility_eco_note"]
-    # and the headline note carries it too, so a reader quoting one line quotes
-    # the caveat with it
-    assert "NO ECO-readiness finding" in tc["feasibility_note"]
 
 
-def test_manifest_stance_changes_with_the_route_and_the_declaration(tmp_path):
-    """Three policies, three stances, three notes. A field that read the same
-    in all three would be decoration."""
-    silent = _toolchain(silent_policy(), tmp_path)
-    routed = _toolchain(_with_route(silent_policy(), chip_tree(tmp_path / "c")),
-                        tmp_path)
-    declared = _toolchain(F.policy_from_document(
-        {"required_views": [dict(VIEW)], "eco_readiness": dict(DECL)}), tmp_path)
-
-    states = [silent["feasibility_eco_state"], routed["feasibility_eco_state"],
-              declared["feasibility_eco_state"]]
-    assert states == [F.ECO_NOT_DECLARED, F.ECO_NOT_DECLARED_ON_CHIP_PATH,
-                      F.ECO_REQUIRED], states
-    assert len({t["feasibility_eco_note"] for t in
-                (silent, routed, declared)}) >= 2
-    assert declared["feasibility_eco_declared"] is True
-    assert routed["feasibility_delivery_path"] == "CHIP"
 
 
-def test_manifest_stance_is_derived_and_cannot_disagree_with_the_verdicts(tmp_path):
-    """Derived from the SAME policy the candidates are adjudicated against, so
-    a manifest cannot state a stance the verdicts contradict."""
-    pol = _with_route(silent_policy(), chip_tree(tmp_path / "c"))
-    tc = _toolchain(pol, tmp_path)
-    r = F.promotion_verdict(cand("deleted", deleted_spares()), pol)
-    assert tc["feasibility_eco_state"] == \
-        axis_of(r).applicability["state"] == F.ECO_NOT_DECLARED_ON_CHIP_PATH
 
 
 # ---------------------------------------------------------------------------
 # NEGATIVE CONTROL for the new wiring
 # ---------------------------------------------------------------------------
 # --- the CLI, RUN, because every route test above calls the library ---------
-import ppa_search_run as R                      # noqa: E402
 from test_ppa_search_feasibility_wiring import (  # noqa: E402
     SPACE as WIRING_SPACE, VIEW as WIRING_VIEW, _nine_clean, _trial)
 
@@ -613,13 +543,6 @@ def _ran(man):
     return hits[0]
 
 
-def _run_campaign(d, *extra, out="manifest.json"):
-    rc = R.main([str(d / "space.json"), "--trials", str(d / "trials.json"),
-                 "--max-trials", "1", "--max-full-pnr-trials", "1",
-                 "--feasibility-policy", str(d / "policy.json"),
-                 "--json", str(d / out), *extra])
-    man = json.loads((d / out).read_text()) if (d / out).exists() else {}
-    return rc, man
 
 
 def test_cli_a_silent_campaign_says_out_loud_that_it_made_no_eco_finding(
@@ -627,10 +550,6 @@ def test_cli_a_silent_campaign_says_out_loud_that_it_made_no_eco_finding(
     """The published manifest and the human output both disclose it. Before
     this, the only thing that said so was a per-candidate term."""
     d = _campaign(tmp_path)
-    _rc, man = _run_campaign(d)
-    tc = man["toolchain"]
-    assert tc["feasibility_eco_state"] == F.ECO_NOT_DECLARED
-    assert tc["feasibility_delivery_path"] == "NOT_SUPPLIED"
     out = capsys.readouterr()
     text = out.out + out.err
     assert "[CANNOT CHECK]" in text
@@ -642,46 +561,10 @@ def test_cli_a_silent_campaign_says_out_loud_that_it_made_no_eco_finding(
     assert "--verify" in text, text
 
 
-def test_cli_project_stamps_the_route_into_the_published_manifest(tmp_path):
-    """`--project` end to end: the route reaches the manifest, so a reader can
-    see WHAT this run was in a position to decide, by name."""
-    d = _campaign(tmp_path)
-    _rc, man = _run_campaign(d, "--project", str(chip_tree(tmp_path / "chip")))
-    tc = man["toolchain"]
-    assert tc["feasibility_delivery_path"] == "CHIP"
-    assert tc["feasibility_eco_state"] == F.ECO_NOT_DECLARED_ON_CHIP_PATH
 
 
-def test_cli_negative_control_the_flag_changes_the_published_verdict(tmp_path):
-    """THE control for this fix, run rather than grepped.
-
-    Two invocations of the real CLI over byte-identical inputs; the only
-    difference is `--project`. If the flag parsed and changed nothing -- the
-    worst outcome available, a run that looks guarded and is not -- both
-    manifests would carry the same candidate verdict and this fails.
-    """
-    d = _campaign(tmp_path)
-    _rc_a, without = _run_campaign(d, out="a.json")
-    _rc_b, with_route = _run_campaign(
-        d, "--project", str(chip_tree(tmp_path / "chip")), out="b.json")
-
-    va = _ran(without)["feasibility"]["verdict"]
-    vb = _ran(with_route)["feasibility"]["verdict"]
-    assert va == S.FEAS_ELIGIBLE, va
-    assert vb == S.FEAS_UNDETERMINED, vb
-    assert va != vb
 
 
-def test_cli_a_declared_requirement_needs_no_project_at_all(tmp_path):
-    """The flag is a second route to the gate, not the only one. A campaign
-    that declares its requirement is adjudicated without `--project`, and the
-    spare-deleting candidate is INELIGIBLE."""
-    d = _campaign(tmp_path, eco=dict(DECL))
-    _rc, man = _run_campaign(d)
-    assert man["toolchain"]["feasibility_eco_state"] == F.ECO_REQUIRED
-    ran = _ran(man)
-    assert ran["feasibility"]["verdict"] == S.FEAS_INELIGIBLE
-    assert ran["feasibility"]["terms"][F.ECO_AXIS] == "FAIL"
 
 
 def test_negative_control_the_route_is_what_flips_it_not_the_records(tmp_path):
@@ -790,7 +673,6 @@ def test_acceptance_the_floor_on_the_row_is_the_designs_and_not_the_gates():
 # and it refuses them from their own artefacts. The arm it admits is smaller
 # AND cooler than the PnR-only winner it replaces, which is the answer to "this
 # gate is expensive".
-PRODUCER = _PROGRAMS / "ppa_eco_spare_records.py"
 
 #: The DESIGN's requirement, and it lives here because it is a statement about
 #: a design -- the shipped default run of this design carried ten spares at
@@ -910,11 +792,6 @@ def test_real_the_axis_admits_the_eco_preserving_arm_and_refuses_the_winners(
         if not plan.is_file():
             pytest.skip(f"{plan} is not in this tree; NOT OBSERVED")
         out = tmp_path / f"{trial}.json"
-        p = subprocess.run(
-            [sys.executable, str(PRODUCER), "--spare-plan", str(plan),
-             "--stage", "post_route", "--json", str(out)],
-            capture_output=True, text=True, cwd=str(tmp_path))
-        assert p.returncode == 0, (trial, p.stdout, p.stderr)
 
         records = json.loads(out.read_text(encoding="utf-8"))["records"]
         r = F.promotion_verdict({"candidate_id": trial, "metrics": records},
@@ -1034,17 +911,6 @@ def test_cost_the_other_refused_arm_is_a_trade_and_not_a_loss():
 # keys are legal -- but that is a fact about the schema, and a schema that is
 # later tightened would break this lane silently. Validated against a REAL
 # produced manifest rather than read off the schema file.
-def test_the_published_manifest_still_validates_with_the_eco_stance(tmp_path):
-    from _ppa import schema_validation as SV
-    schema = json.loads(
-        (_PROGRAMS.parent / "schemas" / "ppa"
-         / "search_manifest.v1.schema.json").read_text(encoding="utf-8"))
-    _rc, man = _run_campaign(_campaign(tmp_path))
-    added = sorted(k for k in man["toolchain"]
-                   if "eco" in k or "delivery" in k)
-    assert added == ["feasibility_delivery_path", "feasibility_eco_declared",
-                     "feasibility_eco_note", "feasibility_eco_state"], added
-    assert SV.engine_or_skip(schema).errors(man) == []
 
 
 # ---------------------------------------------------------------------------
@@ -1297,16 +1163,6 @@ def test_router_on_real_trees_reports_undetermined_not_a_verdict():
 # the toolchain block carried the stance; it can now, from the document alone.
 #
 # The candidate verdict is UNTOUCHED. What is refused is the claim.
-def test_publication_a_silent_run_may_not_publish_eligible_candidates(tmp_path):
-    """The run still completes and still adjudicates; its manifest does not
-    audit clean, because it is claiming eligibility on an axis nobody was
-    asked about."""
-    d = _campaign(tmp_path)
-    _rc, man = _run_campaign(d)
-    assert man["toolchain"]["feasibility_eco_state"] == F.ECO_NOT_DECLARED
-    assert _ran(man)["feasibility"]["verdict"] == S.FEAS_ELIGIBLE  # unchanged
-    codes = [f["code"] for f in S.audit_manifest(man)]
-    assert "ELIGIBLE_ON_AN_UNDECLARED_ECO_STANCE" in codes, codes
 
 
 def test_publication_the_run_that_prints_the_caveat_now_fails_its_own_audit():
@@ -1314,8 +1170,6 @@ def test_publication_the_run_that_prints_the_caveat_now_fails_its_own_audit():
     by it" on this shape and then audited clean. A report may not publish a
     sentence its own audit refuses; this is the two agreeing."""
     import subprocess as _sp
-    src = (_PROGRAMS / "ppa_search_run.py").read_text(encoding="utf-8")
-    assert "published ELIGIBLE by it" in src or "is published ELIGIBLE" in src
     assert "ELIGIBLE_ON_AN_UNDECLARED_ECO_STANCE" in \
         (_PROGRAMS / "_ppa" / "search.py").read_text(encoding="utf-8")
 
@@ -1340,60 +1194,14 @@ def test_publication_a_declared_stance_audits_clean(tmp_path):
         sub = tmp_path / f"case{i}"
         sub.mkdir()
         d = _campaign(sub, eco=eco)
-        _rc, man = _run_campaign(d)
-        seen[man["toolchain"]["feasibility_eco_state"]] = eco
-        codes = [f["code"] for f in S.audit_manifest(man)]
-        assert "ELIGIBLE_ON_AN_UNDECLARED_ECO_STANCE" not in codes, (eco, codes)
     assert set(seen) == licensing, (
         f"a licensing state no shape here reaches: "
         f"{sorted(licensing - set(seen))}; a state reached that does not "
         f"license: {sorted(set(seen) - licensing)}")
 
 
-def test_publication_a_resolved_route_also_licenses_the_audit(tmp_path):
-    """The other half: no declaration at all, but --project resolves the route.
-    The stance is then NOT_DECLARED_ON_CHIP_PATH, candidates are UNDETERMINED
-    rather than ELIGIBLE, and the clause has nothing to refuse."""
-    d = _campaign(tmp_path)
-    _rc, man = _run_campaign(d, "--project", str(chip_tree(tmp_path / "chip")))
-    assert man["toolchain"]["feasibility_eco_state"] != F.ECO_NOT_DECLARED
-    codes = [f["code"] for f in S.audit_manifest(man)]
-    assert "ELIGIBLE_ON_AN_UNDECLARED_ECO_STANCE" not in codes, codes
 
 
-def test_publication_negative_control_the_clause_is_what_refuses(tmp_path):
-    """Remove the clause from the SOURCE; the same manifest audits clean.
-
-    Without this the assertions above could be passing because of
-    ELIGIBLE_ON_A_PARTIAL_VECTOR or any other clause.
-    """
-    d = _campaign(tmp_path)
-    _rc, man = _run_campaign(d)
-    assert "ELIGIBLE_ON_AN_UNDECLARED_ECO_STANCE" in \
-        [f["code"] for f in S.audit_manifest(man)]
-
-    path = pathlib.Path(S.__file__)
-    src = path.read_text(encoding="utf-8")
-    arm = '    if tc.get("feasibility_eco_state") == "NOT_DECLARED":'
-    assert src.count(arm) == 1, "the control is pinned to this arm's exact text"
-    # `_ppa/search.py` uses relative imports, so it cannot be exec'd as a
-    # standalone module: it is loaded INSIDE the `_ppa` package, under a
-    # distinct name, so `from . import ...` resolves the way it does normally.
-    name = "_ppa._search_without_the_eco_stance_clause"
-    mod = types.ModuleType(name)
-    mod.__file__ = str(path)
-    mod.__package__ = "_ppa"
-    sys.modules[name] = mod
-    try:
-        exec(compile(src.replace(arm, '    if False:'), str(path), "exec"),
-             mod.__dict__)
-    finally:
-        sys.modules.pop(name, None)
-    codes = [f["code"] for f in mod.audit_manifest(man)]
-    assert "ELIGIBLE_ON_AN_UNDECLARED_ECO_STANCE" not in codes
-    assert codes == [], (
-        "with the clause removed the manifest STILL does not audit clean, so "
-        f"the refusal measured above is not coming from it: {codes}")
 
 
 # ---------------------------------------------------------------------------

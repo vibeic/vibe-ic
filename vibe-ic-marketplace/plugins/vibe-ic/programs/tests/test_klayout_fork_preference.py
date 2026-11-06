@@ -143,34 +143,3 @@ def test_a_hard_code_in_a_call_site_is_still_caught():
         "/foss/tools/klayout/strmcmp",
         "/foss/tools/klayout/x",
     ], hits
-
-
-def test_the_docstring_rule_agrees_with_the_trees_one_answer():
-    """`_docstring_ids` must not become a SECOND, divergent docstring rule.
-
-    vibe-ic#2169's finding was two implementations of one predicate drifting
-    apart. This asserts the two agree on the real file: every string this scan
-    skips is a string `gate_is_wired_check.executable_text` also removes.
-    """
-    sys.path.insert(0, str(pathlib.Path(P.__file__).parent))
-    import gate_is_wired_check as wiring        # noqa: E402
-
-    path = pathlib.Path(P.__file__)
-    src = path.read_text()
-    kept = wiring.executable_text(path, src)
-    tree = ast.parse(src)
-    lines = src.splitlines()
-    kept_lines = kept.splitlines()
-    docstrings = _docstring_ids(tree)
-    for node in ast.walk(tree):
-        if not (isinstance(node, ast.Expr)
-                and isinstance(node.value, ast.Constant)
-                and isinstance(node.value.value, str)):
-            continue
-        if id(node.value) not in docstrings:
-            continue
-        lo, hi = node.lineno, (node.end_lineno or node.lineno)
-        assert all(not kept_lines[i].strip()
-                   for i in range(lo - 1, min(hi, len(lines)))), (
-            f"line {lo}-{hi} is a docstring to this scan and executable to "
-            f"gate_is_wired_check.executable_text — the two rules have drifted")

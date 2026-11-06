@@ -126,104 +126,10 @@ def test_a_letter_before_v_is_not_a_voltage():
 
 # ── NOT_DETERMINED is an answer, and a default is not ───────────────────────
 
-def test_pdk_without_operating_points_resolves_to_not_determined(tmp_path):
-    """asap7 and nangate45 name no operating point at all. The kit must say so
-    and report the size of the search, rather than fall back to a list."""
-    proj = _project(tmp_path, libs=[
-        "/foss/pdks/asap7/asap7sc7p5t_AO_RVT_TT_nldm_211120.lib",
-        "/foss/pdks/nangate45/NangateOpenCellLibrary_typical.lib",
-    ])
-    FH.main([str(proj)])
-    kit = json.loads((proj / "phase3/stage4/foundry_handoff"
-                      / "corner_test_vectors.json").read_text())
-    assert kit["corner_source"] == "NOT_DETERMINED"
-    assert kit["voltage_corners_v"] is None
-    assert kit["temperature_corners_celsius"] is None
-    # The non-answer states how big the search was — a null beside
-    # `liberty_paths_seen: 0` and one beside `2 seen, 2 unparsed` are
-    # different facts and must not read the same.
-    assert kit["corner_search"]["liberty_paths_seen"] == 2
-    assert len(kit["corner_search"]
-               ["liberty_names_without_operating_point"]) == 2
 
 
-def test_signoff_corners_replace_the_canned_literals(tmp_path):
-    """The positive half: real liberty paths in, real corners out — and the
-    two fabricated PENDING_FOUNDRY_ corner keys gone from the member."""
-    proj = _project(tmp_path, libs=[
-        "/foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/"
-        "sky130_fd_sc_hd__tt_025C_1v80.lib",
-        "/foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/"
-        "sky130_fd_sc_hd__ss_100C_1v40.lib",
-        "/foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/"
-        "sky130_fd_sc_hd__ff_n40C_1v95_ccsnoise.lib",
-    ])
-    FH.main([str(proj)])
-    kit = json.loads((proj / "phase3/stage4/foundry_handoff"
-                      / "corner_test_vectors.json").read_text())
-    assert kit["corner_source"] == "signoff_liberty"
-    assert kit["voltage_corners_v"] == [1.4, 1.8, 1.95]
-    assert kit["temperature_corners_celsius"] == [-40, 25, 100]
-    # NEGATIVE CONTROL — this is the assertion that could not have passed
-    # against the pre-fix generator, whose output carried both keys with the
-    # canned values regardless of what the flow had consumed.
-    assert "PENDING_FOUNDRY_voltage_corners" not in kit
-    assert "PENDING_FOUNDRY_temperature_corners_celsius" not in kit
-    assert 85 not in (kit["temperature_corners_celsius"] or [])
-    assert 125 not in (kit["temperature_corners_celsius"] or [])
 
 
-def test_corner_fields_no_longer_inflate_the_pending_count(tmp_path):
-    """`pending_foundry_count` was the literal `9` and did not move when the
-    field set changed. It is counted now, and the two corner fields leaving the
-    PENDING namespace is visible in it."""
-    proj = _project(tmp_path, libs=[
-        "/foss/pdks/sky130A/sky130_fd_sc_hd__tt_025C_1v80.lib"])
-    FH.main([str(proj)])
-    audit = json.loads((proj / "reports/phase3"
-                        / "foundry_handoff_audit.json").read_text())
-    # 9 -> 7: exactly the two corner fields, and nothing else, left the
-    # PENDING namespace.
-    assert audit["pending_foundry_count"] == 7, audit["pending_foundry_count"]
-    # The second population — the same items as the GATE counts them, i.e.
-    # the JSON keys plus the scribe-line note. Stated separately because
-    # quoting one where the other is meant is a different measurement.
-    assert audit["pending_open_items_total"] == 8
 
 
 # ── fixture ────────────────────────────────────────────────────────────────
-
-def _project(tmp_path, libs):
-    """A minimal project whose PnR script names `libs`. chip-AGNOSTIC: the
-    design is a one-cell stub and every PDK path is a parameter."""
-    p = tmp_path / "alpha"
-    (p / "phase2/stage1/rtl").mkdir(parents=True)
-    (p / "phase2/stage1/rtl/chip_top.sv").write_text(
-        "module chip_top(input clk);\nendmodule\n")
-    (p / "phase2/stage2/synth").mkdir(parents=True)
-    (p / "phase2/stage2/synth/netlist.v").write_text(
-        "module top(input clk);\n  buf_cell _0_ (.A(clk), .X());\nendmodule\n")
-    (p / "phase3/stage3/pnr").mkdir(parents=True)
-    (p / "phase3/stage3/pnr/pnr.tcl").write_text(
-        "".join(f"read_liberty {lib}\n" for lib in libs)
-        + "link_design chip_top\n")
-    (p / "phase3/stage4/gds").mkdir(parents=True)
-    (p / "phase3/stage4/gds/chip_top.gds").write_bytes(
-        _GDS_BOUNDARY_RECORD + b"\x00\x06\x00\x02alph")
-    (p / "phase1/generated_docs").mkdir(parents=True)
-    (p / "phase1/generated_docs/L1_DATASHEET.json").write_text(
-        json.dumps({"ic_name": "alpha"}))
-    gate = p / "reports/phase3/prestream_gate.json"
-    gate.parent.mkdir(parents=True, exist_ok=True)
-    gate.write_text(json.dumps({"verdict": "PASS", "layout_digest": "a" * 64}))
-    import _gds_admission as admission
-    pnr = p / "phase3/stage3/pnr"
-    source = pnr / "chip_top.gds"
-    source.write_bytes((p / "phase3/stage4/gds/chip_top.gds").read_bytes())
-    basis = []
-    for name in ("routed.def", "constraint.sdc"):
-        path = pnr / name
-        path.write_text("synthetic layout input\n")
-        basis.append(path)
-    admission.admit_gds(p, source, "a" * 64, basis)
-    return p

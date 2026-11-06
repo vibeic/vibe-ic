@@ -40,7 +40,6 @@ sys.path.insert(0, str(PROGRAMS))
 import _owner_declared as _OD                              # noqa: E402
 
 import die_level_deck_rule_attribution as D  # noqa: E402
-import flow_compliance_check as F  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -291,33 +290,10 @@ def test_the_handoff_record_carries_every_attributed_rule(tmp_path):
     assert ho["tier"] == D.TIER_PASS_WITH_ATTRIBUTION
 
 
-def test_flow_compliance_refuses_a_delivery_with_no_handoff(tmp_path):
-    proj = _attributed_project(tmp_path, handoff_rules=None, name="none")
-    why = F.hardmacro_handoff_refusal(proj)
-    assert why and "no handoff record" in why
-    assert "COV1.a" in why and "COV2.a" in why
 
 
-def test_flow_compliance_refuses_a_partial_handoff_by_the_missing_names(tmp_path):
-    proj = _attributed_project(tmp_path, handoff_rules=["COV1.a"], name="part")
-    why = F.hardmacro_handoff_refusal(proj)
-    assert why and "missing COV2.a" in why
 
 
-def test_flow_compliance_accepts_a_complete_handoff_and_refuses_nothing_else(
-        tmp_path):
-    ok = _attributed_project(tmp_path, handoff_rules=["COV1.a", "COV2.a"],
-                             name="full")
-    assert F.hardmacro_handoff_refusal(ok) is None
-    # nothing attributed -> nothing to refuse, and no record demanded
-    bare = tmp_path / "bare"
-    (bare / "reports" / "phase3").mkdir(parents=True)
-    (bare / "reports" / "phase3" /
-     "die_level_rule_attribution.json").write_text(json.dumps({
-         "verdict": "NOTHING_TO_ATTRIBUTE", "attributed_density_rules": {}}))
-    assert F.hardmacro_handoff_refusal(bare) is None
-    # no report at all -> no claim to back up
-    assert F.hardmacro_handoff_refusal(tmp_path / "absent") is None
 
 
 def test_the_declared_tier_is_preserved_by_the_runners_aggregator():

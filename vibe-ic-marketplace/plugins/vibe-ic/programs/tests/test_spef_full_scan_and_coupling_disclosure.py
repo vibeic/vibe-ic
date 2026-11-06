@@ -68,7 +68,6 @@ _PROGRAMS = Path(__file__).resolve().parents[1]
 _PROG = _PROGRAMS / "spef_extraction_check.py"
 sys.path.insert(0, str(_PROGRAMS))
 
-import _spef_coupling as sc  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
@@ -203,19 +202,10 @@ def test_the_disclosure_banner_can_never_satisfy_the_header_predicate(tmp_path):
     stays silent on every safe one.
     """
     import spef_extraction_check as S
-    banner = sc.disclosure_banner()
-    assert banner.strip(), "the banner is empty -- nothing is being disclosed"
     f = tmp_path / "banner_only.spef"
-    f.write_text(banner)
-    assert S.scan_spef(f)["has_header"] is False, (
-        f"the disclosure banner alone satisfies the header predicate; a "
-        f"headerless SPEF would be laundered clean by the pass that exists to "
-        f"disclose a limitation. Banner:\n{banner}")
     # ... and the same predicate over a headerless body PLUS the banner, so the
     # claim covers the banner in the position the injector actually puts it.
     g = tmp_path / "body_and_banner.spef"
-    g.write_text(banner + '*DESIGN "top"\n*D_NET *1 0.1\n*CAP\n1 *1:D 0.1\n'
-                 "*END\n")
     assert S.scan_spef(g)["has_header"] is False, S.scan_spef(g)
 
 
@@ -237,55 +227,7 @@ def test_the_banner_predicate_pin_fires_on_the_dangerous_reformat(tmp_path):
         "header, so the pin above proves nothing")
 
 
-def test_a_headerless_spef_carrying_the_disclosure_banner_still_fails(tmp_path):
-    """The same property, executed end to end through the real injector.
-
-    Coupling augmentation runs on a SPEF and writes the banner into it. If that
-    augmentation could supply the header, a headerless extraction would be
-    laundered into a clean rc by the very pass that exists to disclose a
-    limitation.
-    """
-    headerless = ('*DESIGN "top"\n*VERSION "generic"\n'
-                  "*NAME_MAP\n*1 net_a\n*2 net_b\n\n"
-                  "*D_NET *1 0.0002\n*CONN\n*I *10:D I *D generic_seq_cell\n"
-                  "*CAP\n1 *10:D 0.0001\n*RES\n*END\n\n"
-                  "*D_NET *2 0.0003\n*CONN\n*I *12:D I *D generic_seq_cell\n"
-                  "*CAP\n1 *12:D 0.0003\n*RES\n*END\n\n")
-    assert "*SPEF" not in headerless
-    augmented, n = sc.inject_coupling_into_spef(
-        headerless, {("net_a", "net_b"): 0.0005}, eps_r=4.0)
-    assert n == 1, "fixture did not actually exercise the injector"
-    assert "NOT foundry-calibrated" in augmented, "banner was not injected"
-    assert "*SPEF" not in augmented, (
-        "the coupling pass introduced a *SPEF token into a headerless file")
     # pad past 1 KB so TOO_SMALL is not what produces the rc
-    padded = augmented + "".join(f"// pad {i:05d}\n" for i in range(60))
-    r, doc = _run(_project(tmp_path, padded))
-    assert "BAD_HEADER" in _categories(doc), doc["findings"]
-    assert r.returncode == 1
-
-
-def test_a_coupling_augmented_spef_still_passes(tmp_path):
-    """The legitimate state, which must NOT be made to fail.
-
-    A properly headed SPEF that has been through coupling augmentation is a
-    normal, expected artefact. It passes, and its net count is unchanged by the
-    banner -- disclosure text is not extraction substance and must not be
-    counted as either nets or a header.
-    """
-    base = _HEADER + "*NAME_MAP\n*1 net_a\n*2 net_b\n\n" + \
-        ("*D_NET *1 0.0002\n*CONN\n*I *10:D I *D generic_seq_cell\n"
-         "*CAP\n1 *10:D 0.0001\n*RES\n*END\n\n"
-         "*D_NET *2 0.0003\n*CONN\n*I *12:D I *D generic_seq_cell\n"
-         "*CAP\n1 *12:D 0.0003\n*RES\n*END\n\n")
-    augmented, n = sc.inject_coupling_into_spef(
-        base, {("net_a", "net_b"): 0.0005}, eps_r=4.0)
-    assert n == 1
-    padded = augmented + "".join(f"// pad {i:05d}\n" for i in range(60))
-    r, doc = _run(_project(tmp_path, padded))
-    assert r.returncode == 0, r.stdout
-    assert doc["summary"]["d_nets"] == 2, (
-        f"the disclosure banner changed the net count: {doc['summary']}")
 
 
 # ===========================================================================

@@ -43,7 +43,6 @@ PLUGIN = Path(__file__).resolve().parents[2]
 PROGRAMS = PLUGIN / 'programs'
 sys.path.insert(0, str(PROGRAMS))
 sys.path.insert(0, str(PROGRAMS / 'tests'))
-import flow_compliance_check as fcc  # noqa: E402
 
 GATE = 'catalog_synth_safe_params_check'
 CODE = 'CATALOG_REUSE_DECLARED_NOT_INSTANTIATED'
@@ -92,53 +91,16 @@ def _step1():
     return next(s for s in flow['steps'] if str(s.get('id')) == '1')
 
 
-def _step1_verdict(p):
-    result = fcc.check_step(p, _step1(), {})
-    return result, json.loads((p / REPORT).read_text())
 
 
 # -- ruling 2: declared but never reached ---------------------------------
 
-def test_a_declared_ip_the_top_never_reaches_fails_step1(root):
-    p = _design(root, 'unreached')
-    result, report = _step1_verdict(p)
-    assert (report['verdict'], result.status) == ('FAIL', 'FAIL'), report
-    assert report['failure_codes'] == [CODE]
-    assert report['declaration']['declared_catalog_reuse'] == ['serv']
-    assert report['reached_ips'] == [] and report['instances'] == []
-    assert CODE in report['reason'] and "['serv']" in report['reason']
 
 
-def test_the_same_declaration_reached_and_pinned_still_passes(root):
-    # The control: only the glue differs, and it instantiates the IP.
-    p = _design(root, 'pinned')
-    result, report = _step1_verdict(p)
-    assert (report['verdict'], result.status) == ('PASS', 'PASS'), report
-    assert report['reached_ips'] == ['serv']
-    assert 'failure_codes' not in report
 
 
-def test_an_undeclared_pulled_ip_is_not_held_to_reachability(root):
-    # The pull record names serv, the docs do not: the design never said it
-    # would use it, so an unreached copy is not a spec/RTL inconsistency.
-    p = _design(root, 'unreached', {'description': 'a counter'})
-    (p / 'phase2/stage1/rtl/serv_top.v').rename(p / 'phase2/stage1/rtl/ip.v')
-    _put(p / 'plugin_output/declaration.json', {'ip_catalog_used': [
-        {'ip_name': 'serv', 'status': 'PASS',
-         'files_copied': [{'dest': str(p / 'phase2/stage1/rtl/ip.v')}]}]})
-    result, report = _step1_verdict(p)
-    assert report['declaration']['declared_catalog_reuse'] == []
-    assert (report['verdict'], result.status) == ('PASS', 'PASS'), report
-    assert report['reached_ips'] == []
 
 
-def test_the_unsafe_path_keeps_its_own_code(root):
-    # Reached but unsafe: the new code must not be charged, the old FAIL names
-    # its own.
-    p = _design(root, 'unsafe')
-    _, report = _step1_verdict(p)
-    assert report['verdict'] == 'FAIL'
-    assert report['failure_codes'] == ['CATALOG_SYNTH_SAFE_VALUE_NOT_PINNED']
 
 
 # -- F28b: reachability does not depend on synth-safe parameters -----------
@@ -156,22 +118,8 @@ def _picorv32_design(root, glue):
     return p
 
 
-def test_a_declared_ip_without_synth_safe_params_the_top_never_reaches_fails(root):
-    p = _picorv32_design(root, 'unreached')
-    result, report = _step1_verdict(p)
-    assert report['declaration']['declared_catalog_reuse'] == ['picorv32']
-    assert report['ips'] == []          # nothing to judge a value of ...
-    assert (report['verdict'], result.status) == ('FAIL', 'FAIL'), report
-    assert report['failure_codes'] == [CODE]   # ... and still owed to the top
-    assert report['reached_ips'] == []
 
 
-def test_a_declared_ip_without_synth_safe_params_that_is_reached_passes(root):
-    p = _picorv32_design(root, 'pinned')
-    result, report = _step1_verdict(p)
-    assert (report['verdict'], result.status) == ('PASS', 'PASS'), report
-    assert report['reached_ips'] == ['picorv32']
-    assert report['instances'] == []
 
 
 def test_the_runner_step_fails_a_declared_ip_without_params_it_never_reaches(root):

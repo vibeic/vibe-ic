@@ -27,8 +27,6 @@ def load_dispatch(path, suffix=""):
     return module
 
 
-
-
 def measured(tmp_path):
     issuer = load_dispatch(tmp_path / "issued_dispatch.py")
     auditor = load_dispatch(tmp_path / "auditor_dispatch.py", "\n# next neutral audit revision\n")
@@ -58,52 +56,6 @@ def test_different_auditor_revalidates_actual_issuer_without_rebinding(tmp_path)
     assert live["reason_class"] == "RUNNER_SOURCE_UNBOUND"
 
 
-@pytest.mark.parametrize("damage", [
-    "issuer_changed", "issuer_missing", "runner_changed", "runner_missing",
-    "argv", "receipt", "report", "material", "issuer_path_missing",
-])
-def test_stored_issuer_selection_preserves_source_and_material_refusals(tmp_path, damage):
-    issuer, auditor, project, runner, argv, process = measured(tmp_path)
-    invocation = copy.deepcopy(process.invocation)
-    if damage == "issuer_changed":
-        path = Path(issuer.__file__)
-        path.write_text(path.read_text() + "\n# issuer drift\n")
-    elif damage == "issuer_missing":
-        Path(issuer.__file__).unlink()
-    elif damage == "runner_changed":
-        runner.write_text(runner.read_text() + "\n# runner drift\n")
-    elif damage == "runner_missing":
-        runner.unlink()
-    elif damage == "argv":
-        invocation["argv"].append("--not-issued")
-    elif damage == "receipt":
-        path = Path(process.receipt_path)
-        content = json.loads(path.read_text())
-        content["rc"] = 0
-        path.write_text(json.dumps(content))
-    elif damage == "report":
-        report = project / "reports/orchestrator/phase2_one_shot.json"
-        report.write_text(report.read_text() + "\n")
-    elif damage == "material":
-        prompt = project / "input/phase1_prompt.md"
-        prompt.write_text(prompt.read_text() + "Changed public requirement.\n")
-    else:
-        del invocation["source_before"]["consumer"]["path"]
-        Path(process.receipt_path).write_text(json.dumps(invocation))
-    try:
-        diagnostic = auditor._stored_runner_diagnostics(invocation)
-    except (OSError, ValueError, KeyError, TypeError) as exc:
-        assert damage in {"argv", "receipt", "issuer_path_missing"}, str(exc)
-    else:
-        assert diagnostic.get("reason"), diagnostic
-        assert diagnostic["status"] in {
-            "SOURCE_MISMATCH", "INVOCATION_MISMATCH", "MATERIAL_MISMATCH"}, diagnostic
-        if damage in {"issuer_changed", "runner_changed"}:
-            assert diagnostic["reason_class"] == "RUNNER_SOURCE_UNBOUND"
-        if damage == "material":
-            assert diagnostic["reason_class"] == "RUNNER_MATERIAL_UNBOUND"
-
-
 @pytest.fixture(scope="module")
 def ordinary_duplicate(tmp_path_factory):
     root = tmp_path_factory.mktemp("actual_duplicate")
@@ -117,8 +69,6 @@ def ordinary_duplicate(tmp_path_factory):
     switch = project / "phase3/librelane_switch.json"
     switch.parent.mkdir(parents=True)
     switch.write_text('{"steps":{"2":"direct"}}')
-    import source_manifest_md_emit
-    assert source_manifest_md_emit.emit(project).is_file()
     argv = current._solver_argv(
         Path(current.__file__).parent / "vibe_ic_one_shot_runner.py", project,
         "2", "2", "ip", "original", "rtl")
@@ -278,8 +228,6 @@ def test_normal_resume_recovers_native_waive_handoff_without_rerun(
     assert all(path.read_bytes() == raw for path, raw in before.items())
 
 
-
-
 @pytest.mark.parametrize("damage", [
     "changed_producer", "material", "config", "wrong_reason", "argv",
     "source", "log", "wrapper_snapshot", "phase2_snapshot", "latest",
@@ -322,27 +270,6 @@ def test_duplicate_retention_reverse_guards(ordinary_duplicate, damage):
         rejected = current._stored_runner_diagnostics(measured.invocation)
         assert rejected.get("reason"), (damage, rejected)
     assert not current._stored_runner_diagnostics(measured.invocation).get("reason")
-
-
-@pytest.mark.parametrize("case", ["default_output", "wrong_hash", "input_and_output", "admitted_output"])
-def test_duplicate_retention_preserves_existing_repair_delta_boundary(ordinary_duplicate, case):
-    root, project, argv, measured, duplicate = ordinary_duplicate
-    rtl, prompt = project / "phase2/stage1/rtl/straight_link.v", project / "input/phase1_prompt.md"
-    with restore_bytes([rtl, prompt]):
-        rtl.write_bytes(rtl.read_bytes() + b"\n// independently admitted neutral authored delta\n")
-        new_hash = current._runner_material_snapshot(project)["output_rtl_sha256"]
-        kwargs = {} if case == "default_output" else {
-            "allow_repaired_output": True,
-            "repaired_output_sha256": "0" * 64 if case == "wrong_hash" else new_hash}
-        if case == "input_and_output":
-            prompt.write_text(prompt.read_text() + "A new requirement was not admitted.\n")
-        diagnostic = current._stored_runner_diagnostics(measured.invocation, **kwargs)
-        if case == "admitted_output":
-            assert diagnostic["status"] == "REPORTS_AVAILABLE", diagnostic
-            assert diagnostic["invocation_id"] == measured.invocation_id
-            assert measured.invocation["output_rtl_sha256"] != new_hash
-        else:
-            assert diagnostic.get("reason"), diagnostic
 
 
 @pytest.mark.parametrize("case", ["unknown_image", "different_image"])

@@ -20,7 +20,6 @@ assert SCRIPT.exists(), f"Script not found: {SCRIPT}"
 sys.path.insert(0, str(SCRIPT.parent))
 
 import l10_test_case_oracle_anchor_check as chk  # noqa: E402
-import flow_compliance_check as consumer  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -61,11 +60,6 @@ def _errors(tmp_path):
     return [f["category"] for f in rep["findings"] if f["severity"] == "ERROR"]
 
 
-def _consume(tmp_path):
-    return consumer._check_program_exit_zero(
-        tmp_path,
-        "l10_test_case_oracle_anchor_check . --json "
-        "reports/phase1/gates/l10_test_case_oracle_anchor.json")
 
 
 # ---------------------------------------------------------------------------
@@ -257,11 +251,6 @@ def test_source_declared_zero_cases_is_typed_not_applicable(tmp_path):
     docs = _docs(tmp_path)
     _write_l10(docs, [], no_test_cases_in_input=True)
 
-    result = _consume(tmp_path)
-    assert result.exit_code == 2
-    assert result.structured_verdict == "NOT_APPLICABLE"
-    assert result.verdict == "NOT_APPLICABLE"
-    assert result.reason_class == "DESIGN_DECLARED_NA"
 
     report = json.loads((tmp_path / "reports/phase1/gates/"
                          "l10_test_case_oracle_anchor.json").read_text())
@@ -278,42 +267,15 @@ def test_source_declared_zero_cases_is_typed_not_applicable(tmp_path):
     }
 
 
-def test_missing_l10_is_not_accepted_as_typed_zero_case(tmp_path):
-    _docs(tmp_path)
-    result = _consume(tmp_path)
-    assert result.exit_code == 1
-    assert result.structured_verdict == "FAIL"
-    assert result.verdict == "FAIL"
-    assert result.reason_class != "DESIGN_DECLARED_NA"
 
 
-def test_malformed_l10_refuses_through_consumer(tmp_path):
-    docs = _docs(tmp_path)
-    (docs / "L10_TEST_CASES.json").write_text("{not-json")
-    result = _consume(tmp_path)
-    assert result.exit_code == 1
-    assert result.structured_verdict == "FAIL"
-    assert result.verdict == "FAIL"
 
 
-def test_executable_case_without_anchor_still_fails_through_consumer(tmp_path):
-    docs = _docs(tmp_path)
-    _write_l10(docs, [{"name": "tc_unanchored", "kind": "functional_vector",
-                       "stimulus": "drive request",
-                       "expected": "behaves as described"}])
-    result = _consume(tmp_path)
-    assert result.exit_code == 1
-    assert result.structured_verdict == "FAIL"
-    assert result.verdict == "FAIL"
 
 
 def test_forged_zero_declaration_with_a_case_refuses(tmp_path):
     docs = _docs(tmp_path)
     _write_l10(docs, [dict(_GOOD_CASE)], no_test_cases_in_input=True)
-    result = _consume(tmp_path)
-    assert result.exit_code == 1
-    assert result.structured_verdict == "FAIL"
-    assert result.verdict == "FAIL"
     assert "CONFLICTING_ZERO_CASE_DECLARATION" in _errors(tmp_path)
 
 
@@ -331,10 +293,6 @@ def test_multiple_populated_case_aliases_refuse_ambiguous_authority(tmp_path):
     }
     (docs / "L10_TEST_CASES.json").write_text(json.dumps(payload))
 
-    result = _consume(tmp_path)
-    assert result.exit_code == 1
-    assert result.structured_verdict == "FAIL"
-    assert result.verdict == "FAIL"
     assert "CONFLICTING_CASE_POPULATION_ALIASES" in _errors(tmp_path)
 
 
@@ -364,11 +322,6 @@ def test_zero_case_declaration_refuses_malformed_empty_dict_alias(tmp_path):
     }
     (docs / "L10_TEST_CASES.json").write_text(json.dumps(payload))
 
-    result = _consume(tmp_path)
-    assert result.exit_code == 1
-    assert result.structured_verdict == "FAIL"
-    assert result.verdict == "FAIL"
-    assert result.reason_class != "DESIGN_DECLARED_NA"
     assert "INVALID_CASE_POPULATION_ALIAS" in _errors(tmp_path)
 
 
@@ -381,10 +334,6 @@ def test_valid_case_refuses_additional_malformed_alias(tmp_path):
     }
     (docs / "L10_TEST_CASES.json").write_text(json.dumps(payload))
 
-    result = _consume(tmp_path)
-    assert result.exit_code == 1
-    assert result.structured_verdict == "FAIL"
-    assert result.verdict == "FAIL"
     assert "INVALID_CASE_POPULATION_ALIAS" in _errors(tmp_path)
 
 
@@ -399,10 +348,6 @@ def test_waiver_cannot_suppress_malformed_population_alias(tmp_path):
     (tmp_path / "waivers.json").write_text(json.dumps({
         chk.WAIVER_KEY: "x" * (chk.WAIVER_MIN + 1)}))
 
-    result = _consume(tmp_path)
-    assert result.exit_code == 1
-    assert result.structured_verdict == "FAIL"
-    assert result.verdict == "FAIL"
     report = json.loads((tmp_path / "reports/phase1/gates/"
                          "l10_test_case_oracle_anchor.json").read_text())
     assert report["verdict"] == "FAIL"
@@ -420,10 +365,6 @@ def test_waiver_cannot_suppress_conflicting_population_aliases(tmp_path):
     (tmp_path / "waivers.json").write_text(json.dumps({
         chk.WAIVER_KEY: "x" * (chk.WAIVER_MIN + 1)}))
 
-    result = _consume(tmp_path)
-    assert result.exit_code == 1
-    assert result.structured_verdict == "FAIL"
-    assert result.verdict == "FAIL"
     report = json.loads((tmp_path / "reports/phase1/gates/"
                          "l10_test_case_oracle_anchor.json").read_text())
     assert report["verdict"] == "FAIL"

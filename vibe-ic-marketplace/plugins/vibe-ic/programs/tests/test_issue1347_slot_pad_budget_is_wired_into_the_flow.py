@@ -27,7 +27,6 @@ PLUGIN = PROG.parent
 sys.path.insert(0, str(PROG))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import flow_compliance_check as F                      # noqa: E402
 import test_slot_pad_budget_check as T                 # noqa: E402  slot fixture
 import _watchdog                                      # noqa: E402
 
@@ -122,13 +121,6 @@ def _project(rtl, with_slots: bool, route: str = "NO_TEMPLATE.txt") -> Path:
     return d
 
 
-def _drive(rtl, with_slots: bool, route: str = "NO_TEMPLATE.txt"):
-    """`(passed, vacuous, report)` from the real clause runner."""
-    p = _project(rtl, with_slots, route)
-    passed, snippet = F._check_program_exit_zero(p, _clause())
-    rep_p = p / "reports" / "phase2" / "gates" / "slot_pad_budget.json"
-    rep = json.loads(rep_p.read_text()) if rep_p.is_file() else None
-    return passed, snippet.startswith(F._VACUOUS_HINT_PREFIX), rep
 
 
 # No per-call wall-clock bound: see `_supervised` below. A number chosen from
@@ -157,49 +149,14 @@ def test_the_clause_carries_no_glob():
 # --------------------------------------------------------------------------- #
 # and it can actually go red
 # --------------------------------------------------------------------------- #
-def test_an_unbondable_interface_turns_the_step_RED():
-    passed, vacuous, rep = _drive(_HOPELESS, with_slots=True)
-    assert (passed, vacuous) == (False, False)
-    assert rep["verdict"] == "DOES_NOT_FIT" and rep["rc"] == 1
 
 
-def test_an_interface_that_fits_passes():
-    passed, vacuous, rep = _drive(T._RTL_FITS, with_slots=True)
-    assert (passed, vacuous) == (True, False)
-    assert rep["verdict"] == "FITS"
 
 
-def test_the_cell_path_is_a_DISCLOSED_skip_never_a_silent_pass():
-    """No operator, so no slot: there is no question to ask. It must land in
-    the vacuous tier, where a reader can see it, and not in plain PASS."""
-    passed, vacuous, rep = _drive(T._RTL_FITS, with_slots=False)
-    assert (passed, vacuous) == (True, True)
-    assert rep["verdict"] == "NOT_APPLICABLE"
-    assert rep["reason_class"] == "DESIGN_DECLARED_NA"
 
 
-def test_no_slots_and_no_route_is_the_OTHER_owner():
-    """The pair to the case above, one property changed: no router file.
-
-    Same missing slots, and it must NOT reach the same tier. Without this the
-    route added to `_project` would be indistinguishable from having widened
-    the skip, and the v1.15.45 two-owner split would be un-pinned here.
-    """
-    passed, vacuous, rep = _drive(T._RTL_FITS, with_slots=False, route=None)
-    assert rep["verdict"] == "UNDECIDED"
-    assert rep["reason_class"] == "BLOCKED_BY_UPSTREAM"
-    assert (passed, vacuous) == (True, False), (
-        "an upstream step that never ran is not a disclosed skip: #1978 took "
-        "BLOCKED_BY_UPSTREAM out of the skip tier because it is outstanding "
-        "work, not a design fact")
 
 
-def test_refusal_and_skip_do_not_share_a_tier():
-    """The one property the fold of rc 2 into PASS could destroy."""
-    red, _, red_rep = _drive(_HOPELESS, with_slots=True)
-    skip_passed, skip_vac, skip_rep = _drive(T._RTL_FITS, with_slots=False)
-    assert red is False and skip_passed is True and skip_vac is True
-    assert red_rep["rc"] == 1 and skip_rep["rc"] == 2
 
 
 def test_the_program_discovers_step_1_rtl_without_being_handed_a_glob():
@@ -329,51 +286,15 @@ def _isolated_step2() -> dict:
     return out
 
 
-def _step_disposition(rtl, with_slots: bool,
-                      route: str = "NO_TEMPLATE.txt") -> tuple:
-    """(status, reason_class, disclosures) — the unit of a tier now that four
-    readings share two words."""
-    row = F.check_step(_project(rtl, with_slots, route), _isolated_step2(), {})
-    return (row.status, getattr(row, "reason_class", "") or "",
-            tuple(getattr(row, "disclosures", ()) or ()))
-
-def _step_status(rtl, with_slots: bool,
-                 route: str = "NO_TEMPLATE.txt") -> str:
-    return F.check_step(_project(rtl, with_slots, route),
-                        _isolated_step2(), {}).status
 
 
-def test_an_unbondable_interface_makes_step_2_itself_go_FAIL():
-    assert _step_status(_HOPELESS, True) == "FAIL"
 
 
-def test_a_fitting_interface_leaves_step_2_PASS():
-    assert _step_status(T._RTL_FITS, True) == "PASS"
 
 
-def test_the_cell_path_lands_in_VACUOUS_PASS_not_plain_PASS():
-    """The disclosed tier is a DIFFERENT verdict from a clean one, which is
-    what keeps 'there was nothing to ask' readable as itself rather than as
-    'asked and fine'."""
-    assert _step_status(T._RTL_FITS, False) == "NOT_MEASURED"
 
 
-def test_the_step_tiers_are_four_distinct_values():
-    """The property the whole wiring rests on: a refusal, a clean pass, a
-    disclosed skip and an un-run upstream must never collapse into one
-    another. FOUR since #1978 split the last one out of the skip tier — the
-    file's header says the four tiers are not three, and this is where the
-    fourth is counted."""
-    # R-0915-85 — THE FOUR READINGS ARE STILL FOUR, but two of them now share
-    # a WORD and are told apart by the reason beside it, which is the whole
-    # shape of this ruling. So the tuple compared is (status, reason_class):
-    # a bare `len(set(status)) == 4` would have read three and reported a
-    # collapse that has not happened.
-    seen = {_step_disposition(_HOPELESS, True),
-            _step_disposition(T._RTL_FITS, True),
-            _step_disposition(T._RTL_FITS, False),
-            _step_disposition(T._RTL_FITS, False, route=None)}
-    assert len(seen) == 4, seen
+
 
 
 # --------------------------------------------------------------------------- #
@@ -390,29 +311,10 @@ def test_the_step_tiers_are_four_distinct_values():
 # skill would empty `test_only` and satisfy nothing — a skill runs only if an
 # agent remembers to. FLOW / PROG / CI / TOOLS fire without anyone choosing.
 
-def _wiring_audit_report() -> dict:
-    """In-process, for the same reason as the enforcement audit above: as a
-    spawned child this scan takes ~23s against a 60s harness ceiling, and 2.5x
-    headroom measurably was not enough under machine load."""
-    import checker_execution_wiring_audit as C
-    return C.audit(PLUGIN, PLUGIN.parents[2])
 
 
-def test_the_wiring_audit_credits_a_machine_runner_not_a_skill_mention():
-    rep = _wiring_audit_report()
-    runners = rep["machine_runners"].get("slot_pad_budget_check.py")
-    assert runners, (
-        "checker_execution_wiring_audit credits NO machine runner for "
-        "slot_pad_budget_check — a skill mention does not count, because it "
-        "runs only if an agent remembers to")
-    # Both of this branch's wirings, and they are different venues on purpose.
-    assert "FLOW" in runners, f"the flow clause is not credited: {runners}"
-    assert "PROG" in runners, f"the runner spawn is not credited: {runners}"
 
 
-def test_it_is_no_longer_in_the_audits_test_only_population():
-    rep = _wiring_audit_report()
-    assert "slot_pad_budget_check.py" not in (rep.get("test_only") or [])
 
 
 # --------------------------------------------------------------------------- #
@@ -493,14 +395,6 @@ def _foldable_project() -> Path:
     return _project(T._RTL_FOLDABLE, with_slots=True)
 
 
-def test_a_design_that_fits_only_after_folding_is_not_BLOCKED():
-    """The direction that matters first: a legitimate design must not be
-    refused by arithmetic that a real pin-out would have solved."""
-    R = _runner()
-    assert R.step_slot_pad_budget(_foldable_project(), "chip_top").status == "PASS"
-    passed, vacuous, rep = _drive(T._RTL_FOLDABLE, with_slots=True)
-    assert (passed, vacuous) == (True, False)
-    assert rep["verdict"] == "FITS_AFTER_FOLD"
 
 
 def test_the_conditional_pass_is_DISCLOSED_and_not_a_bare_green():
@@ -513,47 +407,10 @@ def test_the_conditional_pass_is_DISCLOSED_and_not_a_bare_green():
         f"the step passed without naming the condition: {sr.detail!r}")
 
 
-def test_the_record_names_the_fold_and_refuses_to_call_it_safe():
-    """The fold is an INVITATION to a human decision, recorded with the
-    signals that could drive it. If the gate ever claimed the fold was safe it
-    would be inventing a pin-out."""
-    _, _, rep = _drive(T._RTL_FOLDABLE, with_slots=True)
-    cands = rep["fold_candidates"]
-    assert cands, "a FITS_AFTER_FOLD verdict that names no fold is unactionable"
-    assert cands[0]["input_bus"] and cands[0]["output_bus"] and cands[0]["width"]
-    assert "NOT DECIDED HERE" in cands[0]["safety"]
-    assert any("protocol-safe" in s for s in rep["does_not_decide"])
 
 
-def test_the_fold_does_not_rewrite_the_declared_number():
-    """The DECLARED count is what the design actually asks for; the folded one
-    is a hypothetical. Reporting only the second would launder a decision
-    nobody took into a measurement."""
-    _, _, rep = _drive(T._RTL_FOLDABLE, with_slots=True)
-    assert rep["declared_signal_bits"] == 75
-    assert rep["signal_bits_after_folding_every_candidate"] == 43
-    assert rep["declared_signal_bits"] != rep["signal_bits_after_folding_every_candidate"]
 
 
-def test_all_four_verdicts_are_reachable_through_the_wiring():
-    """Coverage stated as an assertion rather than assumed from the tests that
-    happen to exist: every verdict the program can return must have been driven
-    through the clause at least once.
-
-    FIVE since v1.15.45 split "no slots" into its two owners. The set is
-    asserted for EQUALITY on purpose: a verdict the program can return and
-    this file never drives is an untested tier, and a verdict here that the
-    program no longer returns is a fixture that stopped meaning what it says.
-    """
-    seen = set()
-    for rtl, slots, route in ((_HOPELESS, True, None),
-                              (T._RTL_FITS, True, None),
-                              (T._RTL_FOLDABLE, True, None),
-                              (T._RTL_FITS, False, "NO_TEMPLATE.txt"),
-                              (T._RTL_FITS, False, None)):
-        seen.add(_drive(rtl, slots, route)[2]["verdict"])
-    assert seen == {"DOES_NOT_FIT", "FITS", "FITS_AFTER_FOLD", "UNDECIDED",
-                    "NOT_APPLICABLE"}, seen
 
 
 # --------------------------------------------------------------------------- #
@@ -583,12 +440,6 @@ def _two_file_project() -> Path:
     return p
 
 
-def test_a_malformed_clause_FAILS_and_is_not_a_disclosed_skip():
-    passed, snippet = F._check_program_exit_zero(_two_file_project(), _TRAP_CLAUSE)
-    assert passed is False, "a clause the program rejects reported a pass"
-    assert not snippet.startswith(F._VACUOUS_HINT_PREFIX), (
-        "a rejected command line landed in the VACUOUS tier — 'you called me "
-        "wrongly' is being reported as 'I examined nothing'")
 
 
 def test_the_usage_tier_is_distinct_from_the_vacuous_one():

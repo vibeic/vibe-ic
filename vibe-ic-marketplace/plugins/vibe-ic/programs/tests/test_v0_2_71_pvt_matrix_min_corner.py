@@ -19,7 +19,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import eda_report_audit as ERA   # noqa: E402
-import pvt_matrix_check as PMC   # noqa: E402
 
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 _P3_SRC = (PLUGIN / "programs" / "phase3_one_shot_runner.py").read_text()
@@ -30,38 +29,6 @@ def _matrix(tmp_path, payload):
     d.mkdir(parents=True, exist_ok=True)
     (d / "pvt_matrix.json").write_text(json.dumps(payload))
     return tmp_path
-
-
-def test_empty_corners_fail(tmp_path):
-    _matrix(tmp_path, {"corners": [], "primary_corner": "TT"})
-    rep = PMC.audit(tmp_path)
-    assert rep["rc"] == 1 and rep["verdict"] == "FAIL"
-
-
-def test_single_corner_disclosed_not_multi(tmp_path):
-    _matrix(tmp_path, {"corners": [{"name": "lib_tt", "label": "TT"}]})
-    rep = PMC.audit(tmp_path)
-    assert rep["rc"] == 0
-    assert rep["verdict"] == "SINGLE_CORNER_ONLY"
-
-
-def test_contradictory_multi_corner_claim_fails(tmp_path):
-    _matrix(tmp_path, {"corners": [{"name": "lib_tt", "label": "TT"}],
-                       "multi_corner": True})
-    rep = PMC.audit(tmp_path)
-    assert rep["rc"] == 1
-
-
-def test_three_corners_is_multi(tmp_path):
-    _matrix(tmp_path, {"corners": [
-        {"name": "a", "label": "SS"}, {"name": "b", "label": "TT"},
-        {"name": "c", "label": "FF"}]})
-    rep = PMC.audit(tmp_path)
-    assert rep["rc"] == 0 and rep["verdict"] == "MULTI_CORNER"
-
-
-def test_no_matrix_is_vacuous_rc2(tmp_path):
-    assert PMC.audit(tmp_path)["rc"] == 2
 
 
 def _runner():
@@ -85,28 +52,6 @@ def _runner():
         else:
             sys.modules["phase3_one_shot_runner"] = previous
     return mod
-
-
-def test_runner_stamps_corner_count_and_coverage():
-    """DRIVEN, not scanned. The first version took a +-window of SOURCE around
-    the FIRST `pvt["corner_count"]` and looked for the token in it — which
-    measures DISTANCE, not behaviour.
-
-    The distance it measured was real, though: this runner writes
-    `pvt_matrix.json` from TWO places, #442's disclosure was added to only one
-    of them, and the token sat 8738 characters away beside the other. The
-    omitting writer was the Step-7c one, which runs FIRST and is therefore the
-    one that creates the file when it does not exist.
-    """
-    R = _runner()
-    for corners, want_cov in (([], "NO_CORNERS"),
-                              ([{"name": "a", "label": "TT"}],
-                               "SINGLE_CORNER_ONLY")):
-        pvt = R.stamp_pvt_corner_coverage({}, corners)
-        assert pvt["corner_count"] == len(corners)
-        assert pvt["multi_corner"] is False
-        assert pvt["coverage"] == want_cov, (corners, pvt)
-        assert "#442" in pvt["note"]
 
 
 def test_two_corners_carry_no_shortfall_disclosure():

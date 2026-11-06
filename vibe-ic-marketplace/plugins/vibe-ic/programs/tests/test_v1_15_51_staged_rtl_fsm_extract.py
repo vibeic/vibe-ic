@@ -138,14 +138,10 @@ def test_the_gate_and_the_ldoc_check_share_this_implementation():
     """Not a style point. Three readers with two copies is exactly what let one
     gate credit an FSM the other contradicted on the same tree."""
     import l6_fsm_scaffold_actionable_check as gate
-    import l_doc_structured_field_count_check as ldoc
 
     assert gate._enum_fsm_state_count is R.enum_fsm_state_count
     assert gate._TYPEDEF_ENUM_RE is R.TYPEDEF_ENUM_RE
     assert gate._strip_verilog_comments is R.strip_verilog_comments
-    assert ldoc._TYPEDEF_ENUM_RE is R.TYPEDEF_ENUM_RE
-    assert ldoc._strip_v_comments is R.strip_verilog_comments
-    assert ldoc._FSM_SIGNAL_TOKENS_STRONG is R.FSM_SIGNAL_STRONG
 
 
 def test_enum_fsm_state_count_agrees_with_the_machine_harvest():

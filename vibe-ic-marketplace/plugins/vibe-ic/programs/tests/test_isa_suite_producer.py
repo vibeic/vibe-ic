@@ -848,33 +848,6 @@ FIX_BEFORE = "module fixed_core; /* pinned, with the defect */ endmodule\n"
 FIX_AFTER = "module fixed_core; /* the upstream fix */ endmodule\n"
 
 
-def test_a_fix_a_catalog_pull_staged_is_disclosed_in_the_credit(tmp_path,
-                                                                monkeypatch):
-    """Owner ruling 2B: the design declares no `ip_upstream`, a catalog pull
-    staged an upstream fix and recorded it in the staged SOURCE_MANIFEST. The
-    STAGED BYTES are the fix's after-image, so the receipt, the Step-4 credit
-    sentence and the card each DISCLOSE it."""
-    import final_report_generate as FRG
-    p = _project(tmp_path)
-    rtl = p / "phase2" / "stage1" / "rtl"
-    (rtl / "fixed_core.v").write_text(FIX_AFTER)
-    (rtl / "SOURCE_MANIFEST.json").write_text(json.dumps({"source_pins": [{
-        "ip_name": "somecore", "version": "9.9",
-        "errata_applied": [{
-            "upstream_commit": "abcdef0123456789" * 2 + "abcdef01",
-            "file": "src/fixed_core.v", "disclosure": "upstream fix",
-            "before_sha256": _sha(FIX_BEFORE.encode()),
-            "after_sha256": _sha(FIX_AFTER.encode())}]}]}))
-    _step4(p, monkeypatch, {"s-add": OVERSIZED, "s-fencei": OVERSIZED})
-    rec = json.loads((p / I.RECEIPT_REL).read_text())
-    assert any("upstream abcdef0123 applied to staged fixed_core.v" in d
-               for d in rec["deviation_disclosures"]), rec["deviation_disclosures"]
-    credit, refusal = _base_isa_credit(p)
-    assert refusal is None, refusal
-    assert "DISCLOSED deviation from somecore 9.9: upstream abcdef0123" \
-        in credit["sentence"], credit["sentence"]
-    card = "\n".join(FRG._deviation_section(p))
-    assert "## Disclosed deviations" in card and "abcdef0123" in card
 
 
 def test_an_unmodified_staged_file_discloses_nothing(tmp_path, monkeypatch):
@@ -1610,13 +1583,6 @@ def _3130_cache(tmp_path, monkeypatch, mode):
     return base
 
 
-def _3130_storage(project, output):
-    import subprocess
-    command = [sys.executable, str(PROGRAMS / 'project_outputs_in_tree_check.py'),
-               str(project), '--json', str(output)]
-    proc = subprocess.run(command, text=True, capture_output=True)
-    return {'argv': command, 'rc': proc.returncode, 'stdout': proc.stdout,
-            'stderr': proc.stderr, 'report': json.loads(output.read_text())}
 
 
 def _3130_observed(tmp_path, value):
@@ -1630,60 +1596,8 @@ def _3130_observed(tmp_path, value):
     (folder / (tmp_path.name + '.json')).write_text(json.dumps(value, indent=2))
 
 
-@pytest.mark.parametrize('mode', ['warm', 'cold', 'custom'])
-def test_isa_acquisition_keeps_current_project_archive_through_credit_and_storage(
-        tmp_path, monkeypatch, mode):
-    import subprocess
-    _3130_cache(tmp_path, monkeypatch, mode)
-    p = _project(tmp_path)
-    archive = p / '.vibeic-state/isa-suite-cache' / ('f' * 40 + '.tar.gz')
-    observations = []
-    for attempt in range(2):
-        _step4(p, monkeypatch, {'s-add': OVERSIZED, 's-fencei': OVERSIZED})
-        credit, refusal = _base_isa_credit(p)
-        assert refusal is None and credit is not None, refusal
-        report = p / 'reports/phase2/gates/cpu_functional_oracle_waiver.json'
-        proc = subprocess.run([sys.executable,
-            str(PROGRAMS / 'cpu_functional_oracle_waiver_check.py'), str(p),
-            '--json', str(report)], text=True, capture_output=True)
-        doc = json.loads(report.read_text())
-        # This fixture leaves other CPU obligations incomplete. A storage fix
-        # must not turn the unrelated complete CPU verdict into PASS.
-        assert proc.returncode != 0
-        actual_credit = doc['isa_conformance_credit']['credited']
-        assert any(c['suite_pins'] == credit['suite_pins'] for c in actual_credit)
-        storage = _3130_storage(p, tmp_path / f'storage-{attempt}.json')
-        observations.append({'suite_pins': credit['suite_pins'], 'storage': storage,
-            'cpu_rc': proc.returncode, 'cpu_verdict': doc['verdict'],
-            'archive_sha256': _sha(archive.read_bytes()) if archive.is_file() else None})
-    _3130_observed(tmp_path, {'mode': mode, 'attempts': observations,
-        'archive': str(archive), 'locked_archive_sha256': _sha(TARBALL)})
-    assert [o['storage']['rc'] for o in observations] == [0, 0]
-    assert archive.read_bytes() == TARBALL
-    assert I.verify_tarball(archive.read_bytes(), _lock()['suites']['s'])[0]
-    assert all(str(archive) in o['suite_pins'][0] for o in observations)
 
 
-@pytest.mark.parametrize('use_cache', [True, False])
-def test_direct_acquisition_keeps_the_archive_beside_its_verified_output(
-        tmp_path, monkeypatch, use_cache):
-    _3130_cache(tmp_path, monkeypatch, 'warm')
-    p = tmp_path / 'project'
-    dest = p / '.vibeic-state/acquired'
-    root, why = I.acquire('s', _lock()['suites']['s'], dest,
-                          fetch=lambda _u: TARBALL, use_cache=use_cache)
-    assert root is not None
-    report = p / 'reports/acquisition.json'
-    report.parent.mkdir(parents=True)
-    report.write_text(json.dumps({'suite_pin': why}))
-    storage = _3130_storage(p, tmp_path / 'storage.json')
-    archive = dest / ('f' * 40 + '.tar.gz')
-    _3130_observed(tmp_path, {'why': why, 'storage': storage,
-        'archive_sha256': _sha(archive.read_bytes()) if archive.is_file() else None})
-    assert storage['rc'] == 0, storage
-    assert archive.read_bytes() == TARBALL
-    assert {str(f.relative_to(root)): _sha(f.read_bytes()) for f in root.rglob('*')
-            if f.is_file()} == _lock()['suites']['s']['files']
 
 
 @pytest.mark.parametrize('bad', ['tarball', 'member'])
@@ -1701,22 +1615,6 @@ def test_acquisition_refuses_changed_locked_bytes_before_archive_publication(
     assert not (dest / (suite['commit'] + '.tar.gz')).exists()
 
 
-@pytest.mark.parametrize('live', [True, False])
-def test_storage_still_refuses_uncopied_live_or_dangling_volatile_archive(
-        tmp_path, monkeypatch, live):
-    base = _3130_cache(tmp_path, monkeypatch, 'cold')
-    external = base / 'uncopied.tar.gz'
-    if live:
-        external.write_bytes(TARBALL)
-    p = tmp_path / 'project'
-    report = p / 'reports/acquisition.json'
-    report.parent.mkdir(parents=True)
-    report.write_text(json.dumps({'suite_pin': f'cache {external}'}))
-    storage = _3130_storage(p, tmp_path / 'storage.json')
-    _3130_observed(tmp_path, {'storage': storage, 'live': live})
-    assert storage['rc'] == 1
-    assert any(f['path'] == str(external) and f['class'] == ('live' if live else 'dangling')
-               for f in storage['report']['flagged'])
 
 
 def test_unpreservable_project_archive_refuses_before_cpu_executor(

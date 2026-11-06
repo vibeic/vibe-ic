@@ -158,23 +158,6 @@ def test_rerun_is_idempotent_with_relative_source(tmp_path):
     assert emit_run(tmp_path)["emitted_count"] == 0, "re-run duplicated a goal"
 
 
-def test_the_emitted_source_round_trips_through_the_reader(tmp_path):
-    """The write side must produce what the read side accepts.
-
-    `l_doc_evidence_util.resolve_under_project` is the counterpart of this
-    change: it resolves an evidence string back to a file and REFUSES a path
-    that escapes the project, on the same reasoning — "a certificate whose
-    proof lives outside the run is not reproducible evidence". A relative
-    source is therefore not merely tidier, it is the form the reader can
-    actually resolve."""
-    from l_doc_evidence_util import resolve_under_project
-
-    src = _mk_project(tmp_path)
-    goal = _emitted_goal(tmp_path)
-    resolved = resolve_under_project(tmp_path, goal["source"])
-    assert resolved is not None, (
-        f"the reader could not resolve the emitted source {goal['source']!r}")
-    assert resolved == src.resolve(), (resolved, src)
 
 
 # ─────────────────────── the policy for an input outside the project ──

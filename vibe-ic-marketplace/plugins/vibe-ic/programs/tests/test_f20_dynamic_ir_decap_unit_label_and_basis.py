@@ -150,20 +150,8 @@ def test_the_tool_step_converts_the_decap_and_solves_a_reference():
     assert tcl.index("VIBEIC_TRANSIENT_REF") < tcl.index("-decap_cap")
 
 
-def _findings(name, decap_f):
-    import librelane_ir_antenna as la     # the plugin's own module, by path
-    transient_findings = la.transient_findings
-    return transient_findings((_LL / name).read_text(), ["VDD", "VSS"], 5.0, 24.0,
-                              "sdc_create_clock",
-                              **_kw(transient_findings, decap_f=decap_f))
 
 
-def test_the_tool_steps_1e21_solve_is_not_a_measurement_of_the_declared_decap():
-    """T101's real `Vibeic.TransientIR` output: 1e-9 declared, 1.00e-21 F
-    modelled. RED on main: MEASURED, and labelled genuine."""
-    doc = _findings("transient_decap_1e-9.rpt", 1e-9)
-    assert doc["verdict"] == "NOT_MEASURED", doc.get("scaled_static_bound")
-    assert "1e-21" in doc["reason"]
 
 
 # ─── 2. "genuine" is a measured property ─────────────────────────────────────
@@ -244,14 +232,6 @@ def test_the_readback_is_against_the_request_not_the_print():
 
 
 
-def test_the_tool_step_earns_the_label_the_same_way():
-    measured = _findings("transient_decap_1e-9_session_unit.rpt", 1e-9)
-    assert measured["verdict"] == "MEASURED"
-    assert measured["scaled_static_bound"] is False
-    assert measured["per_net"]["VSS"]["decap"]["state"] == "DECAP_MEASURED"
-    unresolved = _findings("transient_decap_1e-12_session_unit.rpt", 1e-12)
-    assert unresolved["verdict"] == "MEASURED"
-    assert unresolved["scaled_static_bound"] is True
 
 
 # ─── 3. one power basis ──────────────────────────────────────────────────────

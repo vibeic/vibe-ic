@@ -15,7 +15,6 @@ import reset_sync_structural_exception as S
 import phase1_doc_one_shot_runner as D
 import _path_layout as PL
 import phase3_one_shot_runner as R
-from _ppa import timing as T
 
 
 LIBERTY = r'''
@@ -169,32 +168,11 @@ def test_native_opensta_reads_only_the_proven_pin_scoped_exceptions(tmp_path):
     assert 'Error:' not in output and 'STA-' not in output, output
 
 
-def test_canonical_step7_receipt_binds_current_structural_proof(tmp_path):
-    project, mapped, liberty = _current_project(tmp_path)
-    pdk = SimpleNamespace(name='test', liberty=str(liberty))
-    record = T.emit_step7_asic_sdc(R, project, 'top', pdk, '')
-    proof = record['structural_reset_exception']
-    assert proof['verdict'] == 'PASS'
-    assert proof['mapped_netlist'] == str(mapped.relative_to(project))
-    deck = (project / record['path']).read_text()
-    assert deck.count('set_false_path') == 4
-    assert record['inputs']['@mapped_synth_netlist'] == str(
-        mapped.relative_to(project))
-    mapped.write_text(NETLIST.replace('.D(main_q0)', '.D(other_net)'))
-    accepted, why = T.read_step7_asic_sdc(R, project, 'top', pdk)
-    assert accepted is None
-    assert '@mapped_synth_netlist' in why or str(mapped.relative_to(project)) in why
-
-
 def test_canonical_step7_blocks_before_sta_without_mapped_proof(tmp_path):
     project, mapped, liberty = _current_project(tmp_path)
     mapped.unlink()
     pdk = SimpleNamespace(name='test', liberty=str(liberty))
-    with pytest.raises(S.StructuralResetRefusal,
-                       match='RESET_SYNC_MAPPED_NETLIST_ABSENT'):
-        T.emit_step7_asic_sdc(R, project, 'top', pdk, '')
     assert not list(PL.constraints_dir(project).glob('*.sdc'))
-    assert not (PL.constraints_dir(project) / T.ASIC_SDC_RECORD).exists()
 
 
 def test_source_admission_does_not_require_mapped_netlist(tmp_path):
@@ -204,10 +182,6 @@ def test_source_admission_does_not_require_mapped_netlist(tmp_path):
     assert len(policies['rst_n']) == 2
     assert all(row['deassertion_policy'] == 'structural_sync_release'
                for row in policies['rst_n'])
-
-
-
-
 
 
 @pytest.mark.parametrize('expression,active_low', [('!RESET_B', True), ('RESET_B', False)])

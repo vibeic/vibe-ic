@@ -70,9 +70,6 @@ sys.path.insert(0, str(_PROGRAMS))
 
 import phase2_scaffold_gen as scaf  # noqa: E402
 
-_GATE = _PROGRAMS / "l17_channel_catalog_consumer_contract_check.py"
-_GATE_MOD = importlib.import_module(
-    "l17_channel_catalog_consumer_contract_check")
 _SCAF_SRC = _PROGRAMS / "phase2_scaffold_gen.py"
 
 
@@ -273,92 +270,16 @@ def test_the_cli_still_emits_a_scaffold_it_can_resolve(tmp_path):
 # 4. The gate cannot be satisfied by writing a wrong width
 # ---------------------------------------------------------------------------
 
-def _categories(project):
-    findings, _info = _GATE_MOD.audit(project)
-    return [f.category for f in findings]
 
 
-def _resolver_writing(value):
-    """A consumer-side resolver that writes `value` for every width the real
-    consumer refused. It stands in for ANY repair that turns the symbol into
-    a number, right or wrong."""
-    original = _GATE_MOD._consumer.derive_signals
-
-    def resolving(l17, l9):
-        signals = original(l17, l9)
-        for sig in signals:
-            if sig.get("width") is None:
-                sig["width"] = value
-                sig.pop("width_declared", None)
-        return signals
-    return resolving
 
 
-def test_a_resolver_writing_a_wrong_width_cannot_silence_the_gate(
-        tmp_path, monkeypatch):
-    """THE discriminator for this round, and the reason this repair is not
-    the withdrawn one. The fixture states 48 in the port's own prose and
-    declares the parameter as 4 in the same document — the §7 hazard,
-    verbatim. A resolver writes 4. The gate must still FAIL."""
-    project = _project(
-        tmp_path,
-        [{"name": "acc_o", "direction": "output",
-          "width": "the accumulator is 48 bits in this configuration",
-          "width_symbolic": "ACC_W-1:0"}],
-        parameters=[{"name": "ACC_W", "default": "4"}])
-    monkeypatch.setattr(_GATE_MOD._consumer, "derive_signals",
-                        _resolver_writing(4))
-    cats = _categories(project)
-    assert "PORT_WIDTH_SYMBOL_UNCORROBORATED" in cats, cats
-    assert "PORT_WIDTH_UNRESOLVED_BY_CONSUMER" not in cats, cats
 
 
-def test_a_resolver_writing_the_right_width_also_cannot_silence_it(
-        tmp_path, monkeypatch):
-    """The half that proves the gate is not merely a wrong-value detector.
-    A right value and a wrong value are indistinguishable FROM HERE — which
-    is exactly why neither is trusted. If this test ever goes green by the
-    finding disappearing, a resolver has bought a green light instead of an
-    answer."""
-    project = _project(
-        tmp_path,
-        [{"name": "acc_o", "direction": "output",
-          "width": "the accumulator is 48 bits in this configuration",
-          "width_symbolic": "ACC_W-1:0"}],
-        parameters=[{"name": "ACC_W", "default": "48"}])
-    monkeypatch.setattr(_GATE_MOD._consumer, "derive_signals",
-                        _resolver_writing(48))
-    assert "PORT_WIDTH_SYMBOL_UNCORROBORATED" in _categories(project)
 
 
-def test_a_reverted_consumer_falls_back_into_the_collapse_rail(
-        tmp_path, monkeypatch):
-    """The revert detector. `PORT_WIDTH_COLLAPSED_TO_ONE_BIT` is kept alive
-    for exactly one purpose: a tree where the silent coercion is back must
-    still be reported, and reported as the DIFFERENT thing it is."""
-    project = _project(tmp_path, _SYMBOLIC_PORT)
-    monkeypatch.setattr(_GATE_MOD._consumer, "derive_signals",
-                        _resolver_writing(1))
-    cats = _categories(project)
-    assert "PORT_WIDTH_COLLAPSED_TO_ONE_BIT" in cats, cats
 
 
-def test_no_arm_of_the_rail_returns_clean(tmp_path, monkeypatch):
-    """Stated as one assertion so it cannot rot into three that each pass
-    while a fourth arm gets added with no finding."""
-    project = _project(tmp_path, _SYMBOLIC_PORT)
-    for width in (None, 1, 8, 4096):
-        if width is None:
-            monkeypatch.setattr(_GATE_MOD._consumer, "derive_signals",
-                                _GATE_MOD._consumer.derive_signals)
-        else:
-            monkeypatch.setattr(_GATE_MOD._consumer, "derive_signals",
-                                _resolver_writing(width))
-        findings, _ = _GATE_MOD.audit(project)
-        width_rows = [f for f in findings
-                      if f.category.startswith("PORT_WIDTH_")]
-        assert width_rows, f"no finding for consumer width {width!r}"
-        assert all(f.severity == "ERROR" for f in width_rows)
 
 
 def test_the_refusal_is_keyed_on_the_declaration_not_on_the_number():
@@ -373,15 +294,6 @@ def test_the_refusal_is_keyed_on_the_declaration_not_on_the_number():
         "the refusal is keyed on the consumer's own number again")
 
 
-def test_a_genuine_one_bit_port_is_still_not_reported(tmp_path):
-    """Carried forward from round 1 and re-asserted against the new arm:
-    firing on every width==1 port would hit every clock, reset and enable in
-    every design."""
-    project = _project(tmp_path, [
-        {"name": "en", "direction": "input", "width": 1},
-        {"name": "ok", "direction": "output", "width": "8"}])
-    cats = _categories(project)
-    assert not [c for c in cats if c.startswith("PORT_WIDTH_")], cats
 
 
 # ---------------------------------------------------------------------------

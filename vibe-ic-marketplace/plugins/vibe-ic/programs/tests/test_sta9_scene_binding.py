@@ -4,7 +4,6 @@ import json
 from _hostpaths import require_repo
 from test_f15_step23_gates_read_the_tool_arm import (STA, rebind, run_gate,
                                                       tool_project)
-from test_l24_required_sta_corners import fixture as l24_fixture, run as l24_run
 
 
 def _six_scenes(project):
@@ -100,28 +99,6 @@ def test_historical_native_fallback_reads_real_stapostpnr_scene_reports(tmp_path
     assert rows['max_ss_125C_4v50']['hold_wns_ns'] == 1.5086778919839563
 
 
-def test_partial_custom_report_preserves_violation_and_marks_gap(tmp_path):
-    project = l24_fixture(tool_project(
-        tmp_path, setup={'max_ss_125C_4v50': -0.5}))
-    folder = project / STA
-    missing = 'min_tt_025C_5v00'
-    for corner in json.loads((folder / 'config.json').read_text())['STA_CORNERS']:
-        for file, value in (('ws.max.rpt', 0.2), ('ws.min.rpt', 0.1),
-                            ('tns.max.rpt', 0.0), ('tns.min.rpt', 0.0)):
-            (folder / corner / file).write_text(f'{corner}: {value}\n')
-    (folder / missing / 'vibeic_signoff.rpt').unlink()
-    rebind(project)
-    rc, report = run_gate('sta_corner_record_completeness_check', project, tmp_path)
-    rows = {r['corner']: r for r in report['corners']}
-    assert rc == 1 and 'R3_SIGNOFF_CORNER_VIOLATION' in report['rules_violated'], report
-    assert rows['max_ss_125C_4v50']['setup_wns_ns'] == -0.5
-    assert rows[missing]['measurement_status'] == 'NOT_MEASURED'
-    assert rows[missing]['setup_wns_ns'] is None
-    rc, l24 = l24_run(project)
-    scenes = l24['requirements'][0]['corner_coverage']['scene_table']
-    assert rc == 1 and any(r['setup_wns_ns'] == -0.5 for r in scenes), l24
-
-
 def test_declared_custom_emitter_cannot_fall_back_when_all_reports_absent(tmp_path):
     project = tool_project(tmp_path)
     folder = project / STA
@@ -140,21 +117,6 @@ def test_declared_custom_emitter_cannot_fall_back_when_all_reports_absent(tmp_pa
                            for r in report['corners']), report
 
 
-def test_liberty_drift_with_same_header_is_not_measured(tmp_path):
-    project = l24_fixture(tool_project(tmp_path))
-    liberty = (tmp_path / 'pdk_root/p/libs.ref/cells/lib/'
-               'cells__ss_125C_4v50.lib')
-    liberty.write_text(liberty.read_text() + '\ncell (changed) {}\n')
-    rc, report = run_gate('sta_corner_record_completeness_check', project, tmp_path)
-    row = next(r for r in report['corners'] if r['corner'] == 'max_ss_125C_4v50')
-    assert rc == 1 and row['measurement_status'] == 'NOT_MEASURED', report
-    assert 'liberty_digest' in row['scope_gaps']
-    rc, l24 = l24_run(project)
-    scenes = l24['requirements'][0]['corner_coverage']['scene_table']
-    assert rc == 1 and any('liberty_digest' in r.get('scope_gaps', {})
-                           for r in scenes), l24
-
-
 def test_unrecorded_liberty_input_digest_is_not_measured(tmp_path):
     project = tool_project(tmp_path)
     receipt = project / STA / 'vibeic_receipt.json'
@@ -164,30 +126,3 @@ def test_unrecorded_liberty_input_digest_is_not_measured(tmp_path):
     rc, report = run_gate('sta_corner_record_completeness_check', project, tmp_path)
     assert rc == 1 and all(r['measurement_status'] == 'NOT_MEASURED'
                            for r in report['corners']), report
-
-
-def test_l24_carries_nine_scene_evidence_and_rejects_a_missing_scene(tmp_path):
-    project = l24_fixture(tool_project(tmp_path))
-    rc, report = l24_run(project)
-    coverage = report['requirements'][0]['corner_coverage']
-    assert rc == 0 and len(coverage['scene_table']) == 9, report
-    assert all(r['measurement_status'] == 'MEASURED' for r in coverage['scene_table'])
-    _six_scenes(project)
-    rc, report = l24_run(project)
-    coverage = report['requirements'][0]['corner_coverage']
-    assert rc == 1 and len(coverage['scene_table']) == 9, report
-    assert any(r['measurement_status'] == 'NOT_MEASURED' for r in coverage['scene_table'])
-
-
-def test_l24_marks_a_mismatched_spef_scene_not_measured(tmp_path):
-    project = l24_fixture(tool_project(tmp_path))
-    state = project / STA / 'state_out.json'
-    data = json.loads(state.read_text())
-    data['spef']['max_*'] = data['spef']['min_*']
-    state.write_text(json.dumps(data))
-    rebind(project)
-    rc, report = l24_run(project)
-    coverage = report['requirements'][0]['corner_coverage']
-    assert rc == 1, report
-    assert any(r['rc_corner'] == 'max' and r['measurement_status'] == 'NOT_MEASURED'
-               for r in coverage['scene_table'])

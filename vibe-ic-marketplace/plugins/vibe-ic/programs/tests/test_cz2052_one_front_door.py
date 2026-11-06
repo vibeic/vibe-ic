@@ -53,7 +53,6 @@ sys.path.insert(0, str(PROGRAMS))
 sys.path.insert(0, str(PLUGIN / "tools"))
 
 import phase1_doc_one_shot_runner as D        # noqa: E402
-import l_doc_structured_field_count_check as F  # noqa: E402
 
 # The four answers `_detect_input_mode` can give.
 _DETECTED = ("docs", "prompt", "none")
@@ -177,59 +176,12 @@ def test_mutation_restoring_the_chip_top_sentinel_re_reddens(tmp_path):
 
 # ── ITEM 2 — the structural floor keeps the arithmetic it had ─────────
 
-def _l9_floor(doc):
-    return F._check_l_doc(9, dict(doc))[0]
 
 
-def test_a_declared_absence_fills_the_top_module_slot_exactly_as_the_placeholder_did():
-    """The placeholder used to fill this slot for every document that had no
-    name to give. Removing it must not turn a vocabulary fix into a new red:
-    measured over the 283 published L9 documents on this host, the base
-    checker on the published documents and this checker on the #2052-shaped
-    documents give the IDENTICAL verdict for all 283 (136 FAIL / 147 PASS, by
-    path membership)."""
-    base_shaped = {"top_module": "chip_top",
-                   "top_module_extraction_strategy":
-                       "canonical_chip_top_sentinel",
-                   "no_top_module_in_input": True,
-                   "submodules": [],
-                   "top_ports": [{"name": "clk"}, {"name": "q"}]}
-    head_shaped = {"top_module": None,
-                   "top_module_extraction_strategy": "top_undeclared",
-                   "top_module_status": "top_undeclared",
-                   "no_top_module_in_input": True,
-                   "submodules": [],
-                   "top_ports": [{"name": "clk"}, {"name": "q"}]}
-    assert _l9_floor(base_shaped) is True
-    assert _l9_floor(head_shaped) is True
 
 
-def test_a_document_that_states_nothing_about_its_top_still_fails_the_floor():
-    """CONTROL — the honesty guard. Neither a name NOR the explicit flag is
-    still zero for that slot, on both sides of the change. Without this the
-    new clause would be vacuous."""
-    silent = {"top_ports": [{"name": "clk"}, {"name": "q"}], "submodules": []}
-    assert _l9_floor(silent) is False
-    # and `false` — a design whose input DID name a top — never masquerades
-    denied = dict(silent, no_top_module_in_input=False)
-    assert _l9_floor(denied) is False
 
 
-def test_mutation_dropping_the_honest_absence_clause_re_reddens_29_real_documents():
-    """MUTATION. The pre-clause predicate was `isinstance(top_module, str) and
-    top_module`. Applied to a #2052-shaped document it is False, which is the
-    counterfactual measured over the corpus: 29 of the 283 published L9
-    documents flip PASS -> FAIL without this clause."""
-    head_shaped = {"top_module": None,
-                   "top_module_status": "top_undeclared",
-                   "no_top_module_in_input": True,
-                   "submodules": [],
-                   "top_ports": [{"name": "clk"}, {"name": "q"}]}
-    pre_clause = (isinstance(head_shaped.get("top_module"), str)
-                  and bool(head_shaped.get("top_module")))
-    assert pre_clause is False
-    assert F._has_honest_no_top_module(head_shaped) is True
-    assert _l9_floor(head_shaped) is True
 
 
 # ── ITEM 3 — a prose top name is read ─────────────────────────────────

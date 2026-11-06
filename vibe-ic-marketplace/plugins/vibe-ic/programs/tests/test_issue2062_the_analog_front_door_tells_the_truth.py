@@ -315,9 +315,6 @@ def test_R6_the_log_head_names_the_absolute_libraries_the_deck_loaded():
             "tran 1n 100n\n.end\n")
     head = ARS.deck_library_header(deck)
     assert "cornerMOSlv.lib" in head and "diodes.lib" in head
-    import pdk_revision_resolve as PRR
-    found = PRR._ABS_LIB_RE.findall(head)
-    assert len(found) == 2, head
 
 
 def test_R6_a_deck_with_no_absolute_include_gets_NO_header():

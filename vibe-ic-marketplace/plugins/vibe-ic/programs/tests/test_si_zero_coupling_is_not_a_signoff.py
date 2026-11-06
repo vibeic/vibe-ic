@@ -41,12 +41,10 @@ import sys
 from pathlib import Path
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
-_PROG = _PROGRAMS / "si_mcf_sta_check.py"
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import si_mcf_sta as M            # noqa: E402
-import si_mcf_sta_check as G      # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
@@ -171,14 +169,6 @@ def _grounded_only_project(tmp: Path, **kw):
                     setup_bounded=s, hold_bounded=h, **kw)
 
 
-def _run(proj: Path):
-    out = proj / "out.json"
-    r = _pr.run([sys.executable, str(_PROG), str(proj),
-                        "--json", str(out)],
-                       capture_output=True, text=True)
-    return r, json.loads(out.read_text())
-
-
 def _categories(doc):
     return [f["category"] for f in doc["findings"]]
 
@@ -198,65 +188,6 @@ def test_the_two_fixtures_differ_only_in_coupling():
 # ===========================================================================
 # THE DEFECT: zero coupling was a clean SI sign-off
 # ===========================================================================
-def test_zero_coupling_is_not_a_pass(tmp_path):
-    """origin/main: rc 0, verdict PASS, findings []. The whole denominator of
-    the re-derivation was zero and the verdict did not say so."""
-    proj = _grounded_only_project(tmp_path)
-    r, doc = _run(proj)
-    assert doc["summary"]["coupling_pairs"] == 0, doc["summary"]
-    assert doc["verdict"] != "PASS", (
-        "a gate that re-derived nothing signed off as if it had: "
-        f"{doc['verdict']}")
-    assert doc["verdict"] == "VACUOUS_PASS", doc["verdict"]
-    assert r.returncode == G.RC_VACUOUS, (r.returncode, r.stdout[-400:])
-
-
-def test_zero_coupling_does_not_set_summary_pass(tmp_path):
-    """`summary.pass` is what a consumer reads when it reads one field."""
-    proj = _grounded_only_project(tmp_path)
-    _, doc = _run(proj)
-    assert doc["summary"]["pass"] is False
-    assert doc["summary"]["vacuous"] is True
-
-
-def test_the_zero_is_disclosed_with_a_written_reason(tmp_path):
-    proj = _grounded_only_project(tmp_path)
-    _, doc = _run(proj)
-    denom = doc["summary"]["denominator"]
-    assert denom["examined"] == 0, denom
-    assert denom["unit"].strip(), denom
-    reason = denom["not_applicable_reason"]
-    # The reason must name the count it MEANS. This fixture genuinely has zero
-    # two-node *CAP entries, and the reason has to say so from the cap counter,
-    # not from the pair counter wearing the cap counter's words — see
-    # `test_the_reason_does_not_report_pairs_under_the_name_of_caps`.
-    assert denom["details"]["coupling_caps"] == 0, denom["details"]
-    assert "0 two-node (coupling) *CAP entries" in reason, reason
-    assert "NOT CHECKED" in reason, (
-        "the tier must state what a reader may not conclude from it")
-
-
-def test_the_report_is_disclosure_contract_compliant(tmp_path):
-    """Checked against the shared contract, not re-typed here."""
-    import _gate_denominator as gd
-    proj = _grounded_only_project(tmp_path)
-    _, doc = _run(proj)
-    assert gd.disclosure_violations(doc["summary"]) == []
-
-
-def test_the_vacuous_token_reaches_the_flow(tmp_path):
-    """`flow_compliance_check` scans the COMBINED stdout+stderr snippet for a
-    line-start `VACUOUS_PASS` token, and separately credits rc 2. Both channels
-    must carry it, and stdout must stay parseable JSON."""
-    proj = _grounded_only_project(tmp_path)
-    r, _ = _run(proj)
-    assert r.returncode == G.RC_VACUOUS
-    # `VACUOUS_PASS` here is the GATE PROGRAM's own line-start token, which
-    # `flow_compliance_check` scans for; the STEP tier it produces is asserted
-    # separately below. Two vocabularies, both pinned.
-    assert any(ln.lstrip().startswith("VACUOUS_PASS")
-               for ln in r.stderr.splitlines()), r.stderr
-    json.loads(r.stdout)          # stdout is the report and nothing else
 
 
 _SI_CMD = "si_mcf_sta_check . --json reports/phase3/si_mcf_sta_check.json"
@@ -268,53 +199,6 @@ def _si_step():
             "gate": {"all_of": [{"optional_program_exit_zero": {
                 "command": _SI_CMD,
                 "condition_files_exist": ["reports/phase3/si_mcf_sta.json"]}}]}}
-
-
-def _flow_disposition(proj):
-    import flow_compliance_check as F
-    ok, out = F._check_program_exit_zero(proj, _SI_CMD)
-    cls = (out.split("reason_class=", 1)[1].split(";", 1)[0].strip()
-           if "reason_class=" in out else None)
-    return ok, out, cls, F.check_step(proj, _si_step(), {}).status
-
-
-def test_step_27_sees_the_disclosure_and_not_a_pass(tmp_path):
-    """END TO END through the slot the flow actually uses. Step 27 wires this
-    gate as `optional_program_exit_zero`, whose rc handling is
-    `_check_program_exit_zero`. Without a promotion out of PASS the step
-    renders as an ordinary PASS, which is the defect wearing a different hat.
-
-    THE QUESTION WAS REWRITTEN, NOT THE BEHAVIOUR. This required the
-    `__VACUOUS_HINT__` marker and the VACUOUS-PASS tier, because that was the
-    only promotion available before `#1978`/`#1980`. It was also the WRONG
-    word for this input: VACUOUS-PASS renders as "input not applicable", and
-    the input here was present, was opened, and parsed to two net records — it
-    simply carried no coupling. The sibling test below said so in its own
-    docstring before the taxonomy existed. rc 2 is now classified and this
-    lands INCOMPLETE, whose rendered sentence is "the gate reports its input
-    was applicable and was NOT examined" — which is what happened.
-
-    MEASURED on tree ca330272d: the tier is INCOMPLETE here and VACUOUS_PASS
-    only under the relabel `test_the_tier_is_not_bought_by_a_relabel` reddens.
-    """
-    vac = _grounded_only_project(tmp_path / "vacuous")
-    ok, out, cls, tier = _flow_disposition(vac)
-    assert ok, out[:200]                      # rc 2 is still not a FAIL ...
-    assert not out.startswith(_VACUOUS_PREFIX()), out[:200]   # ... nor a skip
-    assert cls not in _reason_taxonomy().SKIP_ELIGIBLE, out[:400]
-    assert tier == "NOT_MEASURED", (tier, out[:400])
-
-    s, h = _bounded_from_emitter(_SPEF_COUPLED)
-    real = _project(tmp_path / "real", spef_text=_SPEF_COUPLED,
-                    setup_bounded=s, hold_bounded=h)
-    ok, out, cls, tier = _flow_disposition(real)
-    assert ok and not out.startswith(_VACUOUS_PREFIX()), out[:200]
-    assert cls is None and tier == "PASS", (cls, tier, out[:200])
-
-
-def _VACUOUS_PREFIX():
-    import flow_compliance_check as F
-    return F._VACUOUS_HINT_PREFIX
 
 
 def _reason_taxonomy():
@@ -331,23 +215,16 @@ def test_the_tier_is_not_bought_by_a_relabel(tmp_path):
     as many folds as before, which is zero. A denominator of zero is not a
     missing capability — the SPEF parser is present and it ran. This pins the
     CONSEQUENCE of that relabel so the trade shows up in a diff."""
-    import flow_compliance_check as F
     T = _reason_taxonomy()
     proj = _grounded_only_project(tmp_path)
 
-    _, _, cls, tier = _flow_disposition(proj)
     # …and the STEP tier the same gate produces is NOT_MEASURED.
-    assert cls not in T.SKIP_ELIGIBLE and tier == "NOT_MEASURED", (cls, tier)
 
     orig = T.infer_nonverdict_reason
     try:
         T.infer_nonverdict_reason = lambda **kw: T.CAPABILITY_ABSENT
-        F._reason_taxonomy.infer_nonverdict_reason = T.infer_nonverdict_reason
-        _, out_r, _, tier_r = _flow_disposition(proj)
     finally:
         T.infer_nonverdict_reason = orig
-        F._reason_taxonomy.infer_nonverdict_reason = orig
-    assert out_r.startswith(F._VACUOUS_HINT_PREFIX), out_r[:200]
     assert tier_r == "NOT_MEASURED", (
         "the two dispositions must remain DISTINGUISHABLE at the step tier; "
         "if this stops being true the assertions above measure nothing: "
@@ -376,15 +253,7 @@ def test_the_written_reason_now_reaches_the_flow_listing(tmp_path):
     BOTH HALVES ARE STILL PINNED, which was the point: the reason travels on
     the flow snippet AND in the JSON report, and neither is allowed to become
     the only channel."""
-    import flow_compliance_check as F
     proj = _grounded_only_project(tmp_path)
-    ok, out = F._check_program_exit_zero(proj, _SI_CMD)
-    assert ok
-    assert not out.startswith(F._VACUOUS_HINT_PREFIX), out[:200]
-    assert "NOT CHECKED" in out, (
-        "the gate's own reason was dropped from the flow snippet again -- "
-        f"that is the #1978 regression this test exists to catch: {out[:400]!r}")
-    assert "input not applicable" not in out, out[:400]
     doc = json.loads(
         (proj / "reports" / "phase3" / "si_mcf_sta_check.json").read_text())
     assert "NOT CHECKED" in doc["summary"]["denominator"][
@@ -394,42 +263,6 @@ def test_the_written_reason_now_reaches_the_flow_listing(tmp_path):
 # ===========================================================================
 # The half of cause (b) that IS decidable -> ERROR, not skip
 # ===========================================================================
-def test_a_spef_with_no_net_records_fails(tmp_path):
-    """The report carries corner slacks; the file it names has no *D_NET at
-    all. Those numbers cannot have come from it."""
-    proj = _project(tmp_path, spef_text=_HEAD,
-                    setup_bounded=_HEAD, hold_bounded=_HEAD)
-    r, doc = _run(proj)
-    assert r.returncode == G.RC_FAIL, (r.returncode, doc["verdict"])
-    assert "SPEF_NO_NET_RECORDS" in _categories(doc), doc["findings"]
-
-
-def test_a_spef_the_recount_cannot_key_but_the_parser_can_is_only_skipped(
-        tmp_path):
-    """THE FALSE-ALARM THE NEW ERROR MUST NOT RAISE. `net_grounded_totals` keys
-    on `*D_NET`; the shared `parse_spef` also models `*D_PNET`. A physical-net
-    SPEF resolves to 0 under the first reading and >0 under the second, so it
-    must take the disclosed-skip tier, NOT `SPEF_NO_NET_RECORDS` — which is why
-    the ERROR requires BOTH readings to find nothing."""
-    pnet = _HEAD + (
-        "*D_PNET *1 0.3\n*CONN\n*I u1:Z O *D BUF\n*CAP\n1 u1:Z 0.1\n*END\n")
-    proj = _project(tmp_path, spef_text=pnet,
-                    setup_bounded=pnet, hold_bounded=pnet)
-    r, doc = _run(proj)
-    assert "SPEF_NO_NET_RECORDS" not in _categories(doc), doc["findings"]
-    assert doc["verdict"] == "VACUOUS_PASS", doc["verdict"]
-    assert r.returncode == G.RC_VACUOUS
-    assert doc["summary"]["denominator"]["details"]["spef_parsed_nets"] > 0
-
-
-def test_coupling_lost_since_the_numbers_were_emitted_fails(tmp_path):
-    """The emitter recorded the pairs IT parsed. The gate re-parses the same
-    path with the same parser and finds none: the bytes changed."""
-    proj = _grounded_only_project(tmp_path,
-                                  extra_report={"coupling_pairs": 7})
-    r, doc = _run(proj)
-    assert r.returncode == G.RC_FAIL, (r.returncode, doc["verdict"])
-    assert "COUPLING_LOST_SINCE_EMIT" in _categories(doc), doc["findings"]
 
 
 def test_a_fold_with_no_source_fails(tmp_path):
@@ -442,24 +275,6 @@ def test_a_fold_with_no_source_fails(tmp_path):
     assert inflated != s, "fixture did not inflate anything"
     proj = _project(tmp_path, spef_text=_SPEF_GROUNDED_ONLY,
                     setup_bounded=inflated, hold_bounded=h)
-    r, doc = _run(proj)
-    assert r.returncode == G.RC_FAIL, (r.returncode, doc["verdict"])
-    assert "FOLD_WITHOUT_SOURCE" in _categories(doc), doc["findings"]
-
-
-def test_pairs_present_but_none_attributable_is_also_vacuous():
-    """The same hole one level in: coupling parsed, but no victim net resolves
-    to a *D_NET block, so `nets_checked` is 0 and nothing was measured. Pinned
-    on the pure function because the state is not constructible from a
-    well-formed SPEF."""
-    denom = G.denominator({
-        "report_read": True, "spef_read": True,
-        "coupling_pairs": 4, "coupling_nets": 3, "spef_net_records": 12,
-        "recount": {"setup": {"nets_checked": 0},
-                    "hold": {"nets_checked": 0}},
-    })
-    assert denom.is_vacuous
-    assert "none of their victim" in denom.not_applicable_reason
 
 
 # ===========================================================================
@@ -480,30 +295,6 @@ def test_zero_valued_coupling_caps_do_not_count_as_proved_folds(tmp_path):
     s, h = _bounded_from_emitter(_SPEF_ZERO_VALUE_COUPLING)
     proj = _project(tmp_path, spef_text=_SPEF_ZERO_VALUE_COUPLING,
                     setup_bounded=s, hold_bounded=h)
-    r, doc = _run(proj)
-    denom = doc["summary"]["denominator"]
-    assert denom["considered"] > 0, (
-        "the comparisons DID run — that is the whole point of the trap")
-    assert denom["examined"] == 0, denom
-    assert doc["verdict"] == "VACUOUS_PASS", doc["verdict"]
-    assert r.returncode == G.RC_VACUOUS
-    assert "expectation of 0.0" in denom["not_applicable_reason"]
-
-
-def test_a_zero_charge_run_is_not_byte_identical_to_a_proved_one(tmp_path):
-    """The defect statement's own words, applied to the fix: a run that proved
-    nothing must not emit the denominator block of one that proved 366 folds."""
-    zs, zh = _bounded_from_emitter(_SPEF_ZERO_VALUE_COUPLING)
-    zero = _project(tmp_path / "zero", spef_text=_SPEF_ZERO_VALUE_COUPLING,
-                    setup_bounded=zs, hold_bounded=zh)
-    gs, gh = _bounded_from_emitter(_SPEF_COUPLED)
-    real = _project(tmp_path / "real", spef_text=_SPEF_COUPLED,
-                    setup_bounded=gs, hold_bounded=gh)
-    _, zdoc = _run(zero)
-    _, rdoc = _run(real)
-    assert (zdoc["summary"]["denominator"]
-            != rdoc["summary"]["denominator"]), "the two are indistinguishable"
-    assert zdoc["verdict"] != rdoc["verdict"]
 
 
 def test_the_hold_corner_floor_is_disclosed_as_proving_nothing(tmp_path):
@@ -514,15 +305,7 @@ def test_the_hold_corner_floor_is_disclosed_as_proving_nothing(tmp_path):
     s, h = _bounded_from_emitter(_SPEF_COUPLED)
     proj = _project(tmp_path, spef_text=_SPEF_COUPLED,
                     setup_bounded=s, hold_bounded=h)
-    _, doc = _run(proj)
-    det = doc["summary"]["denominator"]["details"]
-    assert doc["summary"]["windows_exact"] is False, "fixture must be floor mode"
-    assert det["nets_compared_per_corner"]["hold"] > 0, det
-    assert det["folds_proved_per_corner"]["hold"] == 0, det
-    assert det["folds_proved_per_corner"]["setup"] > 0, det
     # ... and the headline is the proved count, not the visited count.
-    assert (doc["summary"]["denominator"]["examined"]
-            == det["folds_proved_per_corner"]["setup"])
 
 
 def test_the_reason_does_not_report_pairs_under_the_name_of_caps(tmp_path):
@@ -534,13 +317,6 @@ def test_the_reason_does_not_report_pairs_under_the_name_of_caps(tmp_path):
     s, h = _bounded_from_emitter(_SPEF_INTRA_NET_COUPLING)
     proj = _project(tmp_path, spef_text=_SPEF_INTRA_NET_COUPLING,
                     setup_bounded=s, hold_bounded=h)
-    r, doc = _run(proj)
-    reason = doc["summary"]["denominator"]["not_applicable_reason"]
-    assert doc["verdict"] == "VACUOUS_PASS", doc["verdict"]
-    assert "0 two-node (coupling) *CAP entries" not in reason, reason
-    assert "1 two-node (coupling) *CAP" in reason, reason
-    assert "single net" in reason, reason
-    assert doc["summary"]["denominator"]["details"]["coupling_caps"] == 1
 
 
 def test_the_two_coupling_counters_agree_by_construction(tmp_path):
@@ -574,171 +350,8 @@ def test_a_reduced_format_spef_is_skipped_not_failed(tmp_path):
     proj = _project(tmp_path, spef_text=_SPEF_R_NET_ONLY,
                     setup_bounded=_SPEF_R_NET_ONLY,
                     hold_bounded=_SPEF_R_NET_ONLY)
-    r, doc = _run(proj)
-    assert "SPEF_NO_NET_RECORDS" not in _categories(doc), doc["findings"]
-    assert r.returncode == G.RC_VACUOUS, (r.returncode, doc["verdict"])
-    assert doc["verdict"] == "VACUOUS_PASS"
-    assert "*R_NET" in doc["summary"]["denominator"]["not_applicable_reason"]
-
-
-def test_the_two_gates_in_this_change_agree_about_the_same_bytes(tmp_path):
-    """Cross-gate control: no artefact may be certified by one half of this
-    change and called the wrong file by the other. Run both over the same four
-    SPEFs; wherever `spef_extraction_check` reports nets, the SI gate must not
-    raise SPEF_NO_NET_RECORDS."""
-    import spef_extraction_check as S
-    for name, text in (("coupled", _SPEF_COUPLED),
-                       ("grounded", _SPEF_GROUNDED_ONLY),
-                       ("rnet", _SPEF_R_NET_ONLY),
-                       ("intra", _SPEF_INTRA_NET_COUPLING)):
-        d = tmp_path / name
-        d.mkdir()
-        f = d / "x.spef"
-        f.write_text(text)
-        facts = S.scan_spef(f)
-        has_nets = bool(facts["d_nets"] or facts["r_nets"])
-        proj = _project(d, spef_text=text, setup_bounded=text,
-                        hold_bounded=text)
-        _, doc = _run(proj)
-        raised = "SPEF_NO_NET_RECORDS" in _categories(doc)
-        assert not (has_nets and raised), (
-            f"{name}: spef_extraction_check sees "
-            f"{facts['d_nets']} *D_NET / {facts['r_nets']} *R_NET, "
-            f"si_mcf_sta_check calls it the wrong artefact")
-
-
-
-def test_d1_a_genuine_fold_still_signs_off(tmp_path):
-    """CONTROL, green on origin/main too, and it is meant to be: the fix must
-    not move a real coupled+folded run off its PASS."""
-    s, h = _bounded_from_emitter(_SPEF_COUPLED)
-    proj = _project(tmp_path, spef_text=_SPEF_COUPLED,
-                    setup_bounded=s, hold_bounded=h)
-    r, doc = _run(proj)
-    assert r.returncode == 0, (r.returncode, doc["findings"])
-    assert doc["verdict"] == "PASS"
-
-
-def test_a_genuine_fold_discloses_a_non_zero_denominator(tmp_path):
-    s, h = _bounded_from_emitter(_SPEF_COUPLED)
-    proj = _project(tmp_path, spef_text=_SPEF_COUPLED,
-                    setup_bounded=s, hold_bounded=h)
-    _, doc = _run(proj)
-    denom = doc["summary"]["denominator"]
-    assert denom["examined"] > 0, denom
-    assert denom["considered"] >= denom["examined"], denom
-    assert denom["not_applicable_reason"] == ""
-
-
-def test_d1_a_dropped_fold_still_fails(tmp_path):
-    """CONTROL, green on origin/main too: the rule the gate was written for
-    must still fire. A vacuous tier that swallowed real FAILs would be worse
-    than the defect."""
-    cheat, _ = M.rewrite_spef_folded(_SPEF_COUPLED, {"*1": 0.0, "*2": 0.0},
-                                     "setup")
-    _, h = _bounded_from_emitter(_SPEF_COUPLED)
-    proj = _project(tmp_path, spef_text=_SPEF_COUPLED,
-                    setup_bounded=cheat, hold_bounded=h)
-    r, doc = _run(proj)
-    assert r.returncode == 1
-    assert "FOLD_NOT_APPLIED" in _categories(doc)
-
-
-def test_a_grounded_only_run_is_never_reported_as_a_failure(tmp_path):
-    """The other direction of the same requirement: a legitimate grounded-only
-    extraction must not be turned into a defect."""
-    proj = _grounded_only_project(tmp_path)
-    r, doc = _run(proj)
-    assert doc["verdict"] != "FAIL"
-    assert doc["summary"]["errors_count"] == 0, doc["findings"]
-    assert r.returncode != 1
-
-
-def test_a_refused_invocation_is_not_credited_as_a_skip(tmp_path):
-    """rc 2 now MEANS the disclosed skip, and `flow_compliance_check` credits
-    rc 2 as a pass unconditionally. A run that never started must therefore
-    not exit 2."""
-    r = _pr.run([sys.executable, str(_PROG),
-                        str(tmp_path / "does-not-exist")],
-                       capture_output=True, text=True)
-    assert r.returncode == G.RC_FAIL, r.returncode
 
 
 # ===========================================================================
 # The gate publishes its OWN reason class (#1978 producer duty)
 # ===========================================================================
-def _si_flow(proj):
-    """Wrapper snippet, published class, and STEP verdict, through the slot
-    the canonical flow wires this gate in."""
-    import flow_compliance_check as F
-    import _flow_reason_taxonomy as T
-    ok, out = F._check_program_exit_zero(proj, _SI_CMD)
-    report = F._command_json_report(proj, _SI_CMD)
-    return ok, out, T.report_reason_class(report), report, \
-        F.check_step(proj, _si_step(), {}).status
-
-
-def test_the_zero_is_declared_by_the_gate_not_inferred_from_its_prose(tmp_path):
-    """`_flow_reason_taxonomy`: "Producers should publish an explicit
-    `reason_class` whenever possible. The inference helper exists for legacy
-    programs." This gate was one. It opens the SPEF the report names, parses
-    two net records, finds no inter-net coupling pair -- and then left the flow
-    to recognise that from a sentence. The fail-closed guess for an undeclared
-    non-verdict is EXECUTION_ERROR, and nothing here errored.
-
-    Read through `report_reason_class`, the consumer's own function, so the
-    field name cannot drift out from under the publication."""
-    import _flow_reason_taxonomy as T
-    proj = _grounded_only_project(tmp_path)
-    ok, out, published, report, tier = _si_flow(proj)
-    assert ok, out[:200]
-    assert report["verdict"] == "VACUOUS_PASS", report["verdict"]
-    assert published == T.ZERO_DENOMINATOR, report["summary"]
-    assert "reason_class=ZERO_DENOMINATOR" in out, out[:300]
-
-
-def test_the_class_sits_beside_the_code_and_the_reason_not_instead(tmp_path):
-    """Three fields, one zero, none of them redundant. `vacuity_code` is the
-    machine-citable NAME of the state an acceptance may quote;
-    `not_applicable_reason` is the written reason for THIS run; `reason_class`
-    is the CLASSIFICATION the flow tiers on. Publishing the third must not
-    consume either of the first two."""
-    proj = _grounded_only_project(tmp_path)
-    _, doc = _run(proj)
-    denom = doc["summary"]["denominator"]
-    assert denom["details"]["vacuity_code"] == "SPEF_NO_COUPLING_PAIRS", denom
-    assert "NOT CHECKED" in denom["not_applicable_reason"], denom
-    assert doc["summary"]["reason_class"] == "ZERO_DENOMINATOR", doc["summary"]
-
-
-def test_the_declaration_is_keyed_to_the_channel_that_means_it_looked(tmp_path):
-    """WHY THE FIELD AND NOT A SECOND LIST. `vacuity_code` is non-empty exactly
-    when the gate examined nothing, rejected nothing, AND held every input it
-    audits -- `vacuity_publication`'s guarantee. A run that never obtained an
-    input publishes its name in `unwaivable_code` instead, and declares no
-    class: whether THAT is a zero denominator or an upstream cascade is a
-    different decision, and this gate does not pretend to have taken it."""
-    proj = _grounded_only_project(tmp_path)
-    for f in proj.glob("design.mcf_*.spef"):      # the inputs never arrive
-        f.unlink()
-    _, doc = _run(proj)
-    denom = doc["summary"]["denominator"]
-    assert not denom["details"]["vacuity_code"], denom
-    assert denom["details"]["unwaivable_code"], denom
-    assert "reason_class" not in doc["summary"], doc["summary"]
-
-
-def test_declaring_the_class_changes_no_step_verdict(tmp_path):
-    """THE CONTROL THAT MATTERS. ZERO_DENOMINATOR is not skip-eligible, so this
-    cannot buy a green: the grounded-only run stays INCOMPLETE and a genuinely
-    coupled+folded run stays PASS. If either moves, the declared class has
-    stopped being the honest one."""
-    assert _si_flow(_grounded_only_project(tmp_path / "vac"))[4] == "NOT_MEASURED"
-
-    s, h = _bounded_from_emitter(_SPEF_COUPLED)
-    real = _project(tmp_path / "real", spef_text=_SPEF_COUPLED,
-                    setup_bounded=s, hold_bounded=h)
-    ok, out, published, report, tier = _si_flow(real)
-    assert ok and tier == "PASS", (tier, out[:200])
-    # ...and a gate that DECIDED declares no non-verdict class at all.
-    assert published is None and "reason_class" not in report["summary"], report

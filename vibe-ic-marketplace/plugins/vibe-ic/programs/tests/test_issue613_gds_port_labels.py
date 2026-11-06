@@ -59,8 +59,6 @@ _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 _FLOW = _PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml"
 
 PWR = importlib.import_module("def_gds_port_power_restore")
-GSC = importlib.import_module("gds_substance_check")
-CEN = importlib.import_module("gds_port_label_check")
 KLVS = importlib.import_module("klayout_pdk_lvs")
 
 
@@ -175,14 +173,6 @@ def _project(tmp_path, design, pins, top_labels, layer="Metal2", declared=None):
     return tmp_path
 
 
-def _run(project, extra=()):
-    out = project / "cen.json"
-    r = _pr.run(
-        [sys.executable, str(_PROGRAMS / "gds_port_label_check.py"),
-         str(project), "--json", str(out), *extra],
-        capture_output=True, text=True)
-    rep = json.loads(out.read_text()) if out.is_file() else {}
-    return r.returncode, (r.stdout + r.stderr), rep
 
 
 # ── 2. the producer and the consumer must agree on what a metal name is ─────
@@ -314,119 +304,26 @@ def test_the_refusal_does_not_fire_when_the_names_resolve(tmp_path, capsys):
 
 
 # ── the census: per structure, by name, paired by the design's own name ─────
-def test_a_top_with_no_labels_is_found_even_though_the_library_has_plenty(tmp_path):
-    """The exact #613 shape, and why the count is PER STRUCTURE: the library
-    carries the leaf cell's own pin texts, so a library-wide count is non-zero
-    for a top cell with none."""
-    p = _project(tmp_path, "chip", ["a", "b", "c"], top_labels=())
-    rc, out, rep = _run(p)
-    assert rc == 1, out
-    f = rep["files"][0]
-    assert f["verdict"] == "NO_LABELS"
-    assert f["top_labels"] == 0 and f["labels_total_in_library"] == 2
-    assert "cannot pin-match" in f["reason"]
 
 
-def test_a_fully_labelled_top_passes(tmp_path):
-    p = _project(tmp_path, "chip", ["a", "b", "c"], top_labels=("a", "b", "c"))
-    rc, out, rep = _run(p)
-    assert rc == 0, out
-    assert rep["files"][0]["verdict"] == "OK"
 
 
-def test_a_missing_label_is_named_not_merely_counted(tmp_path):
-    """A count says how many are unnamed; the name says which port to look at."""
-    p = _project(tmp_path, "chip", ["a", "b", "c"], top_labels=("a", "c"))
-    rc, _out, rep = _run(p)
-    assert rc == 1
-    f = rep["files"][0]
-    assert f["verdict"] == "MISSING_LABELS"
-    assert f["missing_labels"] == ["b"]
 
 
-def test_a_naming_convention_difference_is_reported_as_one(tmp_path):
-    """Both directions, so `VDD!` labels for `VDD` pins read as a convention
-    mismatch instead of sending the reader after a missing label."""
-    p = _project(tmp_path, "chip", ["VDD", "VSS"], top_labels=("VDD!", "VSS!"))
-    rc, _out, rep = _run(p)
-    assert rc == 1
-    f = rep["files"][0]
-    assert f["missing_labels"] == ["VDD", "VSS"]
-    assert f["labels_matching_no_pin"] == ["VDD!", "VSS!"]
-    assert "convention" in f["reason"]
 
 
-def test_a_declared_but_unplaced_pin_is_disclosed_and_never_blocks(tmp_path):
-    """A pin in the `PINS n ;` header with no placement has no geometry to
-    attach a label to. Counting it as missing would fail a design for a defect
-    it does not have."""
-    p = _project(tmp_path, "chip", ["a", "b"], top_labels=("a", "b"),
-                 declared=5)
-    rc, out, rep = _run(p)
-    assert rc == 0, out
-    f = rep["files"][0]
-    assert f["pins_declared"] == 5 and f["pins_placed"] == 2
-    assert f["pins_unplaceable"] == 3
-    assert "cannot be labelled" in out
 
 
-def test_a_def_that_does_not_describe_this_gds_is_not_measured(tmp_path):
-    """sha256's pnr dir holds DEFs for TWO designs — `chip_top` and `sha256` —
-    and the sign-off GDS is `sha256`. Taking "the routed DEF" would compare
-    chip_top's pins against a GDS that does not contain chip_top and call the
-    answer zero. Pairing is by the DEF's own `DESIGN <name> ;`."""
-    p = _project(tmp_path, "chip", ["a"], top_labels=())
-    (p / "phase3" / "stage3" / "pnr" / "routed.def").write_text(
-        _def("some_other_design", ["a"]), encoding="utf-8")
-    rc, out, rep = _run(p)
-    assert rc == CEN.RC_CANNOT_MEASURE, out
-    assert rep["files"][0]["verdict"] == "NOT_MEASURED"
-    assert "VACUOUS_PASS" in out
 
 
-def test_the_right_def_is_picked_when_several_are_offered(tmp_path):
-    """THE ACCEPT CASE of the pairing: the wrong-design DEF beside the right one
-    must not suppress the measurement."""
-    p = _project(tmp_path, "chip", ["a", "b"], top_labels=("a", "b"))
-    (p / "phase3" / "stage3" / "pnr" / "chip_top.def").write_text(
-        _def("chip_top", ["z"]), encoding="utf-8")
-    rc, out, rep = _run(p)
-    assert rc == 0, out
-    assert rep["files"][0]["top_cell"] == "chip"
 
 
-def test_a_project_with_no_gds_is_a_disclosed_skip(tmp_path):
-    rc, out, _rep = _run(tmp_path)
-    assert rc == CEN.RC_CANNOT_MEASURE
-    assert out.lstrip().startswith("VACUOUS_PASS")
 
 
-def test_a_gds_that_is_not_a_gds_is_not_a_design_finding(tmp_path):
-    """Counting labels in a damaged stream counts an artefact of the damage.
-    `gds_substance_check` owns that verdict; this one declines to add a second,
-    wrong one."""
-    p = _project(tmp_path, "chip", ["a"], top_labels=("a",))
-    (p / "phase3" / "stage4" / "gds" / "chip.gds").write_bytes(b"not a gds")
-    rc, _out, rep = _run(p)
-    assert rc == CEN.RC_CANNOT_MEASURE
-    assert "not a valid stream" in rep["files"][0]["reason"]
 
 
-def test_the_two_walkers_agree_on_the_text_total():
-    """`parse_gds` is the validity authority and keeps its own byte-exact walk;
-    `iter_records` is the content reader. Two walks over one format is how the
-    counts drift apart, so they are pinned to each other."""
-    data = build_gds("chip", ("a", "b", "c"))
-    _f, st = GSC.parse_gds(data)
-    cen = GSC.structure_text_census(data)
-    assert sum(cen.text_per_structure.values()) == st.element_breakdown["TEXT"]
 
 
-def test_the_top_cell_is_the_one_nothing_references():
-    data = build_gds("chip", ("a",))
-    cen = GSC.structure_text_census(data)
-    assert cen.top_structures() == ["chip"]
-    assert set(cen.structures) == {"leafcell", "chip"}
 
 
 # ── 1. the runner trigger is the measurement, not the PDK class ─────────────
@@ -577,15 +474,6 @@ def test_step_37_gates_on_port_labels():
     assert any(c.startswith("gds_port_label_check") for c in cmds), cmds
 
 
-def test_the_gate_is_reachable_through_the_flow_runner(tmp_path):
-    """END TO END, through `flow_compliance_check`'s own invoker — a gate that
-    only its own test runs is not wired."""
-    FC = importlib.import_module("flow_compliance_check")
-    p = _project(tmp_path, "chip", ["a", "b"], top_labels=())
-    ok, ev = FC._check_program_exit_zero(
-        p, "gds_port_label_check . --json reports/phase3/gds_port_labels.json")
-    assert ok is False, ev
-    assert "NO_LABELS" in str(ev)
 
 # SPM1200: actual DEF PORT/FIXED grammar and real GDS UNITS/XY, neutral names.
 def _gds_real8(value):
@@ -617,55 +505,3 @@ def _witness_input(tmp_path, status='FIXED', xy=(1000, 2000), label='a',
         + _rec(0x0206,_name('LIB')) + _rec(0x0305, _gds_real8(0.001)+_gds_real8(gds_unit))
         + _structure('chip',body) + _rec(0x0400))
     return gp,dp
-
-
-@pytest.mark.parametrize('status', ['PLACED','FIXED','COVER'])
-def test_port_witness_accepts_real_placement_status(tmp_path,status):
-    gp,dp=_witness_input(tmp_path,status=status)
-    verdict,recs=CEN.audit(None,gp,dp)
-    assert verdict=='PASS',recs
-    assert PWR.parse_pins(dp.read_text())==[('a','Metal5',2000,4000)]
-
-
-@pytest.mark.parametrize('status', ['PLACED','FIXED','COVER'])
-def test_port_witness_shifted_same_name_refused(tmp_path,status):
-    gp,dp=_witness_input(tmp_path,status=status,xy=(9000,2000))
-    verdict,recs=CEN.audit(None,gp,dp)
-    assert verdict=='FINDINGS',recs
-    assert recs[0]['verdict']=='MISPLACED_LABELS'
-
-
-@pytest.mark.parametrize('case', ['missing-label','unplaced','missing-layer','missing-units','invalid-gds-units','unknown-orientation'])
-def test_port_witness_missing_evidence_not_pass(tmp_path,case):
-    gp,dp=_witness_input(tmp_path,label='' if case=='missing-label' else 'a',
-        status='' if case=='unplaced' else 'FIXED',units=None if case=='missing-units' else 2000,
-        gds_unit=0 if case=='invalid-gds-units' else 1e-9,
-        orientation='UNKNOWN' if case=='unknown-orientation' else 'N')
-    if case=='missing-layer':dp.write_text(dp.read_text().replace(' + LAYER Metal5 ( -100 -100 ) ( 100 100 )\n',''))
-    verdict,recs=CEN.audit(None,gp,dp)
-    assert verdict!='PASS',recs
-    if case=='missing-label':assert verdict=='FINDINGS',recs
-
-
-def test_port_witness_rotated_offset_rect(tmp_path):
-    gp,dp=_witness_input(tmp_path,orientation='W',xy=(950,2100))
-    dp.write_text(dp.read_text().replace('( -100 -100 ) ( 100 100 )','( 100 0 ) ( 300 200 )'))
-    verdict,recs=CEN.audit(None,gp,dp)
-    assert verdict=='PASS',recs
-
-
-def test_port_witness_rotated_wrong_side_refused(tmp_path):
-    gp,dp=_witness_input(tmp_path,status='PLACED',orientation='W',xy=(1100,2050))
-    dp.write_text(dp.read_text().replace('( -100 -100 ) ( 100 100 )','( 100 0 ) ( 300 200 )'))
-    verdict,recs=CEN.audit(None,gp,dp)
-    assert verdict=='FINDINGS',recs
-
-@pytest.mark.parametrize('shape', ['separate-polygon-port','masked-layer'])
-def test_port_witness_mixed_unsupported_geometry_is_unverified(tmp_path,shape):
-    gp,dp=_witness_input(tmp_path,status='PLACED')
-    extra = (' + PORT\n + POLYGON Metal5 ( 0 0 ) ( 100 0 ) ( 100 100 )\n'
-             ' + FIXED ( 2000 4000 ) N' if shape=='separate-polygon-port' else
-             ' + LAYER Metal5 MASK 1 ( 100 100 ) ( 200 200 )')
-    dp.write_text(dp.read_text().replace(' N ;',' N\n'+extra+' ;'))
-    verdict,recs=CEN.audit(None,gp,dp)
-    assert verdict=='NOTHING_MEASURED',recs

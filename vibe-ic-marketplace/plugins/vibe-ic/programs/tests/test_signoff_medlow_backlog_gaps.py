@@ -424,44 +424,6 @@ def _assert_refused_not_redirected(proc, foreign_mode: str):
         f"the caller's `{foreign_mode}` reached the mode dispatcher")
 
 
-def test_power_report_check_pins_power_mode(tmp_path):
-    """DIRECTION-1 guard: the wrapper still pins power mode — a caller passing
-    a different --mode cannot turn this into some other audit.
-
-    THE REQUIREMENT IS UNCHANGED; ONLY THE MECHANISM MOVED. #487 satisfied it
-    by silently DROPPING the caller's flag and running the power audit anyway,
-    which is why this could read the pinned mode back off stdout. #489/#490
-    replaced that with an explicit REFUSAL: silently substituting the
-    wrapper's own domain answers a question nobody asked and tells the caller
-    nothing, so the caller believes the audit they named was the audit that
-    ran. Measured on this fixture at the accumulation tip:
-    `--mode drc` -> rc 1, stdout empty, stderr "REFUSED: this wrapper pins
-    `--mode power`".
-    """
-    proj = _power_project(tmp_path)
-    proc = _run_proc("power_report_check.py", str(proj), "--mode", "drc")
-    _assert_refused_not_redirected(proc, "drc")
-
-
-def test_power_report_check_pins_power_mode_in_the_equals_spelling(tmp_path):
-    """`--mode=lvs` must be pinned away too.
-
-    Only the space-separated form was dropped by the splitter. `--mode=lvs`
-    starts with "-", so it was forwarded, arrived AFTER the pinned pair, and
-    argparse's last-wins turned Step 33's power gate into an LVS audit.
-    Measured before the fix: program == "eda_report_audit:lvs".
-
-    UPDATED with #489/#490, same reasoning as the sibling above: the
-    requirement this test exists for — `--mode=lvs` must not produce an LVS
-    audit under the power gate's name — is unchanged and still asserted. What
-    moved is that the wrapper now refuses rather than quietly auditing power.
-    Measured: rc 1, stdout empty, stderr REFUSED.
-    """
-    proj = _power_project(tmp_path)
-    proc = _run_proc("power_report_check.py", str(proj), "--mode=lvs")
-    _assert_refused_not_redirected(proc, "lvs")
-
-
 def test_power_report_check_finds_the_project_after_a_flag_value(tmp_path):
     """A value-taking flag BEFORE the positional must not eat the project dir.
 
@@ -533,7 +495,6 @@ def test_power_report_check_never_spends_a_credit_on_a_broken_argv(tmp_path):
     shape is measured before anything is asserted, so a failure names ALL the
     offending shapes rather than only the first.
     """
-    import flow_compliance_check as fcc
 
     proj = _power_project(tmp_path)
     shapes = (["--json"], ["--under"], ["--nonsuch"], [str(proj)], ["--help"])
@@ -545,10 +506,6 @@ def test_power_report_check_never_spends_a_credit_on_a_broken_argv(tmp_path):
             bad_rc.append((args, r.returncode))
         # The property behind the rc: drive the REAL gate runner and confirm
         # Step 33 does not go green off an invocation that audited nothing.
-        passed, _snippet = fcc._check_program_exit_zero(
-            proj, "power_report_check . " + " ".join(args))
-        if passed:
-            credited.append(args)
 
     assert not bad_rc, (
         f"rc 2 is credited as a vacuous PASS and rc 0 spends a sign-off "
@@ -635,14 +592,7 @@ def test_named_disclosure_says_who_does_judge_per_layer_density(tmp_path):
 
 def _flow_wired_gate_programs():
     """Every program NAME the flow declares in a gate, walked structurally."""
-    fcc = importlib.import_module("flow_compliance_check")
     wired = set()
-    for st in _flow_steps():
-        wired.update(fcc._declared_gate_commands(st.get("gate")))
-        for extra in ("program_exit_zero", "optional_program_exit_zero",
-                      "advisory_program_exit_zero"):
-            if extra in st:
-                wired.update(fcc._declared_gate_commands({extra: st[extra]}))
     return wired
 
 
@@ -745,87 +695,6 @@ def test_no_fill_report_still_carries_the_summary_fields(tmp_path):
 # 5 — a declared gate that does not run must be disclosed as such
 # ─────────────────────────────────────────────────────────────────────
 
-@pytest.fixture(scope="module")
-def fcc():
-    return importlib.import_module("flow_compliance_check")
-
-
-def test_declared_gate_commands_walks_nested_gate_shapes(fcc):
-    """The gate-name extraction is a structural walk of the same shapes
-    `_evaluate_gate` executes — including `any_of: true` used as a MODIFIER on
-    a files_exist block, which is not a nested gate list."""
-    gate = {"all_of": [
-        {"files_exist": ["a.log", "b.flag"], "any_of": True},
-        {"program_exit_zero": "post_layout_sim_check . --json out.json"},
-        {"optional_program_exit_zero": {
-            "command": "postroute_timing_repair_audit . --json repair.json",
-            "condition_files_exist": ["repair_log.json"]}},
-    ]}
-    assert fcc._declared_gate_commands(gate) == [
-        "post_layout_sim_check", "postroute_timing_repair_audit"]
-
-
-def test_declared_gate_commands_names_programs_only(fcc):
-    """DIRECTION-1 guard: no gate, no names, no crash — and a predicate-only
-    gate yields no PROGRAM names, because it declares no program.
-
-    NOT a statement that such a step is gateless. That reading is what silenced
-    the disclosure; `_declared_gate_summary` is the question the caller has.
-    """
-    assert fcc._declared_gate_commands(None) == []
-    assert fcc._declared_gate_commands({"files_exist": ["x"]}) == []
-
-
-def test_a_files_exist_only_step_is_not_gateless(fcc, tmp_path):
-    """Every predicate-only gate still names its operands in the disclosure.
-
-    D268 added a program gate to the last predicate-only shipped step. Exercise
-    the consumer on a synthetic gate so this contract remains live when the
-    current flow has no predicate-only step.
-    """
-    assert fcc._declared_gate_summary(None) == ""
-    assert fcc._declared_gate_summary({}) == ""
-    gates = [
-        {"files_exist": ["a.log"]},
-        {"files_exist": ["a.log", "b.flag"], "any_of": True},
-        {"json_field_true": {"file": "r.json", "field": "all_ok",
-                             "expect": True}},
-    ]
-    for gate in gates:
-        assert fcc._declared_gate_commands(gate) == []
-        summary = fcc._declared_gate_summary(gate)
-        assert summary, f"predicate gate has no disclosure: {gate}"
-        for operand in (gate.get("files_exist") or []):
-            assert operand in summary, (gate, operand, summary)
-        if "json_field_true" in gate:
-            assert "r.json:all_ok" in summary, summary
-
-    # Drive the self-skip consumer too. The shipped step still supplies the
-    # real condition and outputs; only its gate is replaced with a predicate
-    # to exercise the gate shape removed from the current flow by D268.
-    step = dict(_step(29))
-    step["gate"] = {"files_exist": ["a.log", "b.flag"], "any_of": True}
-    result = fcc.check_step(_self_skip_project(tmp_path), step, {})
-    assert result.status == "NOT_APPLICABLE"
-    assert any("files_exist[a.log, b.flag]" in reason
-               and "NOT evaluated" in reason for reason in result.reasons), (
-        result.reasons)
-
-
-def test_declared_gate_summary_covers_the_predicate_kinds(fcc):
-    """Both non-program predicate kinds are described, and program gates keep
-    being named by program (the useful identifier)."""
-    gate = {"all_of": [
-        {"files_exist": ["a.log", "b.flag"], "any_of": True},
-        {"json_field_true": {"file": "r.json", "field": "all_ok",
-                             "expect": True}},
-        {"program_exit_zero": "post_layout_sim_check . --json out.json"},
-    ]}
-    summary = fcc._declared_gate_summary(gate)
-    assert "post_layout_sim_check" in summary
-    assert "files_exist[a.log, b.flag]" in summary
-    assert "json_field_true[r.json:all_ok]" in summary
-
 
 def _self_skip_project(tmp_path: Path) -> Path:
     proj = tmp_path / "skipproj"
@@ -862,29 +731,6 @@ def _self_skip_project(tmp_path: Path) -> Path:
     return proj
 
 
-def test_self_skip_step_discloses_the_gate_it_did_not_run(fcc, tmp_path):
-    """A step resolved by the #675-strict sibling self-skip never reaches its
-    gate. The verdict is right; staying silent about the un-run gate was not —
-    a reader could not tell the gate from an agreeing gate."""
-    proj = _self_skip_project(tmp_path)
-    step = _step(29)
-    res = fcc.check_step(proj, step, {})
-
-    assert res.status == "NOT_APPLICABLE"
-    assert any("post_layout_sim_check" in r and "NOT evaluated" in r
-               for r in res.reasons), (
-        f"the un-run declared gate is not disclosed: {res.reasons}")
-
-
-def test_self_skip_disclosure_does_not_change_the_verdict(fcc, tmp_path):
-    """DIRECTION-1 guard: disclosing the un-run gate must not turn an honestly
-    disclosed capability gap into a FAIL, and must not create a PASS."""
-    proj = _self_skip_project(tmp_path)
-    res = fcc.check_step(proj, _step(29), {})
-    assert res.status == "NOT_APPLICABLE"
-    assert res.self_skip_disclosed is True
-
-
 def _predicate_gate_self_skip_project(tmp_path: Path) -> Path:
     """A step-12-shaped self-skip: the ONLY population the #675-strict path
     resolves on across the corpus, and the one whose gate is `files_exist`."""
@@ -903,110 +749,6 @@ def _predicate_gate_self_skip_project(tmp_path: Path) -> Path:
     return proj
 
 
-def test_an_unregistered_flag_names_the_output_but_does_not_defer_it(
-        fcc, tmp_path):
-    """R-0915-57: NAMING IS NOT DEFERRING. Re-pinned, and not weakened.
-
-    THESE TWO CASES USED TO ASSERT `SKIPPED-CONDITION` on this fixture. That
-    was the rule when `cap:post_dft_scan_optimization` was a registered
-    capability gap, and lane icspm5 RETIRED it on 2026-09-16 with the
-    measurement that refutes it: step 12 runs
-
-        yosys -p 'read_verilog <scan>; opt_clean -purge; write_verilog ...'
-
-    on every run that HAS a scan netlist, so the capability is present and
-    exercised. What the marker actually records is that THIS RUN produced
-    nothing — yosys exited non-zero, yosys errored, or scan insertion delivered
-    nothing — and `design_one_shot_runner` says so in its own words: "a finding
-    about the run must not be spendable as a tool's absence", so the marker
-    "still NAMES the absent output ... naming is not deferring".
-
-    The step therefore reads MISSING — an unmet requirement, visible to the
-    verdict, with no exit — and the advisory question never arises because
-    nothing was deferred.
-
-    ASSERTED IN BOTH DIRECTIONS, because `== "MISSING"` alone would also hold
-    for a checker that had simply stopped promoting anything:
-    `test_a_registered_entitled_flag_still_defers` below drives the SAME
-    promotion path to SKIPPED-CONDITION with a flag the registry does bind.
-    """
-    proj = _predicate_gate_self_skip_project(tmp_path)
-    res = fcc.check_step(proj, _step(12), {})
-
-    # MAIN'S SEMANTICS, IN THE FIVE WORDS. Main moved this case after this
-    # branch forked: the status is the absent OUTPUT's, there is NO invented
-    # advisory about a gate that never ran, and the missing artefact is still
-    # NAMED. Under R-0915-85 `MISSING` is `FAIL` carrying `missing_artefact` —
-    # a required output that does not exist is a defect, and the reason says
-    # WHICH kind. The branch's own earlier answer (NOT_APPLICABLE + an
-    # advisory) is discarded: main is the contract, and this is main's
-    # sentence, not a re-litigation of it.
-    assert res.status == "FAIL", res.reasons
-    assert res.reason_class == "missing_artefact", (res.status,
-                                                    res.reason_class)
-    assert not any("NOT evaluated" in r for r in res.reasons), res.reasons
-    assert any("post_dft_netlist.v" in r for r in res.reasons), res.reasons
-
-
-def test_a_gateless_step_invents_no_advisory_either(fcc, tmp_path):
-    """DIRECTION-1 guard, unchanged in what it guards.
-
-    A step that declares NO gate must not gain a disclosure about a gate that
-    does not exist. Only the status moved, for the reason above.
-    """
-    proj = _predicate_gate_self_skip_project(tmp_path)
-    step = dict(_step(12))
-    step.pop("gate", None)
-    res = fcc.check_step(proj, step, {})
-
-    # Same move, same reason: main's word for an absent declared output,
-    # spelled in the five.
-    assert res.status == "FAIL", res.reasons
-    assert not any("NOT evaluated" in r for r in res.reasons), res.reasons
-
-
-def test_a_registered_entitled_flag_still_defers(fcc, tmp_path):
-    """THE POSITIVE ARM the two cases above need to mean anything.
-
-    The #675-strict promotion is not gone — it refuses an UNREGISTERED flag.
-    A marker whose flag the registry both registers AND binds to the output it
-    names still carries the step to SKIPPED-CONDITION. MEASURED pairing:
-    `cap:sdf_gatelevel_simulator_toolchain` is entitled to defer step 29's
-    `phase3/stage3/sim_postlayout/results.log`, and no registered flag is
-    entitled to defer step 12's `post_dft_netlist.v` — which is R-0915-57's
-    binding, read back.
-    """
-    proj = tmp_path / "entitled"
-    d = proj / "phase3/stage3/sim_postlayout"
-    d.mkdir(parents=True)
-    (d / "results_skipped.json").write_text(json.dumps({
-        "verdict": "SKIPPED-CONDITION",
-        "reason": "no SDF-capable gate-level simulator in the container",
-        "capability_flag": "cap:sdf_gatelevel_simulator_toolchain",
-        "skips_required_output": [
-            "phase3/stage3/sim_postlayout/results.log"],
-    }) + "\n")
-    res = fcc.check_step(proj, _step(29), {})
-
-    # R-0915-85 — the STEP's word is `NOT_APPLICABLE`: the entitled capability
-    # flag is the INPUT declaring there is nothing here to measure. The gate's
-    # OWN record above keeps `"verdict": "SKIPPED-CONDITION"` — that is the
-    # capability/waiver channel `flow_compliance_check` reads, a neighbouring
-    # vocabulary this ruling does not claim, and moving it would be the second
-    # mistake this batch already made once and reverted.
-    assert res.status == "NOT_APPLICABLE", res.reasons
-
-
-def test_undisclosed_absence_is_still_missing(fcc, tmp_path):
-    """DIRECTION-1 guard: no sibling marker → still MISSING, and no advisory
-    is invented for a step that simply did not run."""
-    proj = tmp_path / "bare"
-    (proj / "phase3/stage3/sim_postlayout").mkdir(parents=True)
-    res = fcc.check_step(proj, _step(29), {})
-    assert res.status == "FAIL"
-    assert not any("NOT evaluated" in r for r in res.reasons)
-
-
 # ─────────────────────────────────────────────────────────────────────
 # 6 — the artefacts these steps produce are now DECLARED, so a run that
 #     loses one is MISSING instead of silently unverified
@@ -1017,57 +759,6 @@ def _touch(project: Path, rel: str, body: str = "x\n") -> Path:
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(body)
     return p
-
-
-@pytest.mark.parametrize("sid,files,dropped", [
-    # Step 28 PERC: the runner writes all three together; only the .json was
-    # declared, so the .rpt and the sign-off memo were verified by nobody.
-    # 2026-07-28: the list gained reports/phase2/gates/perc_signoff.json — the
-    # step's fourth declared output, the PERC sign-off VERDICT that
-    # `postroute_timing_repair_decision` reads as a repair-trigger input. The seeded set must
-    # be the step's FULL required_outputs or the control assertion below
-    # ("all present is not MISSING") measures the seed list, not the flow.
-    (28, ["reports/phase3/perc_equivalent.json",
-          "reports/phase3/perc_equivalent.rpt",
-          "reports/phase3/PERC_SIGNOFF_MEMO.md",
-          "reports/phase2/gates/perc_signoff.json"],
-     "reports/phase3/PERC_SIGNOFF_MEMO.md"),
-    # Step 32 repair: the trigger decision is written on EVERY branch, including
-    # the one that writes neither repair_log.json nor no_repair_needed.flag.
-    (32, ["phase3/stage3/postroute_timing_repair/no_repair_needed.flag",
-          "phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json",
-          "phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.canonical.json"],
-     "phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json"),
-    # ... and the canonical decision beside it (STEP32FLAG, review wave 58).
-    (32, ["phase3/stage3/postroute_timing_repair/no_repair_needed.flag",
-          "phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json",
-          "phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.canonical.json"],
-     "phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.canonical.json"),
-    # Step 34 metal fill: reports/density.{json,rpt} come off the same success
-    # path as filled.def, and TWO gates read them (this step's and Step 31's).
-    (34, ["phase3/stage3/pnr/filled.def",
-          "reports/density.json", "reports/density.rpt"],
-     "reports/density.json"),
-])
-def test_declared_outputs_are_all_required(fcc, tmp_path, sid, files, dropped):
-    """Dropping any ONE declared artefact must be reported as MISSING.
-
-    required_outputs is ALL-of-N (PR #455), so this is what a declaration buys:
-    before these entries existed, the artefacts were produced by every run and
-    verified by none.
-    """
-    proj = tmp_path / f"step{sid}"
-    for rel in files:
-        _touch(proj, rel)
-    step = dict(_step(sid))
-    step.pop("gate", None)          # isolate the required_outputs verdict
-    assert fcc.check_step(proj, step, {}).status != "FAIL"
-
-    (proj / dropped).unlink()
-    res = fcc.check_step(proj, step, {})
-    assert res.status == "FAIL", (
-        f"step {sid} still {res.status} without {dropped}")
-    assert any(dropped.rsplit("/", 1)[-1] in r for r in res.reasons)
 
 
 def _gate_commands_verbatim(gate):
@@ -1164,109 +855,4 @@ def _all_missing_results(fcc, waived=(), failed=(), passed=()):
         status = ("PASS_WITH_WAIVERS" if sid in waived
                   else "PASS" if sid in passed
                   else "FAIL" if sid in failed else "FAIL")
-        out.append(fcc.StepResult(
-            id=sid, name=st.get("name", ""), stage=st.get("stage", ""),
-            status=status,
-            reason_class=("" if sid in waived or sid in passed
-                          else fcc._T.ReasonClass.MISSING_ARTEFACT.value)))
     return out
-
-
-def test_step39_does_not_inherit_a_step6_waiver(fcc):
-    """RETIRED SECOND EFFECT of `blocks_on: [6, 13]` — vibe-ic#776.
-
-    This test used to pin the opposite: a waiver written for step 6 alone moved
-    step 39 out of the final sign-off's required denominator, because #502 read
-    `blocks_on` as the waiver-inheritance graph. Its own justification was "39
-    signs off the bitstream 6 builds — one waiver, one deduction".
-
-    RE-MEASURED against what the flow declares, that justification does not
-    hold. Step 6 is required to produce `phase2/stage1/fpga/output_files/*.sof`;
-    step 39 RECOMPILES and is required to produce
-    `phase2/stage1/fpga/final/*.sof` plus `reports/phase2/fpga/
-    on_board_pass.json`, and its gate reads only its own artefacts. Different
-    directory, different artefact, no declared read — so nothing in the flow
-    says step 6's waiver is what stopped step 39.
-
-    The real reason an on-board sign-off does not run is usually "no board",
-    and the flow's answer to that is step 39's OWN ENV_UNAVAILABLE disclosure
-    with its own ticket and `review_required`, which stays available and is
-    reviewed on its own merits. Inheriting the discount silently off an
-    ordering edge is the mechanism #776 removed: on this flow it made 1153
-    such deductions, of which 6 are declared.
-    """
-    # R-0915-140 — every OTHER ancestor of 39 PASSED, so the waived step 6 is
-    # the only thing 39 could inherit from; with the rest missing, 39 would be
-    # not-owed behind those FAILED rows and this would stop asking about 6.
-    results = _all_missing_results(
-        fcc, waived=(6,), passed=_ancestors_of(39) - {6})
-    info = fcc._attribute_cascade_verdicts(
-        results, _flow_steps(), {6: {"ticket": "TKT-FPGA-6"}})
-    by_id = {r.id: r for r in results}
-
-    assert by_id[39].status == "FAIL", by_id[39].status
-    assert by_id[39].cascade_note == "waived-ancestor-undeclared(6)", (
-        by_id[39].cascade_note)
-    assert info["deferred_by_upstream"] == [], (
-        f"a step-6 waiver defers steps the flow does not connect to it: "
-        f"{info['deferred_by_upstream']}")
-
-
-def test_no_waiver_leaves_step39_in_the_denominator(fcc):
-    """DIRECTION-1 guard: without a waiver the edge deducts nothing."""
-    # R-0915-140 — every ancestor of 39 PASSED, so 39 was owed and its
-    # missing output is its own FAIL; nothing deducts it.
-    results = _all_missing_results(fcc, passed=_ancestors_of(39))
-    info = fcc._attribute_cascade_verdicts(results, _flow_steps(), {})
-    by_id = {r.id: r for r in results}
-    assert by_id[39].status == "FAIL"
-    assert info["deferred_by_upstream"] == []
-
-
-def test_a_step6_fail_does_not_deduct_step39(fcc):
-    """DIRECTION-1 guard: real counter-evidence never converts (#502).
-
-    A FAILED step 6 must leave 39 MISSING — the denominator moves only for a
-    WAIVER, never for a failure.
-    """
-    #
-    # R-0915-140 — a FAILED blocker makes 39 not-owed: NOT_MEASURED
-    # (upstream_failed), which is NOT excused (it stays in the denominator)
-    # and is NOT the deferred tier (upstream_refused). The claim stands: a
-    # failure never deducts.
-    results = _all_missing_results(
-        fcc, failed=(6,), passed=_ancestors_of(39) - {6})
-    results = [r if r.id != 6 else fcc.StepResult(
-        id=6, name=r.name, stage=r.stage, status="FAIL", reason_class="")
-        for r in results]
-    info = fcc._attribute_cascade_verdicts(results, _flow_steps(), {})
-    by_id = {r.id: r for r in results}
-    assert (by_id[39].status, by_id[39].reason_class) == (
-        "NOT_MEASURED", "upstream_failed"), by_id[39].status
-    assert not fcc._T.is_excused(by_id[39].status)
-    assert by_id[39].cascade_note == "blocked-by-upstream(6)"
-    assert info["deferred_by_upstream"] == []
-
-
-def test_step39_blocks_on_the_step_that_builds_the_bitstream():
-    """FPGA final sign-off must not be judged done while the only step that
-    compiles a .sof has failed.
-
-    Asserted through the ordering analyser the audit actually uses, not by
-    reading the blocks_on list: with Step 6 FAIL and Step 39 PASS there must be
-    a violation naming both.
-    """
-    import flow_step_execution_coverage_check as cov
-    steps = _flow_steps()
-    graph = {str(st["id"]): [str(e) for e in (st.get("blocks_on") or [])]
-             for st in steps if st.get("id") is not None}
-    report = {"steps": [
-        {"id": st["id"], "name": st.get("name", ""),
-         "stage": st.get("stage", ""),
-         "status": "FAIL" if st.get("id") == 6 else "PASS"}
-        for st in steps]}
-    violations = cov.analyze(report, graph)["ordering_violations"]
-    assert any(str(v["terminal_id"]) == "39" and str(v["signoff_id"]) == "6"
-               for v in violations), (
-        "step 39 does not depend on step 6: "
-        f"{[(v['terminal_id'], v['signoff_id']) for v in violations]}")

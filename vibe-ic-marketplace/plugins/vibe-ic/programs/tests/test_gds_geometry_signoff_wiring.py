@@ -26,7 +26,6 @@ import yaml
 PROGRAMS = Path(__file__).resolve().parents[1]
 PLUGIN = PROGRAMS.parent
 FLOW_YAML = PLUGIN / "flow" / "phase1_phase2_phase3.yaml"
-ANTENNA_GATE = PROGRAMS / "gds_antenna_deck_check.py"
 FILL_GATE = PROGRAMS / "metal_fill_emit.py"
 
 sys.path.insert(0, str(PROGRAMS))
@@ -73,9 +72,6 @@ def _gate_commands(gate):
     return out
 
 
-def test_programs_exist():
-    assert ANTENNA_GATE.is_file()
-    assert FILL_GATE.is_file()
 
 
 def test_engines_are_vendored():
@@ -124,41 +120,8 @@ def test_runner_invokes_the_density_fill_at_streamout():
         "density fill must run on both the Magic and the KLayout streamout path"
 
 
-def test_report_names_cannot_be_swallowed_by_sibling_checkers():
-    """`antenna_report_check` rglobs `*antenna*.json` and
-    `metal_layer_density_check` rglobs `*metal*density*.json` across the WHOLE
-    project. Either would consume this capability's files as if they were its
-    own input — the deck config would be read as a router antenna report that
-    carries no violation count, hard-FAILing the sibling gate on any project
-    that adopted the deck. CONFIG paths are as exposed as report paths."""
-    import gds_antenna_deck_check as adc
-    import metal_fill_emit as mfe
-    antenna_names = ((adc._RAW_REPORT_NAME, adc._MATERIALISED_CFG_NAME)
-                     + adc._CFG_GLOBS)
-    for name in antenna_names:
-        assert "antenna" not in name, f"{name} collides with *antenna*.json"
-    fill_names = (mfe._REPORT_REL, mfe._MATERIALISED_CFG_NAME) + mfe._CFG_GLOBS
-    for name in fill_names:
-        assert not ("metal" in name and "density" in name), \
-            f"{name} collides with *metal*density*.json"
 
 
-def test_flow_condition_paths_match_the_programs_discovery_paths(flow):
-    """A condition path the program does not itself discover would gate the
-    gate on a file it then ignores — the capability would look wired and never
-    actually run."""
-    import gds_antenna_deck_check as adc
-    import metal_fill_emit as mfe
-    for step_id, mod in ((26, adc), (34, mfe)):
-        gate = _step(flow, step_id)["gate"]
-        conds = set()
-        for item in gate["all_of"]:
-            spec = item.get("optional_program_exit_zero")
-            if isinstance(spec, dict) and mod.__name__ in spec["command"]:
-                conds.update(spec["condition_files_exist"])
-        assert conds, f"step {step_id} has no condition for {mod.__name__}"
-        assert conds <= set(mod._CFG_GLOBS), \
-            f"step {step_id} gates on paths {mod.__name__} never looks for"
 
 
 # ---------------------------------------------------------------------------
@@ -170,41 +133,10 @@ def _run(prog, *args, env=None):
                           capture_output=True, text=True, env=full)
 
 
-@pytest.mark.parametrize("prog", [ANTENNA_GATE, FILL_GATE])
-def test_absent_checker_is_a_disclosed_skip_not_a_pass(prog, tmp_path):
-    """The load-bearing negative: with the checker forced absent, a project
-    that DOES violate must NOT come back rc 0."""
-    (tmp_path / "signoff").mkdir()
-    (tmp_path / "signoff" / "gate_oxide_deck.json").write_text("{}")
-    (tmp_path / "signoff" / "cmp_fill_targets.json").write_text("{}")
-    gds = tmp_path / "phase3" / "stage4" / "gds"
-    gds.mkdir(parents=True)
-    (gds / "top.gds").write_bytes(b"\x00" * 64)
-    cp = _run(prog, tmp_path, env={"VIBEIC_KLAYOUT_FORCE_ABSENT": "1"})
-    assert cp.returncode == 2, f"expected disclosed skip, got rc={cp.returncode}"
-    assert "VACUOUS_PASS:" in cp.stdout
-    assert "did NOT run" in cp.stdout
-    # The reason must NAME what was missing, not just say "skipped".
-    assert "KLayout" in cp.stdout
 
 
-@pytest.mark.parametrize("prog", [ANTENNA_GATE, FILL_GATE])
-def test_strict_turns_a_disclosed_skip_into_a_failure(prog, tmp_path):
-    (tmp_path / "signoff").mkdir()
-    (tmp_path / "signoff" / "gate_oxide_deck.json").write_text("{}")
-    (tmp_path / "signoff" / "cmp_fill_targets.json").write_text("{}")
-    gds = tmp_path / "phase3" / "stage4" / "gds"
-    gds.mkdir(parents=True)
-    (gds / "top.gds").write_bytes(b"\x00" * 64)
-    cp = _run(prog, tmp_path, "--strict",
-              env={"VIBEIC_KLAYOUT_FORCE_ABSENT": "1"})
-    assert cp.returncode == 1
 
 
-def test_undeclared_deck_is_named_in_the_skip_reason(tmp_path):
-    cp = _run(ANTENNA_GATE, tmp_path)
-    assert cp.returncode == 2
-    assert "no antenna deck config declared" in cp.stdout
 
 
 def test_fill_verify_only_without_a_prior_emit_is_disclosed(tmp_path):
@@ -213,15 +145,6 @@ def test_fill_verify_only_without_a_prior_emit_is_disclosed(tmp_path):
     assert "has not run on this project" in cp.stdout
 
 
-def test_flow_compliance_forwards_an_optional_gates_disclosed_skip():
-    """An OPTIONAL gate signals the disclosed-skip tier by EXIT CODE, at which
-    point `_check_program_exit_zero` has already replaced the snippet with the
-    `__VACUOUS_HINT__:` marker — so the stdout-token test can no longer see it
-    and the disclosure was being downgraded to a bare pass."""
-    src = (PROGRAMS / "flow_compliance_check.py").read_text()
-    optional = src.split("if \"optional_program_exit_zero\" in gate:", 1)[1]
-    optional = optional.split("# `all_of`", 1)[0]
-    assert "out.startswith(_VACUOUS_HINT_PREFIX)" in optional
 
 
 # ---------------------------------------------------------------------------

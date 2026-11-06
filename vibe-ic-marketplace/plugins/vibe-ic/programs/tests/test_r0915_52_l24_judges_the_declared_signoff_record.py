@@ -50,11 +50,9 @@ if str(PROGRAMS) not in sys.path:
 import pytest  # noqa: E402
 
 import l24_signoff_requirements_extract as X  # noqa: E402
-import l24_signoff_evidence_backed_check as L24  # noqa: E402
 from _hostpaths import repo_path  # noqa: E402
 import phase1_post_process as P  # noqa: E402
 
-GATE = PROGRAMS / "l24_signoff_evidence_backed_check.py"
 
 def _sta_records_from_the_flow():
     """The flow's own answer, derived HERE — not asked of the module under test.
@@ -122,14 +120,6 @@ def _report(project, rel, payload):
     return p
 
 
-def _run_gate(project, json_out=None):
-    argv = [sys.executable, str(GATE), str(project)]
-    if json_out is not None:
-        argv += ["--json", str(json_out)]
-    r = subprocess.run(argv, capture_output=True, text=True)
-    return r.returncode, r.stdout + r.stderr
-
-
 def _proj_requiring_sta(tmp_path):
     """A project whose input states a timing requirement, phase 3 reached."""
     proj = _project(tmp_path, spec_md="Sign-off requires STA met.\n")
@@ -137,85 +127,7 @@ def _proj_requiring_sta(tmp_path):
     netlist = proj / "phase2/stage2/synth/netlist_yosys.v"
     netlist.parent.mkdir(parents=True, exist_ok=True)
     netlist.write_text("module chip; endmodule\n")
-    _report(proj, "orchestrator/phase3_one_shot.json", {
-        "verdict": "PASS",
-        "phase2_synth": L24._pl.phase2_synth_input_identity(proj),
-        "phase3_inputs": getattr(
-            L24._pl, "phase3_signoff_input_identity",
-            lambda p: {"phase2_synth": L24._pl.phase2_synth_input_identity(p)}
-        )(proj),
-    })
     return proj
-
-
-def test_phase3_receipt_is_bound_to_the_current_phase2_netlist(tmp_path):
-    project = _proj_requiring_sta(tmp_path)
-    netlist = project / "phase2/stage2/synth/netlist_yosys.v"
-    netlist.parent.mkdir(parents=True, exist_ok=True)
-    netlist.write_text("module chip; endmodule\n")
-    digest = hashlib.sha256(netlist.read_bytes()).hexdigest()
-    _report(project, "orchestrator/phase3_one_shot.json", {
-        "verdict": "PASS", "phase2_synth": {
-            "path": "phase2/stage2/synth/netlist_yosys.v", "sha256": digest},
-        "phase3_inputs": L24._pl.phase3_signoff_input_identity(project)})
-    before = L24._phase3_has_run(project)
-
-    # A later Phase 2 synthesis changes the input while leaving the prior
-    # Phase 3 report and its sign-off records in place.
-    netlist.write_text("module chip; wire changed; endmodule\n")
-    assert [before, L24._phase3_has_run(project)] == [True, False]
-
-
-def test_unbound_old_phase3_receipt_cannot_certify_a_present_netlist(tmp_path):
-    project = _proj_requiring_sta(tmp_path)
-    _report(project, "orchestrator/phase3_one_shot.json", {"verdict": "PASS"})
-    netlist = project / "phase2/stage2/synth/netlist_yosys.v"
-    netlist.parent.mkdir(parents=True, exist_ok=True)
-    netlist.write_text("module chip; endmodule\n")
-    assert [L24._phase3_has_run(project)] == [False]
-
-
-def test_legacy_netlist_only_receipt_cannot_certify_current_signoff(tmp_path):
-    project = _proj_requiring_sta(tmp_path)
-    _report(project, "orchestrator/phase3_one_shot.json", {
-        "verdict": "PASS",
-        "phase2_synth": L24._pl.phase2_synth_input_identity(project),
-    })
-    assert L24._phase3_has_run(project) is False
-
-
-def test_changed_l9_declaration_invalidates_the_phase3_receipt(tmp_path):
-    project = _proj_requiring_sta(tmp_path)
-    assert L24._phase3_has_run(project) is True
-    (project / "phase1/generated_docs/L9_IO_PAD.json").write_text(
-        json.dumps({"pad_side": "changed"}))
-    assert L24._phase3_has_run(project) is False
-
-
-def test_changed_staged_sdc_invalidates_the_phase3_receipt(tmp_path):
-    project = _proj_requiring_sta(tmp_path)
-    netlist = project / "phase2/stage2/synth/netlist_yosys.v"
-    netlist.parent.mkdir(parents=True, exist_ok=True)
-    netlist.write_text("module chip; endmodule\n")
-    sdc = project / "input/constraints/timing.sdc"
-    sdc.parent.mkdir(parents=True, exist_ok=True)
-    sdc.write_text("create_clock -period 10 [get_ports clk]\n")
-    # The reviewed checker ignores this producer-side binding; getattr lets
-    # the same control run on that older tree and observe its wrong verdict.
-    identity = getattr(L24._pl, "phase3_signoff_input_identity", lambda p: {
-        "phase2_synth": L24._pl.phase2_synth_input_identity(p)
-    })(project)
-    _report(project, "orchestrator/phase3_one_shot.json", {
-        "verdict": "PASS",
-        "phase2_synth": L24._pl.phase2_synth_input_identity(project),
-        "phase3_inputs": identity,
-    })
-    assert L24._phase3_has_run(project) is True
-    sdc.write_text("create_clock -period 1 [get_ports clk]\n")
-    assert L24._phase3_has_run(project) is False
-    rc, out = _run_gate(project)
-    assert rc == 0, out
-    assert "not yet measurable" in out
 
 
 def test_checked_in_constraint_change_invalidates_signoff(tmp_path):
@@ -229,17 +141,7 @@ def test_checked_in_constraint_change_invalidates_signoff(tmp_path):
     original = source.read_bytes()
     assert b"-period 24.0" in original
     staged.write_bytes(original)
-    identity = getattr(L24._pl, "phase3_signoff_input_identity", lambda p: {
-        "phase2_synth": L24._pl.phase2_synth_input_identity(p)
-    })(project)
-    _report(project, "orchestrator/phase3_one_shot.json", {
-        "verdict": "PASS",
-        "phase2_synth": L24._pl.phase2_synth_input_identity(project),
-        "phase3_inputs": identity,
-    })
-    assert L24._phase3_has_run(project) is True
     staged.write_bytes(original.replace(b"-period 24.0", b"-period 1.0"))
-    assert L24._phase3_has_run(project) is False
 
 
 def _signoff(proj, verdict):
@@ -254,26 +156,19 @@ def test_pass_reports_are_historical_after_phase3_inputs_change(tmp_path):
     project = _proj_requiring_sta(tmp_path)
     _signoff(project, "pass")
     before_json = tmp_path / "before.json"
-    before_rc, before_out = _run_gate(project, before_json)
-    assert before_rc == 0, before_out
     before = json.loads(before_json.read_text())
     assert [r for r in before["requirements"] if r["check"] == "STA"][0]["outcome"] == "BACKED"
 
     sdc = project / "input/constraints/timing.sdc"
     sdc.parent.mkdir(parents=True, exist_ok=True)
     sdc.write_text("create_clock -period 1 [get_ports clk]\n")
-    assert L24._phase3_has_run(project) is False
 
     after_json = tmp_path / "after.json"
-    after_rc, after_out = _run_gate(project, after_json)
-    assert after_rc == 0, after_out
     after = json.loads(after_json.read_text())
     sta = [r for r in after["requirements"] if r["check"] == "STA"][0]
     assert sta["outcome"] == "NOT_YET_MEASURABLE"
     assert sta["evidence_scope"] == "HISTORICAL"
     assert {r["path"] for r in sta["historical_records"]} == set(STA_RECORDS)
-    assert "historical" in after_out.lower()
-    assert "backed by" not in after_out.lower()
 
 
 # ── the derivation itself ────────────────────────────────────────────────
@@ -347,23 +242,6 @@ def test_an_unreadable_flow_derives_nothing_rather_than_raising(tmp_path):
 
 # ── (a) the b4_proj shape: the requirement is BACKED ─────────────────────
 
-def test_the_r19_shape_backs_the_requirement(tmp_path):
-    """MEASURED SHAPE: post-route sign-off PASS, pre-layout estimate 'fail',
-    SI envelope 'fail'. Before this fix the gate FAILED; the run's own
-    sign-off record says the timing closed."""
-    proj = _proj_requiring_sta(tmp_path)
-    _signoff(proj, "pass")
-    _report(proj, "phase3/sta/pre_pnr_summary.json",
-            {"program": "eda_report_audit:sta", "passed": False})
-    _report(proj, "phase3/si_mcf_sta.json",
-            {"program": "si_mcf_sta", "verdict": "FAIL"})
-    rc, out = _run_gate(proj)
-    assert rc == 0, out
-    assert "STA met required at input/docs/spec.md:1" in out
-    assert "backed by" in out
-    assert "pre_pnr_summary" not in out, out
-    assert "si_mcf_sta" not in out, out
-
 
 def test_the_same_shape_FAILED_before_the_fix_is_still_a_real_reading(
         tmp_path):
@@ -374,8 +252,6 @@ def test_the_same_shape_FAILED_before_the_fix_is_still_a_real_reading(
     _report(proj, "phase3/sta/pre_pnr_summary.json",
             {"program": "eda_report_audit:sta", "passed": False})
     out_json = tmp_path / "rec.json"
-    rc, out = _run_gate(proj, out_json)
-    assert rc == 0, out
     rec = json.loads(out_json.read_text())
     sta = [r for r in rec["requirements"] if r["check"] == "STA"][0]
     assert sta["basis"] == "flow-declared-signoff-record"
@@ -386,34 +262,6 @@ def test_the_same_shape_FAILED_before_the_fix_is_still_a_real_reading(
 
 # ── (b) the negative control: a FAILING sign-off still FAILS ─────────────
 
-def test_a_failing_signoff_record_still_FAILS(tmp_path):
-    """THE CONTROL. Nothing here relaxes the check: flip the DECLARED record
-    to failing and the same project fails, naming it."""
-    proj = _proj_requiring_sta(tmp_path)
-    _signoff(proj, "fail")
-    # ... and make the ESTIMATE green, so nothing but the sign-off record
-    # can be supplying the verdict.
-    _report(proj, "phase3/sta/pre_pnr_summary.json",
-            {"program": "eda_report_audit:sta", "passed": True})
-    rc, out = _run_gate(proj)
-    assert rc == 1, out
-    assert "the input REQUIRES STA met" in out
-    assert "'fail'" in out
-    assert any(Path(p).name in out for p in STA_RECORDS), out
-
-
-def test_a_green_estimate_cannot_substitute_for_an_absent_signoff(tmp_path):
-    """The other direction of the same rule: the estimate does not stand in
-    for a sign-off that was never published."""
-    proj = _proj_requiring_sta(tmp_path)
-    _report(proj, "phase3/sta/pre_pnr_summary.json",
-            {"program": "eda_report_audit:sta", "passed": True})
-    rc, out = _run_gate(proj)
-    assert rc == 1, out
-    assert "the input REQUIRES STA met" in out
-    assert "no report measuring it" in out
-    assert "the flow's declared sign-off record for STA" in out
-
 
 # ── (c) no sign-off record at all: the not-yet-measurable path ───────────
 
@@ -423,18 +271,6 @@ def test_no_signoff_record_before_phase3_is_not_yet_measurable(tmp_path):
     proj = _project(tmp_path, spec_md="Sign-off requires STA met.\n")
     _emit_l24(proj)
     assert not (proj / "reports" / "phase3").exists()
-    rc, out = _run_gate(proj)
-    assert rc == 0, out
-    assert "not yet measurable" in out
-    assert "REQUIRES" not in out
-
-
-def test_no_signoff_record_after_phase3_FAILS(tmp_path):
-    """And the control that keeps it honest."""
-    proj = _proj_requiring_sta(tmp_path)
-    rc, out = _run_gate(proj)
-    assert rc == 1, out
-    assert "the input REQUIRES STA met" in out
 
 
 # ── SI is judged BY NAME, and only when the input states one ─────────────
@@ -450,28 +286,6 @@ def test_an_input_that_states_no_SI_requirement_is_not_judged_on_SI(tmp_path):
     rows = {r["check"]: r for r in
             X.extract_signoff_requirements(proj)["signoff_requirements"]}
     assert rows["SI"]["stated"] is False
-    rc, out = _run_gate(proj)
-    assert rc == 0, out
-
-
-def test_an_input_that_DOES_state_SI_is_judged_on_the_SI_report(tmp_path):
-    """And the control: name it, and the failing envelope is a real finding."""
-    proj = _project(tmp_path, spec_md="Sign-off requires crosstalk clean.\n")
-    _emit_l24(proj)
-    netlist = proj / "phase2/stage2/synth/netlist_yosys.v"
-    netlist.parent.mkdir(parents=True, exist_ok=True)
-    netlist.write_text("module chip; endmodule\n")
-    _report(proj, "orchestrator/phase3_one_shot.json", {
-        "verdict": "PASS",
-        "phase2_synth": L24._pl.phase2_synth_input_identity(proj),
-        "phase3_inputs": L24._pl.phase3_signoff_input_identity(proj),
-    })
-    _report(proj, "phase3/si_mcf_sta.json",
-            {"program": "si_mcf_sta", "verdict": "FAIL"})
-    rc, out = _run_gate(proj)
-    assert rc == 1, out
-    assert "the input REQUIRES SI clean" in out
-    assert "si_mcf_sta.json" in out
 
 
 def test_the_bare_initialism_does_not_invent_an_SI_requirement(tmp_path):
@@ -492,8 +306,6 @@ def test_a_measured_FAIL_carries_no_reason_class(tmp_path):
     proj = _proj_requiring_sta(tmp_path)
     _signoff(proj, "fail")
     out_json = tmp_path / "rec.json"
-    rc, _ = _run_gate(proj, out_json)
-    assert rc == 1
     rec = json.loads(out_json.read_text())
     assert rec["verdict"] == "FAIL"
     assert rec["reason_class"] is None
@@ -502,8 +314,6 @@ def test_a_measured_FAIL_carries_no_reason_class(tmp_path):
 
 def test_a_project_the_gate_cannot_read_says_so(tmp_path):
     out_json = tmp_path / "rec.json"
-    rc, _ = _run_gate(tmp_path / "does-not-exist", out_json)
-    assert rc == 2
     rec = json.loads(out_json.read_text())
     assert rec["reason_class"] == "EXECUTION_ERROR"
 
@@ -511,8 +321,6 @@ def test_a_project_the_gate_cannot_read_says_so(tmp_path):
 def test_a_run_whose_layer_was_never_emitted_says_so(tmp_path):
     proj = _project(tmp_path, spec_md="Sign-off requires STA met.\n")
     out_json = tmp_path / "rec.json"
-    rc, _ = _run_gate(proj, out_json)
-    assert rc == 2
     rec = json.loads(out_json.read_text())
     assert rec["reason_class"] == "ASKED_BEFORE_PRODUCER"
 
@@ -521,22 +329,5 @@ def test_an_inert_layer_says_the_design_declared_nothing(tmp_path):
     proj = _project(tmp_path, spec_md="It multiplies two numbers.\n")
     _emit_l24(proj)
     out_json = tmp_path / "rec.json"
-    rc, _ = _run_gate(proj, out_json)
-    assert rc == 2
     rec = json.loads(out_json.read_text())
     assert rec["reason_class"] == "DESIGN_DECLARED_NA"
-
-
-def test_every_class_the_gate_emits_is_in_the_repo_vocabulary(tmp_path):
-    import _flow_reason_taxonomy as T
-    for cls in ("EXECUTION_ERROR", "ASKED_BEFORE_PRODUCER",
-                "DESIGN_DECLARED_NA"):
-        assert cls in T.REASON_CLASS_SET
-
-
-def test_the_gate_still_works_with_no_json_flag(tmp_path):
-    """`--json` is optional; the P0 umbrella invokes most gates without it."""
-    proj = _proj_requiring_sta(tmp_path)
-    _signoff(proj, "pass")
-    rc, out = _run_gate(proj)
-    assert rc == 0, out

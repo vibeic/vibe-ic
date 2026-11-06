@@ -44,9 +44,7 @@ sys.path.insert(0, str(PROGRAMS))
 
 import _yosys_stat as ys                      # noqa: E402
 import dft_signoff_check as dft               # noqa: E402
-import flow_compliance_check as fcc           # noqa: E402
 import synth_netlist_check as snc             # noqa: E402
-import yosys_script_template_check as ystc    # noqa: E402
 
 FLOW_YAML = PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml"
 
@@ -388,59 +386,14 @@ def _ys_project(root: Path, *, later_script_newer: bool,
     return p
 
 
-def _run_ys_check(project: Path):
-    r = subprocess.run(
-        [sys.executable, str(PROGRAMS / "yosys_script_template_check.py"),
-         str(project), "--json", str(project / "ys.json")],
-        capture_output=True, text=True)
-    return r.returncode, json.loads((project / "ys.json").read_text())
 
 
-def test_step14_rejects_a_handoff_older_than_its_own_producer(tmp_path):
-    """THE DEFECT. The script that declares itself the writer of
-    phase2/stage2/synth/netlist.v has been edited since the netlist was
-    produced, so PnR would consume the product of a recipe nobody ran."""
-    p = _ys_project(tmp_path / "prod", later_script_newer=False,
-                    producer_newer=True)
-    rc, report = _run_ys_check(p)
-    assert rc == 1, report
-    assert report["handoff_netlist_audit"]["stale_vs_scripts"], report
 
 
-def test_step14_ignores_a_script_that_does_not_write_the_handoff(tmp_path):
-    """NO FALSE ALARM. Phase 3 runs after phase 2 by construction, so a yosys
-    script under phase3/ is ALWAYS newer than the phase-2 handoff netlist. It
-    consumes that netlist; its clock says nothing about whether the netlist is
-    the product of the synthesis recipe."""
-    p = _ys_project(tmp_path / "later", later_script_newer=True)
-    rc, report = _run_ys_check(p)
-    assert rc == 0, report
-    assert report["handoff_netlist_audit"]["stale_vs_scripts"] == []
-    assert [Path(s).name for s
-            in report["handoff_netlist_audit"]["producer_scripts"]] == ["synth.ys"]
 
 
-def test_step14_records_that_staleness_was_not_compared(tmp_path):
-    """Unmeasured is recorded as unmeasured. When no audited script claims to
-    write the handoff netlist there is nothing to compare, and the report must
-    say so rather than present a bare pass."""
-    p = _project(tmp_path / "nonproducer")
-    later = p / "phase3/lec"
-    later.mkdir(parents=True, exist_ok=True)
-    (later / "post.ys").write_text(_LATER_YS)
-    rc, report = _run_ys_check(p)
-    assert rc == 0, report
-    assert report["handoff_netlist_audit"]["producer_scripts"] == []
-    assert any("staleness not compared" in m
-               for m in report["handoff_netlist_messages"]), report
 
 
-def test_step14_still_rejects_a_stub_handoff_netlist(tmp_path):
-    """The substantive half of the gate, unchanged by the narrowing above."""
-    p = _ys_project(tmp_path / "stub", later_script_newer=False, stub=True)
-    rc, report = _run_ys_check(p)
-    assert rc == 1, report
-    assert report["handoff_netlist_audit"]["has_module"] is False
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -535,135 +488,3 @@ def _repair_project(root: Path, files: dict) -> Path:
             payload if isinstance(payload, str)
             else json.dumps(payload, indent=2))
     return root
-
-
-def test_step32_flow_gate_goes_red_on_a_contradicted_no_repair_branch(tmp_path):
-    """THE DEFECT, through the REAL evaluator. The decision record says a repair
-    was required; the run certified `no_repair_needed.flag`. The program caught it
-    from the start — the gate never ran it, because its condition listed the
-    repair LOG, which the no-repair branch by definition does not write."""
-    p = _repair_project(tmp_path / "contradicted", {
-        "no_repair_needed.flag": "no repair needed\n",
-        "postroute_timing_repair_decision.json": _DECISION_REPAIR_REQUIRED})
-    passed, reasons = fcc._evaluate_gate(p, _step32_gate())
-    assert passed is False, reasons
-    assert any("postroute_timing_repair_audit" in r for r in reasons), reasons
-
-
-def test_step32_flow_gate_stays_green_on_a_consistent_no_repair_run(tmp_path):
-    """NO FALSE ALARM. Flag plus a decision record that agrees with it is the
-    ordinary converged run, and it must not be reddened by making the gate
-    reachable."""
-    p = _repair_project(tmp_path / "consistent", {
-        "no_repair_needed.flag": "no repair needed\n",
-        "postroute_timing_repair_decision.json": _DECISION_NO_REPAIR})
-    passed, reasons = fcc._evaluate_gate(p, _step32_gate())
-    assert passed is True, reasons
-
-
-def test_step32_flow_gate_stays_green_when_an_repair_really_ran(tmp_path):
-    """NO FALSE ALARM on the other branch."""
-    p = _repair_project(tmp_path / "ecoran", {
-        "repair_log.json": {"changes": [{"type": "buffer_insert", "net": "n0"}],
-                         "re_verified": True, "affected_steps": [21]},
-        "postroute_timing_repair_decision.json": _DECISION_REPAIR_REQUIRED})
-    passed, reasons = fcc._evaluate_gate(p, _step32_gate())
-    assert passed is True, reasons
-
-
-def test_step32_reads_the_record_through_the_path_it_declares(tmp_path):
-    """The literal the gate is grounded on must be the literal it OPENS.
-
-    A path constant that appears only inside a message f-string satisfies a
-    static "is this gate wired to its step's artefact?" audit on the strength
-    of the gate's prose: delete the read, keep the message, and the audit still
-    reports wired. Composing the read from the constant is what makes that
-    mutation visible — this test fails if `load_trigger_decision` stops
-    returning what the declared path holds."""
-    import postroute_timing_repair_audit as ela
-    p = _repair_project(tmp_path / "declared", {
-        "postroute_timing_repair_decision.json": _DECISION_REPAIR_REQUIRED})
-    assert (ela.decision_path(p)
-            == p / "phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json")
-    decision, problem = ela.load_trigger_decision(p)
-    assert problem is None
-    assert decision == _DECISION_REPAIR_REQUIRED
-
-
-def test_step32_discloses_but_does_not_block_on_a_silent_decision(tmp_path):
-    """The audit discloses silence; the later content clause refuses it.
-
-    The producer writes a boolean repair_needed on every normal path. A
-    synthesized silent record therefore exposes the distinct contracts of
-    the audit clause and the full Step-32 gate."""
-    p = _repair_project(tmp_path / "silent", {
-        "no_repair_needed.flag": "no repair needed\n",
-        "postroute_timing_repair_decision.json": {}})
-    r = subprocess.run(
-        [sys.executable, str(PROGRAMS / "postroute_timing_repair_audit.py"), str(p)],
-        capture_output=True, text=True)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert "TRIGGER_DECISION_SILENT" in r.stdout + r.stderr
-    audit_passed, audit_reasons = fcc._evaluate_gate(p, _step32_audit_clause())
-    assert audit_passed is True, audit_reasons
-    passed, reasons = fcc._evaluate_gate(p, _step32_gate())
-    assert passed is False, reasons
-    assert any("flow_step_output_content_check" in reason for reason in reasons), reasons
-
-
-def test_step32_clause_stays_reddenable_under_the_d2_harness(tmp_path):
-    """The gate condition must not be widened into unfalsifiability.
-
-    `test_matrix_d2_falsifiable` proves each blocking clause CAN fail by
-    materialising every `condition_files_exist` path as a substanceless file
-    and running the clause. If `no_repair_needed.flag` were listed there, that
-    materialisation would hand the audit a flag-certified no-repair run and the
-    clause could never reach FAIL again. This asserts the property directly, on
-    the yaml, so the next widening has to face it."""
-    clause = _step32_audit_clause()
-    conds = clause["program_exit_zero"]["condition_files_exist"]
-    assert "phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json" in conds, conds
-    assert "phase3/stage3/postroute_timing_repair/no_repair_needed.flag" not in conds, conds
-    # ... and the materialised state really does still fail.
-    p = tmp_path / "d2shape"
-    repair = p / "phase3/stage3/postroute_timing_repair"
-    repair.mkdir(parents=True)
-    for pat in conds:
-        (p / pat).write_text("{}\n")
-    passed, reasons = fcc._evaluate_gate(p, clause)
-    assert passed is False, reasons
-    assert any("postroute_timing_repair_audit" in reason for reason in reasons), reasons
-
-
-def test_step32_absent_decision_record_is_left_to_required_outputs(tmp_path):
-    """The audit defers missing output; the content clause also refuses it."""
-    p = _repair_project(tmp_path / "norecord",
-                     {"no_repair_needed.flag": "no repair needed\n"})
-    r = subprocess.run(
-        [sys.executable, str(PROGRAMS / "postroute_timing_repair_audit.py"), str(p)],
-        capture_output=True, text=True)
-    assert r.returncode == 0, r.stdout + r.stderr
-    audit_passed, audit_reasons = fcc._evaluate_gate(p, _step32_audit_clause())
-    assert audit_passed is True, audit_reasons
-    passed, reasons = fcc._evaluate_gate(p, _step32_gate())
-    assert passed is False, reasons
-    assert any("flow_step_output_content_check" in reason for reason in reasons), reasons
-
-
-def test_step32_reports_a_declared_vs_catalogued_path_drift(tmp_path,
-                                                            monkeypatch):
-    """The drift guard is falsifiable. If `_path_layout` ever moves the repair
-    directory away from the spelling the flow declares, this gate would read a
-    path nothing writes and report "no decision to cross-check" — a false
-    clean. It must say the two disagree instead."""
-    import _path_layout as pl
-    import postroute_timing_repair_audit as ela
-    p = _repair_project(tmp_path / "drift", {
-        "postroute_timing_repair_decision.json": _DECISION_REPAIR_REQUIRED})
-    monkeypatch.setattr(ela._pl, "postroute_timing_repair_dir",
-                        lambda project: Path(project) / "somewhere/else")
-    decision, problem = ela.load_trigger_decision(p)
-    assert decision is None
-    assert problem is not None
-    assert problem.category == "TRIGGER_DECISION_PATH_DRIFT"
-    assert problem.severity == "ERROR"

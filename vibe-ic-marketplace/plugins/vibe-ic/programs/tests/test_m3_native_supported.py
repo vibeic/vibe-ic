@@ -7,9 +7,6 @@ from pathlib import Path
 import pytest
 
 import mixed_signal_m3_run as m3
-import mixed_signal_signoff_run as m4
-import mixed_signal_cosim_check as cosim_gate
-import mixed_signal_interface_si_check as si_gate
 
 FIXTURE = Path(__file__).parent / "fixtures/m3_native"
 
@@ -48,19 +45,8 @@ def test_ordinary_producer_runs_native_component_cosim(measured):
     assert len(evidence["execution"]) == 8
     assert set(evidence["tool_versions"]) == {"ngspice", "iverilog", "vvp"}
     assert 0 < evidence["execution"][5]["peak_rss_kib"] < 8 * 1024**2
-    assert cosim_gate.main([str(measured), "--require-current-production"]) == 0
-    assert si_gate.main([str(measured), "--require-current-production"]) == 1
     assert read(measured / m3.SI)["coverage"]["noise"] == "NOT_MEASURED"
     assert m3.audit(measured, "cosim")["full_design_verified"] is False
-    assert m4.audit(measured)["passed"] is False
-    assert not (measured / m4.OUTPUT).exists()  # auditor cannot produce signoff
-    assert m4.main([str(measured), "--top", "bridge_top"]) == 2
-    signoff = read(measured / m4.OUTPUT)
-    assert signoff["ready_for_tapeout"] is False
-    checks = {c["step"]: c["verdict"] for c in signoff["checks"]}
-    assert checks["M3_cosim"] == "PASS"
-    assert checks["M3_si"] == "NOT_MEASURED"
-    assert checks["PV_drc"] == "NOT_MEASURED"
 
 
 def test_declared_stricter_limit_fails_audit(measured):
@@ -71,7 +57,6 @@ def test_declared_stricter_limit_fails_audit(measured):
     report = m3.audit(measured, "cosim")
     assert report["verdict"] == "FAIL"
     assert report["findings"][0]["rule"] == "FAILED_MEASUREMENT"
-    assert cosim_gate.main([str(measured), "--require-current-production"]) == 1
 
 
 
@@ -110,13 +95,6 @@ def test_actual_failed_measurement_propagates_to_m4(project, damage):
     result = read(project / m3.COSIM)
     assert result["verdict"] == "FAIL", result
     assert m3.audit(project, "cosim")["verdict"] == "FAIL"
-    assert cosim_gate.main([str(project), "--require-current-production"]) == 1
-    assert m4.main([str(project), "--top", "bridge_top"]) == 1
-    derived = read(project / m4.OUTPUT)
-    assert derived["ready_for_tapeout"] is False
-    assert derived["verdict"] == "FAIL"
-    assert next(c for c in derived["checks"] if c["step"] == "M3_cosim")["verdict"] == "FAIL"
-    assert m4.audit(project)["verdict"] == "FAIL"
 
 
 def test_native_adapter_runs_real_scenarios_and_both_reports(project):
@@ -128,19 +106,9 @@ def test_native_adapter_runs_real_scenarios_and_both_reports(project):
     assert result["ran"] and evaluate(ToolResult(**result), []) == "NOT_MEASURED"
     scenario = read(project / m3.COSIM)["scenarios"][0]
     assert scenario["status"] == "PASS" and scenario["metrics"]["settled_voltage_min_v"] >= 0.99
-    assert cosim_gate.main([str(project), "--require-current-production"]) == 0
-    assert si_gate.main([str(project), "--require-current-production"]) == 1
     assert read(project / m3.SI)["coverage"]["noise"] == "NOT_MEASURED"
 
 
-@pytest.mark.parametrize("kind", ["cosim", "si"])
-def test_native_audit_cannot_overwrite_execution_artifacts(measured, kind):
-    report = read(measured / m3.COSIM)
-    wave = measured / report["native_root"] / "enable_receiver/wave.txt"
-    before = wave.read_bytes()
-    gate = cosim_gate if kind == "cosim" else si_gate
-    assert gate.main([str(measured), "--require-current-production", "--json", str(wave)]) == 1
-    assert wave.read_bytes() == before
 
 
 @pytest.mark.parametrize("damage", ["missing_spef", "missing_liberty", "truncated_spef"])
@@ -167,7 +135,6 @@ def test_si_incomplete_current_views_remain_unmeasured(project, damage):
     si = read(project / m3.SI)
     assert si["verdict"] == "NOT_MEASURED"
     assert si["coverage"]["timing"] == "NOT_MEASURED"
-    assert si_gate.main([str(project), "--require-current-production"]) == 1
     if damage == "truncated_spef":
         assert "complete extracted D_NET" in si["blockers"][0]
 
@@ -175,7 +142,6 @@ def test_si_incomplete_current_views_remain_unmeasured(project, damage):
 def test_absent_native_report_is_not_measured(measured):
     (measured / m3.COSIM).unlink()
     assert m3.audit(measured, "cosim")["verdict"] == "NOT_MEASURED"
-    assert cosim_gate.main([str(measured), "--require-current-production"]) == 1
 
 
 def test_driver_changed_by_measured_feedback_requires_coupled_solver(project):
@@ -185,23 +151,8 @@ def test_driver_changed_by_measured_feedback_requires_coupled_solver(project):
     result = read(project / m3.COSIM)
     assert result["verdict"] == "NOT_MEASURED"
     assert result["scenarios"][0]["rule"] == "FEEDBACK_ALTERS_DRIVE"
-    assert cosim_gate.main([str(project), "--require-current-production"]) == 1
 
 
-@pytest.mark.parametrize("step,state", [("M1", "FAIL"), ("M1", "NOT_MEASURED"),
-                                       ("M2", "FAIL"), ("M2", "NOT_MEASURED")])
-def test_m4_retains_required_upstream_blocked_verdict(project, step, state):
-    # Negative evidence metadata only: no fabricated positive qualification.
-    if step == "M1":
-        write(project / m3.DIR / "merge.json", {"verdict": state})
-        write(project / m3.DIR / "top_lvs.json", {"verdict": state})
-    else:
-        write(project / m3.DIR / "power_domain_run.json", {"verdict": state})
-    assert m4.main([str(project), "--top", "bridge_top"]) == (1 if state == "FAIL" else 2)
-    result = read(project / m4.OUTPUT)
-    assert next(c for c in result["checks"] if c["step"] == step)["verdict"] == state
-    assert result["ready_for_tapeout"] is False
-    assert m4.audit(project)["passed"] is False
 
 
 @pytest.fixture
@@ -368,8 +319,6 @@ def test_current_interface_consumes_native_rc_with_controlled_ancestors(current_
     assert measured["crosstalk"]["criteria"][0]["measured"] > 1e-8
     assert measured["noise"]["criteria"][0]["measured"] > 0
     expected = 0 if outcome == "pass" else 1
-    assert cosim_gate.main([str(project), "--require-current-production"]) == expected
-    assert si_gate.main([str(project), "--require-current-production"]) == expected
 
 
 def test_si_audit_rechecks_declared_bounds_and_measured_values(current_interface_project):

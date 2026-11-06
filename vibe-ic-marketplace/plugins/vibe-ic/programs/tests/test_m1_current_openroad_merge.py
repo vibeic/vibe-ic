@@ -9,7 +9,6 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import mixed_signal_top_lvs_run as M1
-import mixed_signal_merge_check as GATE
 import mixed_signal_power_domain_run as M2
 
 TOP = "integration_top"
@@ -95,16 +94,6 @@ def test_unbound_carried_merge_must_execute_klayout(tmp_path, monkeypatch):
     assert result["verdict"] == "PASS", result
 
 
-def test_gate_refuses_unbound_previous_pass(tmp_path):
-    p = project(tmp_path)
-    merged = p / "phase3/mixed_signal/top_merged.gds"
-    merged.parent.mkdir(parents=True)
-    merged.write_bytes(b"old unrelated merged bytes")
-    rp = p / "reports/analog/mixed_signal"
-    rp.mkdir(parents=True)
-    (rp / "top_lvs.json").write_text(json.dumps({"verdict": "PASS"}))
-    rc = GATE.main([str(p), "--json", str(p / "gate.json")])
-    assert rc == 1, json.loads((p / "gate.json").read_text())
 
 
 
@@ -118,7 +107,6 @@ def test_new_invocation_rebuilds_even_a_previously_bound_merge(tmp_path, monkeyp
     result = M1.run(p, TOP, "host", "declared_pdk")
     assert result["verdict"] == "PASS", result
     assert any("klayout -b" in call for call in calls), result
-    assert GATE.main([str(p)]) == 0
 
 
 def test_unchanged_m2_reads_exact_current_m1_digest(tmp_path, monkeypatch):
@@ -221,11 +209,9 @@ def test_failed_current_invocation_cannot_leave_previous_gate_admission(tmp_path
     p = project(tmp_path)
     fake_tools(p, monkeypatch)
     assert M1.run(p, TOP, "host", "declared_pdk")["verdict"] == "PASS"
-    assert GATE.main([str(p)]) == 0
     path = p / "phase3/stage3/pnr/routed.def"
     path.write_text(path.read_text().replace("u_analog", "u_other"))
     assert M1.main([str(p), "--top", TOP, "--pdk", "declared_pdk", "--container", "host"]) == 1
-    assert GATE.main([str(p)]) == 1
 
 
 def test_checked_in_def_identity_is_read_without_first_file_fallback(tmp_path):

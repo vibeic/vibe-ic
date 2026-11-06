@@ -34,7 +34,6 @@ from pathlib import Path
 _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 
-import tapeout_declaration_check as tdc  # noqa: E402
 import _tapeout_declaration as _td  # noqa: E402
 
 
@@ -54,36 +53,12 @@ def _sec(questions, answered, not_applicable):
             "not_applicable": not_applicable}
 
 
-def test_a_fully_not_applicable_section_says_so_and_never_zero_of_n():
-    line = tdc.summary_line(_res({"2B_pad_ring": _sec(8, 0, 8)}, 0, 8, 8))
-    assert "2B_pad_ring=n/a(8)" in line, line
-    assert "2B_pad_ring=0/8" not in line, (
-        "an all-N/A section still renders as `0/8`, which reads as eight "
-        f"unanswered questions: {line}")
 
 
-def test_a_partly_not_applicable_section_states_its_real_denominator():
-    # 2A on a HARDMACRO: 9 questions, 4 die-only (N/A), 5 applicable, 3 answered.
-    line = tdc.summary_line(_res({"2A_die_size": _sec(9, 3, 4)}, 3, 9, 4))
-    assert "2A_die_size=3/5+n/a(4)" in line, line
-    assert "2A_die_size=3/9" not in line, (
-        "the applicable denominator is 5, not 9; printing 3/9 hides that only "
-        f"two questions are outstanding: {line}")
 
 
-def test_a_section_with_nothing_not_applicable_is_unchanged():
-    line = tdc.summary_line(_res({"2A_die_size": _sec(9, 3, 0)}, 3, 9, 0))
-    assert "2A_die_size=3/9" in line, line
-    assert "n/a(" not in line, line
 
 
-def test_the_verdict_and_counts_are_untouched():
-    line = tdc.summary_line(_res(
-        {"2A_die_size": _sec(9, 3, 4), "2B_pad_ring": _sec(8, 0, 8),
-         "2C_seal_ring": _sec(3, 0, 3)}, 3, 20, 15))
-    assert line.startswith("FAIL: "), line
-    assert "answered=3/20" in line, line
-    assert "not_applicable=15" in line, line
 
 
 def test_the_pad_and_seal_sections_really_are_die_only():

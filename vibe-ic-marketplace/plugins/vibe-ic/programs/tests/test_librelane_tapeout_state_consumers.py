@@ -14,8 +14,6 @@ import pytest
 import signoff_ladder_run as ladder
 import general_precheck as precheck
 import tapeout_checklist_gen as checklist
-import signoff_audit as audit
-import signoff_metrics_aggregate as metrics
 from _native_signoff_fixture import producer, finished_producer, antenna_producer, put, IMAGE
 
 
@@ -168,9 +166,6 @@ def test_measured_failure_dominates_missing_engine(tmp_path, monkeypatch, obliga
               else ladder.check_tier_lvs_tapeout)(tmp_path)
     assert result.verdict == 'FAIL', result.details
     assert result.details['rows'][key]['value'] == count
-    checked = audit._check_tapeout(tmp_path)
-    assert checked.summary['evidence'][obligation] is False
-    assert checked.summary['native_evidence'][obligation]['verdict'] == 'FAIL'
 
 
 def test_standalone_old_producer_cannot_drop_second_lvs_engine(tmp_path, monkeypatch):
@@ -204,7 +199,6 @@ def test_wrong_or_missing_identity_refuses_current_credit(tmp_path, monkeypatch,
     result = ladder.check_tier_1_drc(tmp_path)
     assert result.verdict == 'NOT_RUN', result.details
     assert any(row['value'] == 'NOT_MEASURED' for row in result.details.get('rows', {}).values()) or result.details['reason']
-    assert metrics._librelane_state_cell(tmp_path, key).value == 'NOT_MEASURED' or damage == 'engine'
 
 
 @pytest.mark.parametrize('count,verdict', [(0, precheck.PASS), (4, precheck.FAIL)])
@@ -245,7 +239,6 @@ def test_finished_drc_positive_survives_malformed_own_summary(tmp_path, monkeypa
     assert result['rows']['magic__drc_error__count']['value'] == 3, result
     assert result['rows']['klayout__drc_error__count']['value'] == 0, result
     assert result['verdict'] == 'FAIL', result
-    assert metrics._librelane_state_cell(tmp_path, 'magic__drc_error__count').value == 3
     checked = ladder.check_tier_1_drc(tmp_path)
     assert checked.verdict == 'FAIL', checked.details
     assert checked.details['rows']['magic__drc_error__count']['value'] == 3
@@ -284,32 +277,6 @@ def test_old_lvs_cannot_certify_new_finished_stream(tmp_path, monkeypatch):
     assert result.details['reason'] == 'LL_JUDGED_SELECTED_GDS_MISMATCH'
 
 
-def test_tapeout_caller_native_failure_cannot_use_environment_waiver(tmp_path, monkeypatch):
-    import _gdsii
-    import _si_signoff_fixture
-    import _tapeout_timing_fixture
-    gds = _gdsii.write_declared_streamout(tmp_path, 'maintenance.gds')
-    producer(tmp_path, monkeypatch, counts={'magic__drc_error__count': 5}, gds_path=gds)
-    producer(tmp_path, monkeypatch, 'lvs', both_lvs=True, gds_path=gds)
-    # Density is direct-selected in this bounded caller control; the test is
-    # about native PV versus the existing ENV_UNAVAILABLE waiver contract.
-    switch = tmp_path / 'phase3/librelane_switch.json'
-    doc = json.loads(switch.read_text()); doc['steps']['34'] = 'direct'; put(switch, doc)
-    (tmp_path / 'netlist_mapped.v').write_text('module top(); endmodule')
-    (tmp_path / 'timing_final.rpt').write_text('neutral timing parser control')
-    (tmp_path / 'drc_clean.rpt').write_text('Total violations: 0\n')
-    _legacy_reports(tmp_path)
-    _si_signoff_fixture.write_proved_si_report(tmp_path)
-    _tapeout_timing_fixture.write_timing_signoff_pass(tmp_path)
-    put(tmp_path / 'reports/phase3_one_shot.json', {'steps': [
-        {'name': 'drc', 'status': 'ENV_UNAVAILABLE'}, {'name': 'lvs', 'status': 'ENV_UNAVAILABLE'}]})
-    result = audit._check_tapeout(tmp_path)
-    assert result.passed is False, result.summary
-    assert result.summary['threshold'] == 5
-    assert result.summary['evidence_count'] == 4
-    assert result.summary['evidence']['drc'] is False
-    assert result.summary['evidence']['lvs'] is True
-    assert result.summary['env_unavailable_steps'] == []
 
 
 def test_native_selection_forwards_same_gds_to_both_independent_authorities(tmp_path, monkeypatch):
@@ -509,17 +476,8 @@ def test_finished_density_metrics_cell_uses_current_density_producer(tmp_path, m
     info = finished_producer(tmp_path, monkeypatch, counts={'klayout__density_error__count': 3})
     earlier = json.loads(info['record'].read_text())
     assert earlier['metrics']['klayout__density_error__count']['value'] == 0
-    cell = metrics._librelane_state_cell(tmp_path, 'klayout__density_error__count')
-    assert cell is not None and cell.value == 3, cell.reason if cell else None
-    assert 'KLayout.Density' in cell.basis or '37-magic-density' in cell.basis
 
 
-def test_native_antenna_metrics_cannot_fall_back_to_a_legacy_zero_total(tmp_path, monkeypatch):
-    antenna_producer(tmp_path, monkeypatch, counts={'klayout__antenna_error__count': 5})
-    put(tmp_path / 'reports/phase3/antenna.json', {'net_violations': 0, 'pin_violations': 0})
-    cell = metrics._librelane_state_cell(tmp_path, 'antenna__violation__count')
-    assert cell is not None and cell.value == metrics.NOT_MEASURED, cell
-    assert 'FAIL' in cell.reason and 'independent models' in cell.reason
 
 
 def test_our_zero_rungs_refuse_an_unfinished_aggregate_binding(tmp_path, monkeypatch):

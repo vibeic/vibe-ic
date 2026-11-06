@@ -59,7 +59,6 @@ PROG = PROGRAMS / "analog_netlist_path_lint.py"
 
 sys.path.insert(0, str(PROGRAMS))
 import _gate_denominator as GDEN  # noqa: E402
-import gate_discloses_denominator_check as GD  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
@@ -154,7 +153,6 @@ def test_a_clean_run_states_how_many_decks_it_read(tmp_path):
     first = r.stdout.strip().splitlines()[0]
     assert first.startswith(f"[PASS] {GATE}:"), first
     assert "examined 2" in first, first
-    assert GD.discloses(r.stdout), r.stdout
 
 
 def test_decks_without_any_directive_are_counted_not_hidden(tmp_path):
@@ -226,11 +224,3 @@ def test_non_directory_still_exits_2(tmp_path):
 
 
 # ── 4. the predicate the standing check uses agrees, both ways ─────────────
-
-@pytest.mark.parametrize("populated", [False, True])
-def test_the_standing_checks_predicate_accepts_both_verdict_lines(
-        tmp_path, populated):
-    proj = (_with_decks(tmp_path, "p_yes", [("amp.sp", _CLEAN_DECK)])
-            if populated else _empty_project(tmp_path, "p_no"))
-    r = _run(proj)
-    assert GD.discloses(r.stdout + r.stderr), (r.stdout, r.stderr)

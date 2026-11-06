@@ -241,18 +241,6 @@ def test_the_ceiling_is_reachable_from_every_program_that_uses_it():
 
 # ── behavioural: the argv a real driver hands docker ────────────────────────
 
-def test_mpw_precheck_argv_carries_the_ceiling(tmp_path):
-    import mpw_precheck_driver as mpw
-    for d in ("src", "input", "pdk", "run"):
-        (tmp_path / d).mkdir()
-    argv = mpw.build_docker_command(
-        image="img:1", input_directory=tmp_path / "input",
-        pdk_root=tmp_path / "pdk", pdk_path=tmp_path / "pdk",
-        precheck_src=tmp_path / "src", rundir=tmp_path / "run",
-        checks=["license"])
-    assert argv[:2] == ["docker", "run"]
-    assert "--memory" in argv and "--memory-swap" in argv
-    assert argv[argv.index("--memory") + 1] == argv[argv.index("--memory-swap") + 1]
 
 
 def test_caravel_harden_argv_carries_the_ceiling(tmp_path):

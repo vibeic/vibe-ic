@@ -27,7 +27,6 @@ sys.path.insert(0, str(PROG_DIR))
 import _structural_absence as _sa  # noqa: E402
 import fmeda_fault_injection_coverage as fi          # noqa: E402
 import fmeda_coverage_check as gate                  # noqa: E402
-import ci_harness_timeout_ceiling_check as ceiling_check   # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402

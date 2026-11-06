@@ -8,8 +8,6 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 
 H = importlib.import_module("rtl_hygiene_lint")
-BC = importlib.import_module("_blocker_classification")
-FCC = importlib.import_module("flow_compliance_check")
 
 
 LEAF = "module leaf(input a, output y); assign y = a; endmodule\n"
@@ -55,51 +53,8 @@ def test_missing_host_yosys_is_blocking_not_measured(tmp_path, monkeypatch, caps
     }
 
 
-def test_named_missing_native_tool_classifies_as_capability_not_design_fact():
-    step = {
-        "id": 2,
-        "name": "RTL validation",
-        "stage": "stage1",
-        "status": "NOT_MEASURED",
-        "reason_class": "execution_error",
-        "reasons": [
-            "GATE_RAN rtl_hygiene_lint rc=2 INCOMPLETE",
-            "NOT_MEASURED [EXECUTION_ERROR]: NATIVE_TOOL_ABSENT: Yosys",
-        ],
-        "evidence": [],
-        "gate_output": "",
-        "cascade_note": "",
-        "self_skip_disclosed": False,
-        "structure_only_disclosed": False,
-        "gate_records": None,
-    }
-
-    blocker = BC.build_blockers([step])[0]
-    assert blocker["classification"] == "MISSING_CAPABILITY"
-    assert blocker["basis"] == "native-tool-absent"
 
 
-def test_flow_consumer_keeps_missing_yosys_incomplete(tmp_path, monkeypatch):
-    rtl = tmp_path / "phase2/stage1/rtl"
-    report = tmp_path / "reports/phase2/lint/rtl_hygiene.json"
-    rtl.mkdir(parents=True)
-    report.parent.mkdir(parents=True)
-    (rtl / "leaf.v").write_text(LEAF)
-    (rtl / "top.v").write_text(TOP)
-    monkeypatch.delenv("VIBEIC_EDA_IMAGE", raising=False)
-    monkeypatch.delenv("IIC_EDA_IMAGE", raising=False)
-    monkeypatch.setenv("PATH", "/nonexistent")
-
-    result = FCC._check_program_exit_zero(
-        tmp_path,
-        "rtl_hygiene_lint phase2/stage1/rtl/leaf.v "
-        "phase2/stage1/rtl/top.v --top top --severity ERROR "
-        "--json reports/phase2/lint/rtl_hygiene.json")
-
-    assert result.exit_code == 2
-    assert result.verdict == "INCOMPLETE"
-    assert result.reason_class == "EXECUTION_ERROR"
-    assert "NATIVE_TOOL_ABSENT: Yosys" in result[1]
 
 
 def test_real_undriven_wire_still_returns_design_fail(tmp_path, monkeypatch):

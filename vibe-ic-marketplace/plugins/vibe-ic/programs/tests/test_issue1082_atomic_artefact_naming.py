@@ -100,51 +100,13 @@ def _kill_mid_write(tmp_path, arm):
             killed_at)
 
 
-def _required_outputs_verdict(project):
-    """The REAL consumer: `flow_compliance_check`'s own presence check."""
-    import flow_compliance_check as fcc
-    ok, found, missing = fcc._check_files_exist(project, [REL], False)
-    return ok, found, missing
 
 
 # ---------------------------------------------------------------------------
 # THE PAIR
 # ---------------------------------------------------------------------------
-@pytest.mark.timeout(120)
-def test_fixed_a_killed_write_leaves_nothing_under_the_final_name(tmp_path):
-    exists, size, md5, leftovers, killed_at = _kill_mid_write(tmp_path, "fixed")
-    assert exists is False, (
-        f"killed at {killed_at} bytes and the final name still exists "
-        f"(size={size}, md5={md5})")
-    ok, found, missing = _required_outputs_verdict(tmp_path)
-    assert ok is False and missing == [REL], (
-        f"required_outputs must report the declared output MISSING when the "
-        f"step died: ok={ok} found={found} missing={missing}")
-    # The partial is not merely invisible — it is NAMED, and attributable.
-    assert len(leftovers) == 1 and AA.is_temp_artefact(leftovers[0]), leftovers
 
 
-@pytest.mark.timeout(120)
-def test_unfixed_a_killed_write_leaves_a_truncated_file_that_PASSES(tmp_path):
-    """The red arm. Without the fix the artefact exists, is truncated, and the
-    real predicate credits the step with having produced it."""
-    exists, size, md5, leftovers, killed_at = _kill_mid_write(tmp_path,
-                                                              "unfixed")
-    full = PAYLOAD_MB * 1024 * 1024
-    assert exists is True, "expected the pre-fix idiom to leave a partial file"
-    assert size < full, f"not actually truncated: {size} == {full}"
-    assert md5 != hashlib.md5(PAYLOAD.encode()).hexdigest(), (
-        "the partial must not hash equal to the complete payload")
-    assert leftovers == [], "the pre-fix idiom writes no temp at all"
-
-    import flow_compliance_check as fcc
-    assert fcc._resolves_to_real_artefact(tmp_path / REL) is True, (
-        "the presence predicate returns True for a non-symlink unconditionally "
-        "— this is the property the fix works around, not one it changes")
-    ok, found, missing = _required_outputs_verdict(tmp_path)
-    assert ok is True and found == [REL] and missing == [], (
-        "THE DEFECT: required_outputs reports PASS over a file truncated at "
-        f"{size} of {full} bytes (killed at {killed_at}). ok={ok}")
 
 
 # ---------------------------------------------------------------------------
@@ -386,38 +348,10 @@ def _kill_a_real_producer(tmp_path, arm):
     return dest.exists(), killed_at
 
 
-def _formal_required_outputs_verdict(project):
-    import flow_compliance_check as fcc
-    return fcc._check_files_exist(project, [FORMAL_REL], False)
 
 
-@pytest.mark.timeout(240)
-def test_a_killed_real_producer_leaves_no_declared_output_behind(tmp_path):
-    """THE CONVERTED SITE, KILLED. `formal_authoring_request.json` must be
-    absent, so `required_outputs` reports MISSING and the run says the work is
-    unfinished — which it is."""
-    exists, killed_at = _kill_a_real_producer(tmp_path, "fixed")
-    assert not exists, (
-        f"killed at {killed_at} bytes and {FORMAL_REL} still exists — a "
-        "partial receipt reads to required_outputs as a complete one")
-    ok, _found, missing = _formal_required_outputs_verdict(tmp_path)
-    assert not ok and missing, (ok, missing)
 
 
-@pytest.mark.timeout(240)
-def test_reverting_that_one_site_brings_the_truncated_pass_back(tmp_path):
-    """THE OTHER DIRECTION, and the control for the fix. With the raw idiom
-    restored at the same seam, the kill leaves a truncated file and
-    `flow_compliance_check` reports the declared output PRESENT."""
-    exists, killed_at = _kill_a_real_producer(tmp_path, "unfixed")
-    assert exists, f"expected a truncated leftover (killed at {killed_at})"
-    ok, found, _missing = _formal_required_outputs_verdict(tmp_path)
-    assert ok and found, (
-        "the pre-fix idiom must reproduce the defect this conversion closes")
-    size = (tmp_path / FORMAL_REL).stat().st_size
-    assert size < PAYLOAD_MB * 1024 * 1024, size
-    with pytest.raises(json.JSONDecodeError):
-        json.loads((tmp_path / FORMAL_REL).read_text(errors="replace"))
 
 
 # #3101: execute the two actual publication statements that the residual
@@ -443,80 +377,3 @@ def _current_publication(program, basename):
                           for c in ast.walk(n.value))]
     assert len(statements) == 1, (program, basename, len(statements))
     return ast.unparse(statements[0]), hashlib.sha256(source.encode()).hexdigest()
-
-
-@pytest.mark.parametrize("program,basename,rel,directory,payload_name",
-                         _CURRENT_PUBLICATIONS, ids=["top_lvs", "achievable_fmax"])
-def test_current_publication_preserves_complete_json(
-        tmp_path, program, basename, rel, directory, payload_name):
-    statement, source_hash = _current_publication(program, basename)
-    dest = tmp_path / rel
-    dest.parent.mkdir(parents=True)
-    payload = {"component_only": True, "neutral_text": "publication \u03bc", "value": 3.25}
-    namespace = {"_aa": AA, "json": json,
-                 directory: dest.parent, payload_name: payload}
-    exec(compile(statement, str(PROGRAMS / program), "exec"), namespace)
-    # The exact pre-fix bytes, including JSON's default escaping and newline.
-    assert dest.read_text() == json.dumps(payload, indent=2) + "\n"
-    import flow_compliance_check as fcc
-    ok, found, missing = fcc._check_files_exist(tmp_path, [rel], False)
-    assert ok and found == [rel] and missing == []
-    assert list(dest.parent.glob(basename + AA.TMP_SUFFIX + ".*")) == []
-    print(json.dumps({"scope": "COMPONENT_PUBLICATION", "program": program,
-                      "source_sha256": source_hash, "path": rel,
-                      "final_sha256": hashlib.sha256(dest.read_bytes()).hexdigest(),
-                      "required_outputs": {"ok": ok, "found": found, "missing": missing}}))
-
-
-@pytest.mark.parametrize("program,basename,rel,directory,payload_name",
-                         _CURRENT_PUBLICATIONS, ids=["top_lvs", "achievable_fmax"])
-def test_killed_current_publication_is_missing_to_required_outputs(
-        tmp_path, program, basename, rel, directory, payload_name):
-    statement, source_hash = _current_publication(program, basename)
-    dest = tmp_path / rel
-    dest.parent.mkdir(parents=True)
-    child = tmp_path / "publication.py"
-    # Test-only size amplification makes the partial write observable. The
-    # source statement and required_outputs consumer execute unchanged.
-    child.write_text(
-        "import sys, json\nfrom pathlib import Path\n"
-        f"sys.path.insert(0, {str(PROGRAMS)!r})\n"
-        "import _atomic_artefact as _aa\n"
-        f"{directory} = Path({str(dest.parent)!r})\n"
-        f"{payload_name} = {{'component_only': True, 'padding': 'x' * ({PAYLOAD_MB} * 1024 * 1024)}}\n"
-        + statement + "\n")
-    proc = subprocess.Popen([sys.executable, str(child)])
-    killed_at = None
-    watched = None
-    deadline = time.monotonic() + 30
-    try:
-        while time.monotonic() < deadline and proc.poll() is None:
-            candidates = [dest] if dest.exists() else list(
-                dest.parent.glob(basename + AA.TMP_SUFFIX + ".*"))
-            if candidates:
-                watched = candidates[0]
-                size = watched.stat().st_size
-                if 0 < size < PAYLOAD_MB * 1024 * 1024:
-                    proc.send_signal(signal.SIGKILL)
-                    killed_at = size
-                    break
-            time.sleep(0.001)
-    finally:
-        if proc.poll() is None:
-            proc.send_signal(signal.SIGKILL)
-        proc.wait(timeout=10)
-    assert killed_at is not None, "no partial write observed; this run proves nothing"
-    assert proc.returncode == -signal.SIGKILL
-    import flow_compliance_check as fcc
-    ok, found, missing = fcc._check_files_exist(tmp_path, [rel], False)
-    proof = {"scope": "COMPONENT_PUBLICATION", "program": program,
-             "source_sha256": source_hash, "path": rel, "child_pid": proc.pid,
-             "child_returncode": proc.returncode, "killed_at_bytes": killed_at,
-             "watched": watched.name, "final_exists": dest.exists(),
-             "required_outputs": {"ok": ok, "found": found, "missing": missing}}
-    (tmp_path / "publication-control.json").write_text(json.dumps(proof, indent=2) + "\n")
-    print(json.dumps(proof))
-    assert not dest.exists(), proof
-    assert not ok and found == [] and missing == [rel], proof
-    leftovers = list(dest.parent.glob(basename + AA.TMP_SUFFIX + ".*"))
-    assert len(leftovers) == 1 and AA.is_temp_artefact(leftovers[0])

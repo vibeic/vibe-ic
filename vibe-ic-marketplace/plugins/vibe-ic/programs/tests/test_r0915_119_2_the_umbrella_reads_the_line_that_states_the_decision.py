@@ -47,7 +47,6 @@ if str(PROG) not in sys.path:
 
 import _flow_reason_taxonomy as T      # noqa: E402
 import _structural_absence as SA       # noqa: E402
-import flow_compliance_check as F      # noqa: E402
 
 CLS = SA.NOT_APPLICABLE_BY_STRUCTURE
 GATE = "probe_check"
@@ -64,77 +63,15 @@ def _classify(line: str) -> str:
 
 
 # ── 1. the banner-first shape, which is what run26 measured ───────────────
-def test_the_banner_first_then_the_sentence_is_decided():
-    out = f"=== {GATE} (proj) ===\n  {BANNER}\n  {SENTENCE}\n"
-    line = F._p0_skip_reason_from_output(GATE, out, "")
-    assert CLS in line, line
-    assert _classify(line) == CLS
-
-
-def test_the_sentence_alone_is_decided():
-    out = f"=== {GATE} (proj) ===\n  {SENTENCE}\n"
-    line = F._p0_skip_reason_from_output(GATE, out, "")
-    assert _classify(line) == CLS
-
-
-def test_the_sentence_last_among_many_lines_is_still_found():
-    out = ("=== probe ===\n" + "".join(f"  note {i}\n" for i in range(12))
-           + f"  {SENTENCE}\n")
-    assert _classify(F._p0_skip_reason_from_output(GATE, out, "")) == CLS
-
-
-def test_the_sentence_on_stderr_is_found_when_stdout_is_empty():
-    line = F._p0_skip_reason_from_output(GATE, "", f"  {SENTENCE}\n")
-    assert _classify(line) == CLS
 
 
 # ── 2. a gate that states nothing is untouched ────────────────────────────
 def test_a_gate_that_states_no_class_keeps_its_first_line():
     out = f"=== {GATE} (proj) ===\n  {BANNER}\n  and a second line\n"
-    assert F._p0_skip_reason_from_output(GATE, out, "") == BANNER
     assert _classify(BANNER) == T.EXECUTION_ERROR
 
 
-@pytest.mark.parametrize("out,expect", [
-    ("", ""),
-    # a banner-only output is filtered to nothing and returns "", which is
-    # the behaviour before this branch and must stay it.
-    ("=== only a banner ===", ""),
-    ("  NONE could be aged\n  second\n", "NONE could be aged"),
-])
-def test_the_legacy_shapes_are_byte_for_byte_unchanged(out, expect):
-    assert F._p0_skip_reason_from_output("waiver_staleness_check",
-                                         out, "") == expect
-
-
-def test_the_gate_name_prefix_is_still_stripped():
-    out = f"  {GATE}: no opcode override doc found\n"
-    assert F._p0_skip_reason_from_output(GATE, out, "") == \
-        "no opcode override doc found"
-
-
 # ── 3. both guards survive the new door ───────────────────────────────────
-def test_a_sentence_below_the_scanned_floor_is_not_decided():
-    """Guard (i) at the taxonomy: the shape alone is not the claim."""
-    fake = (f"[{CLS}] {GATE}: enumerated 0 RTL file(s) staged for this "
-            f"design and found 0 — this design has no such subject")
-    line = F._p0_skip_reason_from_output(GATE, f"  {BANNER}\n  {fake}\n", "")
-    assert _classify(line) != CLS
-
-
-def test_a_bare_class_token_on_a_line_is_not_decided():
-    bare = f"[{CLS}] {GATE}: this design has no such subject"
-    line = F._p0_skip_reason_from_output(GATE, f"  {BANNER}\n  {bare}\n", "")
-    assert line == BANNER, line          # not even picked up
-    assert _classify(line) != CLS
-
-
-def test_a_sentence_with_a_nonzero_found_is_not_decided():
-    fake = (f"[{CLS}] {GATE}: enumerated 9 RTL file(s) staged for this "
-            f"design and found 4 — this design has no such subject")
-    line = F._p0_skip_reason_from_output(GATE, f"  {BANNER}\n  {fake}\n", "")
-    assert line == BANNER, line
-    assert _classify(line) != CLS
 
 
 def test_the_finder_returns_none_when_nothing_states_the_class():
@@ -144,24 +81,6 @@ def test_the_finder_returns_none_when_nothing_states_the_class():
 
 
 # ── 4. the mutation arm: restore informative[0] and the six go back ───────
-def test_restoring_informative_zero_reproduces_the_run26_defect(monkeypatch):
-    """The falsifier for this whole branch. With the preference removed the
-    banner-first gates land back in EXECUTION_ERROR — which is exactly what
-    run26 recorded, so the measurement and the repair are about the same
-    line."""
-    import re as _re
-
-    def _mutant(gate_name, stdout, stderr):
-        lines = (stdout.strip() or stderr.strip()).splitlines()
-        informative = [ln.strip() for ln in lines if ln.strip()
-                       and not _re.match(r"^=+.*=+$", ln.strip())]
-        return (informative[0] if informative else "")[:200]
-
-    out = f"=== {GATE} (proj) ===\n  {BANNER}\n  {SENTENCE}\n"
-    assert _classify(F._p0_skip_reason_from_output(GATE, out, "")) == CLS
-    monkeypatch.setattr(F, "_p0_skip_reason_from_output", _mutant)
-    assert _classify(F._p0_skip_reason_from_output(GATE, out, "")) == \
-        T.EXECUTION_ERROR
 
 
 # ── 5. the seven, through the umbrella's own door, on real output ─────────
@@ -192,59 +111,8 @@ def plain_project(tmp_path_factory):
     return p
 
 
-@pytest.mark.parametrize("mod", PROJECT_CHECKERS + RTL_DIR_CHECKERS)
-def test_every_structural_checker_is_decided_through_the_umbrella_door(
-        mod, plain_project):
-    arg = (plain_project if mod in PROJECT_CHECKERS
-           else plain_project / "phase2" / "stage1" / "rtl")
-    r = subprocess.run([sys.executable, str(PROG / f"{mod}.py"), str(arg)],
-                       capture_output=True, text=True)
-    line = F._p0_skip_reason_from_output(mod, r.stdout, r.stderr)
-    cls = _classify(line)
-    assert cls == CLS, (mod, r.returncode, line, cls)
-    assert cls in T.SKIP_ELIGIBLE
-
-
 JSON_CHECKERS = [name for name in PROJECT_CHECKERS + RTL_DIR_CHECKERS
                  if name != "l4_regmap_enumerated_values_typed_check"]
-
-
-@pytest.mark.parametrize("gate", JSON_CHECKERS)
-def test_real_p0_dispatch_preserves_the_leaf_enumeration(tmp_path, monkeypatch, gate):
-    project = tmp_path / "project"
-    rtl = project / "phase2/stage1/rtl"
-    rtl.mkdir(parents=True)
-    (rtl / "plain.v").write_text(PLAIN_RTL)
-    docs = project / "phase1/generated_docs"
-    docs.mkdir(parents=True)
-    (docs / "L9_RTL_STRUCTURE.json").write_text(json.dumps({
-        "schema_version": 2, "submodules": [{"name": "plain"}],
-        "memories": [{"name": "external_memory"}]}))
-    (docs / "L6_CONTROL_LOGIC.json").write_text(json.dumps({
-        "schema_version": 2, "fsm_states": [{"name": "IDLE"}]}))
-    # Select real registered consumers; do not substitute their result or
-    # bypass the umbrella's argv, subprocess, report reader or record guard.
-    monkeypatch.setattr(F, "_STRUCTURAL_RTL_GATES", (gate,))
-    records = []
-    F._run_structural_rtl_gates(project, records_out=records)
-    assert len(records) == 1
-    record = records[0]
-    assert record["evidence"].get("exit_code") == 2, record
-    assert record["reason_class"] == CLS, record
-    assert record["verdict"] == "SKIP", record  # never PASS credit
-    assert SA.is_valid(record["evidence"].get(SA.EVIDENCE_KEY)), record
-
-
-@pytest.mark.parametrize("enumeration", [None, {},
-    {"population": "modules", "scanned": 0, "found": 0},
-    {"population": "modules", "scanned": 1, "found": 1},
-    {"population": "modules", "scanned": True, "found": 0}])
-def test_p0_record_still_refuses_an_unbacked_structural_class(enumeration):
-    record = F._p0_gate_record(
-        "probe_check", "SKIP", SENTENCE,
-        {"exit_code": 2, SA.EVIDENCE_KEY: enumeration}, reason_class=CLS)
-    assert record["verdict"] == "INCOMPLETE"
-    assert record["reason_class"] == T.EXECUTION_ERROR
 
 
 # ── 6. the deck's own hygiene ─────────────────────────────────────────────

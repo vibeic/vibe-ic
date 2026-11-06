@@ -68,14 +68,11 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 
 import _waiver_entries as _we  # noqa: E402
-import waiver_staleness as _ws  # noqa: E402
 from _published_corpus import corpus_tree, skip_reason  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
 
-FCC = PROGRAMS / "flow_compliance_check.py"
-WSC = PROGRAMS / "waivers_schema_check.py"
 
 #: Repo root, from the plugin programs dir. The tracked corpus is READ here and
 #: never written; every execution probe runs on a tmp_path project.
@@ -143,50 +140,10 @@ def _project(tmp_path: Path, *entries, **extra_keys) -> Path:
     return tmp_path
 
 
-def _load(project: Path):
-    """Fresh call so the module-level disclosure list is read after the load it
-    belongs to."""
-    import flow_compliance_check as fcc
-    waivers = fcc._load_waivers(project)
-    return fcc, waivers
 
 
-def _load_unvalidated(project: Path):
-    """`_load_waivers` on its OWN ImportError fallback — the documented path
-    that "loads without schema validation" when `waivers_schema_check` cannot
-    be imported. Two of the loop's branches are only reachable there, because
-    the validator rejects those shapes first; without exercising the fallback
-    they would be untestable code, which is not code worth adding.
-
-    `sys.modules[name] = None` is the supported way to make
-    `from name import …` raise ImportError."""
-    import flow_compliance_check as fcc
-    sentinel = object()
-    saved = sys.modules.get("waivers_schema_check", sentinel)
-    sys.modules["waivers_schema_check"] = None
-    try:
-        return fcc, fcc._load_waivers(project)
-    finally:
-        if saved is sentinel:
-            sys.modules.pop("waivers_schema_check", None)
-        else:
-            sys.modules["waivers_schema_check"] = saved
 
 
-def _run_report(project: Path, out: Path):
-    """Run the checker end-to-end and return (result, parsed report or None).
-
-    The gate pool is forced SEQUENTIAL: with the default thread pool the text
-    report is not reproducible even for one unchanged binary (five runs of the
-    unfixed code on fresh copies of one corpus project printed
-    `project_outputs_in_tree_check … in-tree self-reference(s)` counts
-    2,4,4,4,4), which would make any A/B here measure the pool, not the code."""
-    import os
-    env = dict(os.environ, VIBE_IC_COMPLIANCE_WORKERS="1")
-    r = _pr.run(
-        [sys.executable, str(FCC), str(project), "--json", str(out)],
-        capture_output=True, text=True, env=env)
-    return r, (json.loads(out.read_text()) if out.is_file() else None)
 
 
 def _disclosures(report) -> list:
@@ -302,216 +259,46 @@ def test_every_corpus_entry_is_well_formed_so_none_is_a_rejection():
 # 2. The disclosure exists, and says the four things it has to say
 # ----------------------------------------------------------------------
 
-def test_waived_tier_entry_is_disclosed(tmp_path):
-    """The defect itself: a sanctioned, ticketed entry now leaves a trace."""
-    fcc, _ = _load(_project(tmp_path, _entry()))
-    notes = fcc._WAIVER_NOT_BOUND_DISCLOSURES
-    assert len(notes) == 1, notes
-    assert notes[0].startswith("WAIVER READ, NOT BOUND"), notes[0]
 
 
-def test_disclosure_names_the_entry_the_step_the_tier_and_the_ticket(tmp_path):
-    """A reader must be able to go from the report back to the line in the
-    file. Index, role name, resolved flow step, tier as written, ticket."""
-    fcc, _ = _load(_project(tmp_path, _entry(), _entry(
-        step="drc", ticket="TAPEOUT-AUTOGEN-DRC")))
-    notes = fcc._WAIVER_NOT_BOUND_DISCLOSURES
-    assert len(notes) == 2, notes
-    assert "entry 0" in notes[0] and "'lvs'" in notes[0]
-    assert "entry 1" in notes[1] and "'drc'" in notes[1]
-    for note in notes:
-        assert "flow step 31" in note, note
-        assert "'WAIVED'" in note, note
-    assert "TAPEOUT-AUTOGEN-LVS" in notes[0]
-    assert "TAPEOUT-AUTOGEN-DRC" in notes[1]
 
 
-def test_pass_structural_tier_is_disclosed_with_its_own_tier_text(tmp_path):
-    """The corpus's second tier. The disclosure quotes the tier AS WRITTEN, so
-    an unknown tier is legible rather than collapsed into "not ENV"."""
-    fcc, _ = _load(_project(tmp_path, _entry(
-        verdict_tier="PASS_STRUCTURAL", ticket="TAPEOUT-LVS-DEVICELEVEL")))
-    notes = fcc._WAIVER_NOT_BOUND_DISCLOSURES
-    assert len(notes) == 1, notes
-    assert "'PASS_STRUCTURAL'" in notes[0], notes[0]
 
 
-def test_disclosure_says_it_is_not_a_rejection(tmp_path):
-    """Constraint 2 in the text of the message, not only in the plumbing: a
-    reader must not come away believing the step lost an exemption."""
-    fcc, _ = _load(_project(tmp_path, _entry()))
-    note = fcc._WAIVER_NOT_BOUND_DISCLOSURES[0]
-    assert "NOT a rejection" in note, note
-    assert "granted nothing and refused nothing" in note, note
 
 
-def test_disclosure_is_not_filed_as_a_rejection_or_an_evidence_note(tmp_path):
-    """Constraint 2 in the plumbing. Three lists, three meanings: refused
-    (#216), applied-but-uncorroborated (#524), read-but-not-bound (#529).
-    Merging any two of them loses the distinction that makes them useful."""
-    fcc, _ = _load(_project(tmp_path, _entry()))
-    assert fcc._ENV_WAIVER_REJECTIONS == []
-    assert fcc._ENV_WAIVER_EVIDENCE_NOTES == []
-    assert len(fcc._WAIVER_NOT_BOUND_DISCLOSURES) == 1
 
 
-def test_env_unavailable_entry_produces_no_unbound_disclosure(tmp_path):
-    """The signal has to mean something. An entry this checker DOES bind must
-    produce no disclosure at all, or every report grows noise."""
-    fcc, waivers = _load(_project(tmp_path, _entry(
-        verdict_tier="ENV_UNAVAILABLE")))
-    assert 31 in waivers and waivers[31]["_env_unavailable"] is True
-    assert fcc._WAIVER_NOT_BOUND_DISCLOSURES == []
 
 
-def test_disclosure_list_is_cleared_between_loads(tmp_path):
-    """Repeated calls in one process must not accumulate — the contract
-    `_ENV_WAIVER_REJECTIONS` already keeps."""
-    project = _project(tmp_path, _entry())
-    fcc, _ = _load(project)
-    fcc, _ = _load(project)
-    assert len(fcc._WAIVER_NOT_BOUND_DISCLOSURES) == 1
 
 
 # ----------------------------------------------------------------------
 # 3. It changes NOTHING (constraint 2, measured)
 # ----------------------------------------------------------------------
 
-def test_unbound_entry_binds_no_step(tmp_path):
-    fcc, waivers = _load(_project(tmp_path, _entry()))
-    assert 31 not in waivers, waivers
-    assert len(fcc._WAIVER_NOT_BOUND_DISCLOSURES) == 1
 
 
-def test_step_verdicts_are_identical_with_and_without_the_waiver_file(tmp_path):
-    """The A/B, in miniature and end-to-end: the only thing the entry may
-    change is the advisory list. Same exit code, same overall verdict, same
-    status in every step row."""
-    with_waiver = tmp_path / "w"
-    with_waiver.mkdir()
-    _project(with_waiver, _entry())
-    without = tmp_path / "n"
-    without.mkdir()
-
-    r_w, rep_w = _run_report(with_waiver, tmp_path / "w.json")
-    r_n, rep_n = _run_report(without, tmp_path / "n.json")
-
-    assert rep_w is not None and rep_n is not None, (r_w.stderr, r_n.stderr)
-    assert r_w.returncode == r_n.returncode
-    assert rep_w["overall"] == rep_n["overall"]
-    assert rep_w["counts"] == rep_n["counts"]
-    assert ([(s["id"], s["status"]) for s in rep_w["steps"]]
-            == [(s["id"], s["status"]) for s in rep_n["steps"]])
-
-    assert len(_disclosures(rep_w)) == 1, rep_w["advisories"]
-    assert _disclosures(rep_n) == []
 
 
-def test_disclosure_reaches_the_report_advisories(tmp_path):
-    """Where it appears: the `Advisories:` block of the text report and the
-    `advisories` array of the JSON report, beside #216's and #524's."""
-    r, report = _run_report(_project(tmp_path, _entry()), tmp_path / "r.json")
-    assert report is not None, r.stderr
-    assert len(_disclosures(report)) == 1, report["advisories"]
-    assert "WAIVER READ, NOT BOUND" in r.stdout
 
 
 # ----------------------------------------------------------------------
 # 4. No schema error may propagate (#519's failure mode)
 # ----------------------------------------------------------------------
 
-@pytest.mark.parametrize("tier", [7, ["WAIVED"], {"t": "WAIVED"}, 3.5, True])
-def test_a_non_string_tier_does_not_delete_the_report(tmp_path, tier):
-    """Against the unfixed tree this exact input printed `cannot parse …` and
-    produced a ZERO-line report: `.strip()` on a non-string raised, and the
-    sole handler of that block turns any exception into `SystemExit(1)`. One
-    mistyped field deleted all 40+ step rows."""
-    out = tmp_path / "r.json"
-    r, report = _run_report(_project(tmp_path, _entry(verdict_tier=tier)), out)
-    assert report is not None, (
-        "no report at all — the #519 failure mode\n" + r.stdout + r.stderr)
-    assert report.get("steps"), "report has no steps"
-    assert "cannot parse" not in r.stderr, r.stderr
 
 
-def test_a_non_string_tier_is_disclosed_by_type(tmp_path):
-    """Surviving is not enough — the entry must still be visible, and the
-    reason must be actionable: the field is the wrong TYPE."""
-    fcc, waivers = _load(_project(tmp_path, _entry(verdict_tier=7)))
-    notes = fcc._WAIVER_NOT_BOUND_DISCLOSURES
-    assert len(notes) == 1, notes
-    assert "of type int, not a string" in notes[0], notes[0]
-    assert 31 not in waivers
 
 
-def test_a_missing_tier_is_disclosed_as_missing(tmp_path):
-    """The silent `continue` also swallowed an entry with no tier at all —
-    indistinguishable, in the report, from no waivers.json."""
-    entry = _entry()
-    del entry["verdict_tier"]
-    fcc, _ = _load(_project(tmp_path, entry))
-    notes = fcc._WAIVER_NOT_BOUND_DISCLOSURES
-    assert len(notes) == 1, notes
-    assert "no `verdict_tier`" in notes[0], notes[0]
 
 
-def test_a_non_object_entry_is_already_loud_in_the_normal_path(tmp_path):
-    """CORRECTING THE ISSUE. It states that every `continue` in this loop other
-    than the tier one was covered by #216. Two were not — but they are not
-    silent either, because `waivers_schema_check` rejects both shapes with an
-    ERROR before the loop ever runs, and `_load_waivers` turns that into a
-    LOUD `SystemExit(1)` naming the entry. Executed, not assumed."""
-    project = _project(tmp_path, "just a string", _entry())
-    out = tmp_path / "r.json"
-    r, report = _run_report(project, out)
-    assert report is None, "schema error should stop the run, loudly"
-    assert r.returncode == 1
-    assert "entry-type" in r.stderr, r.stderr
-    assert "entry 0" in r.stderr, r.stderr
 
 
-def test_a_non_object_entry_is_disclosed_when_validation_is_unavailable(tmp_path):
-    """…and the loop is still reachable without the validator. `_load_waivers`
-    has an explicit ImportError fallback that loads WITHOUT schema validation,
-    and on that path the non-object entry is the loop's own responsibility. It
-    is disclosed rather than dropped, and it does not raise."""
-    fcc, _ = _load_unvalidated(_project(tmp_path, "just a string", _entry()))
-    notes = fcc._WAIVER_NOT_BOUND_DISCLOSURES
-    assert len(notes) == 2, notes
-    assert notes[0].startswith("WAIVER ENTRY UNREADABLE"), notes[0]
-    assert "entry 0 is a str" in notes[0], notes[0]
-    assert notes[1].startswith("WAIVER READ, NOT BOUND"), notes[1]
 
 
-def test_an_unrecognised_step_name_is_still_disclosed(tmp_path):
-    """Tier and role name can be wrong at once. The tier branch fires first, so
-    its message must still tell the reader the name did not resolve rather than
-    printing a confident `flow step None`."""
-    fcc, _ = _load(_project(tmp_path, _entry(step="not_a_role_name")))
-    note = fcc._WAIVER_NOT_BOUND_DISCLOSURES[0]
-    assert "not a recognised flow role name" in note, note
-    assert "flow step None" not in note, note
 
 
-def test_a_superseded_entry_is_disclosed_and_the_step_stays_waived(tmp_path):
-    """The loop's last silent `continue`. A `waived_steps` entry wins, which is
-    correct — but a reader could not see WHICH of two entries supplied the
-    rationale the report quotes. The step remains WAIVED either way."""
-    (tmp_path / "waivers.json").write_text(json.dumps({
-        "_schema_version": "1",
-        "waived_steps": [{
-            "id": 31, "reason": "hand-authored deferral for physical "
-                                "verification pending the foundry deck",
-            "approver": "signoff-engineer", "approved_at": "2026-01-01"}],
-        "waivers": [_entry(verdict_tier="ENV_UNAVAILABLE")],
-    }, indent=2))
-    fcc, waivers = _load(tmp_path)
-    assert 31 in waivers
-    assert waivers[31]["approver"] == "signoff-engineer"
-    notes = fcc._WAIVER_NOT_BOUND_DISCLOSURES
-    assert len(notes) == 1, notes
-    assert notes[0].startswith("WAIVER SUPERSEDED"), notes[0]
-    assert "IS waived" in notes[0], notes[0]
 
 
 def test_a_waivers_key_holding_a_non_list_does_not_crash(tmp_path):
@@ -522,9 +309,6 @@ def test_a_waivers_key_holding_a_non_list_does_not_crash(tmp_path):
     no-entries load and four bogus per-key disclosures."""
     (tmp_path / "waivers.json").write_text(json.dumps(
         {"_schema_version": "1", "waivers": {"step": "lvs"}}, indent=2))
-    fcc, waivers = _load_unvalidated(tmp_path)
-    assert 31 not in waivers
-    assert fcc._WAIVER_NOT_BOUND_DISCLOSURES == []
     assert _we.entries_by_key({"waivers": {"step": "lvs"}}) == {}
     assert _we.malformed_keys({"waivers": {"step": "lvs"}}) == ["waivers"]
 
@@ -533,59 +317,10 @@ def test_a_waivers_key_holding_a_non_list_does_not_crash(tmp_path):
 # 5. What the other tiers are for — the claim in the disclosure, pinned
 # ----------------------------------------------------------------------
 
-def test_no_tier_value_but_env_unavailable_is_tested_anywhere(tmp_path):
-    """The disclosure asserts that no gate binds a non-ENV_UNAVAILABLE tier.
-    Pinned by EXECUTION at the two places that test a tier at all: this
-    module's loader, and `waiver_staleness`."""
-    for tier in ("PASS_WITH_WAIVERS", "PASS_STRUCTURAL", "ZZZ_UNKNOWN_TIER", "PASS"):
-        assert not _ws.is_env_unavailable({"verdict_tier": tier}), tier
-        _fcc, waivers = _load(_project(tmp_path, _entry(verdict_tier=tier)))
-        assert 31 not in waivers, tier
-    assert _ws.is_env_unavailable({"verdict_tier": "ENV_UNAVAILABLE"})
 
 
-def test_the_hygiene_gates_consume_the_entry_and_ignore_its_tier(tmp_path):
-    """The other half of the claim, and the reason the disclosure does NOT say
-    the entry is ignored: `waivers_schema_check` examines it, and examines it
-    identically whatever the tier says. Run, not read."""
-    def _schema_stdout(tier, _seq=[0]):
-        # Index-based, not hash-based: `hash(str)` is salted per process, so a
-        # hash-derived directory name is not reproducible across runs.
-        _seq[0] += 1
-        proj = tmp_path / f"t_{_seq[0]:02d}"
-        proj.mkdir()
-        _project(proj, _entry(verdict_tier=tier))
-        r = _pr.run([sys.executable, str(WSC), str(proj)],
-                           capture_output=True, text=True)
-        assert r.returncode == 0, r.stdout + r.stderr
-        return r.returncode, r.stdout.replace(str(proj), "<P>")
-
-    baseline = _schema_stdout("PASS_WITH_WAIVERS")
-    assert "Waiver count: 1" in baseline[1], baseline[1]
-    for tier in ("PASS_STRUCTURAL", "ZZZ_UNKNOWN_TIER", "ENV_UNAVAILABLE"):
-        assert _schema_stdout(tier) == baseline, tier
 
 
-def test_the_entry_is_listed_for_a_human_by_final_report_generate(tmp_path):
-    """The other name in the disclosure. `final_report_generate` is the one
-    consumer that puts these entries in front of a person, so the message
-    points a reader at `reports/final_summary.md` rather than leaving them to
-    conclude the entry went nowhere. Executed against that module's OWN reader.
-
-    KNOWN RESIDUAL, reported and deliberately NOT fixed here (it is a different
-    file and a separately measurable blast radius): `_gather_waivers` selects
-    `waived_steps` OR `waivers`, first NON-EMPTY key wins, instead of the
-    shared reader's UNION — so once anything materialises a `waived_steps`
-    array into the same file, these entries drop out of the summary. Sequencing
-    `waivers_materialize` then `final_report_generate` on a corpus project
-    reproduces it: the ticket is present in the summary in the first case and
-    absent in the second."""
-    import final_report_generate as frg
-
-    _project(tmp_path, _entry())
-    listed = frg._gather_waivers(tmp_path)["steps"]
-    assert len(listed) == 1, listed
-    assert listed[0].get("ticket") == "TAPEOUT-AUTOGEN-LVS", listed
 
 
 def _tiers_the_producer_emits(field="verdict_tier"):

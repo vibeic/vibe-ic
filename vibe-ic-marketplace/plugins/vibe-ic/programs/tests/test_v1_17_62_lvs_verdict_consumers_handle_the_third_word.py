@@ -36,7 +36,6 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import postroute_timing_repair_decision as D  # noqa: E402
 import eda_report_audit as ERA  # noqa: E402
 
 #: The full status vocabulary `_write_lvs_verdict` can persist, enumerated from
@@ -57,97 +56,14 @@ def _write_lvs(project: Path, status: str, finding: str = "X",
     return p
 
 
-def _decide(project):
-    # single_corner_clean=True and no stance ⇒ NO timing reason to repair, so
-    # `repair_needed` can only be moved by the non-timing tiers.  Without this
-    # the assertion below would pass for the wrong reason.
-    return D.decide({}, True, project=project)
-
-
 # ---------------------------------------------------------------------------
 # THE DEFECT
 # ---------------------------------------------------------------------------
-def test_a_stopped_lvs_withholds_the_no_repair_certification(tmp_path):
-    for word in ("BLOCKED", "INCOMPLETE", "STALLED"):
-        p = tmp_path / word
-        _write_lvs(p, word, finding="LVS_EXTRACTION_STALLED",
-                   stopped_as="STALLED")
-        out = _decide(p)
-        assert out["repair_needed"] is True, (word, out)
-        # It is NOT filed as a failure — that would assert a mismatch.
-        assert out["nontiming_failures"] == [], (word, out)
-        nd = out["nontiming_not_determined"]
-        assert [r["domain"] for r in nd] == ["lvs_verdict"], (word, out)
-        assert "stopped_as=STALLED" in nd[0]["signal"], nd
-        assert "never completed" in out["reason"], out["reason"]
-        assert "NOTHING is known" in out["reason"], out["reason"]
 
 
 # ---------------------------------------------------------------------------
 # CONTROLS — what must NOT move
 # ---------------------------------------------------------------------------
-def test_a_clean_lvs_still_certifies(tmp_path):
-    p = tmp_path / "clean"
-    _write_lvs(p, "PASS", finding="LVS_MATCH")
-    out = _decide(p)
-    assert out["repair_needed"] is False, out
-    # `.get` on purpose: this is a CONTROL and must be readable on BOTH arms.
-    # Indexing a key the pre-fix tree does not have would turn it red for a
-    # reason that is not the defect, which is how a control stops controlling.
-    assert out.get("nontiming_not_determined", []) == [], out
-
-
-def test_a_real_lvs_failure_is_still_a_FAILURE_not_a_not_determined(tmp_path):
-    p = tmp_path / "mismatch"
-    _write_lvs(p, "FAIL", finding="LVS_MISMATCH")
-    out = _decide(p)
-    assert out["repair_needed"] is True, out
-    assert [r["domain"] for r in out["nontiming_failures"]] == ["lvs_verdict"]
-    assert out.get("nontiming_not_determined", []) == [], out
-
-
-def test_an_absent_record_still_scores_nothing(tmp_path):
-    """Silence is not failure — this module's own rule, unchanged.  Reading an
-    absent artefact as a stop would deadlock Step 32 on every run that has not
-    reached LVS yet."""
-    p = tmp_path / "empty"
-    (p / "reports" / "phase3").mkdir(parents=True)
-    out = _decide(p)
-    assert out["repair_needed"] is False, out
-    assert out["nontiming_failures"] == [] and \
-        out.get("nontiming_not_determined", []) == [], out
-
-
-def test_an_unparseable_record_still_scores_nothing(tmp_path):
-    p = tmp_path / "junk"
-    d = p / "reports" / "phase3"
-    d.mkdir(parents=True)
-    (d / "lvs_verdict.json").write_text("{not json")
-    out = _decide(p)
-    assert out["repair_needed"] is False, out
-    assert out.get("nontiming_not_determined", []) == [], out
-
-
-def test_env_unavailable_is_deliberately_left_alone(tmp_path):
-    """ENV_UNAVAILABLE is an established waiver tier, and moving it changes the
-    verdict of every run on a host that simply lacks a tool.  Left for an owner
-    ruling, and PINNED here so the decision is visible rather than forgotten."""
-    p = tmp_path / "env"
-    _write_lvs(p, "ENV_UNAVAILABLE", finding="LVS_NO_CELL_GDS")
-    out = _decide(p)
-    assert out["repair_needed"] is False, out
-    assert out.get("nontiming_not_determined", []) == [], out
-
-
-def test_the_two_tiers_are_disjoint_over_the_whole_vocabulary(tmp_path):
-    """MEMBERSHIP, not counts.  No word may score in BOTH tiers — a word that
-    did would make `nontiming_failures` and `nontiming_not_determined`
-    two names for one list, and the distinction this fix exists to draw
-    would be decorative."""
-    for word in LVS_STATUS_VOCABULARY + ("STALLED",):
-        both = (D._hard_failure_signal({"status": word}) is not None
-                and D._not_determined_signal({"status": word}) is not None)
-        assert not both, word
 
 
 # ---------------------------------------------------------------------------

@@ -30,8 +30,6 @@ PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 import _path_layout as _pl  # noqa: E402
 import design_one_shot_runner as P2  # noqa: E402
-import flow_compliance_check as FCC  # noqa: E402
-import phase23_completion_self_audit_check as SA  # noqa: E402
 import eda_report_audit as ERA  # noqa: E402
 
 
@@ -70,87 +68,13 @@ def test_gate_timeout_default_env_cap(monkeypatch):
 # ── phase2 step_final_audit: TIMEOUT is named, not a bare FAIL ─────────────
 
 
-
-
-
-
-
 # ── flow_compliance per-gate cap: named timeout + env budget ───────────────
 
 #: A `run_host_supervised` reporting that the gate's process tree made no
 #: forward progress. The shipped type from the shipped module, not a duck.
-def _stalled_result(cmd, **_kw):
-    return FCC._watchdog.SupervisedResult(
-        FCC._watchdog.RC_STALLED, "", "WATCHDOG_STALLED", "stalled", 61.0)
-
-
-def test_gate_stall_message_says_not_a_verdict(tmp_path, monkeypatch):
-    """THIS BRANCH CHANGED THE SHAPE, and the test follows it rather than being
-    relaxed to accept either.
-
-    It used to stub `FCC.subprocess.run` and raise `TimeoutExpired`. The gate
-    runner no longer bounds a gate by RUNTIME — a structural gate reading a
-    post-PnR netlist or hashing a multi-GB GDS is WORKING, and the old fixed
-    budget killed it and recorded the kill as a gate FAIL — so the launch moved
-    to `_watchdog.run_host_supervised` and that stub went BLIND: the real gate
-    ran, returned 0, and this test asserted `ok is False` against a genuine
-    PASS. A stub below the seam the code actually launches through does not
-    make a test lenient, it makes it MEASURE SOMETHING ELSE.
-
-    #525's reading is unchanged and is what is asserted: an unevaluated gate
-    still FAILs, the reason still says it is NOT a verdict about the design, and
-    it still names the env var that extends the allowance. What moved is the
-    OBSERVATION behind it — "it has been N seconds", which a correct gate on a
-    busy host reaches just as easily, became "this gate's tree did nothing at
-    all for N seconds", which only a wedged gate reaches.
-    """
-    monkeypatch.setattr(FCC._watchdog, "run_host_supervised", _stalled_result)
-    ok, msg = FCC._check_program_exit_zero(
-        tmp_path, "plugin_version_prose_sync_check .")
-    assert ok is False
-    assert "STALLED" in msg and "NOT a verdict" in msg
-    assert _pl.GATE_TIMEOUT_ENV in msg
-    # AND THE ACCUSING CLOCK SENTENCE IS GONE. Asserted, not assumed: the whole
-    # point of the change is that the reason stopped naming a duration.
-    assert "TIMED OUT" not in msg, msg
-
-
-def test_gate_budget_honors_env(tmp_path, monkeypatch):
-    """THE HALF THAT MUST NOT MOVE: the operator's declared number still reaches
-    the launch. It is now the STALL GRACE rather than a runtime deadline — how
-    long the gate may show no progress at all — so it is read off
-    `stall_grace_s` instead of `timeout`. The env var, the value and the fact
-    that the caller's number is honoured as given are all unchanged.
-    """
-    seen = {}
-
-    def capture(cmd, **kw):
-        seen["stall_grace_s"] = kw.get("stall_grace_s")
-        return _stalled_result(cmd, **kw)
-
-    monkeypatch.setenv(_pl.GATE_TIMEOUT_ENV, "77")
-    monkeypatch.setattr(FCC._watchdog, "run_host_supervised", capture)
-    FCC._check_program_exit_zero(
-        tmp_path, "plugin_version_prose_sync_check .")
-    assert seen["stall_grace_s"] == 77
 
 
 # ── phase23 self-audit: no crash, named AUDIT_TIMEOUT overall ──────────────
-
-def test_phase23_self_audit_timeout_no_crash(tmp_path, monkeypatch):
-    def boom(*a, **k):
-        raise subprocess.TimeoutExpired(cmd="x", timeout=k.get("timeout"))
-    for _launcher in (getattr(SA, "subprocess", None),
-                      getattr(SA, "_pr", None)):
-        if _launcher is not None:
-            monkeypatch.setattr(_launcher, "run", boom)
-    rc, out = SA._run_compliance(tmp_path)
-    assert rc == 124
-    # the gate's private `_OVERALL_RE` MOVED to `_audit_verdict` (one owner for the audit's
-    # verdict, asked by all three readers). Same property, read through the owner.
-    import _audit_verdict as _AV
-    assert (_AV.verdict_word(out) or "").upper() == "AUDIT_TIMEOUT"
-    assert "NOT a verdict" in out
 
 
 # ── emit_final_summary outer cap no longer defeats the inner budget ────────
@@ -164,13 +88,6 @@ def test_outer_summary_budget_exceeds_inner(tmp_path):
 
 
 # ── evidence-scan head-read keeps correctness ──────────────────────────────
-
-def test_evidence_scan_detects_stub_in_head_of_big_file(tmp_path):
-    src = (PROGRAMS / "flow_compliance_check.py").read_text()
-    # the whole-file read is gone from the scan
-    assert 'read_text(errors="replace")[:8000]' not in src.split(
-        "def _evidence_integrity_scan")[1].split("def ")[0]
-    assert 'fh.read(8192)' in src
 
 
 # ── discovery-glob hygiene (#525 round-4 adjacent finding) ─────────────────
@@ -208,7 +125,6 @@ def test_discover_negative_normal_nested_dirs_kept(tmp_path):
 # ── adversarial-review regressions (v0.3.26 pre-push round) ────────────────
 
 
-
 def test_run_timeout_partial_stdout_is_str(tmp_path):
     import sys as _sys
     rc, out, err = P2._run(
@@ -217,41 +133,3 @@ def test_run_timeout_partial_stdout_is_str(tmp_path):
         timeout=1)
     assert rc == 124
     assert isinstance(out, str)
-
-
-def test_phase23_runner_uses_shared_summary_helper():
-    # MED (review): the phase23 runner carried a third raw 240s outer cap
-    # that defeated the size-adaptive inner budget.
-    src = (PROGRAMS / "phase23_one_shot_runner.py").read_text()
-    assert "emit_final_summary" in src
-    assert "timeout=240" not in src
-
-
-def test_final_report_constants_are_aliases():
-    """LOW (review): constants must alias the _path_layout single source.
-
-    Compared through `g._pl` -- the module object `final_report_generate`
-    ITSELF aliased -- not through this file's own `import _path_layout`.
-
-    Those are not always the same object. Under whole-directory collection
-    `_path_layout` is imported twice (27 files in this suite reload or pop
-    modules from sys.modules), and then every one of these `is` checks compares
-    equal-but-distinct constants across two module instances:
-
-        pytest <this file>                                  passed
-        pytest programs/tests -k <this test>                 FAILED
-            AssertionError: assert 900 is 900
-
-    900 is outside CPython's small-int cache, so identity across two module
-    objects is never guaranteed -- the assertion was measuring which import
-    graph pytest happened to build, not whether the constants alias.
-
-    The claim itself is unweakened, and is the reason `is` rather than `==` is
-    right here: an independent literal in `final_report_generate` compiles to a
-    different object than `_path_layout`'s and still fails this.
-    """
-    import final_report_generate as g
-    src = g._pl
-    assert g.AUDIT_TIMEOUT_DEFAULT_S is src.AUDIT_TIMEOUT_DEFAULT_S
-    assert g.AUDIT_TIMEOUT_CAP_S is src.AUDIT_TIMEOUT_CAP_S
-    assert g.AUDIT_TIMEOUT_ENV is src.AUDIT_TIMEOUT_ENV

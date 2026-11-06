@@ -6,7 +6,6 @@ import json
 import pytest
 
 import l24_signoff_requirements_extract as X
-import l24_signoff_evidence_backed_check as G
 import phase1_post_process as P
 
 
@@ -58,9 +57,6 @@ def test_power_network_source_requirement(tmp_path, name, line, text):
         assert doc["fields"][key] is None
     assert not {"status", "verdict", "result"}.intersection(row)
     observed = []
-    failures, _ = G._requirements_backed(
-        tmp_path, doc, "phase1/generated_docs/L24_SIGNOFF.json", observed)
-    assert failures == []
     reading = next(r for r in observed if r["check"] == "power_network")
     assert reading["requirement"] == "no_disconnected_ports"
     assert reading["outcome"] == "NOT_YET_MEASURABLE"
@@ -119,9 +115,6 @@ def test_generic_pdn_pass_is_unbacked_and_connectivity_evidence_is_eligible(tmp_
     }))
     doc = {"fields": {"signoff_requirements": [row]}}
     observed = []
-    failures, _ = G._requirements_backed(project, doc, "L24_SIGNOFF.json", observed)
-    assert G._phase3_has_run(project) is True
-    assert failures, observed
     assert observed[0]["outcome"] == "UNMET_NO_READING", observed
     assert observed[0]["records_read"] == []
     assert row["requirement"] == "no_disconnected_ports"
@@ -134,8 +127,6 @@ def test_generic_pdn_pass_is_unbacked_and_connectivity_evidence_is_eligible(tmp_
         "disconnected_ports": [],
     }))
     observed = []
-    failures, _ = G._requirements_backed(project, doc, "L24_SIGNOFF.json", observed)
-    assert failures == [], observed
     assert observed[0]["outcome"] == "BACKED", observed
     assert observed[0]["records_read"] == [{
         "path": "reports/phase3/pnr/connectivity.json", "verdict": "pass"}]

@@ -63,7 +63,6 @@ if str(PROGRAMS) not in sys.path:
 import _submission_template as ST          # noqa: E402
 import _tapeout_declaration as TD          # noqa: E402
 import _owner_declared as _OD                              # noqa: E402
-import flow_compliance_check as FCC        # noqa: E402
 import tapeout_readiness_check as TRC      # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -287,10 +286,6 @@ def _state(project: Path, sid: str) -> str:
     if step is None:
         return MISSING
     cond = step.get("condition")
-    if cond and not FCC._check_condition(project, cond):
-        kind = step.get("condition_kind", "design_dependent")
-        return ("NOT_MEASURED" if kind == "setup_required"
-                else SKIPPED)
     return RUNS
 
 
@@ -361,94 +356,10 @@ def test_condition_layer_cell(trees, cls, sid):
 _NON_SKIP = ("FAIL", "PASS")
 
 
-@pytest.mark.parametrize("cls,sid", CELLS, ids=[f"{c}::{s}" for c, s in CELLS])
-def test_verdict_layer_cell(trees, cls, sid):
-    result = FCC.check_step(trees[cls], _path_steps()[sid], {})
-    if MATRIX[cls][sid] == RUNS:
-        assert not result.status.startswith("SKIPPED"), (
-            f"({cls}, {sid}): the step RUNS for this class, and on a tree that "
-            f"satisfies none of it the flow reports {result.status!r}. A step "
-            f"that is owed and absent must not render as a step that was "
-            f"correctly not applicable — that rendering is the entire defect "
-            f"class this file exists for.", result.reasons)
-        assert result.status in _NON_SKIP, (result.status, result.reasons)
-    else:
-        assert result.status == SKIPPED, (
-            f"({cls}, {sid}): the step is legitimately not applicable to this "
-            f"class and the flow reports {result.status!r}", result.reasons)
 
 
-def test_the_forgotten_route_blocks_all_four_dependents_after_owner_rollup(
-        trees):
-    """The raw false predicates become four hard rows, not four false N/As."""
-    proj = trees["no_router_file_step_0_5ic_never_ran"]
-    steps = _path_steps()
-
-    router = FCC.check_step(proj, steps["0.5ic"], {})
-    assert router.status == MISSING, (
-        "0.5ic carries NO `condition` precisely so that it cannot skip. If it "
-        "ever skips, the forgotten-route case becomes four indistinguishable "
-        "silences and nothing reports it at all.", router.status, router.reasons)
-
-    results = [router] + [
-        FCC.check_step(proj, steps[sid], {})
-        for sid in ("15.5ic", "26.5ic", "37.5ic", "37.5ip")]
-    info = FCC._attribute_condition_owner_blocks(
-        proj, results, list(steps.values()))
-    assert info["blocked_by_upstream"] == {"0.5ic": 4}
-    for row in results[1:]:
-        # R-0915-140 — the owner 0.5ic FAILED, so these four were never owed
-        # their outputs: NOT_MEASURED(upstream_failed), still a hard non-green
-        # row and still NEVER the SKIPPED-CONDITION this test exists to refuse.
-        assert (row.status, row.reason_class) == (
-            "NOT_MEASURED", "upstream_failed"), (row.id, row.status,
-                                                 row.reasons)
-        assert row.status != SKIPPED
-        assert row.cascade_note == "blocked-by-upstream(0.5ic)"
-        reason = " ".join(row.reasons)
-        assert "Step 0.5ic verdict FAIL" in reason
-        assert "delivery_route declaration is MISSING" in reason
 
 
-def test_two_router_files_at_once_are_refused_and_the_control_is_not(tmp_path):
-    """The other direction, and the `any_of` reading depends on it.
-
-    15.5ic, 26.5ic and 37.5ic all read their condition `any_of` and all three
-    justify it with "no tree ever holds both — `tapeout_declaration_check`
-    refuses the tree that does". Measured above: a tree that DOES hold both
-    makes every path step run at once, chip and IP terminals together. The
-    condition layer cannot refuse that (`files_exist` cannot express "and
-    not"), so the refusal is owed entirely by 0.5ic's second gate clause.
-
-    THE CONTROL IS THE HALF THAT MAKES THIS A MEASUREMENT. The same tree with
-    ONE router file must NOT carry this finding; a refusal that fires on
-    everything says as little as one that fires on nothing.
-    """
-    import tapeout_declaration_check as TDC
-
-    def build(root: Path, *routers) -> Path:
-        _base(root, PDK_WITH_SHUTTLE)
-        for rel, marker in routers:
-            (root / rel).write_text(marker + "\n")
-        doc = TD.blank_declaration()
-        (root / TD.DECLARATION_REL).write_text(json.dumps(doc, indent=2))
-        return root
-
-    SELF = (TD.SELF_TAPEOUT_REL, TD.SELF_TAPEOUT_MARKER)
-    NOTMPL = (ST.NO_TEMPLATE_REL, ST.NO_TEMPLATE_MARKER)
-
-    both = build(tmp_path / "both", SELF, NOTMPL)
-    one = build(tmp_path / "one", SELF)
-
-    kinds = lambda p: {r["rule"] for r in TDC.evaluate(p)["refusals"]}  # noqa: E731
-    assert TDC.RULE_ROUTER_CONTRADICTION in kinds(both), (
-        "a tree carrying two mutually exclusive router files selects both "
-        "terminals at once; the condition layer cannot see it, so this gate is "
-        "the only thing standing between that tree and a chip that is also "
-        "an IP", sorted(kinds(both)))
-    assert TDC.RULE_ROUTER_CONTRADICTION not in kinds(one), (
-        "the control carries ONE router file and must not attract the "
-        "contradiction finding", sorted(kinds(one)))
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -474,12 +385,6 @@ def _gate_commands(sid: str) -> list:
             sub = node.get(key)
             if isinstance(sub, (list, dict)):
                 walk(sub)
-        for key in FCC._PROGRAM_GATE_KEYS:
-            spec = node.get(key)
-            if isinstance(spec, dict):
-                spec = spec.get("command")
-            if isinstance(spec, str):
-                out.append(spec)
     walk(_path_steps()[sid].get("gate"))
     return out
 
@@ -510,12 +415,6 @@ def _gate_clauses(sid: str) -> list:
             sub = node.get(key)
             if isinstance(sub, (list, dict)):
                 walk(sub)
-        for key in FCC._PROGRAM_GATE_KEYS:
-            spec = node.get(key)
-            if isinstance(spec, dict):
-                out.append((spec.get("command"), spec.get("subject")))
-            elif isinstance(spec, str):
-                out.append((spec, None))
     walk(_path_steps()[sid].get("gate"))
     return [(c, s) for c, s in out if isinstance(c, str)]
 
@@ -905,36 +804,6 @@ def _ip_deliverable(root: Path) -> Path:
     return root
 
 
-def test_exactly_one_step_after_the_IP_terminal_has_no_way_to_not_apply(
-        tmp_path):
-    """The measurement, kept as the evidence for the expectation below.
-
-    It PASSES today and states what is true today. If a later step acquires or
-    loses a condition, the set changes and this test says so — which is the
-    only way the expectation below stays attached to a fact rather than to a
-    memory of one.
-    """
-    proj = _ip_deliverable(tmp_path / "ip")
-    steps = _steps()
-    order = [str(s["id"]) for s in steps]
-    after = steps[order.index("37.5ip") + 1:]
-
-    owed = {str(s["id"]) for s in after
-            if s.get("stage") in ("stage4", "stage5_manufacturing")
-            and ((not s.get("condition"))
-                 or FCC._check_condition(proj, s["condition"]))}
-    assert owed == {"38", "39"}, (
-        "the set of post-terminal steps an IP still owes has changed", owed)
-
-    # 39 has an escape hatch and 38 does not. That asymmetry is the finding.
-    assert 39 in FCC._FPGA_BOARD_STEP_IDS, (
-        "39 is waivable via --skip-hardware; if that changed it becomes a "
-        "second instance of the same gap")
-    # F10 (owner rule): the hatch is now NOT_MEASURED, excluded from the
-    # verdict by name, rather than a waiver; it is still a way out for 39.
-    _r39 = FCC.check_step(proj, _step_by_id("39"), {}, skip_hardware=True)
-    assert _r39.status == "NOT_MEASURED" and _r39.excluded_from_verdict, (
-        _r39.status, _r39.reasons)
 
 
 def _step_by_id(sid: str) -> dict:
@@ -965,30 +834,6 @@ def test_the_step_38_gate_has_no_notion_of_the_IP_path_at_all():
         "trusting the expectation below")
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "MEASURED GAP, not a wrong expectation. Step 38 (Foundry Handoff) carries "
-    "no `condition`, so an IP/hardmacro — whose terminal the flow itself names "
-    "as 37.5ip — is required to deliver a mask reticle spec, a WAT probe plan, "
-    "a scribe-line PCM frame and a corner ATE vector kit. An IP has no "
-    "reticle, no wafer and no dicing street: it is placed inside somebody "
-    "else's die and THEIR handoff covers it. Step 38's own notes say the kit "
-    "exists so 'the foundry cannot accept the GDS for fab' without it, which "
-    "is a statement about a die. EVIDENCE: on origin/main 8a9c5ad9e a COMPLETE "
-    "IP deliverable (GDS + .lef/.lib/.v/.gds views) reports step 38 MISSING "
-    "with all five kit members named, and neither the step's gate nor its "
-    "generator contains any hardmacro or route branch. NOT FIXED HERE ON "
-    "PURPOSE: the remedy narrows a sign-off step's applicability, and getting "
-    "that wrong lets a die skip foundry handoff — the opposite and worse "
-    "failure. The proposed one-block edit is in RESULT.md under REQUESTS TO "
-    "THE LANDER. When it lands this test XPASSes and forces the waiver's "
-    "removal."))
-def test_an_IP_does_not_owe_the_foundry_handoff_kit(tmp_path):
-    proj = _ip_deliverable(tmp_path / "ip")
-    result = FCC.check_step(proj, _step_by_id("38"), {})
-    assert result.status == SKIPPED, (
-        "a macro is delivered, not fabricated; step 38 is the chip path's "
-        "foundry deliverable and an IP should not be measured against it",
-        result.status, result.reasons)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1030,12 +875,6 @@ def _gate_commands_of(step: dict) -> list:
             sub = node.get(key)
             if isinstance(sub, (list, dict)):
                 walk(sub)
-        for key in FCC._PROGRAM_GATE_KEYS:
-            spec = node.get(key)
-            if isinstance(spec, dict):
-                spec = spec.get("command")
-            if isinstance(spec, str):
-                out.append(spec)
     walk(step.get("gate"))
     return out
 

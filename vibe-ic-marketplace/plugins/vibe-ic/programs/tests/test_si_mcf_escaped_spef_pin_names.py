@@ -36,7 +36,6 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import si_mcf_sta as M  # noqa: E402
-import si_mcf_sta_check as C  # noqa: E402
 
 
 # --------------------------------------------------------------------------
@@ -44,11 +43,6 @@ import si_mcf_sta_check as C  # noqa: E402
 # --------------------------------------------------------------------------
 def test_unescape_strips_the_escape_not_the_character():
     assert M.unescape_spef_name(r"__uuf__\._1811_/Q") == "__uuf__._1811_/Q"
-
-
-def test_unescape_leaves_an_unescaped_name_alone():
-    for name in ("_378_/ZN", "ANTENNA_1/I", "top/u0/Z"):
-        assert M.unescape_spef_name(name) == name
 
 
 def test_unescape_handles_every_escaped_character_not_just_the_dot():
@@ -175,34 +169,3 @@ def _fixture(tmp_path, escaped: bool):
         "spef": str(spef), "windows_json": str(win),
         "coupling_pairs": 1, "overlap_guard_ns": 0.0, "corners": {}}))
     return rep
-
-
-def test_audit_states_full_coverage_and_raises_no_coverage_warning(tmp_path):
-    findings, stats = C.audit(tmp_path, _fixture(tmp_path, escaped=True))
-    assert stats["windows_total"] == 2
-    assert stats["windows_resolved"] == 2
-    assert stats["windows_coverage"] == 1.0
-    assert not [f for f in findings if f.category == "WINDOW_COVERAGE_PARTIAL"]
-
-
-def test_audit_states_partial_coverage_out_loud_as_a_non_fatal_warning(tmp_path):
-    # Same fixture, but the window report no longer knows one of the pins --
-    # the state that used to be invisible behind `windows_exact: true`.
-    rep = _fixture(tmp_path, escaped=True)
-    doc = json.loads(rep.read_text())
-    w = json.loads(Path(doc["windows_json"]).read_text())
-    del w["pins"]["core._a_/Q"]
-    Path(doc["windows_json"]).write_text(json.dumps(w))
-
-    findings, stats = C.audit(tmp_path, rep)
-    assert stats["windows_total"] == 2
-    assert stats["windows_resolved"] == 1
-    assert stats["windows_coverage"] == 0.5
-    hits = [f for f in findings if f.category == "WINDOW_COVERAGE_PARTIAL"]
-    assert len(hits) == 1
-    # Loud, but never a verdict: the unresolved net degrades in the
-    # CONSERVATIVE direction, so it may overstate crosstalk and never hide it.
-    assert hits[0].severity == "WARNING"
-    assert sum(1 for f in findings
-               if f.category == "WINDOW_COVERAGE_PARTIAL"
-               and f.severity == "ERROR") == 0

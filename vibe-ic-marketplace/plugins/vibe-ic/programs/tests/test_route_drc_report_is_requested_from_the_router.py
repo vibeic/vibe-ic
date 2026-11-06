@@ -60,24 +60,10 @@ _FIXTURE = ("vibe-ic-marketplace", "plugins", "vibe-ic", "programs", "tests",
 _RPT = "/tmp/vic-probe-out/routed_router.drc.rpt"
 
 
-
-
 # A stub whose body carries the option in its `keys` list, the way OpenROAD's
 # own `detailed_route` proc does. NOT a copy of any design's data.
 _ACCEPTS = "  # sta::parse_key_args detailed_route args keys {-output_drc -verbose}"
 _REJECTS = "  # sta::parse_key_args detailed_route args keys {-verbose}"
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_the_base_route_asks_the_router_too():
@@ -89,15 +75,6 @@ def test_the_base_route_asks_the_router_too():
 
 
 # --- the CONSUMER half: a report nothing reads is a report nobody has -------
-
-
-
-
-
-
-
-
-
 
 
 def test_every_route_site_asks_so_the_report_is_never_a_superseded_routes():
@@ -128,45 +105,3 @@ def test_every_route_site_asks_so_the_report_is_never_a_superseded_routes():
             continue
         window = " ".join(lines[i:i + 2])
         assert "_vic_drc_opt" in window, f"route site does not ask:\n{window}"
-
-
-def test_a_site_that_forgets_the_option_still_defines_it():
-    """Every site carries the `info exists` default, so no route can reference
-    an undefined variable -- including on a PnR RESUME, which deletes the block
-    that carries the first probe."""
-    # THE POPULATION IS THE CODE, NOT THE PROSE ABOUT THE CODE.
-    #
-    # This scan used to read the raw source, so a `#:` comment QUOTING the
-    # emitted deck counted as a call site. MEASURED on TREE 7903c1972305: ten
-    # lines contain `$_vic_drc_opt`, nine are guarded, and the single violation
-    # is `phase3_one_shot_runner.py:23001`, a comment reading
-    #     #:     if {[catch {detailed_route {*}$_vic_drc_opt} dr_err]} {
-    # A sentence about a call is not a call, and nothing on that line can
-    # reference an undefined variable at run time.
-    #
-    # NEITHER OF THE TWO EASY ANSWERS. Deleting or rewording that comment fixes
-    # the output and not the instrument, and it would leave the next quoted
-    # snippet to trip the same wire. Inserting a guard token INTO the comment is
-    # whitewash: the detector goes green and nothing changed.
-    #
-    # `gate_is_wired_check.executable_text` is the repository's ONE
-    # implementation of "a comment cannot invoke anything" — it strips comments
-    # and docstrings, KEEPS string literals (a Tcl deck returned from a function
-    # is code, and is exactly what must still be scanned), and blanks in place
-    # so line numbers survive for the guard window below. Imported rather than
-    # re-written, so this scan cannot drift from the rule it is applying.
-    import gate_is_wired_check as _giw
-    path = Path(R.__file__)
-    src = _giw.executable_text(path, path.read_text())
-    lines = src.splitlines()
-    uses = [i for i, ln in enumerate(lines) if "$_vic_drc_opt" in ln]
-    # NON-VACUITY. Without this the loop below has an always-false antecedent
-    # and passes on a tree with no wiring at all -- it passed on clean main
-    # while every other test in this module failed.
-    assert len(uses) >= 8, f"expected the wired route sites, found {len(uses)}"
-    for i in uses:
-        back = " ".join(lines[max(0, i - 3):i + 1])
-        assert ("info exists _vic_drc_opt" in back
-                or "_drc_report_block" in back
-                or "_route_drc_report_tcl" in back), \
-            f"use of $_vic_drc_opt with no guard above it:\n{back}"

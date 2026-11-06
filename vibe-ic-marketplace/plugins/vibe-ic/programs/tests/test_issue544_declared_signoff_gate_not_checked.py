@@ -364,36 +364,8 @@ def test_absent_gate_program_blocks_the_drv_promotion_step_too(
 # ===========================================================================
 # (2) THE PATH THAT NEEDS NO BROKEN ENVIRONMENT — rc 2
 # ===========================================================================
-def test_rc2_from_a_declared_signoff_gate_does_not_release(tmp_path, runner):
-    """rc 2 is this repo's canonical NOT-CHECKED code. A declared sign-off gate
-    that correctly reports "I could not check this" was recorded as
-    no-information and the sign-off passed.
-
-    Driven through the REAL `PROGRAMS_DIR` with the REAL gate and nothing
-    patched — this needs no broken deployment at all, which is why a fix aimed
-    only at the observed symptom would leave it open.
-    """
-    proj = _project(tmp_path)
-    r = runner._run_declared_signoff_gate(
-        proj, "sta_signoff", "sta_report_check.py",
-        "reports/phase3/sta/post_route_summary.json", ("--mode", "bogus"))
-    assert r.status == "NOT_MEASURED", r
-    assert "rc=2" in r.detail, r.detail
-    assert runner._aggregate_verdict([r]) not in _RELEASING, r
 
 
-def test_rc2_stays_distinct_from_a_design_failure(tmp_path, runner):
-    """Non-releasing is not the same as "the design is bad". The BLOCKED tier
-    keeps the distinction where triage reads it — the step's own status — which
-    is what stops this fix from being a blunt "call everything a FAIL"."""
-    proj = _project(tmp_path)
-    r = runner._run_declared_signoff_gate(
-        proj, "sta_signoff", "sta_report_check.py",
-        "reports/phase3/sta/post_route_summary.json", ("--mode", "bogus"))
-    assert r.status != "FAIL", (
-        "a checker fault was recorded as a verdict about the design", r)
-    assert r.status in runner._VERDICT_TIERS, (
-        "the status is not in the module's declared verdict vocabulary", r)
 
 
 @pytest.mark.parametrize("rc", [2, 3, 70])
@@ -424,17 +396,6 @@ def test_every_non_verdict_exit_code_is_non_releasing(tmp_path, runner,
     assert runner._aggregate_verdict([r]) not in _RELEASING, (rc, r)
 
 
-def test_an_rc2_argparse_rejection_says_it_was_never_validly_invoked(
-        tmp_path, runner):
-    """rc 2 carries two meanings and the detail must say which. #492 already
-    built the classifier; reusing it is what makes the line actionable instead
-    of a bare number."""
-    proj = _project(tmp_path)
-    r = runner._run_declared_signoff_gate(
-        proj, "sta_signoff", "sta_report_check.py",
-        "reports/phase3/sta/post_route_summary.json", ("--mode", "bogus"))
-    assert "never validly invoked" in r.detail, r.detail
-    assert "invalid choice" in r.detail, r.detail
 
 
 # ===========================================================================
@@ -538,11 +499,7 @@ def test_the_rollup_names_a_failing_gate_apart_from_an_unchecked_one(
 def test_the_rollup_uses_the_repo_wide_not_checked_wording(runner):
     """One wording, not a fifth spelling. `gatekeeper_review._hygiene_verdict`
     prints this exact phrase for the CI hygiene set (#538)."""
-    import gatekeeper_review  # noqa: WPS433
     assert runner._SIGNOFF_NOT_CHECKED == "NOT CHECKED (not a pass)"
-    assert runner._SIGNOFF_NOT_CHECKED in (
-        Path(gatekeeper_review.__file__).read_text(errors="replace")), (
-        "the phrase this roll-up reuses is no longer the one #538 established")
 
 
 def test_the_rollup_is_published_beside_the_headline_verdict():

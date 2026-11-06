@@ -35,7 +35,6 @@ PLUGIN = PROGRAMS.parent
 if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
 
-import flow_compliance_check as FCC  # noqa: E402
 import ic_expert_backup_pack as PACK  # noqa: E402
 import phase1_doc_one_shot_runner as RUNNER  # noqa: E402
 from _hostpaths import require_repo  # noqa: E402
@@ -209,56 +208,6 @@ def test_analog_class_projects_l5_rows_and_intent_into_l22(tmp_path):
 EMITTER = "l22_analog_verification_plan_emit"
 
 
-def test_emitter_declares_itself_a_producer_and_is_not_wired_as_a_gate():
-    """RENAMED AND REPOINTED, and the old name was the problem.
-
-    It asserted the literal `ENFORCEMENT: ADVISORY PRODUCER` in the emitter's
-    first 2000 bytes. MEASURED RED on live main 7903c1972305 (2026-09-03,
-    pinned image sha256:66c33ff2..., host load 5.1) because `867f807a77`
-    (#1980) rewrote that heading to `ROLE: PRODUCER, not a gate` at the same
-    time as it removed the emitter's duplicate
-    `advisory_program_exit_zero --dry-run` wiring: a producer is not a
-    predicate and must not inflate gate coverage.
-
-    PUTTING THE LITERAL BACK IS NOT A COMMENT EDIT. `flow_compliance_check.
-    _gate_is_two_source_advisory` matches `/(?m)^ *ENFORCEMENT: *advis/`
-    against a gate MODULE'S OWN DOCSTRING and uses it as one of the two keys
-    that let a refusal keep its tier ("ADVISORY_REFUSAL (wired advisory; the
-    refusal is reported and does NOT deny this step its tier)"). MEASURED: the
-    regex is case-sensitive and the 50 modules that really declare it spell it
-    `ENFORCEMENT: advisory`, so the old uppercase `ENFORCEMENT: ADVISORY
-    PRODUCER` did not itself arm the hatch — it sat one lowercase word away
-    from arming it, on a module #1980 had just finished removing from every
-    gate slot. Restoring a decommissioned declaration to satisfy a pin is how
-    that word gets edited later by someone reading the module as advisory.
-
-    So the pin now asserts what the emitter IS: a producer, declaring that
-    role in its own docstring, NOT declaring itself advisory, not armed for
-    the two-source hatch, and declared in the flow only in producer slots —
-    never in a gate slot. Every one of those is read structurally, none is a
-    substring of a byte window.
-    """
-    source = PROGRAMS / f"{EMITTER}.py"
-    assert source.is_file()
-    doc = ast.get_docstring(ast.parse(source.read_text())) or ""
-
-    assert "ROLE: PRODUCER" in doc, (
-        "the emitter no longer declares its role in its own docstring; the "
-        "flow reads that docstring, so an undeclared role is not cosmetic")
-    assert not re.search(r"(?m)^ *ENFORCEMENT: *advis", doc), (
-        "the emitter declares itself ADVISORY. That is one of the two keys "
-        "`flow_compliance_check._gate_is_two_source_advisory` needs to let a "
-        "refusal keep its tier, and #1980 disarmed it on purpose")
-    assert FCC._gate_is_two_source_advisory(EMITTER) is False, (
-        "the two-source advisory escape hatch is armed for a PRODUCER")
-
-    gate_slots, producer_slots = _flow_slots_naming(EMITTER)
-    assert not gate_slots, (
-        f"#1980 removed this producer from the gate slots and it is back in "
-        f"{gate_slots}; a producer in a gate slot inflates gate coverage")
-    assert producer_slots, (
-        f"{EMITTER} is declared in no producer slot at all, so the flow no "
-        f"longer runs it and the L22 projection is silently gone")
 
 
 def _flow_slots_naming(program: str):

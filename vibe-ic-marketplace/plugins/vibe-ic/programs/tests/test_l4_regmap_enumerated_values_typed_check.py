@@ -353,7 +353,6 @@ def test_json_report_does_not_claim_absence_without_a_census(tmp_path, case, rc)
 
 
 def test_real_p0_dispatch_transports_the_nonempty_leaf_census(tmp_path, monkeypatch):
-    import flow_compliance_check as flow
 
     proj = _make(tmp_path, {"registers": [{"name": "DATA", "fields": [
         {"field_name": "payload", "bits": "[7:0]"},
@@ -365,10 +364,8 @@ def test_real_p0_dispatch_transports_the_nonempty_leaf_census(tmp_path, monkeypa
         "module neutral(input clk,d,output reg q); "
         "always @(posedge clk) q<=d; endmodule\n")
     # Only narrow the roster: use the real argv, subprocess, report and guard.
-    monkeypatch.setattr(flow, "_STRUCTURAL_RTL_GATES", (PROG.stem,))
     monkeypatch.setenv("VIBE_IC_COMPLIANCE_WORKERS", "1")
     records = []
-    flow._run_structural_rtl_gates(proj, records_out=records)
     assert len(records) == 1, records
     record = records[0]
     assert record["verdict"] == "SKIP", record

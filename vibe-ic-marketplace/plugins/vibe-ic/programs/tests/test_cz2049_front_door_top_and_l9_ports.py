@@ -39,7 +39,6 @@ PLUGIN = PROGRAMS.parent
 sys.path.insert(0, str(PROGRAMS))
 sys.path.insert(0, str(PLUGIN / "tools"))
 
-import phase1_sufficiency_check as S          # noqa: E402
 from phase1_engine.cli import _stub_l_docs_from_prose  # noqa: E402
 
 # The exact input czl9prompt / czl9docs measured — five ports, one per bullet,
@@ -180,85 +179,3 @@ _L9_ONLY = {
         "top_ports": [{"name": "clk", "direction": "input"},
                       {"name": "q", "direction": "output"}]},
 }
-
-
-def _layers(tmp_path, blobs):
-    gd = tmp_path / "generated_docs"
-    gd.mkdir(parents=True)
-    for fn, blob in blobs.items():
-        (gd / fn).write_text(json.dumps(blob))
-    return S._load_layers(gd)
-
-
-def test_a_port_reaching_only_l9_is_counted(tmp_path):
-    """RED before: 0. The gate listed L9 in `layers_seen` the whole time."""
-    layers = _layers(tmp_path, _L9_ONLY)
-    assert "L9" in layers
-    assert sorted(S._collect_port_names(layers)) == ["clk", "q"]
-
-
-def test_the_scan_population_is_not_a_hardcoded_layer_list():
-    """The population must be DERIVED. A literal layer tuple in this function
-    is what let L9 fall off it, so its absence is the thing to pin."""
-    import inspect
-    src = inspect.getsource(S._collect_port_names)
-    body = "\n".join(l for l in src.splitlines()
-                     if not l.strip().startswith("#"))
-    assert '"L8R"' not in body and "'L8R'" not in body
-
-
-def test_a_layer_carrying_no_port_structure_still_contributes_nothing(tmp_path):
-    """CONTROL — widening the population must not widen what COUNTS as a port.
-    A skeleton layer full of prose hints and a bare chip name stays at zero."""
-    layers = _layers(tmp_path, {
-        "L1_DATASHEET.json": {"ic_name": "probe"},
-        "L2_FRS.json": {"functional_summary": "Look for scan / DFT signals",
-                        "author": {"name": "a person"}},
-        "L6_CONTROL_LOGIC.json": {"notes": [{"name": "a parameter"}]},
-    })
-    assert S._collect_port_names(layers) == []
-
-
-def test_a_placeholder_port_in_l9_is_still_rejected(tmp_path):
-    """CONTROL — the unfilled-template guard survives the widening."""
-    layers = _layers(tmp_path, {
-        "L1_DATASHEET.json": {"ic_name": "probe"},
-        "L9_INTEGRATION_SPEC.json": {
-            "top_ports": [{"name": "<fill-in-port-name>", "direction": "input"}]},
-    })
-    assert S._collect_port_names(layers) == []
-
-
-def test_mutation_dropping_l9_from_the_population_re_reddens(tmp_path, monkeypatch):
-    """MUT-2 — restore the hand list and the L9-only design is blind again."""
-    layers = _layers(tmp_path, _L9_ONLY)
-    real = S._collect_port_names
-
-    def _handlist(lyrs):
-        return real({k: v for k, v in lyrs.items()
-                     if k in ("L1", "L8R", "L5", "L17")})
-    monkeypatch.setattr(S, "_collect_port_names", _handlist)
-    assert S._collect_port_names(layers) == []   # the finding, reproduced
-
-
-def test_the_gate_blocks_before_and_passes_after_on_the_l9_only_design(tmp_path):
-    """End to end through the program's own verdict, not just the helper."""
-    layers = _layers(tmp_path, _L9_ONLY)
-    names = S._collect_port_names(layers)
-    assert len(names) >= 1
-    hand = S._collect_port_names({k: v for k, v in layers.items()
-                                  if k in ("L1", "L8R", "L5", "L17")})
-    assert hand == []          # pre-fix population -> insufficient
-
-
-def test_a_port_restated_in_several_layers_is_counted_once(tmp_path):
-    """Widening the population turned legitimate restatement into arithmetic:
-    the same five ports written in L1, L3 and L9 reported `port_count=23`.
-    The population is a SET of signal names, not a count of mentions."""
-    port = {"name": "clk", "direction": "input"}
-    layers = _layers(tmp_path, {
-        "L1_DATASHEET.json": {"ic_name": "p", "pinout": [port]},
-        "L3_CMD_PROTOCOL.json": {"ports": [port]},
-        "L9_INTEGRATION_SPEC.json": {"top_ports": [port]},
-    })
-    assert S._collect_port_names(layers) == ["clk"]

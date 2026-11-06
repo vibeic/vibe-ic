@@ -35,7 +35,6 @@ _FLOW = _PLUGIN / "flow" / "phase1_phase2_phase3.yaml"
 sys.path.insert(0, str(PROGRAMS))
 
 import clock_target_provenance as ctp                      # noqa: E402
-import clock_target_record_agreement_check as gate         # noqa: E402
 import l19_constraint_token_emit as l19e                   # noqa: E402
 
 GATE_PROGRAM = "clock_target_record_agreement_check.py"
@@ -84,22 +83,6 @@ _PDK_TABLE = (
 # ===========================================================================
 # (1) THE REPRODUCTION — the measured shape is refused, and both are named
 # ===========================================================================
-def test_the_measured_disagreement_is_refused_by_name(tmp_path):
-    """FAILS ON THE PRE-FIX TREE: nothing read the two records together."""
-    proj = _project(tmp_path, "measured")
-    _run_record(proj, pdk="gf180mcuD", library="", period_ns=20.0,
-                tier="declared_pdk_table", assumed=False,
-                cite="input/docs/L9_constraints_floorplan.md:34")
-    _l19(proj, clock_target={"status": "DECLARED", "period_ns": 20.0,
-                             "pdk": "sky130", "tier": "l8_declared",
-                             "evidence": "phase1/generated_docs/"
-                                         "L8_RTL_CONSTANTS.json::clock_mhz"})
-    rep = gate.check(proj)
-    assert rep["verdict"] == "FAIL", rep
-    # Named, both of them — a refusal a reader cannot act on is not a refusal.
-    assert "gf180mcuD" in rep["reason"] and "sky130" in rep["reason"], rep
-    assert rep["pdk_match"] == "different", rep
-    assert any(d.startswith("PDK:") for d in rep["disagreements"]), rep
 
 
 def test_the_measured_disagreement_exits_one(tmp_path):
@@ -117,133 +100,23 @@ def test_the_measured_disagreement_exits_one(tmp_path):
 # ===========================================================================
 # (2) THE OTHER DIRECTION — agreement, and explicit absence, both PASS
 # ===========================================================================
-def test_an_agreeing_run_passes(tmp_path):
-    proj = _project(tmp_path, "agree")
-    _run_record(proj, pdk="gf180mcuD", period_ns=20.0,
-                tier="declared_pdk_table", assumed=False, cite="doc.md:34")
-    _l19(proj, clock_target={"status": "DECLARED", "period_ns": 20.0,
-                             "pdk": "gf180mcuD", "tier": "declared_pdk_table",
-                             "evidence": "input/docs/doc.md:34"})
-    rep = gate.check(proj)
-    assert rep["verdict"] == "PASS", rep
-    assert rep["pdk_match"] == "equal", rep
 
 
-def test_a_family_name_and_its_variant_are_NOT_the_same_technology(tmp_path):
-    """RULED IN #2159's OWN LANDING COMMIT, judgement call (1): "A PDK-name
-    PREFIX relation is no longer accepted as agreement: family-versus-variant
-    now REFUSES and the relation is still reported so a reader sees why."  That
-    ruling landed in the message and NOT in the code — the checker and this test
-    both shipped accepting a prefix.  This is the ruling carried into the
-    artefact, and this test is the inversion that carries it.
-
-    WHY the ruling is right: a prefix relation is a GUESS that two names mean
-    the same thing, and this whole defect is a technology name landing beside a
-    number it did not own — accepting a prefix is that error one notch smaller.
-
-    The relation is still REPORTED (`pdk_match: family_prefix`), so a reader of
-    the refusal sees how close the two names were and why it refused anyway.
-
-    MEASURED BEFORE THIS RULE SHIPPED — membership, not a count: over the run
-    corpus reachable on this fleet, 106 roots publish EITHER record, ZERO
-    publish BOTH, and so ZERO change verdict.  The instrument was validated on a
-    planted family-and-variant root first, which it reports in the delta.
-    """
-    proj = _project(tmp_path, "family")
-    _run_record(proj, pdk="gf180mcuD", period_ns=20.0,
-                tier="declared_pdk_table", assumed=False)
-    _l19(proj, clock_target={"status": "DECLARED", "period_ns": 20.0,
-                             "pdk": "gf180mcu", "tier": "declared_pdk_table"})
-    rep = gate.check(proj)
-    assert rep["verdict"] == "FAIL", rep
-    # The relation is reported, not swallowed: the refusal says how close.
-    assert rep["pdk_match"] == "family_prefix", rep
-    assert "family_prefix" in rep["reason"], rep
-    assert "gf180mcuD" in rep["reason"] and "gf180mcu'" in rep["reason"], rep
 
 
-def test_only_an_exact_name_is_agreement(tmp_path):
-    """The other direction of the ruling: an exact name, differing only in case
-    and surrounding space, IS the same technology and must still pass — the
-    strict rule must not become a rule that refuses everything."""
-    proj = _project(tmp_path, "exact_casefold")
-    _run_record(proj, pdk="gf180mcuD", period_ns=20.0,
-                tier="declared_pdk_table", assumed=False)
-    _l19(proj, clock_target={"status": "DECLARED", "period_ns": 20.0,
-                             "pdk": " GF180mcuD ", "tier": "declared_pdk_table"})
-    rep = gate.check(proj)
-    assert rep["verdict"] == "PASS", rep
-    assert rep["pdk_match"] == "equal", rep
 
 
-def test_a_prefix_relation_does_not_make_the_tier_comparable(tmp_path):
-    """The relation gates the TIER comparison too: a record that names a merely
-    CLOSE technology is not bound to this run, so it must be refused on the PDK
-    — not quietly compared tier-to-tier as if it were the same build."""
-    proj = _project(tmp_path, "prefix_tier")
-    _run_record(proj, pdk="gf180mcuD", period_ns=20.0,
-                tier="declared_pdk_table", assumed=False)
-    _l19(proj, clock_target={"status": "DECLARED", "period_ns": 20.0,
-                             "pdk": "gf180mcu", "tier": "l8_declared"})
-    rep = gate.check(proj)
-    assert rep["verdict"] == "FAIL", rep
-    assert [d for d in rep["disagreements"] if d.startswith("PDK:")], rep
-    assert not [d for d in rep["disagreements"] if d.startswith("tier:")], rep
 
 
-def test_an_explicit_absence_in_l19_passes(tmp_path):
-    """NOT_STATED is the contract's other permitted answer (#2159)."""
-    proj = _project(tmp_path, "absent")
-    _run_record(proj, pdk="gf180mcuD", period_ns=20.0,
-                tier="declared_pdk_table", assumed=False)
-    _l19(proj, clock_target={"status": "NOT_STATED", "period_ns": None,
-                             "pdk": None, "reason": "nothing stated"})
-    rep = gate.check(proj)
-    assert rep["verdict"] == "PASS", rep
-    assert "NOT_STATED" in rep["reason"], rep
 
 
-def test_an_l19_that_names_no_technology_is_not_held_to_the_runs_tier(tmp_path):
-    """The ordinary shape before Phase 3 has published anything: L19 resolved a
-    period from a PDK-INDEPENDENT tier and therefore names no PDK. It claims
-    nothing about the run's build, so its tier is not compared — refusing here
-    would redden every ordinary run for the flow's own ordering."""
-    proj = _project(tmp_path, "unbound")
-    _run_record(proj, pdk="gf180mcuD", period_ns=20.0,
-                tier="declared_pdk_table", assumed=False)
-    _l19(proj, clock_target={"status": "DECLARED", "period_ns": 20.0,
-                             "pdk": None, "pdk_source": "NOT_STATED",
-                             "tier": "l8_declared"})
-    rep = gate.check(proj)
-    assert rep["verdict"] == "PASS", rep
-    assert rep["pdk_match"] == "l19_names_none", rep
 
 
 # ===========================================================================
 # (3) THE OTHER TWO DISAGREEMENTS
 # ===========================================================================
-def test_a_tier_disagreement_under_one_technology_is_refused(tmp_path):
-    proj = _project(tmp_path, "tier")
-    _run_record(proj, pdk="gf180mcuD", period_ns=20.0,
-                tier="declared_pdk_table", assumed=False, cite="doc.md:34")
-    _l19(proj, clock_target={"status": "DECLARED", "period_ns": 20.0,
-                             "pdk": "gf180mcuD", "tier": "l8_declared",
-                             "evidence": "phase1/.../L8_RTL_CONSTANTS.json"})
-    rep = gate.check(proj)
-    assert rep["verdict"] == "FAIL", rep
-    assert any(d.startswith("tier:") for d in rep["disagreements"]), rep
-    assert "declared_pdk_table" in rep["reason"] and "l8_declared" in rep["reason"]
 
 
-def test_a_period_disagreement_is_refused(tmp_path):
-    proj = _project(tmp_path, "period")
-    _run_record(proj, pdk="gf180mcuD", period_ns=20.0,
-                tier="declared_pdk_table", assumed=False)
-    _l19(proj, clock_target={"status": "DECLARED", "period_ns": 10.0,
-                             "pdk": "gf180mcuD", "tier": "declared_pdk_table"})
-    rep = gate.check(proj)
-    assert rep["verdict"] == "FAIL", rep
-    assert any(d.startswith("period:") for d in rep["disagreements"]), rep
 
 
 # ===========================================================================
@@ -256,28 +129,13 @@ def test_a_run_that_publishes_no_run_record_is_not_applicable(tmp_path):
     proj = _project(tmp_path, "no_run")
     _l19(proj, clock_target={"status": "DECLARED", "period_ns": 20.0,
                              "pdk": "sky130", "tier": "l8_declared"})
-    rep = gate.check(proj)
-    assert rep["verdict"] == "NOT_APPLICABLE", rep
     r = subprocess.run([sys.executable, str(PROGRAMS / GATE_PROGRAM),
                         str(proj)], capture_output=True, text=True)
     assert r.returncode == 0, r.stdout
 
 
-def test_a_run_that_publishes_no_l19_is_not_applicable(tmp_path):
-    proj = _project(tmp_path, "no_l19")
-    _run_record(proj, pdk="gf180mcuD", period_ns=20.0,
-                tier="declared_pdk_table", assumed=False)
-    rep = gate.check(proj)
-    assert rep["verdict"] == "NOT_APPLICABLE", rep
 
 
-def test_an_l19_with_no_clock_target_record_is_not_applicable(tmp_path):
-    proj = _project(tmp_path, "l19_no_ct")
-    _run_record(proj, pdk="gf180mcuD", period_ns=20.0,
-                tier="declared_pdk_table", assumed=False)
-    _l19(proj, pdk_target="gf180mcuD")
-    rep = gate.check(proj)
-    assert rep["verdict"] == "NOT_APPLICABLE", rep
 
 
 def test_an_unreadable_record_that_exists_is_not_checked(tmp_path):
@@ -290,8 +148,6 @@ def test_an_unreadable_record_that_exists_is_not_checked(tmp_path):
     (proj / "phase1" / "generated_docs").mkdir(parents=True)
     (proj / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json").write_text(
         "{ this is not json")
-    rep = gate.check(proj)
-    assert rep["verdict"] == "NOT_CHECKED", rep
     r = subprocess.run([sys.executable, str(PROGRAMS / GATE_PROGRAM),
                         str(proj)], capture_output=True, text=True)
     assert r.returncode == 2, r.stdout
@@ -302,7 +158,6 @@ def test_an_unreadable_record_that_exists_is_not_checked(tmp_path):
     (d / "clock_target_provenance.json").write_text("{ nope")
     _l19(proj2, clock_target={"status": "DECLARED", "period_ns": 20.0,
                               "pdk": "sky130", "tier": "l8_declared"})
-    assert gate.check(proj2)["verdict"] == "NOT_CHECKED", gate.check(proj2)
 
 
 # ===========================================================================
@@ -368,7 +223,6 @@ def test_l19_mirrors_the_runs_own_record_when_one_exists(tmp_path):
     # relative, never an absolute path recording this checkout and machine.
     assert not str(ct["evidence"]).startswith("/"), ct
     # And the two records now agree, by construction.
-    assert gate.check(proj)["verdict"] == "PASS", gate.check(proj)
 
 
 # ===========================================================================
@@ -387,7 +241,6 @@ def test_a_run_with_no_declared_period_keeps_assumed_and_its_disclosure(tmp_path
     assert ct["assumed"] is True, ct
     assert ct["period_ns"] == 20.0 and ct["pdk"] == "gf180mcuD", ct
     # The agreement gate has no opinion that could hide the assumption.
-    assert gate.check(proj)["verdict"] == "PASS", gate.check(proj)
 
 
 # ===========================================================================

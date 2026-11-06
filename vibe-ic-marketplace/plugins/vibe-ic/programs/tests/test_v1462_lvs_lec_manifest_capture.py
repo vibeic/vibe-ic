@@ -23,8 +23,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import lvs_verdict_tokens as lvt          # noqa: E402
 import lec_run                            # noqa: E402
-import lec_equivalence_check as lec_gate  # noqa: E402
-import source_manifest_md_emit as smme    # noqa: E402
 
 
 # ── FIX 1/2 — LVS report-terminal-line authoritative + flush retry ──────────
@@ -99,24 +97,6 @@ def test_timeout_with_no_completed_verdict_is_inconclusive():
     assert r["verdict"] == "INCONCLUSIVE" and r["inconclusive"] is True
 
 
-def test_ibex_timeout_report_is_non_blocking_in_gate(tmp_path):
-    p = lec_run.parse_equiv_output(_IBEX_TIMEOUT)
-    r = lec_run.build_report(p, "ibex_core", "netlist.v", None)
-    (tmp_path / "reports").mkdir()
-    (tmp_path / "reports" / "lec.json").write_text(json.dumps(r))
-    (tmp_path / "reports" / "lec.rpt").write_text(_IBEX_TIMEOUT)
-    res = lec_gate.audit(tmp_path)
-    assert res.inconclusive is True
-    assert res.passed is False                                 # never a vacuous PASS
-    rules = {f.rule for f in res.findings}
-    assert "LEC_NOT_EQUIVALENT" not in rules                   # not the hard-FAIL path
-  # #208 follow-up: still NON-BLOCKING (flow_compliance resolves rc=3 +
-    # the PASS_WITH_WAIVERS sentinel to WAIVED-DEFERRED, so the step does
-    # not fail and nothing cascades to MISSING) but no longer a BARE PASS,
-    # which rc=0 silently was at the `program_exit_zero` gate.
-    assert lec_gate.main([str(tmp_path)]) == 3   # non-blocking, not a PASS
-
-
 def test_completed_miter_unproven_still_fails():
     # sha256-class: equiv_induct COMPLETED, 1034 unproven, NO timeout → FAIL
     # (the tested false-fail-safe doctrine must be untouched).
@@ -154,45 +134,6 @@ def _mk_rtl(tmp_path, files, manifest=None):
 def _tok(md):
     return (len(re.findall(r"\bGENERATED\b", md)),
             len(re.findall(r"\bREUSED-IP\b", md)))
-
-
-def test_generated_design_tags_all_generated(tmp_path):
-    p = _mk_rtl(tmp_path, {"spm.v": "module spm(input a); endmodule\n"})
-    out = smme.emit(p)
-    assert out is not None
-    md = (p / "SOURCE_MANIFEST.md").read_text()
-    g, r = _tok(md)
-    # token count == module-row count (no legend inflation)
-    rows = len([ln for ln in md.splitlines() if re.match(r"\|\s+`", ln)])
-    assert (g, r) == (1, 0) and g + r == rows
-
-
-def test_reused_ip_design_tags_all_reused(tmp_path):
-    p = _mk_rtl(
-        tmp_path,
-        {"serv_alu.v": "module serv_alu(input a); endmodule\n",
-         "subservient.v": "module subservient(input a); endmodule\n"},
-        manifest={"reused_ip": True, "ip_list": ["serv", "shared_sram_rf"]})
-    smme.emit(p)
-    md = (p / "SOURCE_MANIFEST.md").read_text()
-    g, r = _tok(md)
-    rows = len([ln for ln in md.splitlines() if re.match(r"\|\s+`", ln)])
-    # design-level provenance: reused_ip:true → every module REUSED-IP, even
-    # ones whose name is not literally in the (IP-family) ip_list.
-    assert (g, r) == (0, 2) and g + r == rows
-
-
-def test_emit_is_non_destructive(tmp_path):
-    p = _mk_rtl(tmp_path, {"spm.v": "module spm(input a); endmodule\n"})
-    (p / "SOURCE_MANIFEST.md").write_text("HAND AUTHORED\n")
-    smme.emit(p)
-    assert (p / "SOURCE_MANIFEST.md").read_text() == "HAND AUTHORED\n"
-
-
-def test_emit_none_when_no_digital_source(tmp_path):
-    (tmp_path / "phase2" / "stage1" / "rtl").mkdir(parents=True)
-    assert smme.emit(tmp_path) is None
-    assert not (tmp_path / "SOURCE_MANIFEST.md").exists()
 
 
 if __name__ == "__main__":

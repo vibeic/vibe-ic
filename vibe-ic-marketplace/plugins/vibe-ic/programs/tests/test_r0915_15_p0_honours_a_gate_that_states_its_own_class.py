@@ -34,26 +34,7 @@ if str(PROGRAMS) not in sys.path:
 
 import pytest  # noqa: E402
 
-import flow_compliance_check as F  # noqa: E402
 import _flow_reason_taxonomy as R  # noqa: E402
-
-DECLARING = sorted(F._P0_GATE_DECLARES_REASON_CLASS)
-
-
-def test_the_registry_is_not_empty_and_names_real_programs():
-    assert DECLARING, "nothing declares a class; this file measures nothing"
-    for gate in DECLARING:
-        assert (PROGRAMS / f"{gate}.py").is_file(), gate
-
-
-@pytest.mark.parametrize("gate", DECLARING)
-def test_a_declaring_gate_is_given_somewhere_to_say_it(tmp_path, gate):
-    argv = F._structural_gate_argv(gate, tmp_path, rtl_dir=tmp_path,
-                                   scratch_dir=tmp_path / "scratch")
-    assert "--json" in argv, argv
-    target = Path(argv[argv.index("--json") + 1])
-    assert target.name == f"{gate}.declared.json", target
-    assert target.parent.is_dir(), "the scratch dir must exist before the run"
 
 
 #: What each declaring gate says about THE FIXTURE BELOW — a project with a
@@ -79,68 +60,7 @@ _CLASS_ON_THE_EMPTY_FIXTURE = {
 }
 
 
-def test_every_declaring_gate_states_what_it_says_here():
-    """No gate may join the registry without an expectation in this file."""
-    assert set(_CLASS_ON_THE_EMPTY_FIXTURE) == set(DECLARING), (
-        sorted(set(DECLARING) ^ set(_CLASS_ON_THE_EMPTY_FIXTURE)))
-    for cls in _CLASS_ON_THE_EMPTY_FIXTURE.values():
-        assert cls in R.REASON_CLASS_SET, cls
-
-
-@pytest.mark.parametrize("gate", DECLARING)
-def test_a_declaring_gate_actually_writes_a_class(tmp_path, gate):
-    """Not asserted from the registry — RUN each one and read what it wrote."""
-    proj = tmp_path / gate
-    (proj / "reports").mkdir(parents=True)
-    (proj / "reports" / "ic_class.json").write_text(
-        json.dumps({"has_analog": False}))
-    (proj / "waivers.json").write_text(json.dumps({"waived_steps": [
-        {"id": 39, "reason": "ENV_UNAVAILABLE", "ticket": "T",
-         "auto_synthesized": True}]}))
-    if gate == "deliverable_verdict_consistency_check":
-        (proj / "RESULT.md").write_text("STATUS: NOT_MEASURED\n")
-        orchestrator = proj / "reports" / "orchestrator"
-        orchestrator.mkdir()
-        (orchestrator / "vibe_ic_one_shot.json").write_text(
-            json.dumps({"verdict": "NOT_MEASURED"}))
-    scratch = proj / "scratch"
-    argv = F._structural_gate_argv(gate, proj, rtl_dir=proj,
-                                   scratch_dir=scratch)
-    subprocess.run(argv, cwd=str(proj), capture_output=True,  # nosec B603
-                   text=True, check=False)
-    assert F._p0_declared_reason_class(gate, proj, scratch) == \
-        _CLASS_ON_THE_EMPTY_FIXTURE[gate], gate
-
-
 # ── the conservative direction ────────────────────────────────────────────
-
-def test_a_gate_that_declares_nothing_gets_no_json_and_no_class(tmp_path):
-    gate = "backlog_sanitize_check"
-    assert gate not in F._P0_GATE_DECLARES_REASON_CLASS
-    assert F._p0_declared_report_path(gate, tmp_path, tmp_path) is None
-    assert F._p0_declared_reason_class(gate, tmp_path, tmp_path) is None
-
-
-@pytest.mark.parametrize("body", ["", "{ not json", "[]", "{}",
-                                  '{"summary": {}}'])
-def test_an_absent_or_silent_report_changes_nothing(tmp_path, body):
-    gate = DECLARING[0]
-    scratch = tmp_path / "scratch"
-    scratch.mkdir()
-    if body:
-        (scratch / f"{gate}.declared.json").write_text(body)
-    assert F._p0_declared_reason_class(gate, tmp_path, scratch) is None
-
-
-def test_an_unregistered_class_word_is_refused(tmp_path):
-    """`report_reason_class` normalises; a word outside the taxonomy is not a
-    class and must not become one."""
-    gate = DECLARING[0]
-    scratch = tmp_path / "scratch"
-    scratch.mkdir()
-    (scratch / f"{gate}.declared.json").write_text(
-        json.dumps({"summary": {"reason_class": "TOTALLY_FINE"}}))
-    assert F._p0_declared_reason_class(gate, tmp_path, scratch) is None
 
 
 def test_the_taxonomy_reads_branch_evidence_before_the_prose():

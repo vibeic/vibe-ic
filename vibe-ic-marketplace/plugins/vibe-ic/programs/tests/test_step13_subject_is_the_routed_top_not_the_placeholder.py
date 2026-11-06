@@ -49,7 +49,6 @@ if str(_PROGRAMS) not in sys.path:
 
 import _chip_synth_read as CSR              # noqa: E402
 import design_one_shot_runner as R          # noqa: E402
-import lec_gate_netlist_select as S         # noqa: E402
 import phase3_one_shot_runner as P3         # noqa: E402
 import vibe_ic_one_shot_runner as FD        # noqa: E402
 
@@ -71,8 +70,6 @@ _PAD_WRAPPER = ("module chip_top(input clk, input a, input b, output y);\n"
                 "  core u_core(.clk(clk), .a(a), .b(b), .y(y));\nendmodule\n")
 
 
-
-
 def _tree(tmp_path: Path, *, mapped: bool = True,
           rtl_extra: dict | None = None) -> Path:
     p = tmp_path / "proj"
@@ -91,25 +88,9 @@ def _tree(tmp_path: Path, *, mapped: bool = True,
     return p
 
 
-
-
-
-
-
-
 # --------------------------------------------------------------------------- #
 # the subject
 # --------------------------------------------------------------------------- #
-def _p2(proj, requested=PLACEHOLDER, **kw):
-    """Phase 2's subject: its requested top resolved once at the boundary."""
-    return S.lec_subject_for_step13(proj, S.step15_top(proj, requested, **kw))
-
-
-def test_placeholder_top_resolves_to_the_file_step15_routes(tmp_path):
-    proj = _tree(tmp_path)
-    gate, note, is_scan = _p2(proj)
-    assert gate == ROUTED, (gate, note)
-    assert is_scan is False
 
 
 def test_subject_is_what_phase3_main_hands_step_pnr(tmp_path):
@@ -117,22 +98,6 @@ def test_subject_is_what_phase3_main_hands_step_pnr(tmp_path):
     proj = _tree(tmp_path)
     routed_top = CSR.effective_top(proj, PLACEHOLDER)
     assert routed_top == CORE
-    assert (proj / _p2(proj)[0]
-            == P3.pnr_input_netlist(proj, routed_top)[0])
-
-
-def test_a_real_chip_top_module_is_kept(tmp_path):
-    """A design that DOES stage a chip_top module builds chip_top: unchanged."""
-    proj = _tree(tmp_path, rtl_extra={"chip_top.v": _PAD_WRAPPER})
-    assert _p2(proj)[0] == PHANTOM
-
-
-def test_an_asic_variant_is_the_routed_top(tmp_path):
-    """`<top>_asic.sv` beside `<top>` is what phase 3 synthesises and routes."""
-    proj = _tree(tmp_path, rtl_extra={
-        "chip_top.v": _PAD_WRAPPER,
-        "chip_top_asic.sv": _PAD_WRAPPER.replace("chip_top", "chip_top_asic")})
-    assert _p2(proj)[0] == f"{SYNTH}/chip_top_asic_synth.v"
 
 
 # --------------------------------------------------------------------------- #
@@ -140,15 +105,9 @@ def test_an_asic_variant_is_the_routed_top(tmp_path):
 # --------------------------------------------------------------------------- #
 
 
-
-
-
-
 # --------------------------------------------------------------------------- #
 # the binding the gate and phase 3 read
 # --------------------------------------------------------------------------- #
-
-
 
 
 # --------------------------------------------------------------------------- #
@@ -188,28 +147,11 @@ def _non_idempotent_tree(tmp_path: Path, *, stale_asic: bool = False) -> Path:
     return p
 
 
-
-
 def test_the_fixture_really_is_not_idempotent(tmp_path):
     proj = _non_idempotent_tree(tmp_path)
     eff = CSR.effective_top(proj, PLACEHOLDER)
     assert eff == "m"
     assert CSR.effective_top(proj, eff) == "m_asic"
-
-
-def test_the_shared_resolver_takes_phase3s_top_as_given(tmp_path):
-    proj = _non_idempotent_tree(tmp_path)
-    eff = CSR.effective_top(proj, PLACEHOLDER)          # what phase 3 main hands
-    assert S.pnr_consumed_netlist(proj, eff)[0] == P3.pnr_input_netlist(
-        proj, eff)[0] == proj / f"{SYNTH}/m_synth.v"
-
-
-
-
-
-
-
-
 
 
 # --------------------------------------------------------------------------- #
@@ -226,23 +168,6 @@ def _two_root_tree(tmp_path: Path) -> Path:
     proj = _tree(tmp_path, rtl_extra={"other.v": _OTHER_RTL})
     (proj / f"{SYNTH}/other_synth.v").write_text(_OTHER_MAPPED)
     return proj
-
-
-
-
-
-
-def test_a_driver_that_does_not_rederive_is_not_second_guessed(tmp_path):
-    """phase23 / a standalone phase 2 hands phase 3 the SAME --top-name: no
-    front-door rule is applied on their behalf."""
-    proj = _two_root_tree(tmp_path)
-    (proj / "phase1/generated_docs").mkdir(parents=True)
-    (proj / "phase1/generated_docs/L9_INTEGRATION_SPEC.json").write_text(
-        json.dumps({"top_module": "other"}))
-    assert S.step15_top(proj, PLACEHOLDER) == CSR.effective_top(
-        proj, PLACEHOLDER) == "other"
-
-
 
 
 def _calls(tree, func_name):

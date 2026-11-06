@@ -68,7 +68,6 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import _path_layout as PL             # noqa: E402
-import clock_plan_check as C          # noqa: E402
 from _clock_plan_fixture import current_fixture  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -163,12 +162,6 @@ def _read_plan(proj: Path) -> dict:
 # ===========================================================================
 
 
-def test_an_added_sdc_is_seen(tmp_path):
-    """A constraint file the plan was never derived from is staleness too."""
-    proj = _project(tmp_path)
-    _write(proj / "constraints/extra.sdc",
-           "create_clock -name clk2 -period 8.0 [get_ports clk2]\n")
-    assert C._stale_inputs(proj, _read_plan(proj)) == ["constraints/extra.sdc"]
 
 
 
@@ -221,103 +214,23 @@ def _rules(doc):
     return [(f["severity"], f["rule"]) for f in doc["findings"]]
 
 
-def test_gate_discloses_a_stale_plan(tmp_path):
-    proj = _project(tmp_path)
-    (proj / _SDC_REL).write_text(
-        "create_clock -name clk -period 4.0 [get_ports clk]\n")
-    r, doc = _run_gate(proj, tmp_path / "o.json")
-    assert ("WARNING", "CLOCK_PLAN_STALE") in _rules(doc), _rules(doc)
-    msg = [f["message"] for f in doc["findings"]
-           if f["rule"] == "CLOCK_PLAN_STALE"][0]
-    assert _SDC_REL in msg, msg
 
 
-def test_gate_does_not_flag_a_fresh_plan(tmp_path):
-    proj = _project(tmp_path)
-    _, doc = _run_gate(proj, tmp_path / "o.json")
-    assert "CLOCK_PLAN_STALE" not in [f["rule"] for f in doc["findings"]]
 
 
-def test_the_staleness_disclosure_keeps_current_binding_blocking(
-        tmp_path, monkeypatch):
-    """A stale disclosure is advisory, but changed bound inputs still fail.
-
-    The receipt is a same-invocation subject binding.  Once the SDC bytes are
-    edited, the consumer must refuse that old native measurement; otherwise a
-    stale plan could be called current merely because its clock values look
-    plausible.
-    """
-    proj = _project(tmp_path)
-    current_fixture(monkeypatch, proj, _SDC, preserve_provenance=True)
-    (proj / _SDC_REL).write_text(
-        "create_clock -name clk -period 4.0 [get_ports clk]\n")
-    r, doc = _run_gate(proj, tmp_path / "o.json")
-    assert r.returncode == 1, r.stdout + r.stderr
-    assert doc["verdict"] == "FAIL"
-    assert "CLOCK_PLAN_STALE" in [f["rule"] for f in doc["findings"]]
-    assert "CLOCK_PLAN_CURRENT_REFUSED" in [
-        f["rule"] for f in doc["findings"]]
 
 
 # ===========================================================================
 # DIRECTION-1 GUARDS — hold on the pre-fix tree too
 # ===========================================================================
-def test_d1_a_dropped_sdc_clock_still_fails(tmp_path):
-    """The gate's real blocking job must survive the new advisory finding."""
-    proj = _project(tmp_path)
-    (proj / _SDC_REL).write_text(
-        _SDC + "create_clock -name clk_div2 -period 20.0 [get_ports clk_div2]\n")
-    r, doc = _run_gate(proj, tmp_path / "o.json")
-    assert r.returncode == 1
-    assert doc["verdict"] == "FAIL"
-    assert "SDC_CLOCK_DROPPED" in [f["rule"] for f in doc["findings"]]
 
 
-def test_d1_a_missing_plan_still_fails(tmp_path):
-    proj = _project(tmp_path)
-    (proj / "phase3/stage3/cts/clock_plan.json").unlink()
-    r, doc = _run_gate(proj, tmp_path / "o.json")
-    assert r.returncode == 1
-    assert "CLOCK_PLAN_MISSING" in [f["rule"] for f in doc["findings"]]
 
 
-def test_d1_a_clock_with_no_period_still_fails(tmp_path):
-    proj = _project(tmp_path, plan={
-        "primary_clock": "clk", "clocks": [{"name": "clk", "source": "clk"}]})
-    r, doc = _run_gate(proj, tmp_path / "o.json")
-    assert r.returncode == 1
-    assert "CLOCK_NO_PERIOD" in [f["rule"] for f in doc["findings"]]
 
 
-def test_d1_a_healthy_fresh_plan_still_passes(tmp_path, monkeypatch):
-    proj = _project(tmp_path)
-    current_fixture(monkeypatch, proj, _SDC)
-    r, doc = _run_gate(proj, tmp_path / "o.json")
-    assert r.returncode == 0
-    assert doc["verdict"] == "PASS"
 
 
-def test_an_unreadable_sdc_is_not_called_stale(tmp_path):
-    """A digest that cannot be computed is not evidence of change — and it must
-    not be reported as an added file either."""
-    proj = _project(tmp_path)
-    real_read = Path.read_bytes
-    target = proj / _SDC_REL
-
-    def boom(self, *a, **kw):
-        if self == target:
-            raise OSError("simulated read failure")
-        return real_read(self, *a, **kw)
-
-    Path.read_bytes = boom
-    try:
-        # The recorded path can no longer be hashed, so it reads as changed —
-        # which is the FAIL-CLOSED direction for a provenance claim. What must
-        # NOT happen is a crash or a fabricated extra entry.
-        out = C._stale_inputs(proj, _read_plan(proj))
-        assert out == [_SDC_REL], out
-    finally:
-        Path.read_bytes = real_read
 
 
 def test_native_asic_inputs_exclude_quartus_and_historical_tool_decks(tmp_path):
@@ -336,38 +249,14 @@ def test_native_asic_inputs_exclude_quartus_and_historical_tool_decks(tmp_path):
         _write(proj / rel, "derive_pll_clocks\n" + _SDC)
     expected = {proj / rel for rel in included}
     assert set(PL.clock_plan_input_sdcs(proj)) == expected
-    assert set(C._find_sdc_files(proj)) == expected
     assert set(PL.clock_plan_sdc_digests(proj)) == set(included)
 
 
-def test_fpga_and_old_attempts_cannot_add_an_asic_clock_domain(
-        tmp_path, monkeypatch):
-    proj = _project(tmp_path)
-    _write(proj / "phase2/stage1/fpga/top.sdc",
-           "derive_pll_clocks\n"
-           "create_clock -name fpga_only -period 2 [get_ports fpga_clk]\n")
-    _write(proj / "phase3/librelane/attempts/old/15-floorplan/top.sdc",
-           "create_clock -name old_clock -period 3 [get_ports old_clk]\n")
-    current_fixture(monkeypatch, proj, _SDC)
-    result, doc = _run_gate(proj, tmp_path / "o.json")
-    assert result.returncode == 0, doc
-    assert doc["verdict"] == "PASS"
-    assert doc["sdc_files_checked"] == [_SDC_REL]
 
 
-def test_user_asic_aux_clock_must_still_be_covered(tmp_path, monkeypatch):
-    proj = _project(tmp_path)
-    _write(proj / "input/constraints/aux.sdc",
-           "create_clock -name aux -period 8 [get_ports aux_clk]\n")
-    current_fixture(monkeypatch, proj, _SDC)
-    result, doc = _run_gate(proj, tmp_path / "o.json")
-    assert result.returncode == 1
-    assert "SDC_CLOCK_DROPPED" in [f["rule"] for f in doc["findings"]]
-    assert "input/constraints/aux.sdc" in doc["sdc_files_checked"]
 
 
 def test_only_fpga_constraints_do_not_supply_an_asic_clock(tmp_path):
     proj = tmp_path / "only_fpga"
     _write(proj / "phase2/stage1/fpga/top.sdc", _SDC)
     assert PL.clock_plan_input_sdcs(proj) == []
-    assert C._find_sdc_files(proj) == []

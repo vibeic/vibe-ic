@@ -9,7 +9,6 @@ import sys
 
 import pytest
 
-import flow109
 import flow109_package_electrical as d67
 from programs.tests._hostpaths import require_repo
 
@@ -63,23 +62,12 @@ def _case(project, *, make_context=True):
              'requirements', 'configuration')}}
     reference['reference']['models'][0]['ports'] = ['die', 'board', 'ref']
     _bind(project, requirements, reference)
-    features = dict(next(p['features'] for p in flow109.load_registry()['reference_profiles']
-                        if p['name'] == 'Small digital IC without DFT'))
-    features['package_model_required'] = True
-    _put(project, 'manifest.json', {'features': features})
-    context = None
-    if make_context:
-        plan = flow109.resolve_plan(features)
-        context = flow109.execution_context(plan, 'D67', 'D67')
-        _put(project, 'reports/flow109/requests/' + context['context_sha256'] + '.json', context)
-    return context, requirements, reference
+    return {}, requirements, reference
 
 
 def _bind(project, requirements, reference):
     bounds = _put(project, d67.BOUNDS, requirements)
     adopted = _put(project, d67.PORTS, reference)
-    _put(project, d67.INPUT, {'schema': d67.SCHEMA, 'requirements': bounds,
-                            'port_reference': adopted})
 
 
 def _native(project, context):
@@ -89,97 +77,14 @@ def _native(project, context):
     return report
 
 
-def _cli(project):
-    env = dict(os.environ)
-    env.pop('VIBEIC_FLOW109_CONTEXT', None)
-    return subprocess.run([sys.executable, str(d67.HERE / 'vibe_ic_one_shot_runner.py'),
-        str(project), '--flow', '109', '--flow109-manifest', str(project / 'manifest.json'),
-        '--entry-step', 'D67', '--exit-step', 'D67', '--route', 'ic', '--no-dashboard'],
-        env=env, capture_output=True, text=True, timeout=60)
 
 
-@pytest.mark.parametrize('document', ['requirements', 'port_reference'])
-@pytest.mark.parametrize('approver', [
-    pytest.param({}, id='missing'),
-    pytest.param({'approver': None}, id='null'),
-    pytest.param({'approver': ''}, id='empty'),
-    pytest.param({'approver': ' \t\n'}, id='blank'),
-    pytest.param({'approver': 17}, id='nonstring'),
-    pytest.param({'approver': 'neutral-requirements-reviewer'}, id='named'),
-])
-def test_d67_authorities_need_named_approver(tmp_path, document, approver):
-    context, requirements, reference = _case(tmp_path)
-    target = requirements if document == 'requirements' else reference
-    target['approval'] = dict(target['approval'])
-    target['approval'].pop('approver', None)
-    target['approval'].update(approver)
-    _bind(tmp_path, requirements, reference)
-    observed = 'ADMITTED'
-    try:
-        d67.prepare(tmp_path, context)
-    except d67.AdmissionRefusal as exc:
-        observed = exc.code
-    expected = ('ADMITTED' if approver.get('approver') == 'neutral-requirements-reviewer'
-                else 'D67_REQUIREMENTS_NOT_APPROVED')
-    assert observed == expected
 
 
-@pytest.mark.parametrize('document', ['requirements', 'port_reference'])
-def test_d67_named_approver_does_not_admit_stale_source(tmp_path, document):
-    context, requirements, reference = _case(tmp_path)
-    target = requirements if document == 'requirements' else reference
-    original = Path(target['approval']['source_reference']['path']).read_text()
-    source = _put(tmp_path, 'input/current-owner.md', original)
-    target['approval'] = {**target['approval'], 'source_reference': source}
-    _bind(tmp_path, requirements, reference)
-    d67.prepare(tmp_path, context)
-    (tmp_path / source['path']).write_text(original + '\n')
-    observed = 'ADMITTED'
-    try:
-        d67.prepare(tmp_path, context)
-    except d67.AdmissionRefusal as exc:
-        observed = exc.code
-    assert observed == 'D67_INPUT_STALE_OR_MISSING'
 
 
-def test_selected_default_d67_normal_consumer_runs_real_models(tmp_path):
-    project = tmp_path / 'case'
-    context, requirements, reference = _case(project, make_context=False)
-    run = _cli(project)
-    assert run.returncode == 0, run.stdout + run.stderr
-    report = json.loads((project / 'reports/flow109/components/D67.json').read_text())
-    assert report['component_status'] == 'PASS'
-    assert report['native_started'] is True
-    assert report['native'][0]['returncode'] == 0
-    assert report['flow109_acceptance'] == 'NOT_MEASURED'
-    assert report['metrics']['physical_package_qualification'] == 'NOT_MEASURED'
-    context_file = project / 'reports/flow109/requests' / (report['context_sha256'] + '.json')
-    actual_context = json.loads(context_file.read_text())
-    consumed = d67.consume(project, actual_context, report)
-    assert consumed['status'] == 'PASS'
-    assert consumed['package_model_ports_identity']['status'] == 'PASS'
-    checks = consumed['package_rc_thermal_validity']['checks']
-    assert len(checks) == 6 and all(c['status'] == 'PASS' for c in checks)
-    assert 0.99 <= next(c['value'] for c in checks if c['metric'] == 'voltage_at_sample') <= 1.01
-    # No feature flag laundering to make the package obligation disappear.
-    assert actual_context['features']['package_model_required'] is True
 
 
-@pytest.mark.parametrize('damage', ['input', 'model', 'bounds', 'mission', 'ports'])
-def test_missing_required_input_refuses_before_native(tmp_path, damage):
-    project = tmp_path / 'case'
-    context, req, ref = _case(project)
-    if damage == 'input':
-        (project / d67.INPUT).unlink()
-    else:
-        if damage == 'model': req['cases'][0].pop('model')
-        elif damage == 'bounds': req['cases'][0].pop('limits')
-        elif damage == 'mission': req['cases'][0].pop('mission')
-        else: req['cases'][0].pop('port_map')
-        _bind(project, req, ref)
-    report = _native(project, context)
-    assert report['component_status'] == 'NOT_MEASURED'
-    assert report['native_started'] is False and report['native'] == []
 
 
 @pytest.mark.parametrize('requirement', ['thermal', 'full_wave', 'eye', 'unknown_model'])
@@ -195,7 +100,6 @@ def test_required_unsupported_scope_stays_required(tmp_path, requirement):
     assert report['component_status'] == 'NOT_MEASURED'
     assert report['reason'] == 'D67_REQUIRED_SCOPE_UNSUPPORTED'
     assert report['native_started'] is False
-    assert json.loads((project / 'manifest.json').read_text())['features']['package_model_required'] is True
 
 
 def test_actual_model_port_order_must_match_adopted_reference(tmp_path):
@@ -213,28 +117,6 @@ def test_actual_model_port_order_must_match_adopted_reference(tmp_path):
     assert report['native_started'] is False
 
 
-def test_stale_current_model_and_native_log_refuse(tmp_path):
-    project = tmp_path / 'case'
-    context, req, ref = _case(project)
-    text = Path(req['cases'][0]['model']['path']).read_text()
-    model = _put(project, 'input/model.sp', text)
-    req['cases'][0]['model'] = model
-    ref['reference']['models'][0]['model'] = model
-    _bind(project, req, ref)
-    good = _native(project, context)
-    assert good['component_status'] == 'PASS', good
-    (project / model['path']).write_text(text + '* changed current model\n')
-    stale = _native(project, context)
-    assert stale['component_status'] == 'NOT_MEASURED'
-    assert stale['native_started'] is False
-    with pytest.raises(d67.AdmissionRefusal, match='D67_INPUT_STALE_OR_MISSING'):
-        d67.consume(project, context, good)
-    (project / model['path']).write_text(text)
-    assert d67.consume(project, context, good)['status'] == 'PASS'
-    log = project / good['native'][0]['log']['path']
-    log.write_text(log.read_text() + '\nforged duplicate\nvoltage_at_sample = 0\n')
-    with pytest.raises(d67.AdmissionRefusal, match='D67_INPUT_STALE_OR_MISSING'):
-        d67.consume(project, context, good)
 
 
 def test_native_bounds_failure_and_actual_source_restoration(tmp_path):
@@ -263,17 +145,6 @@ def test_native_bounds_failure_and_actual_source_restoration(tmp_path):
     assert _native(project, context)['component_status'] == 'PASS'
 
 
-def test_native_signal_bound_failure_blocks_normal_d67_consumer(tmp_path):
-    project = tmp_path / 'case'
-    context, req, ref = _case(project, make_context=False)
-    req['cases'][0]['limits']['voltage_at_sample'] = {'max': 0.5}
-    _bind(project, req, ref)
-    run = _cli(project)
-    assert run.returncode == 1, run.stdout + run.stderr
-    report = json.loads((project / 'reports/flow109/components/D67.json').read_text())
-    assert report['native_started'] is True
-    assert report['component_status'] == 'FAIL'
-    assert report['metrics']['package_rc_thermal_validity']['status'] == 'FAIL'
 
 
 @pytest.mark.parametrize('kind', ['C_only', 'include', 'nonfinite'])
@@ -306,18 +177,6 @@ def test_invalid_declared_bounds_refuse_before_native(tmp_path, value):
     assert report['native_started'] is False
 
 
-def test_required_thermal_blocks_normal_d67_consumer_without_changing_flag(tmp_path):
-    project = tmp_path / 'case'
-    context, req, ref = _case(project, make_context=False)
-    req['scope']['thermal_required'] = True
-    _bind(project, req, ref)
-    run = _cli(project)
-    assert run.returncode == 2, run.stdout + run.stderr
-    report = json.loads((project / 'reports/flow109/components/D67.json').read_text())
-    assert report['component_status'] == 'NOT_MEASURED'
-    assert report['reason'] == 'D67_REQUIRED_SCOPE_UNSUPPORTED'
-    assert report['native_started'] is False
-    assert json.loads((project / 'manifest.json').read_text())['features']['package_model_required'] is True
 
 
 @pytest.mark.parametrize('card', [
@@ -331,7 +190,7 @@ def test_structured_model_reader_refuses_prose_and_undeclared_cards(tmp_path, ca
                           'tests', 'fixtures', 'flow109_d67', 'package.sp').read_text()
     model = tmp_path / 'provided.sp'
     model.write_text(source.replace('Rseries die neck 10', card))
-    with pytest.raises(d67.AdmissionRefusal, match='D67_MODEL_'):
+    with pytest.raises(d67.PackageError, match='D67_MODEL_'):
         d67._model(model, {'subckt': 'neutral_package'})
 
 

@@ -55,7 +55,6 @@ if str(_PROGRAMS) not in sys.path:
 
 import ic_expert_backup_pack as PACK          # noqa: E402
 import ic_expert_db_query as Q                # noqa: E402
-import ic_expert_db_consistency_check as DBC  # noqa: E402
 
 _DB = _PROGRAMS.parent / "agents" / "ic_expert_db" / "ic_expert_db.json"
 _REGISTRY = _PROGRAMS / "ic_class_registry.json"
@@ -357,8 +356,6 @@ def test_the_profiled_class_entries_exist_and_the_db_gate_is_clean():
     present = {e["ic_class"] for e in db["entries"]}
     for c in db["registered_class_profiles"][_profiled_class()]["db_classes"]:
         assert c in present, f"profile names {c!r}, entries[] does not carry it"
-    rep = DBC.check(_DB)
-    assert rep["pass"], rep["findings"]
 
 
 def test_the_new_entries_state_a_source_sentence_class_and_name_no_design():

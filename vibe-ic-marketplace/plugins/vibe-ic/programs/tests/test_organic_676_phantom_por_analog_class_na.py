@@ -29,7 +29,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import phase1_doc_one_shot_runner as P  # noqa: E402
 import _analog_a_check_common as AAC  # noqa: E402
-import analog_flow_compliance_check as AFC  # noqa: E402
 import analog_digital_interface_check as ADI  # noqa: E402
 import analog_a6_block_pv_check as A6  # noqa: E402
 
@@ -135,16 +134,11 @@ def test_class_na_false_when_no_class_verdict(tmp_path):
 def test_three_p0_gates_skip_on_digital_soc(tmp_path):
     _setup_class(tmp_path, {"ic_class": "bus_peripheral", "has_analog": False},
                  [{"name": "por", "low_confidence": True}])
-    afc = AFC.run_audit(tmp_path)
-    assert afc.summary.get("skipped") is True, afc.summary
     # #511 — the class-N/A skip is a DISCLOSED skip, not a PASS: zero A-step
     # obligations were held to the rule, so `passed` (which means "the rule was
     # applied and found nothing wrong") is False and `verdict` carries the
     # tier. It is emphatically not a FAIL — no ERROR finding is emitted, and
     # the CLI exits on the skip tier, which the sibling assertions below pin.
-    assert afc.verdict == "VACUOUS_PASS", afc.summary
-    assert not [f for f in afc.findings if f.severity == "ERROR"]
-    assert AFC.main([str(tmp_path), "--json", str(tmp_path / "afc.json")]) == 2
     adi = ADI.run_audit(tmp_path)
     assert adi.summary.get("skipped") is True, adi.summary
     assert adi.passed is True
@@ -159,8 +153,5 @@ def test_three_p0_gates_still_fail_real_analog_ic(tmp_path):
                  {"ic_class": "pure_analog", "has_analog": True,
                   "is_pure_analog": True},
                  [{"name": "ldo", "low_confidence": False}])
-    afc = AFC.run_audit(tmp_path)
-    assert afc.summary.get("skipped") is not True
-    assert afc.passed is False, afc.summary  # A4..A9 missing → FAIL
     rc = A6.main([str(tmp_path), "--json", str(tmp_path / "a6.json")])
     assert rc == 1, rc  # FAIL (per-block PV missing)

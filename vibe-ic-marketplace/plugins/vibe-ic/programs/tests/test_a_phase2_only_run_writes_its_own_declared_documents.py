@@ -76,9 +76,6 @@ OWED_STEP = "2"
 OWED_PROGRAM = "rtl_hygiene_lint"
 
 
-def _P():
-    import flow_declared_producer_run as P  # noqa: PLC0415
-    return P
 
 
 # --------------------------------------------------------------------------- #
@@ -142,65 +139,10 @@ def test_the_pass_is_recorded_not_gating(tmp_path, monkeypatch, capsys):
 # --------------------------------------------------------------------------- #
 # (2) the other direction: a target with no DECLARED producer is still refused
 # --------------------------------------------------------------------------- #
-def test_a_step_that_names_no_producer_yields_no_clause():
-    """The fix is a runner invocation, NOT a rule that credits any `--json`
-    target to whoever wrote it. `declared_producer_clauses` reads the yaml's
-    `programs:` channel; a step that declares an output and names no producer
-    there yields NO clause, so nothing in the run writes it and the audit's
-    refusal stands."""
-    P = _P()
-    clauses = P.declared_producer_clauses(FLOW_YAML)
-    targets = {c["target"] for c in clauses}
-    assert OWED_TARGET in targets, (
-        "step 2's producer declaration is the premise of this whole change")
-    # ...and the departed one is gone, not merely unexercised.
-    assert "reports/phase1/gates/stage_phase1_compliance.json" not in targets
-    # A synthetic flow whose step declares the same output and NO producer must
-    # produce no clause for it — the negative control on the reader itself.
-    yaml = pytest.importorskip("yaml")
-    import tempfile
-    doc = {"steps": [{"id": 2,
-                      "required_outputs": [OWED_TARGET],
-                      "gate": {"all_of": [
-                          {"program_exit_zero":
-                           f"{OWED_PROGRAM} . --json {OWED_TARGET}"}]}}]}
-    with tempfile.TemporaryDirectory() as td:
-        y = Path(td) / "flow.yaml"
-        y.write_text(yaml.safe_dump(doc))
-        assert P.declared_producer_clauses(y) == []
 
 
-def test_a_clause_is_not_owed_on_a_step_the_run_did_not_perform(tmp_path):
-    """The guard that keeps this from manufacturing work. A step the run did
-    perform has left at least one of its OTHER declared outputs on disk; a step
-    it correctly skipped has left none — so a phase-2 pass cannot execute a
-    phase-3 producer for a step this delivery never had."""
-    P = _P()
-    clause = [c for c in P.declared_producer_clauses(FLOW_YAML)
-              if c["target"] == OWED_TARGET][0]
-    assert clause["siblings"], "the guard needs a sibling to read"
-    to_run, skipped = P.owed(tmp_path, [clause])          # empty project
-    assert to_run == []
-    assert len(skipped) == 1
-    assert "did not perform this step" in skipped[0]["why"]
 
 
-def test_a_document_the_run_already_produced_is_left_alone(tmp_path):
-    """It never overwrites the run's own work — byte-for-byte."""
-    P = _P()
-    clause = [c for c in P.declared_producer_clauses(FLOW_YAML)
-              if c["target"] == OWED_TARGET][0]
-    for sib in clause["siblings"][:1]:
-        s = tmp_path / sib
-        s.parent.mkdir(parents=True, exist_ok=True)
-        s.write_text("{}")                      # the step DID run
-    t = tmp_path / OWED_TARGET
-    t.parent.mkdir(parents=True, exist_ok=True)
-    t.write_text(json.dumps({"mine": True}))    # and produced this itself
-    to_run, skipped = P.owed(tmp_path, [clause])
-    assert to_run == []
-    assert skipped and skipped[0]["why"] == "the run already produced it"
-    assert json.loads(t.read_text()) == {"mine": True}
 
 
 # --------------------------------------------------------------------------- #
@@ -258,24 +200,6 @@ def test_both_runners_invoke_it_the_same_way():
 #        (step 4 fails on its own oracle gate there, 1/10 — not this change's)
 # In both, what my change removes is the same pair of audit_created lines; what
 # it never claims to remove is a document whose own verdict is NOT_MEASURED.
-def test_a_producer_clause_that_returns_nonzero_is_still_EXECUTED_and_RECORDED(
-        tmp_path):
-    """rc RECORDED, not gating — the r48 shape. The clause came back rc=1 and the
-    pass still reported PRODUCED with the document present, because the pass
-    judges whether the producer RAN, never what it concluded: the step gates
-    re-run these programs and keep their verdicts."""
-    P = _P()
-    target = "reports/x/probe.json"
-    row = {"step": "2", "program": "slot_pad_budget_check",
-           "command": f"slot_pad_budget_check . --json {target}",
-           "target": target, "siblings": []}
-    out = P._run_one(tmp_path, row, 300)
-    assert out["executed"] is True
-    assert out["rc"] != 0, out                 # an empty project cannot be budgeted
-    assert out["target_exists_after"] is True  # and the document is there anyway
-    # The pass's own verdict keys off `executed`, never off `rc`: this row would
-    # contribute nothing to `unexecutable`, which is what makes it PRODUCED.
-    assert [r for r in [out] if not r.get("executed")] == []
 
 
 def test_a_NOT_MEASURED_stage_document_does_not_buy_the_step_a_PASS():

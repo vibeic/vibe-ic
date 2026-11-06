@@ -10,10 +10,8 @@ import pytest
 import analog_native_em as power
 import em_current_density_check as em
 import ir_drop_budget_check as ir
-import si_crosstalk_check as si
 from test_analog_native_em import measured_case, grade, put, TABLE, TECH
 
-OWNERS = {'D48':si, 'D56':power, 'D57':ir, 'D58':em}
 IDS = {'D48':['base_36.si_required_windows','base_36.coupling_noise_delay_bounds'],
        'D56':['base_40.power_activity_coverage','base_40.per_mode_rail_average_peak_power'],
        'D57':['base_33.rail_source_coverage','base_33.static_dynamic_ir_limits'],

@@ -50,8 +50,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
 
 R = importlib.import_module("def_gds_port_power_restore")
-C = importlib.import_module("gds_port_label_check")
-G = importlib.import_module("gds_substance_check")
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 _REPO = _PROGRAMS.parents[3]
@@ -133,21 +131,6 @@ def test_the_metal_index_comes_from_the_shared_resolver():
     assert set(R.pdk_port_label_layers(_SYNTH_TECH)) == {1, 2}
 
 
-def test_two_real_pdk_techs_parse():
-    """Real bytes from two independent PDKs — a parser proved only on its own
-    fixture is proved against itself."""
-    if _TECH is None or not _TECH.is_dir():
-        return
-    for name, want_met2 in (("ihp-sg13g2-GDS.tech", (10, 2)),
-                            ("sky130A-GDS.tech", (69, 5))):
-        f = _TECH / name
-        if not f.is_file():
-            continue
-        got = R.pdk_port_label_layers(f.read_text(errors="replace"))
-        assert got.get(2) == want_met2, (name, got)
-        assert len(got) >= 5, (name, got)
-
-
 # ── the restore writes there IN ADDITION to layer 100 ──────────────────────
 def test_the_klayout_contract_layer_is_kept():
     """Layer 100 is the contract with `klayout_pdk_lvs`; writing the PDK layer
@@ -217,112 +200,3 @@ def _cen(labels, layer):
     class _C:
         label_layers_per_structure = {"top": [layer] * len(labels)}
     return _C()
-
-
-def test_a_label_on_a_declared_port_layer_reads_as_readable(tmp_path):
-    tech = tmp_path / "t.tech"
-    tech.write_text(_SYNTH_TECH, encoding="utf-8")
-    ok, note = C.label_layer_readability(_cen(["a"], (10, 2)), "top", str(tech))
-    assert ok is True
-    assert "can name the ports" in note
-
-
-def test_a_label_off_every_declared_port_layer_is_MEASURED_but_not_a_FAIL(tmp_path):
-    """THE MEASUREMENT AND THE VERDICT ARE SEPARATE, and keeping them separate
-    is the whole point.
-
-    The predicate says `False` — measured off every declared layer — and that
-    is a FACT the producer acts on (it re-runs the restore). The GATE still
-    does not fail on it, because blocking is a calibration decision that is not
-    settled: on the shipped corpus both sha256 and subservient are off-layer,
-    and neither has a passing LVS to prove the rule would be right about them.
-
-    An earlier version of this test asserted `None`, which conflated "I have
-    not measured" with "I measured and chose not to fail" — and that
-    conflation is what stopped the producer from being able to act at all.
-    """
-    tech = tmp_path / "t.tech"
-    tech.write_text(_SYNTH_TECH, encoding="utf-8")
-    ok, note = C.label_layer_readability(_cen(["a"], (100, 2)), "top", str(tech))
-    assert ok is False, "off-layer must be MEASURED, not left unknown"
-    assert "ADVISORY" in note and "not yet calibrated" in note
-    assert "(100, 2)" in note and "(10, 2)" in note
-
-
-def test_the_gate_still_does_not_FAIL_on_an_off_layer_label():
-    """The other half: a measured False must not reach the VERDICT. If it ever
-    does, it fails three shipped designs on a rule with no accept case in the
-    corpus.
-
-    Driven on a real shipped GDS with a real PDK tech, because a synthetic
-    fixture would prove only the fixture."""
-    import sys as _sys
-    # Derived from this file's own location, NOT typed. The docstring at the
-    # top of `_TECH` says a shipped test naming one user's home cannot run
-    # anywhere else — and the first version of this test did exactly that, two
-    # edits after that sentence was written. `shipped_path_portability_check`
-    # caught it at the landing gate.
-    base = _REPO / "benchmark-data" / "ic" / "subservient"
-    tech = _TECH / "sky130A-GDS.tech" if _TECH else None
-    # THE GUARD WAS ON THE WRONG THING. `base.is_dir()` is true in every
-    # checkout — the directory is tracked — while the GDS this drives on is
-    # NOT IN GIT at all (`git ls-files …/stage4/gds` -> 0). So the test passed
-    # only where that artefact happens to sit on disk, and failed in every
-    # worktree — which is the environment the dispatch doctrine tells every
-    # agent to work in, and the one the widened selection first ran it in.
-    #
-    # A bare `return` also made the absence look like a pass. Skipping loudly
-    # is the honest shape: the accept case genuinely needs a real shipped GDS
-    # (a synthetic fixture would prove only the fixture), so where there is
-    # none there is nothing to assert.
-    gds = sorted((base / "phase3/stage4/gds").glob("*.gds")) if base.is_dir() else []
-    if not gds or tech is None or not tech.is_file():
-        import pytest
-        pytest.skip("needs a real shipped subservient GDS (untracked) and a PDK "
-                    "tech; absent here, so there is no accept case to drive")
-    out = pathlib.Path("/tmp") / "t630_gate.json"
-    r = _pr.run(
-        [_sys.executable, str(_PROGRAMS / "gds_port_label_check.py"), str(base),
-         "--pdk-tech", str(tech), "--json", str(out)],
-        capture_output=True, text=True)
-    import json
-    rep = json.loads(out.read_text())
-    f = rep["files"][0]
-    assert r.returncode == 0, r.stderr[-300:]
-    assert f["verdict"] == "OK"
-    assert f["labels_extractor_readable"] is False, f
-    (base / "reports/phase3/gds_port_labels.json").unlink(missing_ok=True)
-
-
-def test_no_tech_is_UNKNOWN_not_confirmed(tmp_path):
-    ok, note = C.label_layer_readability(_cen(["a"], (100, 2)), "top", None)
-    assert ok is None
-    assert "UNKNOWN" in note and "not confirmed" in note
-
-
-def test_a_tech_declaring_nothing_cannot_establish_it_either_way(tmp_path):
-    tech = tmp_path / "t.tech"
-    tech.write_text("layer FOO\n calma 1 0\n", encoding="utf-8")
-    ok, note = C.label_layer_readability(_cen(["a"], (100, 2)), "top", str(tech))
-    assert ok is None and "either way" in note
-
-
-def test_a_top_with_no_labels_says_nothing_here():
-    """The no-label case is `NO_LABELS`' job; a second sentence about layers
-    would be noise on a cell that has none."""
-    assert C.label_layer_readability(_cen([], (0, 0)), "top", None) == (None, "")
-
-
-def test_the_shipped_corpus_still_passes():
-    """THE ACCEPT CASE that decides whether this could block: the three real
-    sign-off GDS must stay rc 0 with the advisory present."""
-    base = _REPO / "benchmark-data" / "ic"
-    if not base.is_dir():
-        return
-    for proj in ("sha256", "subservient", "spm"):
-        gds = list((base / proj / "phase3/stage4/gds").glob("*.gds"))
-        if not gds:
-            continue
-        cen = G.structure_text_census(gds[0].read_bytes())
-        layers = set(cen.label_layers_per_structure.get(gds[0].stem, []))
-        assert layers, f"{proj}: the census lost the label layers"

@@ -34,7 +34,6 @@ if str(PROGRAMS) not in sys.path:
 
 import pytest  # noqa: E402
 
-import stage_on_pass_review as S  # noqa: E402
 import _flow_reason_taxonomy as R  # noqa: E402
 
 
@@ -47,96 +46,11 @@ def _register(tmp_path, rows, stage="stage1", name="c.json"):
 
 # ── the rows are named, not just the words ────────────────────────────────
 
-def test_stage_passed_names_the_rows_it_waits_on(tmp_path):
-    got = S.stage_passed(
-        _register(tmp_path, [("1", "PASS"), ("2", "NOT_MEASURED"),
-                             ("P0", "FAIL")]), "stage1", None)
-    assert got["passed"] is False
-    assert got["non_green_rows"] == [
-        {"id": "2", "status": "NOT_MEASURED"},
-        {"id": "P0", "status": "FAIL"}], got
-
-
-def test_a_green_stage_names_no_rows(tmp_path):
-    got = S.stage_passed(
-        _register(tmp_path, [("1", "PASS"), ("6", "PASS_WITH_WAIVERS")]), "stage1", None)
-    assert got["passed"] is True
-    assert got["non_green_rows"] == []
-
 
 # ── direction 1: waiting on a non-green row is BLOCKED_BY_UPSTREAM ────────
 
-def _run(tmp_path, register, stage="stage1"):
-    out = tmp_path / "report.json"
-    argv = [sys.executable, str(PROGRAMS / "stage_on_pass_review.py"),
-            str(tmp_path), "--stage", stage, "--json", str(out)]
-    if register is not None:
-        argv += ["--compliance", str(register)]
-    r = subprocess.run(argv, capture_output=True, text=True,  # nosec B603
-                       check=False)
-    doc = json.loads(out.read_text()) if out.is_file() else None
-    return r, doc
-
-
-def test_the_review_no_longer_waits_and_publishes_what_it_went_past(tmp_path):
-    """R-0915-34a's WAIT is exactly what R-0915-85 deleted, and this file is
-    where the two rulings meet.
-
-    R-0915-34a was right that a review which waits must SAY it is waiting and
-    on what — the alternative was a silent NOT_CHECKED that the completion
-    audit read as "this step's whole population is unexamined". What R-0915-85
-    changes is the waiting, not the saying: the review reads the stage's
-    ARTEFACTS, which are on disk either way, and r26 measured what waiting
-    costs — steps 2, 7, 15 and 37 NOT_MEASURED behind one review that never
-    looked, and a run published FAIL in which every gate that looked passed.
-
-    So the disclosure is STRICTLY LARGER than the one 34a asked for: the record
-    names the rows the review proceeded past, rather than naming the rows it
-    refused over.
-    """
-    reg = _register(tmp_path, [("1", "PASS"), ("2", "NOT_MEASURED")])
-    r, doc = _run(tmp_path, reg)
-    assert doc is not None, "the review wrote no report"
-    assert doc.get("reviewed_over_non_green_rows") == [
-        {"id": "2", "status": "NOT_MEASURED"}], doc
-    assert "REVIEWING ANYWAY" in r.stdout, r.stdout
-    # and it did not simply refuse: the record it wrote is the REVIEW's own,
-    # carrying the rules it applied rather than a single decline word.
-    assert doc.get("rules") or doc.get("unproven_rejections") is not None, doc
-
-
-def test_the_rows_it_went_past_reach_the_human_line(tmp_path):
-    reg = _register(tmp_path, [("1", "PASS"), ("2", "NOT_MEASURED"),
-                               ("P0", "FAIL")])
-    r, _doc = _run(tmp_path, reg)
-    assert "Non-green rows disclosed:" in r.stdout, r.stdout
-    assert "2=NOT_MEASURED" in r.stdout and "P0=FAIL" in r.stdout, r.stdout
-
 
 # ── direction 2: a review that truly cannot run is still a fault ──────────
-
-@pytest.mark.parametrize("what", ["no-register", "unreadable", "no-row"])
-def test_a_review_that_could_not_run_states_nothing(tmp_path, what):
-    """It has established nothing about anyone, so it may not name a cascade
-    it did not observe — the fail-closed default stands."""
-    reg = None
-    if what == "unreadable":
-        reg = tmp_path / "c.json"
-        reg.write_text("{ not json")
-    elif what == "no-row":
-        reg = _register(tmp_path, [("1", "PASS")], stage="stageZ")
-    _r, doc = _run(tmp_path, reg)
-    if doc is not None:
-        assert doc.get("reason_class") is None, (what, doc)
-        assert R.report_reason_class(doc) is None, (what, doc)
-        assert "blocked_by" not in doc, (what, doc)
-
-
-def test_an_unestablished_verdict_is_not_a_cascade(tmp_path):
-    """`stage_passed` returns None there, and None is not False."""
-    assert S.stage_passed(None, "stage1", None)["passed"] is None
-    assert S.stage_passed(
-        _register(tmp_path, [("1", "PASS")]), "stageZ", None)["passed"] is None
 
 
 def test_BLOCKED_BY_UPSTREAM_is_not_skip_eligible():

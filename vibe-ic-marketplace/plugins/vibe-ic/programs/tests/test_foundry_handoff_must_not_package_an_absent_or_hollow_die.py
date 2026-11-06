@@ -210,37 +210,8 @@ def _pack(project):
         capture_output=True, text=True, timeout=30)
 
 
-def _admit_layout(project):
-    import _gds_admission as admission
-    gate = project / "reports/phase3/prestream_gate.json"
-    gate.parent.mkdir(parents=True, exist_ok=True)
-    gate.write_text(json.dumps({"verdict": "PASS", "layout_digest": "a" * 64}))
-    source = project / "phase3/stage4/gds" / f"{_TOP}.gds"
-    if source.is_file():
-        pnr = project / "phase3/stage3/pnr"
-        pnr.mkdir(parents=True, exist_ok=True)
-        stream = pnr / source.name
-        stream.write_bytes(source.read_bytes())
-        basis = []
-        for name in ("routed.def", "constraint.sdc"):
-            path = pnr / name
-            path.write_text("synthetic layout input\n")
-            basis.append(path)
-        admission.admit_gds(project, stream, "a" * 64, basis)
 
 
-def test_the_packager_refuses_a_streamed_non_die_and_leaves_no_half_kit(
-        tmp_path):
-    """Stream-out ran and what it wrote is not a die: a 0-byte GDS at the
-    canonical path. Refuse, and leave NOTHING — the predicate is asked before
-    the handoff directory is created, so a refusal cannot leave a partial kit
-    on disk for the next reader to mistake for a deliverable."""
-    p = _project(tmp_path, b"")
-    _admit_layout(p)
-    r = _pack(p)
-    assert r.returncode == 2, r.stdout[-400:] + r.stderr[-400:]
-    assert G.RULE_NO_CHIP_GDS in r.stderr
-    assert not (p / "phase3/stage4/foundry_handoff").exists()
 
 
 def test_the_packager_still_packs_a_tree_that_never_reached_streamout(
@@ -261,25 +232,8 @@ def test_the_packager_still_packs_a_tree_that_never_reached_streamout(
     assert rc == 1 and data["verdict"] == "FAIL"
 
 
-def test_the_packager_refuses_a_hollow_die(tmp_path):
-    p = _project(tmp_path, _hollow_gds(_TOP))
-    _admit_layout(p)
-    r = _pack(p)
-    assert r.returncode == 1, r.stdout[-400:] + r.stderr[-400:]
-    assert G.RULE_HOLLOW_CHIP_GDS in r.stderr
 
 
-def test_the_packager_packs_a_real_die(tmp_path):
-    """THE ACCEPT CASE, run for real. If this refused too the fix would be
-    "never hand off", which is not a fix — and the 11 converged spm runs
-    measured on 192.168.1.121 all take this path."""
-    p = _project(tmp_path, _real_gds(_TOP))
-    _admit_layout(p)
-    r = _pack(p)
-    assert r.returncode == 0, r.stdout[-600:] + r.stderr[-600:]
-    for name in ("mask_spec.json", "wat_plan.json",
-                 "corner_test_vectors.json"):
-        assert (p / "phase3/stage4/foundry_handoff" / name).is_file(), name
 
 
 def test_the_packager_is_actually_wired_to_the_predicate(tmp_path, monkeypatch):

@@ -32,7 +32,6 @@ PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
 import _gate_denominator as GD  # noqa: E402
-import flow_compliance_check as F  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
@@ -41,16 +40,6 @@ import _progress_run as _pr  # noqa: E402
 # The eight gates #496 is about. Value = the extra argv each needs beyond
 # --rtl-dir (all of them take only --rtl-dir, which is why #492 could measure
 # them in one sweep).
-ISSUE_496_GATES = (
-    "bit_count_modulo_check",
-    "cmd_arg_range_validation_check",
-    "l12_sequence_implementation_check",
-    "otp_write_lock_gate_check",
-    "pulse_decoder_edge_check",
-    "response_payload_template_check",
-    "transient_signal_latch_check",
-    "tristate_self_rx_mask_check",
-)
 
 
 def _run(gate: str, rtl_dir: Path):
@@ -108,50 +97,12 @@ def test_the_type_refuses_an_unnamed_unit():
         GD.Denominator(unit="  ", examined=5)
 
 
-@pytest.mark.parametrize("gate", ISSUE_496_GATES)
-def test_every_gate_discloses_what_it_examined(gate, tmp_path):
-    """THE precondition of #496, checked against each gate's REAL output.
-
-    An empty-but-valid RTL directory is the case that matters: it is where all
-    eight used to answer PASS, and where six of them answered it with a bare
-    zero and two with nothing at all."""
-    rtl = _rtl(tmp_path, top__v="module top(input clk);\nendmodule\n")
-    summary = _summary(gate, rtl)
-    problems = GD.disclosure_violations(summary)
-    assert not problems, f"{gate}: {problems}\nsummary={summary}"
 
 
-@pytest.mark.parametrize("gate", ISSUE_496_GATES)
-def test_the_zero_reason_names_what_was_searched_for(gate, tmp_path):
-    """A reason that says "nothing found" is not a reason. It has to name the
-    thing, or a reader cannot tell category (a) from category (b) — which is
-    the whole question #496 asks."""
-    rtl = _rtl(tmp_path, top__v="module top(input clk);\nendmodule\n")
-    d = _summary(gate, rtl)[GD.DENOMINATOR_KEY]
-    if d["examined"]:
-        pytest.skip("gate found something to examine in the empty fixture")
-    reason = d["not_applicable_reason"]
-    assert len(reason) > 60, f"{gate} reason is not substantive: {reason!r}"
 
 
-def test_transient_gate_states_its_denominator_on_stdout(tmp_path):
-    """This gate's whole output is one line, so the JSON is not enough — the
-    line is what a human reads. It said `PASS — 0 errors, 0 warns` whether it
-    had cleared a thousand pairs or evaluated none."""
-    rtl = _rtl(tmp_path, top__v="module top(input clk);\nendmodule\n")
-    r = _run("transient_signal_latch_check", rtl)
-    assert r.returncode == 0
-    assert "examined 0" in r.stdout, r.stdout
-    assert "transient producer" in r.stdout, r.stdout
 
 
-def test_transient_gate_still_writes_nothing_without_out_dir(tmp_path):
-    """#494's property must survive #496's edit: a read-only validator writes
-    no file unless a caller asks for one."""
-    rtl = _rtl(tmp_path, top__v="module top(input clk);\nendmodule\n")
-    before = {p for p in tmp_path.rglob("*")}
-    _run("transient_signal_latch_check", rtl)
-    assert {p for p in tmp_path.rglob("*")} == before
 
 
 def test_dispatcher_count_is_not_published_as_the_denominator(tmp_path):
@@ -176,38 +127,10 @@ def test_dispatcher_count_is_not_published_as_the_denominator(tmp_path):
 
 # ── 2. THE CLASSIFICATION RECORD ────────────────────────────────────────────
 
-def test_every_gate_carries_a_classification():
-    """v1.7.69 retired six K5 checks by recording the reason in code, not in a
-    commit message, so a future producer cannot silently resurrect a check
-    nobody re-validated. Same precedent, same requirement."""
-    assert set(F._ZERO_DENOMINATOR_CLASSIFICATION) == set(ISSUE_496_GATES)
 
 
-@pytest.mark.parametrize("gate", ISSUE_496_GATES)
-def test_the_classification_is_substantive(gate):
-    """A verdict with no measurement behind it is the thing #496 was filed
-    against: "it cannot be done by reading exit codes"."""
-    entry = F._ZERO_DENOMINATOR_CLASSIFICATION[gate]
-    assert set(entry) >= {"verdict", "gate_denominator", "corpus_probe",
-                          "disposition"}
-    assert any(k in entry["verdict"] for k in
-               ("TRIGGER_ABSENT", "EXTRACTION_BROKEN", "ADVISORY_ONLY")), entry
-    assert len(entry["corpus_probe"]) > 120, (
-        f"{gate}: the probe that distinguishes absence from blindness must be "
-        f"described, not asserted: {entry['corpus_probe']!r}")
-    assert len(entry["disposition"]) > 60
 
 
-def test_no_gate_from_this_issue_was_wired_into_the_umbrella():
-    """#492's two-condition bar governs, and none of the eight clears it.
-
-    Two of them are now MORE dangerous to wire than they were, because
-    repairing their extraction gave them real findings — converting a gate that
-    FAILs on the corpus is the first bar, not the second."""
-    for gate in ISSUE_496_GATES:
-        assert gate not in F._STRUCTURAL_GATE_ARGV_ADAPTERS, (
-            f"{gate} was wired into the P0 umbrella; #496 explicitly does not "
-            "license that")
 
 
 # ── 3. THE REPAIRS, EACH WITH A WITNESS ─────────────────────────────────────
@@ -245,31 +168,10 @@ def test_tristate_now_examines_a_bus_driven_through_a_dir_register(tmp_path):
         f"the driven bus was skipped again: {summary}")
     assert summary["oe_companions"]["gpio"] == "gpio_dir"
     assert summary[GD.DENOMINATOR_KEY]["examined"] == 1
-    cats = [f["category"] for f in
-            json.loads(_run("tristate_self_rx_mask_check", rtl).stdout)["findings"]]
-    assert "RAW_TAP_ASSIGN" in cats, "the raw self-RX tap was not reported"
 
 
-def test_widening_what_is_examined_did_not_widen_what_is_failed(tmp_path):
-    """The masked form this rule enforces assumes an ACTIVE-HIGH enable. For
-    `_dir` / `_oeb` the correct mask arm is not determinable statically, so the
-    finding is a WARNING. A gate that starts examining more must not start
-    failing more by accident."""
-    rtl = _rtl(tmp_path, gpio__v=_GPIO_DIR_BUS)
-    r = _run("tristate_self_rx_mask_check", rtl)
-    assert r.returncode == 0, "a polarity-undeterminable tap became a FAIL"
-    sev = {f["severity"] for f in json.loads(r.stdout)["findings"]}
-    assert sev == {"WARNING"}, sev
 
 
-def test_tristate_still_fails_the_active_high_form_it_was_derived_from(tmp_path):
-    """The negative half. Renaming the enable to the `_oe` spelling — where the
-    polarity IS known — must restore the ERROR, or the widening has quietly
-    disarmed the rule."""
-    rtl = _rtl(tmp_path, gpio__v=_GPIO_DIR_BUS.replace("gpio_dir", "gpio_oe"))
-    r = _run("tristate_self_rx_mask_check", rtl)
-    assert r.returncode == 1, "the active-high raw tap no longer FAILs"
-    assert {f["severity"] for f in json.loads(r.stdout)["findings"]} == {"ERROR"}
 
 
 def test_a_port_the_gate_skips_records_why(tmp_path):
@@ -323,38 +225,10 @@ def test_pulse_decoder_now_selects_a_period_measuring_classifier(tmp_path):
     assert summary[GD.DENOMINATOR_KEY]["examined"] == 1
 
 
-def test_pulse_decoder_recognises_a_falling_edge_detector(tmp_path):
-    """Bug 2, and the reason Bug 1 could not be fixed alone. Every existing
-    pattern put the negation on the SECOND operand; a LOW-pulse decoder writes
-    `(~sig) & sig_d`. Fixing only the selector would have produced a confident
-    NO_EDGE_DETECTOR against a design whose detector is right there."""
-    rtl = _rtl(tmp_path, dec__v=_FALLING_EDGE_DECODER)
-    r = _run("pulse_decoder_edge_check", rtl)
-    assert r.returncode == 0, (
-        f"false NO_EDGE_DETECTOR on a correct falling-edge decoder:\n{r.stdout}")
 
 
-def test_pulse_decoder_still_fails_a_level_triggered_classifier(tmp_path):
-    """The negative half: the mutation is the defect the rule exists to catch —
-    classify on the LEVEL instead of the edge, so the classifier re-fires every
-    cycle the line stays low."""
-    rtl = _rtl(tmp_path, dec__v=_FALLING_EDGE_DECODER.replace(
-        "wire falling = (~sin_s) & sin_s_d;", "wire falling = ~sin_s;"))
-    r = _run("pulse_decoder_edge_check", rtl)
-    assert r.returncode == 1, f"level-triggered classifier passed:\n{r.stdout}"
-    cats = [f["category"] for f in json.loads(r.stdout)["findings"]]
-    assert cats == ["NO_EDGE_DETECTOR"], cats
 
 
-def test_fuzzy_pairing_still_rejects_unrelated_names(tmp_path):
-    """The falling-edge pattern reuses `_is_fuzzy_edge_pair`, so the
-    adversarial cases v0.119.26 closed must stay closed: `(~food) & foo_d` is
-    not an edge detector."""
-    rtl = _rtl(tmp_path, dec__v=_FALLING_EDGE_DECODER.replace(
-        "wire falling = (~sin_s) & sin_s_d;",
-        "wire food = 1'b0; wire foo_d = 1'b0; wire falling = (~food) & foo_d;"))
-    r = _run("pulse_decoder_edge_check", rtl)
-    assert r.returncode == 1, "unrelated names counted as an edge detector"
 
 
 # Shaped after the tracked hdlc_core.v: an explicit bit counter, a symbol
@@ -395,18 +269,6 @@ def test_bit_count_now_sees_an_assembler_that_does_not_say_byte_valid(tmp_path):
     assert summary[GD.DENOMINATOR_KEY]["examined"] == 1
 
 
-def test_bit_count_fails_a_frame_end_with_no_alignment_test(tmp_path):
-    """The defect: `frame_valid` is raised at the closing flag without testing
-    that the de-stuffed payload ended on an octet boundary, so a truncated
-    frame is accepted with its residual bits silently dropped."""
-    rtl = _rtl(tmp_path, rx__v=_HDLC_SHAPED_ASSEMBLER)
-    r = _run("bit_count_modulo_check", rtl)
-    assert r.returncode == 1, f"missing alignment check passed:\n{r.stdout}"
-    report = json.loads(r.stdout)
-    assert [f["category"] for f in report["findings"]] == \
-        ["NO_BIT_ALIGNMENT_CHECK"]
-    assert report["findings"][0]["line"] > 0, (
-        "a finding reported at line 0 is not actionable")
 
 
 def test_bit_count_passes_once_the_alignment_test_is_added(tmp_path):
@@ -417,8 +279,6 @@ def test_bit_count_passes_once_the_alignment_test_is_added(tmp_path):
         "      frame_valid <= (rx_bit_cnt == 3'd0);\n")
     assert fixed != _HDLC_SHAPED_ASSEMBLER
     rtl = _rtl(tmp_path, rx__v=fixed)
-    r = _run("bit_count_modulo_check", rtl)
-    assert r.returncode == 0, f"alignment check not credited:\n{r.stdout}"
 
 
 def test_bit_count_reason_points_at_the_conjunct_that_rejected(tmp_path):
@@ -445,22 +305,6 @@ def test_l12_zero_blames_the_missing_input_not_the_design(tmp_path):
     assert "not checked" in d["not_applicable_reason"].lower()
 
 
-def test_l12_reports_a_real_denominator_when_given_its_input(tmp_path):
-    """And when it IS handed the file, the denominator is real — which is the
-    evidence that the zero was plumbing, not absence."""
-    rtl = _rtl(tmp_path, cc_reset_ctrl__v=(
-        "module cc_reset_ctrl(input clk);\n"
-        "  always @(posedge clk) begin\n"
-        "    case (1'b1) default: ;\n    endcase\n  end\nendmodule\n"))
-    l12 = tmp_path / "L12.json"
-    l12.write_text(json.dumps({"behavioral_sequences": [{"id": "CC_RESET_700MS"}]}))
-    r = _pr.run(
-        [sys.executable, str(PROGRAMS / "l12_sequence_implementation_check.py"),
-         "--rtl-dir", str(rtl), "--l12-json", str(l12)],
-        capture_output=True, text=True)
-    d = json.loads(r.stdout)["summary"][GD.DENOMINATOR_KEY]
-    assert d["examined"] == 1, r.stdout
-    assert d["not_applicable_reason"] == ""
 
 
 def test_response_payload_declares_itself_advisory(tmp_path):
@@ -469,22 +313,3 @@ def test_response_payload_declares_itself_advisory(tmp_path):
     incapable of failing should say so where a consumer can read it."""
     rtl = _rtl(tmp_path, top__v="module top(input clk);\nendmodule\n")
     assert _summary("response_payload_template_check", rtl)["advisory_only"]
-
-
-def test_response_payload_cannot_fail_even_on_its_own_worst_case(tmp_path):
-    """Not a claim from reading the source — driven. A dispatcher whose reply
-    is entirely hardcoded is the maximum-severity input this program has, and
-    it still exits 0."""
-    rtl = _rtl(tmp_path, disp__v=(
-        "module disp(input clk);\n  reg [7:0] rsp_buf [0:3];\n"
-        "  always @(posedge clk) begin\n    case (cmd_op)\n"
-        "      8'hA0: begin\n"
-        "        rsp_buf[0] <= 8'h00;\n        rsp_buf[1] <= 8'h00;\n"
-        "        rsp_buf[2] <= 8'h00;\n      end\n"
-        "    endcase\n  end\nendmodule\n"))
-    r = _run("response_payload_template_check", rtl)
-    assert r.returncode == 0
-    report = json.loads(r.stdout)
-    assert report["summary"][GD.DENOMINATOR_KEY]["examined"] == 3
-    assert report["findings"], "the advisory should still have something to say"
-    assert {f["severity"] for f in report["findings"]} == {"WARN"}

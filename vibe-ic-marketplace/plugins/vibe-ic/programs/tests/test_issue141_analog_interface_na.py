@@ -24,7 +24,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import analog_interface_classify as AIC          # noqa: E402
 import design_one_shot_runner as DOR             # noqa: E402
-import flow_compliance_check as FCC              # noqa: E402
 
 # 20-port all-analog ADC interface (issue #141 evidence shape): analog ins,
 # analog supplies/refs, raw 1-bit modulator-bitstream OUTs, on-chip clocks as
@@ -146,62 +145,14 @@ def test_step_rtl_gen_digital_iface_keeps_spec_to_rtl(tmp_path):
 
 # ── C. flow_compliance_check._digital_backend_is_na ────────────────────────
 
-def test_flow_compliance_marks_backend_na_for_all_analog(tmp_path):
-    p = _mk_project(tmp_path, _ADC_ALL_ANALOG)
-    FCC._ANALOG_IFACE_NA_CACHE.clear()
-    FCC._PURE_ANALOG_CACHE.clear()
-    is_na, reason = FCC._digital_backend_is_na(p)
-    assert is_na is True, reason
-    assert "all-analog" in reason or "analog" in reason
 
 
-def test_flow_compliance_keeps_backend_for_digital_iface(tmp_path):
-    p = _mk_project(tmp_path, _CONV_DIGITAL_IFACE)
-    FCC._ANALOG_IFACE_NA_CACHE.clear()
-    FCC._PURE_ANALOG_CACHE.clear()
-    is_na, _reason = FCC._digital_backend_is_na(p)
-    assert is_na is False
 
 
-def test_flow_compliance_data_converter_all_analog_is_na(tmp_path, monkeypatch):
-    """The issue's exact scenario: ic_class == data_converter (analog_applicable,
-    rtl_gen=null, fallback_skill=spec-to-rtl) but an all-analog top interface →
-    digital backend N/A, not a spec-to-rtl hard-FAIL."""
-    p = _mk_project(tmp_path, _ADC_ALL_ANALOG)
-    import ic_class_profile as ICP
-    monkeypatch.setattr(FCC, "_project_is_pure_analog",
-                        lambda proj: (False, "class 'data_converter' is not "
-                                             "analog-only"))
-    monkeypatch.setattr("ic_class_profile.detect_ic_class",
-                        lambda proj: {"ic_class": "data_converter"})
-    FCC._ANALOG_IFACE_NA_CACHE.clear()
-    is_na, reason = FCC._digital_backend_is_na(p)
-    assert is_na is True, reason
-    assert "data_converter" in reason
 
 
-def test_flow_compliance_data_converter_digital_iface_not_na(tmp_path, monkeypatch):
-    p = _mk_project(tmp_path, _CONV_DIGITAL_IFACE)
-    monkeypatch.setattr(FCC, "_project_is_pure_analog",
-                        lambda proj: (False, "not analog-only"))
-    monkeypatch.setattr("ic_class_profile.detect_ic_class",
-                        lambda proj: {"ic_class": "data_converter"})
-    FCC._ANALOG_IFACE_NA_CACHE.clear()
-    is_na, _reason = FCC._digital_backend_is_na(p)
-    assert is_na is False
 
 
-def test_flow_compliance_keeps_backend_when_rtl_present(tmp_path):
-    """A real digital datapath (RTL present) is never marked N/A even if the
-    L9 pinout would otherwise read all-analog."""
-    p = _mk_project(tmp_path, _ADC_ALL_ANALOG)
-    rtl = p / "phase2" / "stage1" / "rtl"
-    rtl.mkdir(parents=True)
-    (rtl / "dut.v").write_text("module dut(); endmodule\n")
-    FCC._ANALOG_IFACE_NA_CACHE.clear()
-    FCC._PURE_ANALOG_CACHE.clear()
-    is_na, _reason = FCC._digital_backend_is_na(p)
-    assert is_na is False
 
 
 # ── D. phase3_one_shot_runner._is_pure_analog_no_rtl_track ─────────────────

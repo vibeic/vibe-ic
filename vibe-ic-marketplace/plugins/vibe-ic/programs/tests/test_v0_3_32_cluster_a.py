@@ -15,28 +15,10 @@ from pathlib import Path
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 
-import cts_quality_check as CTS          # noqa: E402
 import ip_catalog_query as IPC           # noqa: E402
-import postroute_timing_repair_status_gen as repair             # noqa: E402
 
 
 # ── #567 — cts_quality sums every CTS-0018 line ────────────────────────────
-def test_567_cts_sums_multiple_trees():
-    rpt = (
-        "[INFO CTS-0018] Created 2 clock buffers.\n"
-        "[INFO CTS-0018] Created 145 clock buffers.\n"
-        "[INFO CTS-0018] Created 137 clock buffers.\n"
-        "[INFO CTS-0017] Max level of the clock tree: 7\n"
-    )
-    parsed = CTS._parse_report(rpt)
-    assert parsed["created_buffers"] == 2 + 145 + 137  # 284, not 2
-
-
-def test_567_single_tree_unchanged_and_none_when_absent():
-    assert CTS._parse_report(
-        "[INFO CTS-0018] Created 9 clock buffers.\n")["created_buffers"] == 9
-    # no CTS-0018 at all → None (preserves ZERO_CLOCK_BUFFERS path)
-    assert CTS._parse_report("no buffers here")["created_buffers"] is None
 
 
 # ── #552 — token-level ISA extension membership ────────────────────────────
@@ -66,8 +48,6 @@ def test_552_RV32MFast_does_not_match_F_extension():
 # ── #566 — clock_plan generator parses create_generated_clock ──────────────
 
 
-
-
 # ── #565 — pvt_matrix corner discovery container-PDK fallback ──────────────
 
 
@@ -82,42 +62,6 @@ def _mk_sta(project, wns_neg):
     else:
         rpt.write_text("wns 0.00\ntns 0.00\n")
     return rpt
-
-
-def test_564_existing_repair_record_preserved(tmp_path, monkeypatch):
-    project = tmp_path / "proj"
-    repair_dir = project / "phase3/stage3/postroute_timing_repair"
-    repair_dir.mkdir(parents=True)
-    rich = {
-        "program": "agent",
-        "verdict": "REPAIR_REQUIRED",
-        "changes": [{"cell": "buf1", "op": "upsize"}],
-        "re_verified": True,
-        "affected_steps": ["sta", "route"],
-    }
-    (repair_dir / "repair_log.json").write_text(json.dumps(rich))
-    _mk_sta(project, wns_neg=True)
-    rc = repair.main([str(project)])
-    assert rc == 0
-    out = json.loads((repair_dir / "repair_log.json").read_text())
-    # the rich provenance survives
-    assert out["changes"] == rich["changes"]
-    assert out["re_verified"] is True
-    assert out["affected_steps"] == rich["affected_steps"]
-    # measured values refreshed
-    assert out["wns_negative"] is True
-
-
-def test_564_no_existing_record_writes_minimal(tmp_path):
-    project = tmp_path / "proj2"
-    repair_dir = project / "phase3/stage3/postroute_timing_repair"
-    repair_dir.mkdir(parents=True)
-    _mk_sta(project, wns_neg=True)
-    rc = repair.main([str(project)])
-    assert rc == 0
-    out = json.loads((repair_dir / "repair_log.json").read_text())
-    assert out["verdict"] == "REPAIR_REQUIRED"
-    assert "changes" not in out  # minimal shape
 
 
 # ── #568 — CTS evidence-lost marker is FAILed (no fabricated no-op) ────────

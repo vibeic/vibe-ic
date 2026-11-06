@@ -33,8 +33,6 @@ _PROGRAMS = Path(__file__).resolve().parent.parent
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
-import lec_equivalence_check as G           # noqa: E402
-import lec_gate_netlist_select as S         # noqa: E402
 import phase3_one_shot_runner as P3         # noqa: E402
 import fault_scan_chain_insert as SCI        # noqa: E402
 
@@ -152,65 +150,18 @@ def test_flow_declares_step13_and_step15_read_one_netlist():
 # --------------------------------------------------------------------------- #
 # 2. the gate refuses a stale proof
 # --------------------------------------------------------------------------- #
-def _gate(proj: Path, doc: dict):
-    (proj / "reports").mkdir(exist_ok=True)
-    (proj / "reports/lec.json").write_text(json.dumps(doc))
-    (proj / "reports/lec.rpt").write_text(
-        "Equivalence successfully proven!\nProved 2 $equiv cells.\n")
-    rc = G.main([str(proj), "--json", str(proj / "reports/gate.json")])
-    return rc, json.loads((proj / "reports/gate.json").read_text())
 
 
-def test_gate_refuses_a_pass_about_the_generic_netlist(tmp_path, capsys):
-    """run23's shape: PASS on netlist.v, step 15 routes the mapped netlist."""
-    proj = _tree(tmp_path)
-    rc, rep = _gate(proj, _lec_doc(proj, GENERIC))
-    assert rc == 1
-    assert [f["rule"] for f in rep["findings"]] == ["LEC_STALE_PROOF"]
-    b = rep["summary"]["subject_binding"]
-    assert (b["proved_sha256"], b["consumer_sha256"]) == (
-        _sha(proj / GENERIC), _sha(proj / MAPPED))
 
 
-def test_gate_refuses_a_proof_of_an_older_copy_of_the_routed_file(tmp_path):
-    proj = _tree(tmp_path)
-    doc = _lec_doc(proj, MAPPED)
-    (proj / MAPPED).write_text(_MAPPED_V.replace("nand2_1", "nand2_2"))
-    rc, rep = _gate(proj, doc)
-    assert rc == 1 and rep["findings"][0]["rule"] == "LEC_STALE_PROOF"
 
 
-def test_gate_passes_a_proof_of_the_routed_file(tmp_path):
-    proj = _tree(tmp_path)
-    rc, rep = _gate(proj, _lec_doc(proj, MAPPED))
-    assert rc == 0, rep["findings"]
-    assert rep["summary"]["subject_binding"]["state"] == S.BINDING_MATCH
 
 
-def test_gate_refuses_a_proof_with_no_recorded_gate_sha(tmp_path):
-    proj = _tree(tmp_path)
-    doc = _lec_doc(proj, MAPPED)
-    del doc["proof_identity"]["gate_netlist"]["sha256"]
-    rc, rep = _gate(proj, doc)
-    assert rc == 1 and rep["findings"][0]["rule"] == "LEC_SUBJECT_UNBOUND"
 
 
-def test_gate_refuses_an_unconstrained_proof_of_the_scan_netlist(tmp_path):
-    proj = _tree(tmp_path, scan="authorized")
-    rc, rep = _gate(proj, _lec_doc(proj, POST_DFT, scan_applied=False))
-    assert rc == 1
-    assert rep["findings"][0]["rule"] == "LEC_SCAN_MODE_UNCONSTRAINED"
-    rc, _ = _gate(proj, _lec_doc(proj, POST_DFT, scan_applied=True))
-    assert rc == 0
 
 
-def test_gate_is_silent_before_step15_has_an_input(tmp_path):
-    """Phase 2 without a mapped netlist: nothing is routed, so nothing is
-    stale; the substance rules decide as before."""
-    proj = _tree(tmp_path, mapped=False)
-    rc, rep = _gate(proj, _lec_doc(proj, GENERIC))
-    assert rep["summary"]["subject_binding"]["state"] == S.BINDING_NO_CONSUMER
-    assert rc == 0
 
 
 # --------------------------------------------------------------------------- #

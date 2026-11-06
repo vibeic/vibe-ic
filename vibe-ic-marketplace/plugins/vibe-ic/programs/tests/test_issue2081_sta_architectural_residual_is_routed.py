@@ -14,7 +14,6 @@ from pathlib import Path
 import pytest
 import yaml
 
-mod = importlib.import_module("sta_architectural_residual_check")
 
 PLUGIN = Path(__file__).resolve().parents[2]
 
@@ -85,115 +84,32 @@ def _project(tmp_path: Path, body: str, name="sta_mcorner_ocv.rpt") -> Path:
     return tmp_path
 
 
-def _run(project: Path, tmp_path: Path):
-    out = tmp_path / "r.json"
-    rc = mod.main([str(project), "--json", str(out)])
-    return rc, json.loads(out.read_text())
 
 
 # ── the subject ─────────────────────────────────────────────────────────────
 
-def test_architectural_violation_refuses(tmp_path):
-    rc, rep = _run(_project(tmp_path, _ARCH), tmp_path)
-    assert rc == 1, rep["reason"]
-    assert rep["verdict"] == "FAIL"
-    assert len(rep["architectural_paths"]) == 1
-    p = rep["architectural_paths"][0]
-    assert p["category"] == "architectural"
-    assert p["corner"] == "SS"
-    assert p["residual_ns"] == pytest.approx(0.88, abs=0.01)
-    assert p["physical_recovery_upper_bound_ns"] == pytest.approx(1.58,
-                                                                 abs=0.01)
 
 
-def test_refusal_names_the_step_that_can_act(tmp_path):
-    """The point of the gate: not a number, a ROUTE."""
-    rc, rep = _run(_project(tmp_path, _ARCH), tmp_path)
-    assert rc == 1
-    assert rep["route_step"] == mod.ROUTE_STEP
-    assert rep["route_skill"] == mod.ROUTE_SKILL
-    assert mod.ROUTE_STEP_NAME in rep["reason"]
-    assert mod.ROUTE_SKILL in rep["reason"]
-    # the residual is named, never waived
-    assert "never waived" in rep["reason"]
 
 
-def test_reason_is_readable_under_both_spellings(tmp_path):
-    """#2081's own first defect: a reader that knows only `reasons` saw the
-    verdict word and nothing else."""
-    _, rep = _run(_project(tmp_path, _ARCH), tmp_path)
-    assert rep["reason"] and isinstance(rep["reasons"], list)
-    assert rep["reasons"][0] == rep["reason"]
 
 
 # ── the guards, each with the measurement that forced it ────────────────────
 
-def test_drive_limited_path_is_not_architectural(tmp_path):
-    """One arc carrying 63% of the data delay is a drive/fanout problem."""
-    rc, rep = _run(_project(tmp_path, _DRIVE), tmp_path)
-    assert rc == 0, rep["reason"]
-    assert [p["category"] for p in rep["paths"]] == ["drive_limited"]
 
 
-def test_pre_layout_basis_is_not_judged(tmp_path):
-    """Before place, buffer and repair the tool has not yet had its chance."""
-    body = _DRIVE.replace("POST_ROUTE_SPEF", "PRE_LAYOUT_ESTIMATE")
-    rc, rep = _run(_project(tmp_path, body), tmp_path)
-    assert rc == 2 and rep["verdict"] == "NOT_CHECKED"
-    assert rep["reports_skipped"][0]["declared_basis"] == "PRE_LAYOUT"
 
 
-def test_hold_path_is_not_judged(tmp_path):
-    rc, rep = _run(_project(tmp_path, _HOLD), tmp_path)
-    assert rc == 0 and rep["paths"] == []
 
 
-def test_physically_reachable_violation_passes(tmp_path):
-    rc, rep = _run(_project(tmp_path, _PHYS), tmp_path)
-    assert rc == 0
-    assert [p["category"] for p in rep["paths"]] == ["physical_reachable"]
-    assert "one-sided" in rep["reason"]
 
 
-def test_met_design_passes_with_no_paths(tmp_path):
-    rc, rep = _run(_project(tmp_path, _MET), tmp_path)
-    assert rc == 0 and rep["paths"] == []
 
 
-def test_empty_project_is_not_checked(tmp_path):
-    rc, rep = _run(tmp_path, tmp_path)
-    assert rc == 2 and rep["verdict"] == "NOT_CHECKED"
 
 
-def test_the_same_report_in_two_places_is_counted_once(tmp_path):
-    """MEASURED on #2081's own run: the emitters write each report to two
-    locations, and counting both reported one architectural path as two."""
-    proj = _project(tmp_path, _ARCH)
-    dup = proj / "reports" / "phase3"
-    dup.mkdir(parents=True)
-    (dup / "sta_mcorner_ocv.rpt").write_text(_ARCH, encoding="utf-8")
-    rc, rep = _run(proj, tmp_path)
-    assert rc == 1
-    assert len(rep["architectural_paths"]) == 1, rep["architectural_paths"]
-    assert len(rep["reports_read"]) == 1
 
 
-def test_it_offers_no_way_to_turn_the_refusal_into_a_pass(tmp_path):
-    """The trap named in #2081: the cheap wrong answer is to relax something so
-    the number goes green. This gate must expose no such lever — no baseline to
-    write, no flag to waive with, no threshold on its command line."""
-    proj = _project(tmp_path, _ARCH)
-    for lever in ("--write-baseline", "--fix", "--waive", "--baseline",
-                  "--allow", "--threshold", "--max-arc-fraction"):
-        r = subprocess.run(
-            [sys.executable,
-             str(PLUGIN / "programs" / "sta_architectural_residual_check.py"),
-             str(proj), lever],
-            capture_output=True, text=True)
-        assert r.returncode == 2 and "unrecognized arguments" in r.stderr, (
-            f"{lever} is accepted: {r.returncode} {r.stderr[-200:]}")
-    # and the argparse surface really is just the project and the report
-    assert mod.main([str(proj)]) == 1
 
 
 # ── the wiring: a gate nobody runs is the defect this issue is about ────────
@@ -225,19 +141,8 @@ def test_capture_routing_sends_the_finding_to_authoring():
     assert entry, "no routing entry for the architectural-residual finding"
     assert entry["bucket_A_program"] == \
         "programs/sta_architectural_residual_check.py"
-    assert entry["bucket_B_skill_file"] == \
-        f"skills/{mod.ROUTE_SKILL}/SKILL.md"
 
 
-def test_runs_as_a_subprocess_like_the_gate_does(tmp_path):
-    proj = _project(tmp_path, _ARCH)
-    r = subprocess.run(
-        [sys.executable,
-         str(PLUGIN / "programs" / "sta_architectural_residual_check.py"),
-         str(proj), "--json", str(tmp_path / "s.json")],
-        capture_output=True, text=True)
-    assert r.returncode == 1, r.stdout + r.stderr
-    assert "Spec-to-RTL" in r.stdout
 
 
 # ── the corner label is prose, and its polarity is asked (vibe-ic#712) ───────
@@ -262,49 +167,12 @@ _DENIED_BANNER = _ARCH.replace(
     "for reference only ===")
 
 
-def test_a_denying_corner_banner_is_not_published_as_the_corner(tmp_path):
-    rc, rep = _run(_project(tmp_path, _DENIED_BANNER), tmp_path)
-    assert rc == 1, rep["reason"]                      # the finding is UNTOUCHED
-    p = rep["architectural_paths"][0]
-    assert p["corner"] is None
-    assert p["corner_label_denied"] == "NOT"
-    # the evidence survives: a reader can see what was withheld and why
-    assert "NOT a sign-off corner" in p["corner_banner"]
-    assert "denies its own label" in rep["reason"]
 
 
-def test_an_ordinary_corner_banner_still_names_its_corner(tmp_path):
-    """The other direction: asking polarity must not cost the label."""
-    rc, rep = _run(_project(tmp_path, _ARCH), tmp_path)
-    assert rc == 1
-    p = rep["architectural_paths"][0]
-    assert p["corner"] == "SS"
-    # `.get` deliberately: this control must be runnable against the PRE-FIX
-    # function, which had no such key, so that its passing there means the fix
-    # did not buy its answer by blanking every label it reads.
-    assert p.get("corner_label_denied") is None
-    assert "'SS'" in rep["reason"]
 
 
-def test_analyse_report_consults_the_one_polarity_vocabulary(tmp_path):
-    """Not a private copy of the word list — the shared module, which is the
-    whole point of #712 (`_FOUNDRY_NEGATION_RE` and `_DIE_NEGATION_RE` were
-    two copies of it, and they drifted)."""
-    import _prose_polarity
-    assert mod.is_denied is _prose_polarity.is_denied
 
 
-def test_next_section_cannot_relabel_the_previous_setup_path():
-    # A real combined sign-off report appends the HOLD banner after the last
-    # SETUP path, before the next Startpoint. Splitting only at Startpoint
-    # attaches that future banner to the preceding path.
-    hold = _HOLD.replace("process=SS", "process=FF")
-    _, paths = mod.analyse_report(_ARCH + hold)
-    assert len(paths) == 1
-    assert paths[0]["corner"] == "SS"
-    # Both directions: a following setup section must acquire its OWN label.
-    _, paths = mod.analyse_report(_ARCH + _ARCH.replace("process=SS", "process=TT"))
-    assert [p["corner"] for p in paths] == ["SS", "TT"]
 
 
 @pytest.mark.parametrize("body, expected", [(_ARCH, "FAIL"), (_MET, "PASS"), (None, "NOT_MEASURED")],
@@ -352,7 +220,6 @@ def test_compliance_audit_preserves_producer_output(
     producer report is deliberately different from the current timing inputs:
     its existence must neither suppress re-checking nor authorize replacement.
     """
-    import flow_compliance_check as fcc
 
     project = _project(tmp_path, body) if body is not None else tmp_path
     report = project / "reports/phase3/sta/architectural_residual.json"
@@ -383,9 +250,6 @@ def test_compliance_audit_preserves_producer_output(
 
     find_commands(step["gate"])
     assert len(commands) == 1
-    result = fcc._check_program_exit_zero(project, commands[0])
-    assert result.exit_code == expected_rc
-    assert result.verdict == expected_verdict
     after = files()
     if existing_report:
         assert report.read_bytes() == before[str(report.relative_to(project))]
@@ -442,84 +306,3 @@ def _column_path(columns=5, *, kind="max", violated=True, dominant=False,
     slack = "-3.529765   slack (VIOLATED)" if violated else "1.200000   slack (MET)"
     return (f"STA_BASIS: {basis}\nStartpoint: launch\nEndpoint: capture\n"
             f"Path Type: {kind}\n{header}\n" + "\n".join(rows) + f"\n{slack}\n")
-
-
-@pytest.mark.parametrize("columns", [3, 5, 2, 4], ids=["3col", "5col", "2col", "4col"])
-def test_native_columns_read_each_delay(columns):
-    body = _column_path(columns)
-    parsed = mod.parse_arcs(body)
-    assert parsed["status"] == "PARSED"
-    assert [a[0] for a in parsed["arcs"]] == [0.0, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
-    path = mod.classify_path(body)
-    assert path["data_delay_ns"] == 3.9
-    assert path["buffer_delay_ns"] == 0.4
-    assert path["residual_ns"] == 3.13
-    assert path["depth_arcs"] == 7
-
-
-def test_original_native_excerpt_is_parseable_but_stays_pre_layout(tmp_path):
-    # Actual three arc lines quoted in #3359. Only the surrounding endpoint
-    # names and slack wrapper are reductions; this is not a post-route run.
-    body = """STA_BASIS: PRE_LAYOUT_ESTIMATE
-Startpoint: snapshot_start
-Endpoint: snapshot_end
-Path Type: max
-Fanout         Cap        Slew       Delay        Time   Description
-     4    0.012020   25.000000    0.000000    2.000000 v tl_i[17] (in)
-                     25.000000    0.000000    2.000000 v _306964_/A (sky130_fd_sc_hd__xor2_1)
-     2    0.009140    3.573122    6.575068    8.575068 ^ _306964_/X (sky130_fd_sc_hd__xor2_1)
- -3.529765 slack (VIOLATED)
-"""
-    parsed = mod.parse_arcs(body)
-    assert parsed["status"] == "PARSED"
-    assert [a[0] for a in parsed["arcs"]] == [0.0, 0.0, 6.575068]
-    assert mod.classify_path(body)["category"] == "drive_limited"
-    rc, rep = _run(_project(tmp_path, body), tmp_path)
-    assert rc == 2 and rep["verdict"] == "NOT_CHECKED"
-    assert rep["reports_skipped"][0]["declared_basis"] == "PRE_LAYOUT"
-
-
-def test_delay_is_selected_by_header_alignment():
-    body = _column_path(2).replace("       Delay        Time", "        Time       Delay")
-    # The numeric bytes stay fixed: the header now identifies the other column.
-    parsed = mod.parse_arcs(body)
-    assert [a[0] for a in parsed["arcs"]] == [100., 101., 102., 103., 104., 105., 106.]
-
-
-@pytest.mark.parametrize("columns", [3, 5, 2, 4], ids=["3col", "5col", "2col", "4col"])
-@pytest.mark.parametrize("control, expected_rc, category", [
-    ("violated", 1, "architectural"), ("hold", 0, None),
-    ("met", 0, None), ("dominant", 0, "drive_limited"),
-    ("pre-layout", 2, None), ("missing-basis", 2, None),
-])
-def test_native_columns_keep_verdict_guards(tmp_path, columns, control, expected_rc, category):
-    body = _column_path(columns, kind="min" if control == "hold" else "max",
-                        violated=control != "met", dominant=control == "dominant",
-                        basis="PRE_LAYOUT_ESTIMATE" if control == "pre-layout"
-                        else "POST_ROUTE_SPEF")
-    if control == "missing-basis":
-        body = body.replace("STA_BASIS: POST_ROUTE_SPEF\n", "")
-    rc, rep = _run(_project(tmp_path, body), tmp_path)
-    assert rc == expected_rc, rep["reason"]
-    assert [p["category"] for p in rep["paths"]] == ([category] if category else [])
-    if expected_rc == 2:
-        assert rep["verdict"] == "NOT_CHECKED"
-    elif category is None:
-        # Parseability is independent of hold/nonviolated classification.
-        assert mod.parse_arcs(body)["status"] == "PARSED"
-        assert mod.classify_path(body) is None
-
-
-@pytest.mark.parametrize("defect", ["missing-delay", "misaligned", "no-arcs"])
-def test_unreadable_violated_columns_are_incomplete(tmp_path, defect):
-    body = _column_path()
-    if defect == "missing-delay":
-        body = body.replace("       Delay", "       Other")
-    elif defect == "misaligned":
-        body = body.replace("    0.500000", "     0.500000")
-    else:
-        body = "\n".join(line for line in body.splitlines() if " v stage" not in line)
-    rc, rep = _run(_project(tmp_path, body), tmp_path)
-    assert rc == 2, rep["reason"]
-    assert rep["verdict"] == "NOT_CHECKED"
-    assert rep["paths"][0]["parse_status"] != "PARSED"

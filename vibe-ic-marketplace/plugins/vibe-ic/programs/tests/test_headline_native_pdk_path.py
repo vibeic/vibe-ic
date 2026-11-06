@@ -26,7 +26,6 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import analog_pdk_availability as APA            # noqa: E402
 import analog_real_corner_sweep as ARS           # noqa: E402
-import flow_compliance_check as FCC              # noqa: E402
 
 
 def _make_lister(tree: dict):
@@ -292,24 +291,8 @@ def _mk_analog_deck(project: Path, head: str) -> None:
     (bdir / "ldo.sp").write_text(head + _sky130_deck_body())
 
 
-def test_gate_native_marker_earns_no_waiver(tmp_path):
-    p = _project_with_l19(tmp_path, "IHP SG13G2")
-    res = APA.resolve_pdk("IHP SG13G2", lister=_make_lister(_INSTALLED))
-    native = APA.native_available_header(res, "sky130")
-    _mk_analog_deck(p, native)
-    # a native-marker deck is NOT a disclosed substitution → no waiver
-    assert FCC._pdk_substitution_disclosed(p) is None
 
 
-def test_gate_substitution_marker_absent_target_earns_waiver(tmp_path):
-    p = _project_with_l19(tmp_path, "AcmeFab X28 node")
-    head = ("* pdk_substitution: target=AcmeFab X28 node substitute=sky130 "
-            "reason=no public ngspice models for target; open-source substitute\n")
-    _mk_analog_deck(p, head)
-    disc = FCC._pdk_substitution_disclosed(p)
-    assert disc is not None
-    assert disc["substitute"] == "sky130"
-    assert disc["target"] == "AcmeFab X28 node"
 
 
 if __name__ == "__main__":

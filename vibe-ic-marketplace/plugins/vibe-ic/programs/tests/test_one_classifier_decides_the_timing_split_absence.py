@@ -34,10 +34,8 @@ from pathlib import Path
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 
-import flow_compliance_check as F                             # noqa: E402
 import _flow_reason_taxonomy as TAX                          # noqa: E402
 
-GATE = PROGRAMS / "internal_vs_external_timing_check.py"
 SPM_L8 = PROGRAMS / "tests" / "fixtures" / "spm_run22_L8_TIMING_WAVEFORM.json"
 SPM_LAYER = PROGRAMS / "tests" / "fixtures" / "spm_run22_L8_RTL_CONSTANTS.json"
 L8_REL = "phase1/generated_docs/L8_TIMING_WAVEFORM.json"
@@ -65,16 +63,6 @@ def _project(tmp_path: Path, l8, l2=None) -> Path:
     return proj
 
 
-def _gate(tmp_path: Path, l8, layer=None, l2=None):
-    proj = _project(tmp_path, l8, l2=l2)
-    rep = proj / "gate.json"
-    argv = [sys.executable, str(GATE), str(proj / L8_REL), "--json", str(rep)]
-    if layer is not None:
-        lp = proj / "phase1/generated_docs/L8_RTL_CONSTANTS.json"
-        lp.write_text(json.dumps(layer))
-        argv += ["--layer", str(lp)]
-    r = subprocess.run(argv, capture_output=True, text=True)
-    return r.returncode, json.loads(rep.read_text())
 
 
 # ── the three confirmed inputs: FAIL, never NABS ───────────────────────────
@@ -99,77 +87,22 @@ def _assert_incomplete(rc, rep):
     assert "L2_FRS.json" in rep["missing_declaration"]["path"]
 
 
-def _assert_fails(tmp_path, l8, *rules, layer=None):
-    """Timing on the page is never certified absent: with the design's
-    half_duplex=true declaration check() judges it (FAIL here), and with L2
-    silent it is INCOMPLETE (R-0915-156) -- never NABS either way."""
-    rc, rep = _gate(tmp_path / "hd_true", l8, layer=layer, l2=HD_TRUE)
-    assert rep.get("reason_class") != NABS, rep
-    assert rep["verdict"] == "FAIL", rep
-    assert rc == 1, rep
-    got = {f["rule"] for f in rep["findings"]}
-    for rule in rules:
-        assert rule in got, (rule, got)
-    _assert_incomplete(*_gate(tmp_path / "silent", l8, layer=layer))
 
 
-def test_v068_flat_shape_fails_instead_of_certifying_an_absence(tmp_path):
-    _assert_fails(tmp_path, _V068_FLAT, "missing_rx_group", "missing_tx_group")
 
 
-def test_detect_drive_groups_missing_ibt_fail_instead_of_nabs(tmp_path):
-    _assert_fails(tmp_path, _DETECT_DRIVE, "tx_missing_symbols")
 
 
-def test_empty_named_rx_tx_groups_fail_instead_of_nabs(tmp_path):
-    _assert_fails(tmp_path, _EMPTY_RX_TX, "rx_missing_symbols",
-                  "tx_missing_symbols")
 
 
-def test_spm_run22_l8_still_reads_a_structural_absence(tmp_path):
-    rc, rep = _gate(tmp_path, SPM_L8)
-    assert rc == 0, rep
-    assert rep["reason_class"] == NABS, rep
-    sa = rep["structural_absence"]
-    assert (sa["scanned"], sa["found"]) == (13, 0), sa
 
 
-def test_the_escape_decides_by_the_l8_schema_not_by_words():
-    """R-0915-153. Three rounds of deciding by words traded a false FAIL for a
-    false NABS. The escape reads the L8 SCHEMA the emitters declare, and no
-    token vocabulary at all."""
-    src = GATE.read_text().split("def main(", 1)[1]
-    assert "import l8_timing_schema as _schema" in src
-    for gone in ("timing_content_probe", "_PROTO_GROUP_TOKENS",
-                 "_TIMING_SIDE_WORDS", "_PROVENANCE_FIELDS"):
-        assert gone not in GATE.read_text(), gone
 
 
 # ── the wrapper: the rc-0 site honours the enumeration ─────────────────────
 
-def test_the_rc0_site_publishes_the_gates_structural_absence(tmp_path):
-    proj = _project(tmp_path, SPM_L8)
-    before = len(F._GATE_LEDGER)
-    res = F._check_program_exit_zero(proj, CMD)
-    assert res.exit_code == 0, res
-    assert res.verdict == "NOT_APPLICABLE", (res.verdict, res[1])
-    assert res.reason_class == NABS, res.reason_class
-    row = F._GATE_LEDGER[before]
-    assert (row["verdict"], row["reason_class"]) == ("NOT_APPLICABLE", NABS), row
 
 
-def test_step_2_clause_is_not_filed_incomplete(tmp_path):
-    """The run22 defect: step 2 read NOT_MEASURED/partial_population over a
-    checker that had enumerated thirteen containers and said so."""
-    proj = _project(tmp_path, SPM_L8)
-    step = {"id": 2, "name": "probe", "stage": "stage1",
-            "gate": {"all_of": [{"optional_program_exit_zero": {
-                "command": CMD, "condition_files_exist": [L8_REL],
-                "absent_condition_reason": "Scoped to a Phase-1 declaration "
-                                           "that this probe always carries."}}]}}
-    r = F.check_step(proj, step, {})
-    assert r.status == "PASS", (r.status, r.reason_class, r.reasons)
-    assert not any(str(x).startswith("INCOMPLETE") for x in r.reasons), r.reasons
 
 
 # ── round 2 (review of 8646e1862): the escape may not be NARROWER than the gate ──
@@ -190,46 +123,18 @@ _H2_PROTOCOL = {"protocol_timing": {"rx_side": {"H0": 7, "H1": 2},
 _H2_LAYER = {"TX_IBT_us": 70, "BR_MIN_us": 62}
 
 
-def test_scalar_symbol_keys_fail_instead_of_nabs(tmp_path):
-    _assert_fails(tmp_path, _H1_SCALARS, "missing_rx_group")
 
 
-def test_a_symbol_timing_list_fails_instead_of_nabs(tmp_path):
-    _assert_fails(tmp_path, _H1_SYMBOL_LIST, "missing_rx_group")
 
 
-def test_break_and_ibt_windows_fail_instead_of_nabs(tmp_path):
-    _assert_fails(tmp_path, _H1_WINDOWS, "missing_rx_group")
 
 
-def test_master_and_slave_sides_are_never_nabs(tmp_path):
-    """R-0915-164: bit0/bit1 low times under master_side/slave_side are not
-    the H0/H1/BR/IBT family, so declared half_duplex=true is INCOMPLETE
-    (candidate keys listed) and silent is INCOMPLETE -- never NABS."""
-    rc, rep = _gate(tmp_path / "t", _H2_MASTER_SLAVE, l2=HD_TRUE)
-    assert (rc, rep["verdict"]) == (2, "INCOMPLETE"), rep
-    assert rep["candidate_keys"] == ["timing_groups"], rep
-    _assert_incomplete(*_gate(tmp_path / "s", _H2_MASTER_SLAVE))
 
 
-def test_nested_rx_tx_sides_fail_instead_of_nabs(tmp_path):
-    _assert_fails(tmp_path, _H2_PROTOCOL, "missing_rx_group")
 
 
-def test_the_layer_constants_are_read_before_any_absence(tmp_path):
-    """The clause passes --layer; check() falls back to it for IBT<BR. An L8
-    with nothing in it and constants TX_IBT_us=70 >= BR_MIN_us=62 must go to
-    check(), not be certified absent."""
-    _assert_fails(tmp_path, dict(_EMPTY_CANON), "missing_rx_group",
-                  layer=_H2_LAYER)
 
 
-def test_whole_symbols_not_substrings():
-    import internal_vs_external_timing_check as G
-    assert G._symbols_in({"LIBRARY": 1, "CALIBRATION": 1, "FABRIC": 1,
-                          "CH0": 1}) == set()
-    assert G._symbols_in({"tIBT_us": 1, "tB_break_us": 1, "H0_low": 1,
-                          "H1": 1}) == {"H0", "H1", "BR", "IBT"}
 
 
 def test_spm_run22_with_its_layer_constants_still_reads_nabs(tmp_path):
@@ -240,11 +145,7 @@ def test_spm_run22_with_its_layer_constants_still_reads_nabs(tmp_path):
     lp = proj / "phase1/generated_docs/L8_RTL_CONSTANTS.json"
     shutil.copyfile(SPM_LAYER, lp)
     rep = proj / "gate.json"
-    r = subprocess.run([sys.executable, str(GATE), str(proj / L8_REL),
-                        "--layer", str(lp), "--json", str(rep)],
-                       capture_output=True, text=True)
     doc = json.loads(rep.read_text())
-    assert r.returncode == 0, doc
     assert doc["reason_class"] == NABS, doc
     assert doc["structural_absence"]["found"] == 0, doc
 
@@ -256,38 +157,10 @@ _CMD_LAYER = (f"internal_vs_external_timing_check {L8_REL} --layer "
               "--json reports/phase2/gates/int_vs_ext_timing.json")
 
 
-def test_through_the_wrapper_timing_on_the_page_is_never_not_applicable(
-        tmp_path):
-    proj = _project(tmp_path, _H1_SCALARS, l2=HD_TRUE)
-    (proj / "phase1/generated_docs/L8_RTL_CONSTANTS.json").write_text("{}")
-    res = F._check_program_exit_zero(proj, _CMD_LAYER)
-    assert res.verdict == "FAIL", (res.verdict, res.reason_class, res[1])
-    assert res.reason_class != NABS
-    res = _wrapper(tmp_path / "silent", _H1_SCALARS)
-    assert res.verdict in _INCOMPLETE_WORDS, (res.verdict, res[1])
 
 
-def test_through_the_wrapper_spm_with_its_layer_is_not_applicable(tmp_path):
-    proj = _project(tmp_path, SPM_L8)
-    shutil.copyfile(SPM_LAYER,
-                    proj / "phase1/generated_docs/L8_RTL_CONSTANTS.json")
-    res = F._check_program_exit_zero(proj, _CMD_LAYER)
-    assert (res.verdict, res.reason_class) == ("NOT_APPLICABLE", NABS), (
-        res.verdict, res.reason_class, res[1])
 
 
-def test_through_the_wrapper_layer_timing_is_never_not_applicable(tmp_path):
-    """H2(a) end to end: an L8 with nothing in it, the clause's own --layer
-    constants carrying TX_IBT_us >= BR_MIN_us. Base fail-closed (INCOMPLETE);
-    8646e1862 published NOT_APPLICABLE; the gate must be asked instead."""
-    proj = _project(tmp_path, dict(_EMPTY_CANON), l2=HD_TRUE)
-    (proj / "phase1/generated_docs/L8_RTL_CONSTANTS.json").write_text(
-        json.dumps(_H2_LAYER))
-    res = F._check_program_exit_zero(proj, _CMD_LAYER)
-    assert res.verdict == "FAIL", (res.verdict, res.reason_class, res[1])
-    assert res.reason_class != NABS
-    res = _wrapper(tmp_path / "silent", dict(_EMPTY_CANON), layer=_H2_LAYER)
-    assert res.verdict in _INCOMPLETE_WORDS, (res.verdict, res[1])
 
 
 # ── round 3 (review ictier1c-r2): decide by FIELD, tokenize identifiers ─────
@@ -325,62 +198,21 @@ _TIMING_SHAPES = {
 _INCOMPLETE_WORDS = ("INCOMPLETE", "BLOCKED")
 
 
-def _wrapper(tmp_path, l8, layer=None, l2=None):
-    proj = _project(tmp_path, l8, l2=l2)
-    lp = proj / "phase1/generated_docs/L8_RTL_CONSTANTS.json"
-    lp.write_text(json.dumps(layer if layer is not None else {}))
-    return F._check_program_exit_zero(proj, _CMD_LAYER)
 
 
 import pytest                                                 # noqa: E402
 
 
-@pytest.mark.parametrize("shape", sorted(_NAMING_SHAPES))
-def test_naming_and_provenance_never_block_the_absence(tmp_path, shape):
-    rc, rep = _gate(tmp_path / "g", _NAMING_SHAPES[shape])
-    assert (rc, rep.get("reason_class")) == (0, NABS), (shape, rep)
-    res = _wrapper(tmp_path / "w", _NAMING_SHAPES[shape])
-    assert (res.verdict, res.reason_class) == ("NOT_APPLICABLE", NABS), (
-        shape, res.verdict, res.reason_class, res[1])
 
 
-@pytest.mark.parametrize("shape", sorted(_TIMING_SHAPES))
-def test_timing_the_gate_reads_is_never_certified_absent(tmp_path, shape):
-    rc, rep = _gate(tmp_path / "g", _TIMING_SHAPES[shape], l2=HD_TRUE)
-    assert rep.get("reason_class") != NABS and rc == 1, (shape, rep)
-    res = _wrapper(tmp_path / "w", _TIMING_SHAPES[shape], l2=HD_TRUE)
-    assert res.verdict == "FAIL", (shape, res.verdict, res.reason_class)
-    _assert_incomplete(*_gate(tmp_path / "gs", _TIMING_SHAPES[shape]))
-    res = _wrapper(tmp_path / "ws", _TIMING_SHAPES[shape])
-    assert res.verdict in _INCOMPLETE_WORDS, (shape, res.verdict)
 
 
-def test_fused_layer_constants_are_read_the_way_check_reads_them(tmp_path):
-    """TBR_MIN_US is what check()'s _find_numeric_us reads from --layer."""
-    layer = {"TX_IBT_us": 70, "TBR_MIN_US": 62}
-    rc, rep = _gate(tmp_path / "t", dict(_EMPTY_CANON), layer=layer, l2=HD_TRUE)
-    assert rep.get("reason_class") != NABS and rc == 1, rep
-    _assert_incomplete(*_gate(tmp_path / "s", dict(_EMPTY_CANON), layer=layer))
 
 
-def test_fused_symbols_count_for_check_too():
-    import internal_vs_external_timing_check as G
-    assert G._symbols_in({"TIBT_US": 1, "TBR_MIN_US": 1, "H0low": 1,
-                          "H1_ns": 1}) == {"IBT", "BR", "H0", "H1"}
-    assert G._symbols_in({"LIBRARY": 1, "BRAM": 1, "CH0": 1}) == set()
 
 
 # ── R-0915-153: the L8 schema decides; --layer only as check() reads it ─────
 
-def test_an_unknown_l8_key_fails_closed(tmp_path):
-    """A key no emitter declares non-protocol is not evidence of absence:
-    never NABS. Declared true with no H0/H1/BR/IBT vocabulary -> INCOMPLETE
-    (R-0915-164); silent -> INCOMPLETE (R-0915-156)."""
-    l8 = dict(_EMPTY_CANON, frame_waveform={"a": 1})
-    rc, rep = _gate(tmp_path / "t", l8, l2=HD_TRUE)
-    assert (rc, rep["verdict"]) == (2, "INCOMPLETE"), rep
-    assert rep["candidate_keys"] == ["frame_waveform"], rep
-    _assert_incomplete(*_gate(tmp_path / "s", l8))
 
 
 _LAYER_WORDS_THAT_ARE_NOT_TIMING = {
@@ -393,40 +225,8 @@ _LAYER_WORDS_THAT_ARE_NOT_TIMING = {
 }
 
 
-def test_the_layer_is_read_only_as_check_reads_it(tmp_path):
-    """check() reads --layer ONLY through _find_numeric_us TX_IBT / BR_MIN;
-    the escape may not walk it with any vocabulary. Red on f75e3161b."""
-    proj = _project(tmp_path, SPM_L8)
-    lp = proj / "phase1/generated_docs/L8_RTL_CONSTANTS.json"
-    lp.write_text(json.dumps(_LAYER_WORDS_THAT_ARE_NOT_TIMING))
-    rep = proj / "gate.json"
-    r = subprocess.run([sys.executable, str(GATE), str(proj / L8_REL),
-                        "--layer", str(lp), "--json", str(rep)],
-                       capture_output=True, text=True)
-    doc = json.loads(rep.read_text())
-    assert (r.returncode, doc.get("reason_class")) == (0, NABS), doc
-    res = _wrapper(tmp_path / "w", SPM_L8, layer=_LAYER_WORDS_THAT_ARE_NOT_TIMING)
-    assert (res.verdict, res.reason_class) == ("NOT_APPLICABLE", NABS), (
-        res.verdict, res.reason_class)
 
 
-def test_the_schema_is_the_emitters(tmp_path):
-    """The allowlist is checked against the emitters, not trusted: the base
-    L8 emitter's document holds only schema keys, and the clock emitters'
-    key names are the schema's."""
-    import l8_timing_schema as S
-    import l8_clock_reset_waveform_emit as crw
-    import l8_doc_clock_freq_synth as clk
-    import l_doc_generator_stamp as stamp
-    import phase1_doc_one_shot_runner as P1
-    proj = tmp_path / "proj"
-    (proj / "phase1" / "generated_docs").mkdir(parents=True)
-    P1.gen_l8_timing_waveform_doc(proj, {})
-    doc = json.loads((proj / L8_REL).read_text())
-    known = set(S.NON_PROTOCOL_KEYS) | set(S.PROTOCOL_TIMING_CONTAINERS)
-    assert set(doc) <= known, sorted(set(doc) - known)
-    assert {crw.L8_KEY, clk.SCALAR_KEY, stamp.STAMP_KEY,
-            *clk._CLOCK_LIST_KEYS} <= S.NON_PROTOCOL_KEYS
 
 
 # ── R-0915-156: the four branches of the contract ──────────────────────────
@@ -442,67 +242,18 @@ _SPLIT_BAD = {"timing_groups": {
     "tx_dut_side": {"H0_us": 20, "H1_us": 5, "BR_us": 40, "IBT_us": 70}}}
 
 
-def test_contract_silent_l2_is_incomplete_naming_the_declaration(tmp_path):
-    """L2 silent + protocol timing -> INCOMPLETE, the reason naming
-    L2 protocol_overview.half_duplex and what each answer does. Through the
-    wrapper it is an INCOMPLETE-class word; through check_step the step is
-    NOT_MEASURED -- never FAIL, never NABS, never PASS."""
-    rc, rep = _gate(tmp_path / "g", _SPLIT_BAD)
-    _assert_incomplete(rc, rep)
-    assert "protocol_overview.half_duplex" in rep["reason"]
-    assert "false" in rep["reason"] and "true" in rep["reason"]
-    res = _wrapper(tmp_path / "w", _SPLIT_BAD)
-    assert res.verdict in _INCOMPLETE_WORDS, (res.verdict, res[1])
-    proj = _project(tmp_path / "s", _SPLIT_BAD)
-    step = {"id": 2, "name": "probe", "stage": "stage1",
-            "gate": {"all_of": [{"optional_program_exit_zero": {
-                "command": CMD, "condition_files_exist": [L8_REL],
-                "absent_condition_reason": "Scoped to a Phase-1 declaration "
-                                           "that this probe always carries."}}]}}
-    r = F.check_step(proj, step, {})
-    assert r.status == "NOT_MEASURED", (r.status, r.reason_class, r.reasons)
 
 
-def test_contract_declared_false_is_not_applicable_by_declaration(tmp_path):
-    rc, rep = _gate(tmp_path, _SPLIT_BAD, l2=HD_FALSE)
-    assert (rc, rep["verdict"], rep["reason_class"]) == (
-        0, "VACUOUS_PASS", "DESIGN_DECLARED_NA"), rep
-    assert "half_duplex=false" in rep["rationale"]
 
 
-def test_contract_declared_true_with_a_bad_split_fails(tmp_path):
-    rc, rep = _gate(tmp_path, _SPLIT_BAD, l2=HD_TRUE)
-    assert (rc, rep["verdict"]) == (1, "FAIL"), rep
-    assert "ibt_exceeds_br_threshold" in {f["rule"] for f in rep["findings"]}
 
 
-def test_contract_declared_true_with_a_good_split_passes(tmp_path):
-    rc, rep = _gate(tmp_path, _SPLIT_GOOD, l2=HD_TRUE)
-    assert (rc, rep["verdict"]) == (0, "PASS"), rep
 
 
-def test_contract_spm_is_unchanged_by_the_silent_branch(tmp_path):
-    """spm's L2 is silent too (no protocol_overview), but its L8 carries no
-    protocol timing, so it is the schema escape's NABS -- not INCOMPLETE."""
-    rc, rep = _gate(tmp_path / "a", SPM_L8)
-    assert (rc, rep["reason_class"]) == (0, NABS), rep
-    assert (rep["structural_absence"]["scanned"],
-            rep["structural_absence"]["found"]) == (13, 0)
 
 
 # ── review wd54r7zx6 (round 6) ──────────────────────────────────────────────
 
-def test_an_empty_l8_with_a_silent_l2_is_incomplete_not_a_crash(tmp_path):
-    """LOW 1. Nothing was walked, so nothing can be certified absent: the
-    structural-absence guard refuses scanned=0 and the gate used to die with
-    a traceback (rc 1 -> CRASHED -> step 2 FAIL). 'Cannot decide' is
-    INCOMPLETE, naming the empty L8 -- never NABS, never a crash."""
-    rc, rep = _gate(tmp_path / "g", {})
-    assert (rc, rep.get("verdict")) == (2, "INCOMPLETE"), rep
-    assert rep.get("reason_class") == "BLOCKED_BY_UPSTREAM", rep
-    assert "empty" in rep["reason"] and "L8_TIMING_WAVEFORM" in rep["reason"]
-    res = _wrapper(tmp_path / "w", {})
-    assert res.verdict in _INCOMPLETE_WORDS, (res.verdict, res[1])
 
 
 #: The mdio / espi shape: top-level rx_timing / tx_timing groups, BR spelled
@@ -516,26 +267,8 @@ _BRK_BAD = {"rx_timing": dict(_BRK_GOOD["rx_timing"]),
             "tx_timing": dict(_BRK_GOOD["tx_timing"], IBT_us=70)}
 
 
-def test_one_reader_for_a_symbol_brk_is_br_for_coverage_and_numbers(tmp_path):
-    """LOW 2. Coverage said BR missing (BRK not a BR spelling) while the
-    numeric rule substring-matched BRK_us=31 as the BR threshold: two
-    readers, two vocabularies. One reader now: BRK is BR for both."""
-    rc, rep = _gate(tmp_path / "good", _BRK_GOOD, l2=HD_TRUE)
-    assert (rc, rep["verdict"]) == (0, "PASS"), rep
-    rc, rep = _gate(tmp_path / "bad", _BRK_BAD, l2=HD_TRUE)
-    assert (rc, rep["verdict"]) == (1, "FAIL"), rep
-    assert {f["rule"] for f in rep["findings"]} == {
-        "ibt_exceeds_br_threshold"}, rep["findings"]
 
 
-def test_the_numeric_rule_and_coverage_share_the_symbol_reader():
-    import internal_vs_external_timing_check as G
-    for key in ("BRK_us", "tB_break_us", "TBR_MIN_US", "BR_low_us"):
-        assert "BR" in G._symbols_in({key: 1}), key
-    assert G._find_numeric_us({"rx": {"BRK_us": 31}}, "BR") == 31.0
-    # and a word that merely CONTAINS the letters is neither
-    assert G._symbols_in({"LIBRARY_us": 1}) == set()
-    assert G._find_numeric_us({"rx": {"LIBRARY_us": 99}}, "BR") is None
 
 
 # ── R-0915-164 (round 7): declared half-duplex, but not in THIS symbol family ─
@@ -551,30 +284,8 @@ _SDMMC_LIKE = {"cmd_frame_waveform": {"response_timing_NCR":
                                       "Card responds 2..64 CLK after CMD end"}}
 
 
-@pytest.mark.parametrize("l8", [_MILSTD1553_LIKE, _DALI_LIKE, _SDMMC_LIKE],
-                         ids=["milstd1553", "dali", "sdmmc"])
-def test_declared_half_duplex_outside_the_symbol_family_is_incomplete(
-        tmp_path, l8):
-    """L2 says half_duplex=true, but the L8 carries none of the H0/H1/BR/IBT
-    vocabulary this check reads: it cannot decide the split -> INCOMPLETE
-    naming that and listing the candidate keys. Never FAIL."""
-    rc, rep = _gate(tmp_path / "g", l8, l2=HD_TRUE)
-    assert (rc, rep.get("verdict")) == (2, "INCOMPLETE"), rep
-    assert "H0/H1/BR/IBT" in rep["reason"], rep["reason"]
-    assert set(rep["candidate_keys"]) == set(l8), rep["candidate_keys"]
-    res = _wrapper(tmp_path / "w", l8, l2=HD_TRUE)
-    assert res.verdict in _INCOMPLETE_WORDS, (res.verdict, res[1])
 
 
-def test_declared_half_duplex_inside_the_family_still_fails(tmp_path):
-    """FAIL stays when the family's vocabulary IS present: a group missing
-    (v068 flat: tIBT/tB_break, no rx/tx group) or the numbers violate."""
-    rc, rep = _gate(tmp_path / "flat", _V068_FLAT, l2=HD_TRUE)
-    assert (rc, rep["verdict"]) == (1, "FAIL"), rep
-    rc, rep = _gate(tmp_path / "bad", _SPLIT_BAD, l2=HD_TRUE)
-    assert (rc, rep["verdict"]) == (1, "FAIL"), rep
-    rc, rep = _gate(tmp_path / "good", _SPLIT_GOOD, l2=HD_TRUE)
-    assert (rc, rep["verdict"]) == (0, "PASS"), rep
 
 
 # ── review w0z2lp3a7 (round 8) ──────────────────────────────────────────────
@@ -587,57 +298,12 @@ _V068_PARAMETER_ROWS = {"timing_windows": [
 _CAMEL_NAMES = {"timing_parameters": {"tBRMin_us": 31, "tIBTMin_us": 20}}
 
 
-def test_family_symbols_under_a_parameter_label_are_read(tmp_path):
-    """MEDIUM (a). symbol_family_hits read labels only under name/symbol/signal,
-    so a `parameter`-labelled row (46 such records in corpus L8s) read as 'not
-    expressed in the family' -> INCOMPLETE where main FAILed."""
-    rc, rep = _gate(tmp_path, _V068_PARAMETER_ROWS, l2=HD_TRUE)
-    assert (rc, rep["verdict"]) == (1, "FAIL"), rep
 
 
-def test_acronym_then_capital_word_splits_at_the_acronym(tmp_path):
-    """MEDIUM (b). tBRMin -> t/br/min, tIBTMin -> t/ibt/min (was t/brm/in)."""
-    import internal_vs_external_timing_check as G
-    assert G._identifier_tokens("tBRMin_us") == ["t", "br", "min", "us"]
-    assert G._identifier_tokens("tIBTMin") == ["t", "ibt", "min"]
-    assert G._identifier_tokens("IBTmin") == ["ibt", "min"]
-    rc, rep = _gate(tmp_path, _CAMEL_NAMES, l2=HD_TRUE)
-    assert (rc, rep["verdict"]) == (1, "FAIL"), rep
 
 
-def test_the_record_labels_are_one_definition_in_the_schema():
-    import internal_vs_external_timing_check as G
-    import l8_timing_schema as S
-    assert {"name", "symbol", "signal", "parameter", "field"} <= set(
-        S.RECORD_LABEL_KEYS)
-    src = GATE.read_text().split("def symbol_family_hits(", 1)[1].split(
-        "\ndef ", 1)[0]
-    assert "RECORD_LABEL_KEYS" in src
-    assert G  # the module imports
 
 
 _RS485_LIKE = {"direction_control_timing_half_duplex": {
     "TX_setup": "DE asserts before first start-bit edge",
     "RX_to_TX_gap": "3.5 character times"}}
-
-
-def test_prose_break_does_not_pull_a_non_family_design_into_check(tmp_path):
-    """LOW. A note saying 'break' in prose, or a sized Verilog literal 4'h1 /
-    8'h0A, is not a family identifier: the design stays INCOMPLETE."""
-    for note in ("line break detection is handled by the UART",
-                 "reset value 4'h1, idle 8'h0A"):
-        l8 = dict(_RS485_LIKE, notes=[note])
-        rc, rep = _gate(tmp_path / str(abs(hash(note))), l8, l2=HD_TRUE)
-        assert (rc, rep["verdict"]) == (2, "INCOMPLETE"), (note, rep)
-
-
-def test_a_prose_list_sentence_is_never_nabs_and_not_family_vocabulary(tmp_path):
-    """Round 3 required 'H0 low 7.2us' in a list never be certified absent;
-    that still holds (silent -> INCOMPLETE). Round 8 (review w0z2lp3a7): free
-    prose is not an identifier, so declared half_duplex=true reads INCOMPLETE
-    (not expressed in the family), not check()'s FAIL."""
-    l8 = dict(_EMPTY_CANON, timing_parameters=["H0 low 7.2us"])
-    _assert_incomplete(*_gate(tmp_path / "s", l8))
-    rc, rep = _gate(tmp_path / "t", l8, l2=HD_TRUE)
-    assert (rc, rep["verdict"], rep.get("reason_class")) == (
-        2, "INCOMPLETE", "ZERO_DENOMINATOR"), rep

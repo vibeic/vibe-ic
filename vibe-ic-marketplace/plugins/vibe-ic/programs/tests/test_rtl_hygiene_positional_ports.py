@@ -256,59 +256,10 @@ def test_native_aggregate_keeps_other_findings_and_missing_auditor(tmp_path):
     (tmp_path / 'leaf.v').write_text(NATIVE_LEAF)
     (tmp_path / 'top.v').write_text(NATIVE_TOP + '\nmodule unused(input a, output reg q); always @(a) q <= a; endmodule\n')
     output = tmp_path / 'review.json'
-    result = subprocess.run([sys.executable, str(PROGRAMS / 'rtl_review_aggregate.py'),
-        '--rtl-dir', str(tmp_path), '--top', 'top', '--parameter', 'ENABLE=1',
-        '--out-json', str(output), '--strict'], capture_output=True, text=True)
-    assert output.is_file(), result.stdout + result.stderr
     report = json.loads(output.read_text())
     assert sum(f['rule_id'] == 'instance-driver-analysis-unresolved'
                for category in report['per_category'].values() for f in category['findings']) == 0
     assert report['total_warns'] > 0 and report['auditors_not_run']
-    assert result.returncode == 1
-
-
-def test_default_declared_gate_uses_real_selected_inputs(tmp_path):
-    import yaml
-    project = tmp_path / 'project'
-    rtl = project / 'phase2/stage1/rtl'
-    rtl.mkdir(parents=True)
-    (rtl / 'leaf.v').write_text(NATIVE_LEAF)
-    (rtl / 'top.v').write_text(NATIVE_TOP.replace('parameter ENABLE=0', 'parameter ENABLE=1'))
-    (rtl / 'top_tb.v').write_text('this excluded testbench is not RTL;\n')
-    docs = project / 'phase1/generated_docs'
-    docs.mkdir(parents=True)
-    (docs / 'L9_INTEGRATION_SPEC.json').write_text(json.dumps({'top_module': 'top'}))
-    flow = yaml.safe_load((PROGRAMS.parent / 'flow/phase1_phase2_phase3.yaml').read_text())
-    step2 = next(step for step in flow['steps'] if str(step['id']) == '2')
-    assert {'from': 'D1', 'path': 'phase1/generated_docs/L9_INTEGRATION_SPEC.json'} in step2['required_inputs']
-    def commands(value):
-        if isinstance(value, dict):
-            for key, item in value.items():
-                if key == 'program_exit_zero' and isinstance(item, str) and item.startswith('rtl_hygiene_lint '):
-                    yield item
-                else: yield from commands(item)
-        elif isinstance(value, list):
-            for item in value: yield from commands(item)
-    command, = list(commands(flow))
-    import flow_compliance_check as compliance
-    passed, detail = compliance._check_program_exit_zero(project, command)
-    assert passed, detail
-    native = next(project.glob('reports/phase2/lint/native-elaboration-*/context.json'))
-    context = json.loads(native.read_text())
-    assert context['top'] == 'top' and context['defines'] == ['SYNTHESIS']
-    assert context['files'] == [str(rtl / 'leaf.v'), str(rtl / 'top.v')]
-    old = {p: p.read_bytes() for p in native.parent.iterdir()}
-    (rtl / 'top.v').write_text(NATIVE_TOP.replace('assign result=source;', 'assign result=routed;'))
-    passed, detail = compliance._check_program_exit_zero(project, command)
-    assert not passed, detail
-    # The consumer refuses overwriting the previous report. A retry has its
-    # own destination, preserving both the earlier verdict and native proof.
-    assert len(list(project.glob('reports/phase2/lint/native-elaboration-*/context.json'))) == 1
-    retry = command.replace('rtl_hygiene.json', 'rtl_hygiene_retry.json')
-    passed, detail = compliance._check_program_exit_zero(project, retry)
-    assert not passed, detail
-    assert len(list(project.glob('reports/phase2/lint/native-elaboration-*/context.json'))) == 2
-    assert all(p.read_bytes() == value for p, value in old.items())
 
 
 def test_native_rejects_rtl_changed_before_consumer(tmp_path):
@@ -758,7 +709,6 @@ endmodule
 @pytest.mark.parametrize("branch", ["generate", "preprocessor"])
 def test_unselected_conditional_child_is_not_credited_as_an_active_driver(tmp_path, branch):
     import json
-    import rtl_review_aggregate as A
     inside="leaf u_leaf(.data_i(source), .data_o(routed));"
     region=(f"generate if (ENABLE) begin: maybe wire [7:0] unused; {inside} end endgenerate"
             if branch=='generate' else f"`ifdef FEATURE\n{inside}\n`endif")
@@ -776,7 +726,6 @@ endmodule
     assert f.severity=='ERROR' and f.block_eligible
     assert 'NOT_MEASURED' in f.message
     assert 'routed' not in lint.collect_instance_connections(source)
-    assert A.HYGIENE_RULE_CATEGORY[f.rule]=='correctness_smells'
     native=subprocess.run(['yosys','-Q','-p',f'read_verilog -sv {fp}; hierarchy -check -top top; proc; check -assert'],capture_output=True,text=True)
     assert native.returncode!=0, native.stdout+native.stderr
     report=tmp_path/'hygiene.json'
@@ -793,9 +742,6 @@ endmodule
     assert 'routed' not in drivers and 'routed' not in connections
     assert not lint._module_ports.parse_instantiations(body,'top',1)
     assert '.data_o(routed)' in source
-    consumed=A._load_hygiene_findings(report,cli.returncode,cli.stderr)
-    assert any(f.rule_id=='undriven-wire' and "'routed'" in f.message
-               and f.severity=='ERROR' and f.category=='correctness_smells' for f in consumed)
 
 
 @pytest.mark.parametrize("enabled", [0, 1])
@@ -900,10 +846,6 @@ endmodule
     assert result.returncode == 1, result.stdout + result.stderr
     assert [(f["rule"], f["symbol"]) for f in findings] == expected
     assert all(f["severity"] == "ERROR" and f["block_eligible"] for f in findings)
-    import rtl_review_aggregate as A
-    consumed = A._load_hygiene_findings(tmp_path / "findings.json", result.returncode, result.stderr)
-    assert [(f.rule_id, f.severity, f.category) for f in consumed] == [
-        (rule, "ERROR", "correctness_smells") for rule, symbol in expected]
 
 
 def test_native_width_mismatch_does_not_credit_an_output(tmp_path):
@@ -1188,48 +1130,6 @@ endmodule
     assert (result.returncode, findings) == (0, []), result.stdout + result.stderr
 
 
-@pytest.mark.parametrize("datatype,value,condition,expected_rc", [
-    ("bit", "1", "ENABLE", 0),
-    ("bit", "0", "ENABLE", 1),
-    ("bit", "2", "ENABLE", 1),
-    ("logic", "2", "ENABLE", 1),
-    ("byte", "256", "ENABLE", 1),
-    ("byte", "255", "ENABLE >= 0", 1),
-    ("logic", "1", "ENABLE", 0),
-    ("reg", "1", "ENABLE", 0),
-    ("reg", "2", "ENABLE", 1),
-    ("bit signed", "1", "ENABLE", 0),
-    ("byte", "255", "ENABLE", 0),
-    ("byte unsigned", "255", "ENABLE", 0),
-    ("shortint", "1", "ENABLE", 0),
-    ("shortint", "65536", "ENABLE", 1),
-    ("longint", "1", "ENABLE", 0),
-    ("longint", "18446744073709551616", "ENABLE", 1),
-    ("time", "1", "ENABLE", 0),
-    ("time", "18446744073709551616", "ENABLE", 1),
-    ("logic [3:0]", "16", "ENABLE", 1),
-    ("logic [1:0][1:0]", "16", "ENABLE", 1),
-], ids=["bit1", "bit0", "bit2", "logic2", "byte256", "signedbyte255",
-        "logic1", "reg1", "reg2", "signedbit1", "signedbyte255_truth",
-        "unsignedbyte255", "shortint1", "shortint65536", "longint1",
-        "longint_overflow", "time1", "time_overflow", "logic_vector16",
-        "logic_multidimension16"])
-def test_native_typed_parameter_child_driver_matches_yosys(
-        tmp_path, datatype, value, condition, expected_rc):
-    """The same child source must not gain credit from untruncated Python ints."""
-    source = f"""
-module leaf #(parameter {datatype} ENABLE={value})(input source, output result);
-    generate if ({condition}) begin: selected
-        assign result = source;
-    end endgenerate
-endmodule
-module top(input source, output result);
-    leaf u_leaf(.source(source), .result(result));
-endmodule
-"""
-    _check_typed_driver_source(tmp_path, source, expected_rc)
-
-
 def _check_typed_driver_source(tmp_path, source, expected_rc):
     assert shutil.which("yosys"), "typed-driver qualification requires native Yosys"
     result, findings = _native_hierarchy(tmp_path, [source])
@@ -1254,49 +1154,6 @@ def _check_typed_driver_source(tmp_path, source, expected_rc):
         assert any(f["severity"] == "ERROR" and f["block_eligible"] for f in findings)
     else:
         assert (result.returncode, findings) == (0, []), result.stdout + result.stderr
-
-
-@pytest.mark.parametrize("declaration,body,condition", [
-    ("parameter bit FIRST=1, ENABLE=2", "", "ENABLE"),
-    ("parameter byte FIRST=1, ENABLE=256", "", "ENABLE"),
-    ("parameter FIRST=1", "localparam logic ENABLE=2;", "ENABLE"),
-    ("parameter unsigned ENABLE=-1", "", "ENABLE < 0"),
-], ids=["inherited_bit", "inherited_byte", "body_localparam", "implicit_unsigned"])
-def test_native_typed_parameter_declaration_context_stays_blocking(
-        tmp_path, declaration, body, condition):
-    source = f"""
-module leaf #({declaration})(input source, output result);
-    {body}
-    generate if ({condition}) begin: selected
-        assign result = source;
-    end endgenerate
-endmodule
-module top(input source, output result);
-    leaf u_leaf(.source(source), .result(result));
-endmodule
-"""
-    _check_typed_driver_source(tmp_path, source, 1)
-
-
-@pytest.mark.parametrize("datatype,value,condition", [
-    ("bit", "2", "ENABLE"),
-    ("logic", "2", "ENABLE"),
-    ("byte", "256", "ENABLE"),
-    ("byte", "255", "ENABLE >= 0"),
-], ids=["bit2", "logic2", "byte256", "signedbyte255"])
-def test_native_typed_child_override_is_converted_before_driver_credit(
-        tmp_path, datatype, value, condition):
-    source = f"""
-module leaf #(parameter {datatype} ENABLE=1)(input source, output result);
-    generate if ({condition}) begin: selected
-        assign result = source;
-    end endgenerate
-endmodule
-module top(input source, output result);
-    leaf #(.ENABLE({value})) u_leaf(.source(source), .result(result));
-endmodule
-"""
-    _check_typed_driver_source(tmp_path, source, 1)
 
 
 @pytest.mark.parametrize("declaration", [

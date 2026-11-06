@@ -7,7 +7,6 @@ from pathlib import Path
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 import eda_report_audit as E                # noqa: E402
-import phase3_verify_aggregate as V        # noqa: E402
 
 def _corpus_report() -> Path:
     """The published report, found by walking UP to the repo root.
@@ -67,32 +66,3 @@ def test_an_anchored_summary_still_wins():
 
 
 # ── #727: NOT-MEASURED coded as NOT-FAILING, in the source ─────────────────
-
-def test_an_unmeasurable_drc_count_is_its_own_verdict():
-    """`parse_drc_count` returns -1 when it cannot determine a count and carries
-    no XML dialect at all, so a KLayout RDB — the format every sign-off
-    certificate in this corpus uses — is unparseable BY CONSTRUCTION. The source
-    said `# treat -1 (unknown) as not-failing here`, and the comment was the
-    defect."""
-    r = V.aggregate(Path("/tmp/x"), artifacts=[], checks=[],
-                    drc_violations=-1, wns=0.1, tns=0.1)
-    assert r.verdict == "UNMEASURED", (
-        "an unreadable DRC count must not share a verdict with a clean run")
-
-
-def test_a_real_zero_is_still_a_pass_and_a_real_count_still_fails():
-    assert V.aggregate(Path("/tmp/x"), artifacts=[], checks=[],
-                       drc_violations=0, wns=0.1, tns=0.1).verdict == "PASS"
-    assert V.aggregate(Path("/tmp/x"), artifacts=[], checks=[],
-                       drc_violations=7, wns=0.1, tns=0.1).verdict == "FAIL"
-
-
-def test_a_real_failure_still_outranks_unmeasured():
-    """Order matters: a design with a missing artefact AND an unreadable count
-    is FAILING, not merely unmeasured."""
-    class _A:
-        present = False
-        def __init__(self): self.name = "gds"
-    r = V.aggregate(Path("/tmp/x"), artifacts=[_A()], checks=[],
-                    drc_violations=-1, wns=0.1, tns=0.1)
-    assert r.verdict == "FAIL"

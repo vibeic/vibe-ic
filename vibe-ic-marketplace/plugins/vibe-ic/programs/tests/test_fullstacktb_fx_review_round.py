@@ -39,7 +39,6 @@ sys.path.insert(0, str(PROGRAMS))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import bit_level_full_stack_tb_check as gate  # noqa: E402
-import flow_compliance_check as fcc  # noqa: E402
 import reset_invariant_oracle_tb_gen as riv  # noqa: E402
 import test_fullstacktb_functional_population as base  # noqa: E402
 
@@ -58,55 +57,13 @@ def arith_class(monkeypatch):
                         lambda project: "digital_arithmetic_primitive")
 
 
-def _step5(reasons):
-    return fcc.StepResult(id=5, name="Formal", stage="stage1", status="FAIL",
-                          reasons=list(reasons))
 
 
 # ===========================================================================
 # HIGH — a measured functional FAIL keeps Step 5 in `failing`
 # ===========================================================================
-def test_a_measured_functional_fail_is_not_informational(tmp_path,
-                                                         arith_class):
-    """Through the REAL clause evaluation: the gate runs as the flow runs it,
-    exits 1 on a case that disagreed through the chip top, and the step that
-    carries that failure must not be excluded as informational."""
-    proj = base._mk_project(tmp_path, die=True)
-    sim = base._FakeSim(lambda case, nv: (nv - 1, nv)
-                        if case == "corner_operand" else (nv, nv))
-    rec = _fsf().generate(proj, "ctr", dispatch=sim,
-                          model_resolver=base._resolver)
-    assert rec["verdict"] == "FAIL"
-    passed, reasons = fcc._evaluate_gate(proj, {"program_exit_zero": _GATE_CMD})
-    assert passed is False
-    assert any(r.startswith("program failed:") for r in reasons)
-    assert fcc._step_failure_is_informational_only(_step5(reasons)) is False
-    assert any(r.startswith(fcc._INFORMATIONAL_MEASURED_FAIL_PREFIX)
-               and "functional_full_stack_mismatch" in r for r in reasons)
 
 
-def test_the_legacy_skeleton_failure_stays_informational(tmp_path):
-    """KNOWN-NEGATIVE: a failing report with no typed verdict (the legacy
-    opcode-skeleton check) or a coverage-gap verdict keeps the name-keyed
-    exclusion exactly as before."""
-    rep = tmp_path / "reports/phase2/gates/bit_level_full_stack.json"
-    rep.parent.mkdir(parents=True)
-    for body in ({"pass": False, "findings": ["rule 1: sim_full_stack/ "
-                                               "missing"]},
-                 {"pass": False, "verdict": "FUNCTIONAL_COVERAGE_GAP",
-                  "rule": "register_map_protocol_unsynthesized"}):
-        rep.write_text(json.dumps(body))
-        assert fcc._informational_gate_measured_fail(tmp_path, _GATE_CMD) \
-            is None
-        assert fcc._step_failure_is_informational_only(_step5(
-            [f"program failed: {_GATE_CMD}", "output: {"])) is True
-    # a gate OUTSIDE the informational set never gets the line, whatever it says
-    rep.write_text(json.dumps({"verdict": "FAIL"}))
-    assert fcc._informational_gate_measured_fail(
-        tmp_path, "some_real_gate . --json "
-                  "reports/phase2/gates/bit_level_full_stack.json") is None
-    line = fcc._informational_gate_measured_fail(tmp_path, _GATE_CMD)
-    assert line and line.startswith(fcc._INFORMATIONAL_MEASURED_FAIL_PREFIX)
 
 
 # ===========================================================================

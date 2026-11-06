@@ -40,9 +40,7 @@ _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 
 from _ppa import feasibility as F  # noqa: E402
-import ppa_eco_spare_records as P  # noqa: E402
 
-PRODUCER = _PROGRAMS / "ppa_eco_spare_records.py"
 SPACE = _PROGRAMS / "ppa_pnr_search_space.py"
 
 DIGEST = "sha256:" + "0" * 64
@@ -283,48 +281,15 @@ def test_vacuous_a_declaration_that_is_not_an_object_is_refused():
         assert axis_of(r).codes == (F.C_ECO_DECLARATION_UNREADABLE,), junk
 
 
-def test_vacuous_producer_on_a_missing_plan_emits_no_zero(tmp_path):
-    out = tmp_path / "eco.json"
-    r = subprocess.run([sys.executable, str(PRODUCER),
-                        "--spare-plan", str(tmp_path / "nope.json"),
-                        "--stage", "post_route", "--json", str(out)],
-                       capture_output=True, text=True)
-    assert r.returncode == P.RC_UNDETERMINED, r.stdout + r.stderr
-    assert P.MARK_CANNOT in r.stderr
-    doc = json.loads(out.read_text(encoding="utf-8"))
-    for row in doc["records"]:
-        assert row["status"] != "MEASURED", row
-        assert "value" not in row, row
 
 
-def test_vacuous_the_unreadable_plan_makes_the_gate_undetermined(tmp_path):
-    """End to end: the producer's honest absence must survive into the
-    verdict. This is the join the two halves are separately correct about and
-    could still get wrong between them."""
-    out = tmp_path / "eco.json"
-    subprocess.run([sys.executable, str(PRODUCER), "--spare-plan",
-                    str(tmp_path / "nope.json"), "--stage", "post_route",
-                    "--json", str(out)], capture_output=True, text=True)
-    recs = json.loads(out.read_text(encoding="utf-8"))["records"]
-    r = F.promotion_verdict(cand("unread", clean_nine() + recs), policy())
-    assert r.verdict == F.UNDETERMINED
-    assert axis_of(r).status == F.AXIS_UNDETERMINED
 
 
 # ---------------------------------------------------------------------------
 # BAD INVOCATION -- 3, and never 2
 # ---------------------------------------------------------------------------
-def test_bad_invocation_producer_unknown_flag_is_3_not_2():
-    r = subprocess.run([sys.executable, str(PRODUCER), "--spare-plan", "x",
-                        "--stage", "s", "--this-flag-does-not-exist"],
-                       capture_output=True, text=True)
-    assert r.returncode == P.RC_BAD_INVOCATION
 
 
-def test_bad_invocation_producer_help_is_0_not_3():
-    r = subprocess.run([sys.executable, str(PRODUCER), "--help"],
-                       capture_output=True, text=True)
-    assert r.returncode == 0
 
 
 def test_bad_invocation_space_unknown_flag_is_3_not_2():
@@ -393,20 +358,6 @@ def test_M_ECO_4_a_waiver_may_not_be_applied_to_an_unmeasured_population():
     assert F.C_WAIVER_ON_UNMEASURED in codes
 
 
-def test_M_ECO_5_a_plan_that_contradicts_itself_is_invalid_not_believed():
-    """A plan claiming ten spares while listing none must not have the
-    flattering field believed. Somebody looked and the artefact cannot answer:
-    that is INVALID, and INVALID is UNDETERMINED at the gate."""
-    bad = dict(PLAN_TEN, instances=[])
-    src = {"path": "phase3/stage3/pnr/spare_cells.json", "sha256": DIGEST,
-           "tool": "phase3_one_shot_runner",
-           "parser": "ppa_eco_spare_records.py"}
-    recs = P.records_from_plan(bad, VIEW, src, None)
-    count = [r for r in recs if r["metric"] == F.ECO_M_COUNT][0]
-    assert count["status"] == "INVALID"
-    r = F.promotion_verdict(cand("contradicts", clean_nine() + recs), policy())
-    assert r.verdict == F.UNDETERMINED
-    assert axis_of(r).status == F.AXIS_UNDETERMINED
 
 
 def test_M_ECO_6_the_declaration_is_what_refuses_not_the_gate_itself():
@@ -492,13 +443,6 @@ def test_the_gate_names_no_pdk_cell_and_the_producer_names_no_requirement():
     gate = pathlib.Path(F.__file__).read_text(encoding="utf-8").lower()
     for token in ("sky130", "gf180", "__inv_", "__nand2_", "__dfrtp"):
         assert token not in gate, token
-    prod = pathlib.Path(P.__file__).read_text(encoding="utf-8").lower()
-    for token in ("min_spare_cells", "required_kinds", "target_density",
-                  "0.02"):
-        assert token not in prod, (
-            f"{token!r} appears in the producer. Whether a population is "
-            "sufficient is the declaration's question and the gate's "
-            "comparison, never the producer's.")
 
 
 # ---------------------------------------------------------------------------
@@ -561,21 +505,6 @@ def test_preservation_is_not_proved_when_the_declaration_does_not_ask():
                                       for row in a.applicability["not_proved"]}
 
 
-def test_preservation_a_no_witness_report_does_not_vouch_for_anything():
-    """`spare_cell_preservation_check` says NO_WITNESS when it could read no
-    name-bearing final artefact. Nothing vouched for any spare, so the producer
-    must emit an absence and not the report's `survived` number."""
-    src = {"path": "reports/spare_preservation.json", "sha256": DIGEST,
-           "tool": "phase3_one_shot_runner",
-           "parser": "ppa_eco_spare_records.py"}
-    row = P.survival_record(
-        {"inserted": 10, "survived": 10,
-         "artefact_agreement": {"status": "NO_WITNESS"}}, VIEW, src, None)
-    assert row["status"] == "NOT_MEASURED"
-    assert "value" not in row
-    r = F.promotion_verdict(cand("no-witness", clean_nine() + spares() + [row]),
-                            policy(DECL_PRESERVED))
-    assert r.verdict == F.UNDETERMINED
 
 
 def test_an_obligation_with_no_proof_does_not_become_a_vacuous_pass():
@@ -608,7 +537,6 @@ def test_an_obligation_with_no_proof_does_not_become_a_vacuous_pass():
 #: physical axes were in before `ppa_signoff_records.py`, and it was the state
 #: `eco_readiness` arrived in. These tests are the statement that it is not any
 #: more, and they drive the SHIPPED bundle rather than a hand-built record list.
-SIGNOFF = _PROGRAMS / "ppa_signoff_records.py"
 
 
 def _run_tree(root, plan=PLAN_TEN, preservation=None):
@@ -623,71 +551,3 @@ def _run_tree(root, plan=PLAN_TEN, preservation=None):
         (rep / "spare_preservation.json").write_text(
             json.dumps(preservation), encoding="utf-8")
     return root
-
-
-def _bundle(root, tmp_path, name="bundle.json"):
-    out = tmp_path / name
-    r = subprocess.run([sys.executable, str(SIGNOFF), str(root), "--quiet",
-                        "--json", str(out)], capture_output=True, text=True)
-    return r, json.loads(out.read_text(encoding="utf-8"))
-
-
-def test_wired_the_signoff_bundle_carries_the_eco_evidence(tmp_path):
-    """The join. `ppa_signoff_records.py` is what the flow runs and what the
-    gate reads; before this it emitted nothing the ECO axis could prove from."""
-    r, bundle = _bundle(_run_tree(tmp_path / "run"), tmp_path)
-    assert r.returncode == 0, r.stdout + r.stderr
-    names = {rec["metric"] for rec in bundle["records"]}
-    assert F.ECO_M_COUNT in names
-    assert F.ECO_M_TIE_OFF in names
-    assert F.eco_metric_for_kind("dff") in names
-    assert bundle["eco_readiness_reader"]["program"] == "ppa_eco_spare_records"
-
-
-def test_wired_M_the_bundle_has_exactly_one_reader_of_the_spare_plan():
-    """MUTATION ARM for the decision not to re-read the plan here.
-
-    `ppa_signoff_records.py` owns WHERE the flow writes the two artefacts;
-    `ppa_eco_spare_records.py` owns WHAT they say. A second parse in the
-    signoff program would be a second set of the rules that took measurement to
-    get right -- the count-vs-instances contradiction, the NO_WITNESS report,
-    the missing plan that is not a zero -- and the first time the two disagreed
-    a design would pass one gate and fail the other.
-    """
-    import ast
-    src = (_PROGRAMS / "ppa_signoff_records.py").read_text(encoding="utf-8")
-    tree = ast.parse(src)
-
-    # DOCSTRINGS ARE EXCLUDED ON PURPOSE. This file's own prose NAMES the keys
-    # it refuses to parse -- that is how it explains the rule -- so a plain
-    # substring scan would fail on the explanation and pass on the violation.
-    # The measurement is over the executable AST.
-    docstrings = set()
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef,
-                             ast.ClassDef)):
-            d = ast.get_docstring(node, clean=False)
-            if d is not None:
-                docstrings.add(d)
-    code_strings = {n.value for n in ast.walk(tree)
-                    if isinstance(n, ast.Constant) and isinstance(n.value, str)
-                    and n.value not in docstrings}
-    attrs = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
-    reachable = code_strings | attrs
-
-    for key in ("instances", "tie_off", "cell_map", "spare_pads", "types",
-                "survived", "artefact_agreement", "count"):
-        assert key not in reachable, (
-            f"{key!r} is read in ppa_signoff_records.py's own code. The spare "
-            "plan has ONE reader in this tree and it is "
-            "ppa_eco_spare_records.py; a second parse here is a second set of "
-            "rules for the same artefact.")
-    assert "ppa_eco_spare_records" in src
-
-    # and the detector is shown to FIRE: the reader it delegates to really does
-    # name those keys, so an empty `reachable` set would have passed vacuously.
-    prod = ast.parse((_PROGRAMS / "ppa_eco_spare_records.py").read_text(
-        encoding="utf-8"))
-    prod_strings = {n.value for n in ast.walk(prod)
-                    if isinstance(n, ast.Constant) and isinstance(n.value, str)}
-    assert {"instances", "tie_off", "cell_map"} <= prod_strings

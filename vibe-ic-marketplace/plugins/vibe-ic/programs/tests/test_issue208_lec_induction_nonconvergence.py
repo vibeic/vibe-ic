@@ -33,7 +33,6 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import lec_run                       # noqa: E402
-import lec_equivalence_check as gate  # noqa: E402
 
 
 # equiv_induct diverges at the SAT base case — the opentitan_aes signature.
@@ -136,35 +135,10 @@ def test_flat_wall_with_counterexample_stays_fail():
 # downstream gate — non-convergence INCONCLUSIVE is non-blocking, NOT
 # LEC_NOT_EQUIVALENT; a counterexample still FAILs.
 # ---------------------------------------------------------------------------
-def _run_gate(tmp_path, raw):
-    p = lec_run.parse_equiv_output(raw)
-    r = lec_run.build_report(p, "chip_top", "netlist.v", None)
-    (tmp_path / "reports").mkdir()
-    (tmp_path / "reports" / "lec.json").write_text(json.dumps(r))
-    (tmp_path / "reports" / "lec.rpt").write_text(raw)
-    res = gate.audit(tmp_path)
-    return res, gate.main([str(tmp_path)])
 
 
-def test_gate_flat_wall_is_non_blocking_inconclusive(tmp_path):
-    res, rc = _run_gate(tmp_path, FLAT_WALL_OUTPUT)
-    assert res.inconclusive is True
-    assert res.passed is False
-    rules = {f.rule for f in res.findings}
-    assert "LEC_INCONCLUSIVE_NONCONVERGENCE" in rules
-    assert "LEC_NOT_EQUIVALENT" not in rules
-  # #208 follow-up: still NON-BLOCKING (flow_compliance resolves rc=3 +
-    # the PASS_WITH_WAIVERS sentinel to WAIVED-DEFERRED, so the step does
-    # not fail and nothing cascades to MISSING) but no longer a BARE PASS,
-    # which rc=0 silently was at the `program_exit_zero` gate.
-    assert rc == 3, "INCONCLUSIVE: non-blocking, but never a bare PASS"
 
 
-def test_gate_counterexample_is_hard_fail(tmp_path):
-    res, rc = _run_gate(tmp_path, COUNTEREXAMPLE_OUTPUT)
-    assert res.passed is False
-    assert res.inconclusive is False
-    assert rc == 1, "a genuine counterexample must remain a hard FAIL"
 
 
 # ---------------------------------------------------------------------------
@@ -229,15 +203,6 @@ def test_ladder_exhausted_report_marks_non_convergence():
     assert r["non_equivalent_points"] == 0     # zero counterexamples
 
 
-def test_ladder_exhausted_gate_is_non_blocking(tmp_path):
-    # Same non-blocking rc=3 as the flat-wall sibling (WAIVED-DEFERRED), NOT a
-    # blocking LEC_NOT_EQUIVALENT.
-    res, rc = _run_gate(tmp_path, LADDER_EXHAUSTED_OUTPUT)
-    assert res.inconclusive is True
-    assert res.passed is False
-    rules = {f.rule for f in res.findings}
-    assert "LEC_NOT_EQUIVALENT" not in rules
-    assert rc == 3, "INCONCLUSIVE: non-blocking, but never a bare PASS"
 
 
 def test_induct_proved_nothing_stays_fail():

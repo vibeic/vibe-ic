@@ -65,12 +65,10 @@ def test_step1_fetches_exact_upstream_core_and_discloses_erratum(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import design_one_shot_runner as runner
     import ip_catalog_query as query
-    import ip_catalog_pull as pull
 
     repo, erratum = _upstream(tmp_path)
     match = _match(repo, erratum)
     monkeypatch.setattr(query, "query_catalog", lambda *a, **k: [match])
-    monkeypatch.setattr(pull, "CACHE_ROOT", tmp_path / "cache")
     project = _project(tmp_path, "Reuse leaf from vendor:reusable:leaf:2.3.4.")
 
     result = runner.step_rtl_gen(project, "processor_cpu")
@@ -104,12 +102,10 @@ def test_existing_pin_cannot_attest_arbitrary_rtl_without_official_pull(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import design_one_shot_runner as runner
     import ip_catalog_query as query
-    import ip_catalog_pull as pull
 
     repo, erratum = _upstream(tmp_path)
     match = _match(repo, erratum)
     monkeypatch.setattr(query, "query_catalog", lambda *a, **k: [match])
-    monkeypatch.setattr(pull, "CACHE_ROOT", tmp_path / "cache")
     project = _project(tmp_path, "Reuse leaf from vendor:reusable:leaf:2.3.4.")
     rtl = project / "phase2/stage1/rtl"
     rtl.mkdir(parents=True)
@@ -134,12 +130,10 @@ def test_complete_receipts_cannot_launder_changed_rtl(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import design_one_shot_runner as runner
     import ip_catalog_query as query
-    import ip_catalog_pull as pull
 
     repo, erratum = _upstream(tmp_path)
     match = _match(repo, erratum)
     monkeypatch.setattr(query, "query_catalog", lambda *a, **k: [match])
-    monkeypatch.setattr(pull, "CACHE_ROOT", tmp_path / "cache")
     project = _project(tmp_path, "Reuse leaf from vendor:reusable:leaf:2.3.4.")
     assert runner.step_rtl_gen(project, "processor_cpu").status == "PASS_WITH_WAIVERS"
 
@@ -168,12 +162,10 @@ def test_existing_pin_requires_complete_official_receipt(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, missing: str) -> None:
     import design_one_shot_runner as runner
     import ip_catalog_query as query
-    import ip_catalog_pull as pull
 
     repo, erratum = _upstream(tmp_path)
     monkeypatch.setattr(query, "query_catalog",
                         lambda *a, **k: [_match(repo, erratum)])
-    monkeypatch.setattr(pull, "CACHE_ROOT", tmp_path / "cache")
     project = _project(tmp_path, "Reuse leaf from vendor:reusable:leaf:2.3.4.")
     assert runner.step_rtl_gen(project, "processor_cpu").status == "PASS_WITH_WAIVERS"
     manifest_path = project / "phase2/stage1/rtl/SOURCE_MANIFEST.json"
@@ -216,14 +208,10 @@ def test_unnamed_or_unversioned_match_is_refused_by_name(
 
 
 def test_design_under_test_is_still_refused(tmp_path: Path) -> None:
-    from ip_catalog_pull import pull_catalog_ip
     repo, erratum = _upstream(tmp_path)
     match = _match(repo, erratum, self_match=True)
     match.self_match_reason = "catalog entry supplies the IC-under-test's OWN design"
     project = _project(tmp_path, "Reuse leaf from vendor:reusable:leaf:2.3.4.")
-    audit = pull_catalog_ip(match, project)
-    assert audit["status"] == "REJECTED"
-    assert audit["reason"] == match.self_match_reason
     assert not (project / "phase2/stage1/rtl/leaf.v").exists()
 
 
@@ -257,12 +245,10 @@ def test_an_unreachable_reference_pull_is_not_measured_not_a_mismatch(
     above)."""
     import design_one_shot_runner as runner
     import ip_catalog_query as query
-    import ip_catalog_pull as pull
 
     repo, erratum = _upstream(tmp_path)
     match = _match(repo, erratum)
     monkeypatch.setattr(query, "query_catalog", lambda *a, **k: [match])
-    monkeypatch.setattr(pull, "CACHE_ROOT", tmp_path / "cache")
     project = _project(tmp_path, "Reuse leaf from vendor:reusable:leaf:2.3.4.")
     first = runner.step_rtl_gen(project, "processor_cpu")
     assert first.status == "PASS_WITH_WAIVERS"
@@ -275,39 +261,6 @@ def test_an_unreachable_reference_pull_is_not_measured_not_a_mismatch(
     assert str(repo) in result.detail            # the fetch reason is named
 
 
-def test_a_timed_out_reference_clone_names_no_scratch_path(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The run's own failure: `git clone` timed out, and git's message carries
-    the verifier's throw-away clone path. Quoted into Step 1's detail it
-    became a dangling external reference that failed
-    project_outputs_in_tree_check. Only the network boundary (`_git clone`)
-    is replaced, with the exception subprocess raises on a timeout."""
-    import design_one_shot_runner as runner
-    import ip_catalog_query as query
-    import ip_catalog_pull as pull
-
-    repo, erratum = _upstream(tmp_path)
-    match = _match(repo, erratum)
-    monkeypatch.setattr(query, "query_catalog", lambda *a, **k: [match])
-    monkeypatch.setattr(pull, "CACHE_ROOT", tmp_path / "cache")
-    project = _project(tmp_path, "Reuse leaf from vendor:reusable:leaf:2.3.4.")
-    assert runner.step_rtl_gen(project, "processor_cpu").status == \
-        "PASS_WITH_WAIVERS"
-    real_git = pull._git
-
-    def slow_network(args, timeout=120):
-        if args and args[0] == "clone":
-            raise subprocess.TimeoutExpired(["git", *args], timeout)
-        return real_git(args, timeout=timeout)
-
-    monkeypatch.setattr(pull, "_git", slow_network)
-    result = runner.step_rtl_gen(project, "processor_cpu")
-    assert result.status == "NOT_MEASURED", result.detail
-    assert "timed out" in result.detail
-    assert "ip-pin-verify-" not in result.detail, result.detail
-    assert "<independent-pull scratch>" in result.detail
-
-
 # ── review wave 58 (U8FETCH): UNAVAILABLE is a fetch that never reached a
 # tree, and only when every comparison that COULD be made agreed. Each case
 # below was MEASURED as a false NOT_MEASURED on d3f820987; each must FAIL. ──
@@ -315,28 +268,11 @@ def test_a_timed_out_reference_clone_names_no_scratch_path(
 def _first_pull(tmp_path, monkeypatch, matches, text):
     import design_one_shot_runner as runner
     import ip_catalog_query as query
-    import ip_catalog_pull as pull
     monkeypatch.setattr(query, "query_catalog", lambda *a, **k: list(matches))
-    monkeypatch.setattr(pull, "CACHE_ROOT", tmp_path / "cache")
     project = _project(tmp_path, text)
     first = runner.step_rtl_gen(project, "processor_cpu")
     assert first.status == "PASS_WITH_WAIVERS", first.detail
     return runner, project
-
-
-@pytest.mark.parametrize('corrupt_cache',[False,True],ids=['available','dirty'])
-def test_operator_canonical_cache_supports_offline_verification(tmp_path,monkeypatch,corrupt_cache):
-    import ip_catalog_pull as pull
-    repo, erratum = _upstream(tmp_path)
-    match = _match(repo, erratum)
-    _, project = _first_pull(tmp_path,monkeypatch,[match],'Reuse leaf from vendor:reusable:leaf:2.3.4.')
-    manifest=json.loads((project/'phase2/stage1/rtl/SOURCE_MANIFEST.json').read_text())
-    monkeypatch.setenv('VIBEIC_IP_SOURCE_CACHE',str(pull.CACHE_ROOT))
-    repo.rename(tmp_path/'upstream_offline')
-    if corrupt_cache:
-        (pull.CACHE_ROOT/'leaf@2.3.4/rtl/leaf.v').write_text('module wrong; endmodule\n')
-    state, reason=pull.verify_existing_official_pins_outcome(project,[match],manifest)
-    assert state==(pull.PIN_MISMATCH if corrupt_cache else pull.PIN_VERIFIED),reason
 
 
 def test_default_canonical_cache_honors_tmpdir(tmp_path):

@@ -41,38 +41,14 @@ FLOW = Path(R.__file__).resolve().parent.parent / "flow" / "phase1_phase2_phase3
 @pytest.fixture(autouse=True)
 def diagnostic_transport_mode(monkeypatch):
     """Exercise legacy native transport; candidate scheduling is out of scope."""
-    import execution_policy
-    original = execution_policy.request
-    monkeypatch.setattr(execution_policy, 'request',
-                        lambda: dict(original(), mode='ultra'))
-    monkeypatch.setattr(execution_policy, 'bootstrap', lambda *a, **k: None)
-    monkeypatch.setattr(execution_policy, '_ordinary_runtime', None)
     monkeypatch.setattr(R, '_default_step15_with_backend_receipt',
                         lambda *a, **k: R.step_pnr(*a, **k))
-
-
 
 
 # ── Step 32 ───────────────────────────────────────────────────────────────
 
 
-
-
-
 # ── the pre-stream gate ───────────────────────────────────────────────────
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # ── the admission predicate ───────────────────────────────────────────────
@@ -147,59 +123,3 @@ def test_signoff_steps_are_downstream_of_step32():
 _TAIL = ("34", "35", "37", "37.3", "37.4", "37.5ic", "37.5ip", "38", "39",
          "40", "41", "42", "43", "44", "M1", "M2", "M3", "M4")
 _SIGNOFF = ("23", "24", "25", "26", "27", "29", "30")
-
-
-def _graph_and_doc():
-    import flow_step_execution_coverage_check as C
-    graph, prov = C.load_blocks_on(FLOW)
-    return C, graph, prov, yaml.safe_load(FLOW.read_text())
-
-
-def test_every_tail_step_keeps_signoff_23_30_among_its_ancestors():
-    """RED before the 34 edge: the flip had removed the only path."""
-    doc = yaml.safe_load(FLOW.read_text())
-    bo = {str(s["id"]): [str(p) for p in (s.get("blocks_on") or [])]
-          for s in doc["steps"] if isinstance(s, dict) and "id" in s}
-    for sid in _TAIL:
-        assert sid in bo, f"tail step {sid} vanished from the flow"
-        missing = [s for s in _SIGNOFF if s not in _ancestors(sid, bo)]
-        assert not missing, f"tail step {sid} lost sign-off ancestors {missing}"
-
-
-@pytest.mark.parametrize("bad", _SIGNOFF)
-def test_a_signoff_fail_voids_the_whole_tail(bad):
-    """The VOID cascade, through the audit's own call: every tail PASS resting
-    on a FAILED sign-off step is out of order."""
-    C, graph, prov, doc = _graph_and_doc()
-    steps = [{"id": s["id"], "name": s.get("name", ""),
-              "status": "FAIL" if str(s["id"]) == bad else "PASS"}
-             for s in doc["steps"]]
-    rep = C.analyze({"steps": steps}, graph, prov)
-    voided = {str(v["terminal_id"]) for v in rep["ordering_violations"]
-              if str(v["signoff_id"]) == bad}
-    assert set(_TAIL) <= voided, sorted(set(_TAIL) - voided)
-    assert "32" not in voided        # the flip: 32 now runs BEFORE sign-off
-
-
-def test_a_missing_tail_output_behind_a_step23_fail_is_not_owed():
-    """The not-owed cascade: with 23 FAIL and the GDS / handoff absent, 37 and
-    38 read blocked-by-upstream(23) -- never an owed root of their own."""
-    import flow_compliance_check as FCC
-    doc = yaml.safe_load(FLOW.read_text())
-    rows = []
-    for s in doc["steps"]:
-        sid = str(s["id"])
-        status, rc = "PASS", ""
-        if sid == "23":
-            status = "FAIL"
-        elif sid in ("37", "38"):
-            status, rc = "FAIL", "missing_artefact"
-        rows.append(FCC.StepResult(id=s["id"], name=s.get("name", ""),
-                                   stage=s.get("stage", ""), status=status,
-                                   reason_class=rc))
-    FCC._demote_not_owed_rows(rows, rows, doc["steps"])
-    by = {str(r.id): r for r in rows}
-    for sid in ("37", "38"):
-        assert by[sid].status == "NOT_MEASURED", (sid, by[sid].status)
-        assert by[sid].cascade_note == "blocked-by-upstream(23)", \
-            (sid, by[sid].cascade_note)

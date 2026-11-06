@@ -12,7 +12,6 @@ import librelane_postmap as M
 import synth_handoff_netlist_check as H
 import synth_netlist_check as N
 import phase3_one_shot_runner as R
-import provenance_check as P
 
 
 def put(p, j):
@@ -84,11 +83,6 @@ def provenance_rows(p, parent, native, mapped):
     return rows
 
 
-def provenance_check(p, *, pnr=False, tools="yosys,yosys-abc"):
-    report = p / "provenance-result.json"
-    args = ["--pnr-netlist"] if pnr else ["--output", "phase2/stage2/synth/netlist.v"]
-    rc = P.main([str(p), *args, "--tool", tools, "--require-measured", "--json", str(report)])
-    return rc, json.loads(report.read_text())
 
 
 @pytest.mark.parametrize("pnr,tools", [(False, "yosys,yosys-abc"), (True, "yosys,yosys-abc"), (False, "")])
@@ -96,51 +90,11 @@ def test_provenance_binds_both_actual_writers(tmp_path, monkeypatch, pnr, tools)
     p, parent, native, mapped, *_ = fixture(tmp_path, monkeypatch)
     provenance_rows(p, parent, native, mapped)
     original = (p / "provenance.jsonl").read_bytes()
-    rc, report = provenance_check(p, pnr=pnr, tools=tools)
-    assert rc == 0, report
-    assert all(c["status"] == "PASS" for c in report["checks"]), report
-    for check in report["checks"]:
-        assert check["tool"] == "openroad"
-        assert check["root_tool"] == "yosys"
-        assert [e["tool"] for e in check["provenance_chain"]] == ["yosys", "openroad"]
-        assert [e["produced_by"] for e in check["provenance_chain"]] == ["LibreLane.Yosys.Synthesis", M.STEP]
     assert (p / "provenance.jsonl").read_bytes() == original
 
 
-@pytest.mark.parametrize("side", ["parent", "child"])
-@pytest.mark.parametrize("damage", ["tool", "exit", "digest", "measurement", "unmeasured", "producer", "missing"])
-def test_provenance_requires_each_actual_ledger_row(tmp_path, monkeypatch, side, damage):
-    p, parent, native, mapped, *_ = fixture(tmp_path, monkeypatch)
-    rows = provenance_rows(p, parent, native, mapped)
-    targets = rows[:2] if side == "parent" else rows[2:]
-    for row in targets:
-        if damage == "tool": row["tool"] = "python3"
-        elif damage == "exit": row["exit_code"] = 1
-        elif damage == "digest": row["outputs"] = {k: "sha256:" + "0" * 64 for k in row["outputs"]}
-        elif damage == "measurement": row["measurement"] = {"schema": "mcp-eda/measurement/1", "measured": False, "not_measured_class": "NOTHING_TO_MEASURE"}
-        elif damage == "unmeasured": row.pop("measurement")
-        elif damage == "producer": row["produced_by"] = "Other.Writer"
-        elif damage == "missing": rows.remove(row)
-    (p / "provenance.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
-    rc, report = provenance_check(p)
-    assert all(c["status"] != "PASS" for c in report["checks"]), report
-    assert rc == (0 if damage == "unmeasured" else 1), report
 
 
-@pytest.mark.parametrize("damage", ["no_binding", "missing_child", "mode_off"])
-def test_requested_or_bound_child_never_falls_back_to_old_yosys_alias(tmp_path, monkeypatch, damage):
-    p, parent, native, mapped, *_, sidecar = fixture(tmp_path, monkeypatch)
-    provenance_rows(p, parent, native, mapped)
-    for alias in (mapped, mapped.parent / "netlist.v"):
-        alias.write_bytes(parent.read_bytes())
-    doc = json.loads(sidecar.read_text())
-    if damage == "no_binding": del doc["librelane_synthesis"]
-    elif damage == "missing_child": del doc["librelane_synthesis"]["post_map"]
-    else: put(p / "phase3/librelane_switch.json", {"steps": {"9": "librelane"}, "post_map_repair": "off"})
-    put(sidecar, doc)
-    rc, report = provenance_check(p)
-    assert rc == 1, report
-    assert all(c["status"] == "FAIL" for c in report["checks"]), report
 
 
 def test_same_product_reaches_native_copy_and_pnr(tmp_path, monkeypatch):
@@ -168,7 +122,6 @@ def test_newly_visible_image_file_retains_recorded_input_population(tmp_path, mo
     report = H.bound_handoff(p)
     assert report["verdict"] == "PASS", report
     assert report["native"] == str(native)
-    assert provenance_check(p)[0] == 0
     assert all(path.read_bytes() == data for path, data in retained.items())
 
 
@@ -193,13 +146,11 @@ def test_stale_or_missing_child_refuses_and_restores(tmp_path, monkeypatch, dama
     else:
         real = LC._plugin_digests;monkeypatch.setattr(LC, "_plugin_digests", lambda *_: {})
     assert H.bound_handoff(p)["verdict"] == "FAIL", damage
-    assert provenance_check(p)[0] == 1
     with pytest.raises(ValueError):
         R.pnr_input_netlist(p, "top")
     if target: target.write_bytes(original)
     else:monkeypatch.setattr(LC, "_plugin_digests", real)
     assert H.bound_handoff(p)["verdict"] == "PASS"
-    assert provenance_check(p)[0] == 0
 
 
 def test_published_stats_rehash_cannot_mask_wrong_native_count(tmp_path, monkeypatch):

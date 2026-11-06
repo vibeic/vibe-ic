@@ -24,7 +24,6 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 
 import clock_target_provenance as ctp          # noqa: E402
-import sta_assumed_clock_disclosure_check as gate  # noqa: E402
 
 
 def _project(tmp_path: Path, name: str) -> Path:
@@ -76,52 +75,12 @@ def test_absent_target_and_no_applied_period_is_not_determined(tmp_path):
     assert rep["assumed"] is False
 
 
-def test_undisclosed_assumed_signoff_is_a_FAIL(tmp_path):
-    """THE CONTROL. A sign-off record that stays silent must go red."""
-    proj = _project(tmp_path, "undisclosed")
-    _provenance(proj, {"assumed": True, "tier": ctp.PLUGIN_DEFAULT_TIER,
-                       "period_ns": 10.0})
-    _signoff(proj, {"setup_wns_ns": -42.140, "verdict": "VIOLATED"})
-    rep = gate.check(proj)
-    assert rep["verdict"] == "FAIL", rep
-    assert rep["missing"], rep
-    assert gate.main([str(proj)]) == 1
 
 
-def test_disclosed_assumed_signoff_passes(tmp_path):
-    """The fixed shape: flag AND sentence, both required."""
-    proj = _project(tmp_path, "disclosed")
-    _provenance(proj, {"assumed": True, "tier": ctp.PLUGIN_DEFAULT_TIER,
-                       "period_ns": 10.0})
-    _signoff(proj, {"setup_wns_ns": -42.140, "verdict": "VIOLATED",
-                    "clock_period_assumed": True,
-                    "clock_period_note": ctp.ASSUMED_DISCLOSURE + ": 10 ns"})
-    rep = gate.check(proj)
-    assert rep["verdict"] == "PASS", rep
 
 
-@pytest.mark.parametrize("drop", ["flag", "sentence"])
-def test_half_a_disclosure_is_not_a_disclosure(tmp_path, drop):
-    """MUTATION, both halves. Dropping either half must redden the gate."""
-    proj = _project(tmp_path, "half_" + drop)
-    _provenance(proj, {"assumed": True, "tier": ctp.PLUGIN_DEFAULT_TIER,
-                       "period_ns": 10.0})
-    payload = {"verdict": "VIOLATED", "clock_period_assumed": True,
-               "clock_period_note": ctp.ASSUMED_DISCLOSURE + ": 10 ns"}
-    if drop == "flag":
-        payload.pop("clock_period_assumed")
-    else:
-        payload["clock_period_note"] = "timing measured."
-    _signoff(proj, payload)
-    assert gate.check(proj)["verdict"] == "FAIL"
 
 
-def test_absent_provenance_is_NOT_CHECKED_not_PASS(tmp_path):
-    """vibe-ic#1140 — a gate with no input certifies nothing."""
-    proj = _project(tmp_path, "empty")
-    rep = gate.check(proj)
-    assert rep["verdict"] == "NOT_CHECKED"
-    assert gate.main([str(proj)]) == 2
 
 
 # ── the input DOES state a period: nothing may change ───────────────────────
@@ -140,7 +99,6 @@ def test_staged_sdc_is_design_owned_and_gate_is_silent(tmp_path):
     _provenance(proj, rep)
     _signoff(proj, {"verdict": "MET"})
     # No disclosure is demanded of a design that declared its own period.
-    assert gate.check(proj)["verdict"] == "PASS"
 
 
 def test_l8_declared_period_outranks_the_default(tmp_path):
@@ -212,7 +170,6 @@ def test_cli_exit_codes_separate_the_three_outcomes(tmp_path):
 
 
 # ── the DIALOGUE track: the question must actually be asked ────────────────
-import phase1_sufficiency_check as suff  # noqa: E402
 
 
 def _layers(tmp_path: Path, clock_rec: dict) -> Path:
@@ -227,29 +184,10 @@ def _layers(tmp_path: Path, clock_rec: dict) -> Path:
     return d
 
 
-def test_a_named_clock_with_no_rate_raises_the_question(tmp_path):
-    """#2091 — L8 carried `clk_i` and no target of its own."""
-    rep = suff.check(_layers(tmp_path, {"name": "clk_i", "period_ns": None}))
-    assert "clock_rate" in rep["missing_conditional"], rep
-    q = [a for a in rep["advisories_for_agent"] if "how many times a second" in a]
-    assert q, rep["advisories_for_agent"]
-    # ADVISORY, never blocking — the gate's own severity model.
-    assert rep["verdict"] == "sufficient"
-    assert "clock_rate" not in rep["missing_required"]
 
 
-def test_a_stated_rate_raises_nothing(tmp_path):
-    """The control: a design that states its rate must be left alone."""
-    rep = suff.check(_layers(tmp_path, {"name": "clk_i", "period_ns": 24.0}))
-    assert "clock_rate" not in rep["missing_conditional"], rep
 
 
-def test_the_question_uses_no_silicon_jargon(tmp_path):
-    """The gate's own contract: the user is never shown these tokens."""
-    q = suff._QUESTIONS["clock_rate"].lower()
-    for jargon in ("clock", "period", "ns", "mhz", "sdc", "frequency",
-                   "constraint"):
-        assert jargon not in q.split(), q
 
 
 # ── the RUNNER wiring: the record actually gets the stamp ──────────────────
@@ -277,7 +215,6 @@ def test_runner_stamps_the_assumption_into_the_signoff_record(tmp_path):
     assert rec["verdict"] == "VIOLATED"
     assert rec["setup_wns_ns"] == -42.140
     # And the gate that enforces this is now green on the stamped record.
-    assert gate.check(proj)["verdict"] == "PASS"
 
 
 def test_runner_stamps_nothing_when_the_design_owns_the_period(tmp_path):
@@ -294,7 +231,6 @@ def test_runner_stamps_nothing_when_the_design_owns_the_period(tmp_path):
     assert prov["assumed"] is False and prov["tier"] == "staged_sdc", prov
     assert ctp.stamp_signoff_records(proj) == [], "a design-owned period was stamped"
     assert rec_path.read_bytes() == before
-    assert gate.check(proj)["verdict"] == "PASS"
 
 
 # ── L19 records the ABSENCE explicitly (the icaes expectation

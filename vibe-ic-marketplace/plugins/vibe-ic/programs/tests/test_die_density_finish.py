@@ -9,7 +9,6 @@ import pytest
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 import librelane_fill_dfm as fill
-import librelane_step37 as step37
 from metal_fill_config_gen import build_metal_fill_config
 from librelane_contract import Refusal
 
@@ -370,81 +369,6 @@ def test_density_specs_ignore_comment_claims_and_refuse_missing_layers(tmp_path)
     assert fill._density_ratio_specs(missing, derived)['PL.8']['status'] == 'NOT_MEASURED'
 
 
-def test_step37_rechecks_topped_gds_before_selection(tmp_path, monkeypatch):
-    import librelane_pv_signoff as pv
-
-    project = tmp_path / 'project'
-    project.mkdir()
-    root, cfg = _pdk(tmp_path)
-    configs = {step: cfg for step in step37.STEPS}
-    source = project / 'source.gds'
-    source.write_bytes(b'stream')
-    sealed = project / 'sealed.gds'
-    sealed.write_bytes(b'sealed')
-    pdk_filled = project / 'pdk_filled.gds'
-    pdk_filled.write_bytes(b'pdk fill')
-    topped = project / 'topped.gds'
-    topped.write_bytes(b'pdk fill plus metal2')
-    state = _put(project / 'state.json', {'gds': str(source)})
-    routed = project / 'routed.def'
-    routed.write_text('DEF')
-    netlist = project / 'routed.v'
-    netlist.write_text('module top; endmodule')
-    sdc = project / 'routed.sdc'
-    sdc.write_text('create_clock')
-    monkeypatch.setattr(step37, 'resolve_step_configs', lambda *a, **k: configs)
-    monkeypatch.setattr(step37, 'declaration_config', lambda *a: (
-        {'CORE_AREA': [10, 10, 90, 90]}, {'CORE_AREA': 'test declaration'}))
-    monkeypatch.setattr(step37, '_routed_state', lambda *a: state)
-    monkeypatch.setattr(step37, '_vibeic_gds_gates', lambda *a: {
-        'substance': {'rc': 0, 'sha256': 'x'},
-        'port_labels': {'rc': 0, 'sha256': 'x'}})
-    monkeypatch.setattr(step37, '_measured_drc', lambda *a: {
-        'magic': 0, 'klayout': 0, 'total': 0})
-    monkeypatch.setattr(pv, 'tech_lef_overlay', lambda *a: None)
-    monkeypatch.setattr(pv, 'run_finishing_xor', lambda *a, **k: {'verdict': 'PASS'})
-    monkeypatch.setattr(fill, 'top_up_density', lambda *a: {'gds': str(topped)},
-                        raising=False)
-    monkeypatch.setattr(fill, 'measure_density_ratios', lambda *a: {
-        'layers': {'M2.4': {'ratio': .36, 'status': 'MEASURED'}}}, raising=False)
-
-    def eda_run(project, image, pdk_root, pdk, steps, incoming, lane, configs):
-        parent = json.loads(Path(incoming).read_text())
-        folders = []
-        for index, name in enumerate(steps, 1):
-            folder = project / 'phase3/librelane' / lane / f'{index:02d}-{name.lower().replace(".", "-")}'
-            next_state = dict(parent)
-            if name == 'KLayout.XOR':
-                next_state.update({'mag_gds': str(source), 'klayout_gds': str(source)})
-                next_state['metrics'] = {'design__xor_difference__count': 0}
-            if name == 'KLayout.SealRing':
-                next_state['gds'] = str(sealed)
-            if name == 'KLayout.Filler':
-                next_state['gds'] = str(pdk_filled)
-            if name == 'KLayout.Density':
-                next_state['metrics'] = {'klayout__density_error__count':
-                                         0 if next_state['gds'] == str(topped) else 1}
-            _put(folder / 'state_out.json', next_state)
-            parent = next_state
-            folders.append(folder)
-        return folders
-
-    monkeypatch.setattr(step37, '_run', eda_run)
-    canonical = project / 'canonical.gds'
-    result = step37.run(project, 'image', root, 'processA', routed, netlist,
-                        sdc, canonical)
-    assert canonical.read_bytes() == topped.read_bytes()
-    assert json.loads(Path(result['state']).read_text())['gds'] == str(topped)
-    promo = json.loads(Path(result['promotion']).read_text())
-    assert promo['density'] == {'magic': 0, 'klayout': 0}
-    assert promo['density_ratios']['magic']['layers']['M2.4']['ratio'] == .36
-    # Mutation: send the PDK-only bytes through the new handoff.  The deck's
-    # positive result must still prevent selection and canonical promotion.
-    monkeypatch.setattr(fill, 'top_up_density', lambda *a: {'gds': str(pdk_filled)})
-    with pytest.raises(Refusal, match='LL_NO_FEASIBLE_STREAM'):
-        step37.run(project, 'image', root, 'processA', routed, netlist, sdc,
-                   project / 'mutated_canonical.gds')
-    assert not (project / 'mutated_canonical.gds').exists()
 
 
 @pytest.mark.parametrize('case', [

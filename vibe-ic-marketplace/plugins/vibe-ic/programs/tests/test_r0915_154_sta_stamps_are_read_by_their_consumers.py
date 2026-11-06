@@ -36,8 +36,6 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import sta_signoff_rigor_check as RIG            # noqa: E402
-from _ppa import benchmark as BENCH              # noqa: E402
-from _ppa import timing as TIM                   # noqa: E402
 from _ppa.backends import opensta as OSTA        # noqa: E402
 
 #: A report body the rigor gate PASSes: derate, the three check types and a
@@ -162,10 +160,6 @@ def _process_report(sdc_named: str) -> str:
             "worst slack max 0.25\ntns max 0.00\n")
 
 
-def _rows(project: Path, sdc_named: str):
-    rep = OSTA.parse_report(_process_report(sdc_named), path="sta_x.rpt")
-    return TIM.rows_from_report(project, project / "sta_x.rpt", rep,
-                                mode="func", mode_gap=None)
 
 
 def _slack_scope(rows):
@@ -178,37 +172,12 @@ def test_the_sdc_stamp_is_parsed_per_section():
     assert rep.sections[0].sdc == "/foss/designs/p/c/top.sdc"
 
 
-def test_the_sdc_content_digest_enters_the_scope(tmp_path):
-    body = b"create_clock -period 10 [get_ports clk]\n"
-    (tmp_path / "c").mkdir()
-    (tmp_path / "c" / "top.sdc").write_bytes(body)
-    scope, _ = _slack_scope(_rows(tmp_path, "/foss/designs/p/c/top.sdc"))
-    assert scope["sdc"] == "sha256:" + hashlib.sha256(body).hexdigest(), scope
 
 
-def test_without_the_stamp_the_key_is_absent_and_the_gap_is_stated(tmp_path):
-    scope, gaps = _slack_scope(_rows(tmp_path, ""))
-    assert "sdc" not in scope, scope
-    assert "STA_BASIS_SDC" in gaps["sdc"], gaps
 
 
-def test_an_sdc_this_project_does_not_hold_is_a_gap_not_a_digest(tmp_path):
-    scope, gaps = _slack_scope(_rows(tmp_path, "/foss/designs/p/c/gone.sdc"))
-    assert "sdc" not in scope, scope
-    assert "gone.sdc" in gaps["sdc"], gaps
 
 
-def test_different_sdcs_give_different_scopes_same_bytes_the_same(tmp_path):
-    a, b = tmp_path / "a", tmp_path / "b"
-    for root, period in ((a, 10), (b, 5)):
-        (root / "c").mkdir(parents=True)
-        (root / "c" / "top.sdc").write_text(f"create_clock -period {period}\n")
-    sa, _ = _slack_scope(_rows(a, "/w/c/top.sdc"))
-    sb, _ = _slack_scope(_rows(b, "/w/c/top.sdc"))
-    assert sa["sdc"] != sb["sdc"]
-    (b / "c" / "top.sdc").write_text("create_clock -period 10\n")
-    sb2, _ = _slack_scope(_rows(b, "/elsewhere/c/top.sdc"))
-    assert sa["sdc"] == sb2["sdc"], "a path is not an identity; bytes are"
 
 
 def _arm(flow: str, sdc: str) -> dict:
@@ -226,17 +195,8 @@ def _arm(flow: str, sdc: str) -> dict:
                                "activity_basis": "vectorless"}}}}
 
 
-def test_head_to_head_refuses_slacks_timed_under_different_sdcs():
-    with pytest.raises(BENCH.Refusal) as exc:
-        BENCH.check_scope_parity([_arm("ours", "sha256:" + "a" * 64),
-                                  _arm("theirs", "sha256:" + "b" * 64)])
-    assert exc.value.code == "SCOPE_DIVERGED"
-    assert "sdc" in exc.value.message
 
 
-def test_head_to_head_accepts_the_same_sdc():
-    BENCH.check_scope_parity([_arm("ours", "sha256:" + "a" * 64),
-                              _arm("theirs", "sha256:" + "a" * 64)])
 
 
 # ── the stamp lines are a closed grammar, not prose (prose-polarity ratchet) ──

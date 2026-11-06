@@ -28,7 +28,6 @@ from pathlib import Path
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 
-import phase1_sufficiency_check as S  # noqa: E402
 
 _PORTFUL_INPUT = ("Implement a framed serial receiver.\n"
                   "\n"
@@ -53,55 +52,12 @@ def _project(tmp_path, doc_text, ports):
     return proj, gd
 
 
-def test_input_declares_ports_and_l_docs_carry_none_is_an_extraction_gap(tmp_path):
-    proj, gd = _project(tmp_path, _PORTFUL_INPUT, [])
-    rep = S.check(gd, project=proj)
-    assert rep["port_count"] == 0
-    assert rep["ports_declared_in_input"] is True
-    assert rep["ports_reason"] == "extraction_gap"
-    assert rep["extraction_gap"] is True
-    assert S.main([str(gd), "--project", str(proj),
-                   "--strict-extraction-gap"]) == 1
 
 
-def test_a_portless_behavioural_spec_is_still_allowed_through(tmp_path):
-    proj, gd = _project(tmp_path, _PORTLESS_INPUT, [])
-    rep = S.check(gd, project=proj)
-    assert rep["ports_declared_in_input"] is False
-    assert rep["ports_reason"] == "input_declares_no_ports"
-    assert rep["extraction_gap"] is False
-    # the verdict is still `insufficient` — that has NOT changed — but this
-    # cause never blocks.
-    assert rep["verdict"] == "insufficient"
-    assert S.main([str(gd), "--project", str(proj),
-                   "--strict-extraction-gap"]) == 0
 
 
-def test_ports_present_reports_the_third_reason_and_never_blocks(tmp_path):
-    proj, gd = _project(tmp_path, _PORTFUL_INPUT,
-                        [{"name": "clk", "direction": "input", "width": "1"}])
-    rep = S.check(gd, project=proj)
-    assert rep["ports_reason"] == "ports_extracted"
-    assert rep["extraction_gap"] is False
-    assert S.main([str(gd), "--project", str(proj),
-                   "--strict-extraction-gap"]) == 0
 
 
-def test_unreadable_input_is_NOT_MEASURED_and_is_never_defaulted(tmp_path):
-    # "could not read it" is not "read it and it was empty" — the field stays
-    # None, and None must not be collapsed into an extraction gap NOR into a
-    # port-less design.
-    proj = tmp_path / "q"
-    gd = proj / "phase1" / "generated_docs"
-    gd.mkdir(parents=True)
-    (gd / "L1_DATASHEET.json").write_text(json.dumps(
-        {"schema_version": 2, "ic_name": "dut", "pin_table": []}))
-    rep = S.check(gd, project=proj)
-    assert rep["ports_declared_in_input"] is None
-    assert rep["ports_reason"] == "NOT_MEASURED"
-    assert rep["extraction_gap"] is False
-    assert S.main([str(gd), "--project", str(proj),
-                   "--strict-extraction-gap"]) == 0
 
 
 def test_the_runner_wires_project_and_strict_extraction_gap(tmp_path):

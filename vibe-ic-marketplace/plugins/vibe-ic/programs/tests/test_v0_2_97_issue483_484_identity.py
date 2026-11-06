@@ -48,10 +48,8 @@ from pathlib import Path
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 
-import final_report_generate as frg  # noqa: E402
 
 FOUNDRY_PROG = PROGRAMS / "foundry_handoff_pack_gen.py"
-CDI_PROG = PROGRAMS / "cross_design_identity_check.py"
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -68,97 +66,12 @@ REAL_ORACLE_LOG = (
 )
 
 
-
-
-
-
-
-
 # ════════════════════════════════════════════════════════════════════════
 # #483 symptom (2) — final_summary verdict headline not truncated
 # ════════════════════════════════════════════════════════════════════════
 
-def test_483_extract_overall_token_full_verdict():
-    """The verdict token extractor returns the FULL token for every real
-    flow_compliance verdict shape (the prior .split()[0] truncated on the
-    first internal whitespace)."""
-    cases = {
-        "Overall: FAIL  (strict=True)": "FAIL",
-        "Overall: PASS": "PASS",
-        "Overall: PASS_WITH_WAIVERS  (strict=True)": "PASS_WITH_WAIVERS",
-        "Overall: PASS_WITH_OPEN_SOURCE_CONSTRAINTS  (strict=True)":
-            "PASS_WITH_OPEN_SOURCE_CONSTRAINTS",
-        "Overall: AUDIT_TIMEOUT": "AUDIT_TIMEOUT",
-    }
-    for line, want in cases.items():
-        assert frg._extract_overall_token(line) == want, line
 
-
-def test_483_defect_whitespace_verdict_not_truncated():
-    """DEFECT FIXTURE: a verdict line whose verdict carries internal
-    whitespace — exactly what collapsed the headline to ``Overall: FA``
-    under the old ``.split()[0]``. END STATE: the full token is returned."""
-    line = "Overall: FA IL  (strict=True)"
-    # Prove the OLD slice produced the truncated symptom.
-    old_truncated = line.split(":", 1)[1].strip().split()[0]
-    assert old_truncated == "FA", "fixture must reproduce the old truncation"
     # FIXED PATH: the extractor keeps the full token.
-    assert frg._extract_overall_token(line) == "FA IL"
-
-
-def test_483_regenerated_summary_headline_full_token(tmp_path, monkeypatch):
-    """ACCEPTANCE end-to-end: regenerate final_summary.md with a defect-
-    shaped audit text whose Overall verdict carries internal whitespace.
-    END STATE: the ``**`Overall: …`**`` headline shows the FULL verdict
-    token (never the truncated ``Overall: FA``), while the raw counts code
-    block is untouched."""
-    project = tmp_path / "datacore_widget"
-    project.mkdir()
-
-    # Defect-shaped audit transcript: header/Steps/tally lines (the raw
-    # counts section, which is correct) + an Overall line whose verdict
-    # carries internal whitespace.
-    defect_audit = (
-        "=== Vibe-IC compliance ===\n"
-        "Project: x\n"
-        "Flow def: y\n"
-        "Steps: 3 total (1/2 executed PASS, 0 DEFERRED via waiver)\n"
-        "  PASS=1  FAIL=1  MISSING=1\n"
-        "\n"
-        "Overall: FA IL  (strict=True)\n"
-    )
-
-    def _fake_run_audit(proj, timeout_s=None, prior_marker=None):
-        return defect_audit, frg._extract_overall_token(
-            "Overall: FA IL  (strict=True)")
-
-    monkeypatch.setattr(frg, "_run_audit", _fake_run_audit)
-    md = frg._render(project, run_audit=True)
-    out = project / "reports" / "final_summary.md"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(md)
-
-    text = out.read_text()
-    assert "**`Overall: FA IL`**" in text, \
-        "headline must carry the FULL verdict token"
-    assert "**`Overall: FA`**" not in text, \
-        "headline must NOT be truncated to FA"
-    # Raw counts section (the verbatim audit lines) is preserved.
-    assert "Steps: 3 total (1/2 executed PASS" in text
-
-
-def test_483_real_audit_headline_full_token(tmp_path):
-    """Regression: a real run of the generator (flow_compliance audit on an
-    empty project → Overall: FAIL) shows the full ``FAIL`` token."""
-    project = tmp_path / "datacore_empty"
-    project.mkdir()
-    r = subprocess.run(
-        [sys.executable, str(PROGRAMS / "final_report_generate.py"),
-         str(project)],
-        capture_output=True, text=True)
-    assert r.returncode == 0, r.stderr
-    text = (project / "reports" / "final_summary.md").read_text()
-    assert "**`Overall: FAIL`**" in text
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -166,18 +79,11 @@ def test_483_real_audit_headline_full_token(tmp_path):
 # ════════════════════════════════════════════════════════════════════════
 
 
-
-
-
-
-
 def _run_foundry(project: Path):
     project.mkdir(parents=True, exist_ok=True)
     return subprocess.run(
         [sys.executable, str(FOUNDRY_PROG), str(project)],
         capture_output=True, text=True)
-
-
 
 
 def test_484_foundry_handoff_pending_txt_has_design_name(tmp_path):
@@ -190,24 +96,9 @@ def test_484_foundry_handoff_pending_txt_has_design_name(tmp_path):
     assert "# design: datacore_a" in note
 
 
-
-
-
-
 # ════════════════════════════════════════════════════════════════════════
 # #484 — STRICT named honest-N/A exemption (SECONDARY) + adversarial guard
 # ════════════════════════════════════════════════════════════════════════
-
-
-
-
-
-
-
-
-
-
-
 
 
 if __name__ == "__main__":

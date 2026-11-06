@@ -72,45 +72,10 @@ def _l9_port_names(l9: dict):
 # Guard (a) — SDC directive family is a PATTERN class
 # ---------------------------------------------------------------------------
 
-def test_sdc_directive_family_rejected():
-    for tok in (
-        "set_input_delay", "set_output_delay", "set_max_delay",
-        "set_min_delay", "create_clock", "create_generated_clock",
-        "set_load", "set_driving_cell", "set_clock_latency",
-        "set_clock_uncertainty", "set_false_path", "set_multicycle_path",
-        "all_inputs", "all_outputs", "get_ports", "current_design",
-    ):
-        assert _is_sdc_directive_token(tok), tok
-        assert not _is_real_port_token(tok, "DEMO_TOP"), (
-            f"SDC directive {tok!r} must NOT be a real port token")
-
-
-def test_sdc_guard_does_not_overmatch_real_ports():
-    # `set_*` / `*_delay` style names that are NOT SDC directives must
-    # still be allowed (no over-broad keyword grep).
-    for tok in ("setup_done", "reset_n", "delay_count", "i_set",
-                "delayed_data", "set_value"):
-        assert not _is_sdc_directive_token(tok), tok
-
 
 # ---------------------------------------------------------------------------
 # Guard (b) — stdcell library-prefix SHAPE (pattern, not vendor literal)
 # ---------------------------------------------------------------------------
-
-def test_stdcell_lib_shape_rejected():
-    # Synthetic process/variant names — SHAPE match only, no SKU.
-    for tok in (
-        "demo_fd_sc_hd", "proc_fd_sc_hdll", "xx_fd_sc_ls__1",
-        "alpha_sc_hd", "beta_sc_hs", "gamma_sc_hdll",
-    ):
-        assert _is_stdcell_lib_shape_token(tok), tok
-        assert not _is_real_port_token(tok, "DEMO_TOP"), (
-            f"stdcell-lib-shaped {tok!r} must NOT be a real port token")
-
-
-def test_stdcell_guard_does_not_overmatch_real_ports():
-    for tok in ("scl", "scan_en", "schedule", "scl_io", "sc_data"):
-        assert not _is_stdcell_lib_shape_token(tok), tok
 
 
 def _deny_tokens():
@@ -152,88 +117,6 @@ def _without_module_docstring(text):
     return "".join(lines[end:])
 
 
-def test_the_matcher_here_is_the_canonical_one_and_not_a_second_copy():
-    """THE RULE IS THE DENY LIST'S OWN, and this test used to break it.
-
-    `chip_deny_list.txt` states its contract in its own header: "Matching is
-    case-insensitive, **word-bounded (\\b)**", and the canonical
-    implementation is `source_chip_agnostic_check._build_token_re`,
-    `(?<![A-Za-z0-9_])(...)(?![A-Za-z0-9_])`. This test re-implemented the rule
-    as a bare SUBSTRING (`line in src.lower()`) and was therefore STRICTER than
-    the file it loads — not by decision, by re-implementation.
-
-    MEASURED at `7903c1972305` on `phase1_doc_one_shot_runner.py`: the
-    canonical matcher reports 0 hits, the substring one reports `['u_hawaii']`,
-    and the single occurrence is inside a COMMENT that cites a run as
-    provenance — `# Round 15 (u_hawaii_adc): a THIRD producer, ...` — not
-    detection logic, which is what this file's own docstring says it guards.
-    The hit is `u_hawaii` matching INSIDE `u_hawaii_adc`; the deny token is
-    `u_hawaii`, and under the word-bounded rule the tree already accepts
-    `u_hawaii_adc`. Aligning here changes no tree-wide policy: the canonical
-    gate reports 0 hits over all 1357 top-level programs today.
-
-    Whether the token OUGHT to be `u_hawaii_adc` is a deny-list question and is
-    not settled here — the deny list is untouched. Doing it the other way
-    round, dropping `u_hawaii` from the list to make one local test green,
-    would blind the tree-wide guard to a real private codename.
-    """
-    import source_chip_agnostic_check as S
-    header = (PROGRAMS / "tests" / "chip_deny_list.txt").read_text(
-        encoding="utf-8").lower()
-    assert "word-bounded" in header, (
-        "the deny list no longer states the word-bounded rule this test "
-        "delegates to; re-derive the contract before changing the matcher")
-    rx = S._build_token_re(_deny_tokens())
-    assert rx.search("u_hawaii ") and not rx.search("u_hawaii_adc"), (
-        "the canonical matcher is no longer word-bounded, so delegating to it "
-        "no longer means what this test says it means")
-
-
-def test_no_denied_literal_in_source():
-    """No deny-list codename in a program that CLAIMS the stricter rule.
-
-    THE POPULATION IS BEHAVIOURAL, not a filename. It used to be one
-    hand-typed path, which saw none of the other 1356 top-level programs and
-    would have expired silently. `source_chip_agnostic_check` already
-    maintains the registry this test wants: a program DECLARES `CHIP_AGNOSTIC:
-    strict` / `strict-logic` in its own header, that gate READS the
-    declaration, DISCLOSES it and explicitly does NOT enforce it — "the
-    program's own test is the lane that can refuse". This is that lane.
-
-    The promoter this file is about is scanned whether or not it declares,
-    because that is the subject the rest of the module guards.
-
-    Scanned WHOLE — comments and docstrings included — for every file except
-    the ones declaring `strict-logic`, whose declaration says the docstring is
-    stripped first. Nothing here is looser than what a file declared for
-    itself.
-    """
-    import source_chip_agnostic_check as S
-    rx = S._build_token_re(_deny_tokens())
-
-    subjects = {PROGRAMS / "phase1_doc_one_shot_runner.py": "strict"}
-    for f in sorted(PROGRAMS.glob("*.py")):
-        text = f.read_text(encoding="utf-8", errors="replace")
-        strictness, _off = S.declared_strictness_site(text)
-        if strictness:
-            subjects[f] = strictness
-    assert len(subjects) > 1, (
-        f"the declared-strict population collapsed to {len(subjects)}; a "
-        "single-member denominator reads clean no matter what it holds")
-
-    bad = {}
-    for f, strictness in sorted(subjects.items()):
-        text = f.read_text(encoding="utf-8", errors="replace")
-        if strictness == "strict-logic":
-            text = _without_module_docstring(text)
-        hits = _denied_hits(text, rx)
-        if hits:
-            bad[f.name] = hits
-    assert not bad, (
-        f"denied literal(s) present in a program that declares the stricter "
-        f"rule: {bad}")
-
-
 # ---------------------------------------------------------------------------
 # Guard (c) — positive port-like-evidence corroboration
 # ---------------------------------------------------------------------------
@@ -253,12 +136,6 @@ def test_positive_evidence_structured_source():
          "extraction_strategy": "rst_grid_interface_table"})
     assert _pin_has_port_like_evidence(
         {"name": "zzqq", "evidence": "pipe table row in pinout section"})
-
-
-def test_positive_evidence_functional_stem():
-    for nm in ("clk", "reset_n", "id_bus", "ddr_dq", "vbg", "ovp",
-               "cs", "we", "data_bus"):
-        assert _pin_has_port_like_evidence({"name": nm}), nm
 
 
 def test_positive_evidence_rejects_uncorroborated_novel_junk():

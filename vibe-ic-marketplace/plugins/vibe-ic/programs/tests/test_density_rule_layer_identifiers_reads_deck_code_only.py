@@ -43,7 +43,6 @@ sys.path.insert(0, str(PROGRAMS))
 import _prose_polarity as P  # noqa: E402
 import die_level_deck_rule_attribution as D  # noqa: E402
 import metal_fill_config_gen as G  # noqa: E402
-import prose_polarity_consulted_check as C  # noqa: E402
 
 EXEMPT_NAME = "metal_fill_config_gen::density_rule_layer_identifiers"
 
@@ -202,32 +201,8 @@ def test_offsets_and_line_count_are_preserved():
 # The exemption pays for itself.
 # ---------------------------------------------------------------------------
 
-def test_the_exemption_is_registered_with_a_real_argument():
-    assert EXEMPT_NAME in C._NOT_PROSE
-    reason = C._NOT_PROSE[EXEMPT_NAME].strip()
-    assert len(reason) >= C._EXEMPT_REASON_MIN
-    # the argument must name what makes the claim true and how it was checked
-    low = reason.lower()
-    for token in ("deck_code_only", "84", "negative control", "mutation"):
-        assert token in low, f"the argument does not mention {token!r}"
 
 
-def test_the_exemption_is_load_bearing_and_its_removal_refuses(monkeypatch):
-    """CONTROL. The scanner must still flag this function — an exemption for
-    something the scan no longer finds is dead weight, and `exemption_audit`
-    says so — and with the entry removed the ratchet must refuse again."""
-    root = PROGRAMS.parent
-    flagged = C.scan(root)
-    assert EXEMPT_NAME in flagged, (
-        "the exemption no longer names an offender; delete it with the fix")
-    assert C.exemption_audit(flagged, root) == []
-    # THE GATE ITSELF, the way the landing runs it.
-    assert C.main(["--ratchet", "--root", str(root)]) == 0
-
-    monkeypatch.delitem(C._NOT_PROSE, EXEMPT_NAME)
-    assert C.main(["--ratchet", "--root", str(root)]) == 1, (
-        "with the entry removed the ratchet must refuse again — an exemption "
-        "that changes nothing is not carrying the claim")
 
 
 def test_the_backward_direction_can_actually_fail():

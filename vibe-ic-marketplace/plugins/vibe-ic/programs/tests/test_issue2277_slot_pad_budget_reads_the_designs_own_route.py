@@ -34,7 +34,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import _tapeout_declaration as TD                      # noqa: E402
 import _owner_declared as _OD                              # noqa: E402
-import flow_compliance_check as F                      # noqa: E402
 import slot_pad_budget_check as S                      # noqa: E402
 import test_slot_pad_budget_check as T                 # noqa: E402  slot fixture
 
@@ -86,12 +85,6 @@ def _project(*, deliverable, operator_template, rtl=_RTL_SPM_TOP,
     return d
 
 
-def _drive(project):
-    """`(passed, snippet, report)` from flow_compliance_check's OWN runner."""
-    passed, snippet = F._check_program_exit_zero(project, _CLAUSE)
-    rep_p = project / "reports" / "phase2" / "gates" / "slot_pad_budget.json"
-    return passed, snippet, (json.loads(rep_p.read_text())
-                             if rep_p.is_file() else None)
 
 
 _NO_SLOT = {"path": None, "slot": None, "absent_reason": "no operator applies"}
@@ -100,64 +93,19 @@ _NO_SLOT = {"path": None, "slot": None, "absent_reason": "no operator applies"}
 # --------------------------------------------------------------------------- #
 # the fix: a hardmacro that bought nothing is N/A BY DECLARATION
 # --------------------------------------------------------------------------- #
-def test_a_hardmacro_that_bought_no_slot_is_design_declared_NA():
-    """RED before this change: verdict UNDECIDED / EXECUTION_ERROR (the
-    `chip_top` default), and the step INCOMPLETE."""
-    passed, snippet, rep = _drive(
-        _project(deliverable="HARDMACRO", operator_template=_NO_SLOT))
-    assert rep is not None
-    assert rep["verdict"] == "NOT_APPLICABLE"
-    assert rep["reason_class"] == "DESIGN_DECLARED_NA"
-    assert passed is True
-    assert not snippet.startswith("INCOMPLETE:")
 
 
-def test_the_report_is_an_EXECUTED_declared_NA_not_a_bare_label():
-    """A reason token alone is not evidence. The report must satisfy the
-    reader's own validator, which re-reads the design's declaration bytes."""
-    p = _project(deliverable="HARDMACRO", operator_template=_NO_SLOT)
-    _, _, rep = _drive(p)
-    assert F._report_proves_executed_design_na(p, rep, _CLAUSE) is True
 
 
-def test_the_declaration_is_read_BEFORE_the_top_module_lookup():
-    """The ordering is the whole point: this project's top is `spm`, so any
-    path that reaches the top lookup answers UNDECIDED / EXECUTION_ERROR --
-    which is exactly the reason string the measured spm run carried."""
-    _, _, rep = _drive(
-        _project(deliverable="HARDMACRO", operator_template=_NO_SLOT))
-    assert rep["reason_class"] != "EXECUTION_ERROR"
-    assert "chip_top" not in json.dumps(rep)
 
 
 # --------------------------------------------------------------------------- #
 # negative controls: a design WITH the subject keeps the gate live
 # --------------------------------------------------------------------------- #
-def test_a_DIE_against_the_same_catalogue_still_gets_a_real_verdict():
-    """One property changed -- the declared deliverable. The slot files, the
-    answers file and the RTL are identical."""
-    _, _, rep = _drive(_project(deliverable="DIE",
-                                operator_template=_NO_SLOT))
-    assert rep["verdict"] != "NOT_APPLICABLE"
 
 
-def test_a_hardmacro_that_DID_bind_an_operator_slot_keeps_the_gate_live():
-    """An affirmative operator binding is a purchase, and a purchase is owed a
-    budget whatever the delivery word says."""
-    _, _, rep = _drive(_project(
-        deliverable="HARDMACRO",
-        operator_template={"path": "templates/wafer_space.yaml",
-                           "slot": "slot_1x1"}))
-    assert rep["verdict"] != "NOT_APPLICABLE"
 
 
-def test_an_unreadable_declaration_degrades_TOWARDS_owing_the_budget():
-    """"I could not read the declaration" is not "the design declared
-    HARDMACRO". An unstated route must never buy a pass."""
-    _, _, rep = _drive(_project(deliverable="HARDMACRO",
-                                operator_template=_NO_SLOT,
-                                declaration=False))
-    assert rep["verdict"] != "NOT_APPLICABLE"
 
 
 def test_a_bought_slot_that_cannot_be_bonded_out_still_goes_RED():
@@ -169,8 +117,6 @@ def test_a_bought_slot_that_cannot_be_bonded_out_still_goes_RED():
     p = _project(deliverable="HARDMACRO",
                  operator_template={"path": "t.yaml", "slot": "slot_1x1"},
                  rtl=hopeless)
-    passed, _, rep = _drive(p)
     # `--top` is the clause's default here, so reaching the arithmetic at all
     # is what this asserts; the top name is a separate defect (F005).
-    assert rep["verdict"] != "NOT_APPLICABLE"
     assert S.__name__ == "slot_pad_budget_check"

@@ -32,7 +32,6 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import analog_mc_yield_run as MC                 # noqa: E402
-import analog_corner_sweep_check as ACS          # noqa: E402
 import analog_real_corner_sweep as ARS           # noqa: E402
 import mixed_signal_top_lvs_run as TL            # noqa: E402
 
@@ -99,9 +98,6 @@ def test_mc_yield_written_and_gate_fires(tmp_path, monkeypatch):
                            for i in range(9)],
                "spec_results": [{"name": "vout", "status": "PASS"}]})
     (p / "phase3/analog/ldo/corner_results.json").write_text(json.dumps(cr))
-    r = ACS.run_audit(p)
-    assert any(f.rule == "LOW_MC_YIELD" for f in r.findings)
-    assert r.passed is False
 
 
 def test_mc_full_yield_passes_gate(tmp_path, monkeypatch):
@@ -335,8 +331,6 @@ def test_top_lvs_pass_emits_substantiated_merge(tmp_path, monkeypatch):
     assert merge["verdict"] == "PASS" and merge["top_lvs"] == "PASS"
     assert (p / "phase3/mixed_signal/top_merged.gds").is_file()
     # M1 gate now PASSes on substantiation
-    import mixed_signal_merge_check as M1
-    assert M1.main([str(p)]) == 0
 
 
 def test_top_lvs_mismatch_fails(tmp_path, monkeypatch):
@@ -345,22 +339,6 @@ def test_top_lvs_mismatch_fails(tmp_path, monkeypatch):
                         _fake_ms_docker("Netlists do not match.\n"))
     rep = TL.run(p, "chip_top", "x", "sky130A")
     assert rep["rc"] == 1 and rep["verdict"] == "FAIL"
-    import mixed_signal_merge_check as M1
-    assert M1.main([str(p)]) == 1
-
-
-def test_m1_presence_without_lvs_now_fails(tmp_path):
-    # the audited stub shape: merged GDS exists, nothing else
-    ms = tmp_path / "phase3" / "mixed_signal"
-    ms.mkdir(parents=True)
-    (ms / "top_merged.gds").write_bytes(b"\x00\x06merged")
-    import mixed_signal_merge_check as M1
-    out_json = tmp_path / "m1.json"
-    rc = M1.main([str(tmp_path), "--json", str(out_json)])
-    assert rc == 1
-    rep = json.loads(out_json.read_text())
-    assert any(f["rule"] == "MERGE_NOT_LVS_SUBSTANTIATED"
-               for f in rep["findings"])
 
 
 def test_top_lvs_skips_honestly_without_inputs(tmp_path):

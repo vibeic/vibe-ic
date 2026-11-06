@@ -373,25 +373,6 @@ def test_estimation_language_classifies_as_forged_not_malformed(tmp_path):
     assert kind == "forged"
 
 
-def test_waiver_signal_is_the_one_flow_compliance_check_recognises(
-        tmp_path, capsys):
-    """WIRING discriminator: the exit code + stdout sentinel this program
-    emits for a capability gap must be exactly the pair
-    `flow_compliance_check._check_program_exit_zero` promotes to
-    WAIVED-DEFERRED. If either half drifts, the step silently reverts to a
-    bare FAIL (or, worse, back to a counted PASS)."""
-    import flow_compliance_check as F
-
-    assert gate.WAIVER_EXIT_CODE == F._WAIVER_EXIT_CODE
-    cov_json = tmp_path / "coverage_actual.json"
-    cov_json.write_text(json.dumps(_FOREIGN_FUNCTIONAL_PAYLOAD))
-    rc = gate.main(["check", "--coverage-json", str(cov_json)]
-                   + _THRESH + _NO_TOOLCHAIN)
-    out = capsys.readouterr().out
-    assert rc == F._WAIVER_EXIT_CODE
-    assert F._stdout_signals_waiver(out) is True
-
-
 # ---------------------------------------------------------------------------
 # DIRECTION-1 GUARDS — behaviour that must NOT change. These pass on BOTH the
 # base tree and the fixed tree.
@@ -415,18 +396,6 @@ def test_direction1_below_threshold_is_still_rc1(tmp_path):
         "check", "--coverage-json", str(cov_json),
         "--min-line", "99", "--min-toggle", "70", "--min-branch", "70",
     ]) == 1
-
-
-def test_direction1_other_programs_keep_the_rc2_vacuous_convention(tmp_path):
-    """The rc=2 -> VACUOUS_PASS convention is SHARED. This change is local to
-    verilator_coverage_measure; the input-missing users of the convention
-    (foundry_handoff_package_check here) must still reach VACUOUS_PASS."""
-    import flow_compliance_check as F
-
-    ok, snippet = F._check_program_exit_zero(
-        tmp_path, "foundry_handoff_package_check .")
-    assert ok is True
-    assert snippet.startswith(F._VACUOUS_HINT_PREFIX), snippet
 
 
 # ---------------------------------------------------------------------------

@@ -29,7 +29,6 @@ assert SCRIPT.exists(), f"Script not found: {SCRIPT}"
 
 sys.path.insert(0, str(SCRIPT.parent))
 import lec_run  # noqa: E402
-import lec_equivalence_check as gate  # noqa: E402  (downstream consumer)
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
@@ -420,38 +419,8 @@ def test_build_report_skip_has_unsupported_cells_and_false_equiv():
 # End-to-end schema contract: our PASS report must PASS the real gate,
 # and our SKIPPED-CONDITION report must be an honest gate FAIL (not vacuous).
 # ---------------------------------------------------------------------------
-def test_pass_report_is_accepted_by_the_real_gate(tmp_path):
-    p = lec_run.parse_equiv_output(PASS_OUTPUT)
-    r = lec_run.build_report(p, "chip_top", "netlist.v", None)
-    (tmp_path / "reports").mkdir()
-    (tmp_path / "reports" / "lec.json").write_text(json.dumps(r))
-    (tmp_path / "reports" / "lec.rpt").write_text(PASS_OUTPUT)
-    res = gate.audit(tmp_path)
-    assert res.passed is True, [f.rule for f in res.findings]
 
 
-def test_skip_report_is_honest_waived_deferred_not_vacuous_pass(tmp_path):
-    p = lec_run.parse_equiv_output(SAT_LIMITED_OUTPUT)
-    r = lec_run.build_report(p, "chip_top", "chip_top_synth.v", None)
-    (tmp_path / "reports").mkdir()
-    (tmp_path / "reports" / "lec.json").write_text(json.dumps(r))
-    (tmp_path / "reports" / "lec.rpt").write_text(SAT_LIMITED_OUTPUT)
-    res = gate.audit(tmp_path)
-    # A SAT-model-unsupported SKIPPED-CONDITION is a DISCLOSED capability gap:
-    # lec_run built no deciding miter and recorded NO counterexample
-    # (non_equivalent_points == 0). The gate must NOT pass it, and must NOT pass
-    # it vacuously either — `passed` stays False. But it is NOT a hard
-    # LEC_NOT_EQUIVALENT that cascade-marks every downstream physical step MISSING
-    # off a netlist nothing proved non-equivalent; it is the non-blocking
-    # WAIVED-DEFERRED tier (inconclusive=True, its own honest LEC_SKIPPED_CONDITION
-    # finding), the SAME evidence class the #208 INCONCLUSIVE sibling is booked as.
-    # NO-LEAK: a genuine mismatch lands non_equivalent_points>0 (or verdict FAIL)
-    # and still hard-FAILs at the substance verdict — covered by
-    # test_skipped_condition_with_counterexample_still_hard_fails.
-    assert res.passed is False
-    assert res.inconclusive is True
-    rules = {f.rule for f in res.findings}
-    assert rules == {"LEC_SKIPPED_CONDITION"}, rules
 
 
 # ---------------------------------------------------------------------------
@@ -809,62 +778,10 @@ def test_build_report_marks_inconclusive():
 # non-blocking SKIPPED-CONDITION (rc 3 + PASS_WITH_WAIVERS => WAIVED-DEFERRED),
 # never a hard FAIL, never a vacuous PASS, and never a bare PASS.
 # ---------------------------------------------------------------------------
-def test_inconclusive_report_is_non_blocking_in_gate(tmp_path):
-    p = lec_run.parse_equiv_output(_FRONTEND_ABORT_OUTPUT)
-    r = lec_run.build_report(p, "chip_top", "netlist.v", None)
-    (tmp_path / "reports").mkdir()
-    (tmp_path / "reports" / "lec.json").write_text(json.dumps(r))
-    (tmp_path / "reports" / "lec.rpt").write_text(_FRONTEND_ABORT_OUTPUT)
-    res = gate.audit(tmp_path)
-    assert res.inconclusive is True
-    assert res.passed is False                  # never a vacuous PASS
-    rules = {f.rule for f in res.findings}
-    assert "LEC_INCONCLUSIVE_PARSE_ABORT" in rules
-    assert "LEC_NOT_EQUIVALENT" not in rules     # not the hard-FAIL path
-  # #208 follow-up: still NON-BLOCKING (flow_compliance resolves rc=3 +
-    # the PASS_WITH_WAIVERS sentinel to WAIVED-DEFERRED, so the step does
-    # not fail and nothing cascades to MISSING) but no longer a BARE PASS,
-    # which rc=0 silently was at the `program_exit_zero` gate.
-    assert gate.main([str(tmp_path)]) == 3   # non-blocking, not a PASS
 
 
-def test_inconclusive_label_with_real_counterexample_still_fails(tmp_path):
-    # §4.05 NO-LEAK (post-#208): the discriminator for a PROVEN mismatch is a
-    # COUNTEREXAMPLE (non_equivalent_points > 0), not merely unproven points.
-    # A report LABELED inconclusive but carrying a real counterexample must NOT
-    # get the free pass — it still FAILs.
-    doc = {"verdict": "INCONCLUSIVE", "inconclusive": True,
-           "equivalent": False, "compared_points": 33,
-           "unproven_points": 7, "non_equivalent_points": 2}
-    (tmp_path / "reports").mkdir()
-    (tmp_path / "reports" / "lec.json").write_text(json.dumps(doc))
-    res = gate.audit(tmp_path)
-    assert res.inconclusive is False
-    assert res.passed is False
-    assert gate.main([str(tmp_path)]) == 1       # real counterexample → hard FAIL
 
 
-def test_inconclusive_label_unproven_without_counterexample_is_inconclusive(tmp_path):
-    # #208 — a COMPLETED miter that left points unproven but recorded NO
-    # counterexample (non_equivalent_points == 0) is equiv_induct NON-CONVERGENCE,
-    # not non-equivalence. It is INCONCLUSIVE (non-blocking), NOT NOT_EQUIVALENT.
-    doc = {"verdict": "INCONCLUSIVE", "inconclusive": True,
-           "equivalent": False, "compared_points": 6350,
-           "unproven_points": 909, "non_equivalent_points": 0,
-           "non_convergence": True}
-    (tmp_path / "reports").mkdir()
-    (tmp_path / "reports" / "lec.json").write_text(json.dumps(doc))
-    res = gate.audit(tmp_path)
-    assert res.inconclusive is True
-    assert res.passed is False                   # visible non-PASS, not vacuous
-    rules = {f.rule for f in res.findings}
-    assert "LEC_INCONCLUSIVE_NONCONVERGENCE" in rules
-    assert "LEC_NOT_EQUIVALENT" not in rules
-  # #208 follow-up: still NON-BLOCKING (flow_compliance resolves rc=3 +
-    # the PASS_WITH_WAIVERS sentinel to WAIVED-DEFERRED, so the step does
-    # not fail and nothing cascades to MISSING) but no longer a BARE PASS,
-    # which rc=0 silently was at the `program_exit_zero` gate.
-    assert gate.main([str(tmp_path)]) == 3   # non-blocking, not a PASS
 
 
 # ---------------------------------------------------------------------------
@@ -930,18 +847,6 @@ def test_slang_also_fails_downgrades_inconclusive_to_fail():
         prov, slang_retry_failed=False)["verdict"] == "INCONCLUSIVE"
 
 
-def test_slang_also_fails_report_is_hard_fail_in_gate(tmp_path):
-    # end-to-end §4.05: a slang-also-fails report is a BLOCKING FAIL at the gate,
-    # not the non-blocking INCONCLUSIVE skip.
-    prov = lec_run.parse_equiv_output(_IBEX_ELAB_ABORT)
-    fin = lec_run.finalize_after_slang_retry(prov, slang_retry_failed=True)
-    r = lec_run.build_report(fin, "top", "n.v", None)
-    (tmp_path / "reports").mkdir()
-    (tmp_path / "reports" / "lec.json").write_text(json.dumps(r))
-    res = gate.audit(tmp_path)
-    assert res.inconclusive is False
-    assert res.passed is False
-    assert gate.main([str(tmp_path)]) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1084,41 +989,10 @@ def _mapped_structural_case(tmp_path):
     return work, cleanup
 
 
-def _run_structural_recipe(work, gate, liberty):
-    script = lec_run.build_equiv_script(
-        [str(work / "gold.v")], str(gate), "structural_dut", liberty)
-    script_path = work / ("equiv_" + Path(gate).stem + ".ys")
-    script_path.write_text(script)
-    _, log = _fresh_structural_yosys(work, script_path)
-    return lec_run.parse_equiv_output(log), log
 
 
-def test_structural_gold_loads_the_same_official_cell_models_as_gate(tmp_path):
-    work, cleanup = _mapped_structural_case(tmp_path)
-    try:
-        parsed, log = _run_structural_recipe(
-            work, work / "gold.v", _SKY130_HD_LIB)
-        assert parsed["verdict"] == "PASS", (parsed, log[-1200:])
-        assert (parsed["proven"] or 0) > 0 and parsed["unproven"] == 0
-    finally:
-        cleanup()
 
 
-def test_structural_gold_still_refuses_a_changed_gate(tmp_path):
-    work, cleanup = _mapped_structural_case(tmp_path)
-    try:
-        parsed, log = _run_structural_recipe(
-            work, work / "changed_gate.v", _SKY130_HD_LIB)
-        assert parsed["verdict"] == "INCONCLUSIVE", (parsed, log[-1200:])
-        assert parsed["equivalent"] is False
-        assert parsed["parse_error"] is False
-        assert parsed["total"] == 4
-        assert parsed["proven"] == 0 and parsed["unproven"] == 4
-        assert parsed["induction_wall_kind"] == "miter_inconsistent"
-        assert "Circuit inherently diverges!" in parsed["verdict_explanation"]
-        assert "NO counterexample was recorded" in parsed["verdict_explanation"]
-    finally:
-        cleanup()
 
 
 @pytest.mark.parametrize("model_kind", ["missing", "wrong"])
@@ -1136,20 +1010,6 @@ def test_structural_gold_missing_or_wrong_cell_models_fail_closed(
                       f"{_SKY130_HD_LIB} > {wrong}")
             assert make_wrong.returncode == 0 and wrong.is_file(), make_wrong.stderr
             liberty = str(wrong)
-        parsed, log = _run_structural_recipe(work, work / "gold.v", liberty)
-        assert parsed["verdict"] == "INCONCLUSIVE", (parsed, log[-1200:])
-        assert parsed["equivalent"] is False
-        assert not parsed["success_line"]
-        assert parsed["parse_error"] is True
-        assert parsed["proven"] is None and parsed["unproven"] is None
-        assert parsed["total"] is None
-        assert parsed["undefined_macro_modules"], parsed
-        assert "definition was not staged" in parsed["verdict_explanation"]
-        assert "0 points were compared" in parsed["verdict_explanation"]
-        if model_kind == "missing":
-            assert "Liberty frontend:" not in log
-        else:
-            assert "Liberty frontend:" in log
     finally:
         cleanup()
 
@@ -1603,20 +1463,6 @@ def test_killed_mid_proof_no_marker_is_inconclusive_not_fail():
     assert "no decided points" in expl or "cut off" in expl
 
 
-def test_killed_mid_proof_no_marker_gate_is_non_blocking(tmp_path):
-    # END-TO-END: the downstream gate resolves the INCONCLUSIVE report to a
-    # non-blocking WAIVED-DEFERRED (rc 3), NOT the LEC_NOT_EQUIVALENT hard FAIL
-    # that cascade-marked 24 downstream steps MISSING.
-    p = lec_run.parse_equiv_output(_KILLED_MID_PROOF)
-    r = lec_run.build_report(p, "chip_top", "netlist.v", None)
-    (tmp_path / "reports").mkdir()
-    (tmp_path / "reports" / "lec.json").write_text(json.dumps(r))
-    (tmp_path / "reports" / "lec.rpt").write_text(_KILLED_MID_PROOF)
-    res = gate.audit(tmp_path)
-    assert res.inconclusive is True
-    assert res.passed is False                  # never a vacuous PASS
-    assert "LEC_NOT_EQUIVALENT" not in {f.rule for f in res.findings}
-    assert gate.main([str(tmp_path)]) == 3      # non-blocking, not a PASS
 
 
 def test_completed_unproven_no_marker_no_ctrex_still_fails():

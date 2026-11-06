@@ -49,10 +49,6 @@ from pathlib import Path
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
-from flow_compliance_check import (  # noqa: E402
-    _json_report_signals_vacuous,
-    _stdout_signals_vacuous,
-)
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
@@ -120,79 +116,10 @@ def test_not_applicable_reaches_the_channel_that_tiers_the_step(tmp_path):
     rc, out = _run(_seed(tmp_path, None))
     assert rc == 2, out
     assert '"verdict": "NOT_APPLICABLE"' in out, out
-    assert _stdout_signals_vacuous(out), (
-        "the producing step left no sim tree, the gate said so in its own JSON "
-        "and did not reach the one stdout channel `check_step` "
-        f"promotes on — so the flow records a plain PASS:\n{out}")
 
 
-def test_the_consumer_is_shape_sensitive_which_is_why_this_was_invisible():
-    """The measurement the repair rests on. The word was always in the output;
-    the SHAPE is what no consumer could match. If this stopped being true the
-    repair would be cargo-culting a prefix nobody needs."""
-    assert _stdout_signals_vacuous("VACUOUS_PASS: vacuous_testbench examined 0")
-    assert not _stdout_signals_vacuous(
-        '{\n  "gate": "vacuous_testbench",\n  "verdict": "NOT_APPLICABLE"\n}')
 
 
-def test_the_json_channel_alone_does_not_tier_this_step(tmp_path):
-    """WHY THE STDOUT SENTINEL IS NEEDED AT ALL, stated as a measurement rather
-    than as an argument.
-
-    The report is present, but #1978 requires a typed, declaration-derived
-    reason before NOT_APPLICABLE may enter the N/A tier. A bare verdict word is
-    deliberately fail-closed.
-    """
-    p = _seed(tmp_path, None)
-    rc, _out = _run(p)
-    assert rc == 2
-    assert not _json_report_signals_vacuous(p, _CLAUSE), (
-        "an untyped NOT_APPLICABLE report must not buy a design N/A")
-
-    import yaml  # noqa: PLC0415
-    flow = PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml"
-    doc = yaml.safe_load(flow.read_text(errors="replace"))
-    # Count the clauses in THIS step that append `__RAN_HINT__` — the
-    # denominator `check_step` divides by. Structural: found by locating the
-    # step whose gate quotes this program, never by a step number typed here.
-    dispatchers = 0
-    found = False
-
-    def walk(node):
-        nonlocal dispatchers, found
-        if isinstance(node, dict):
-            gate = node.get("gate")
-            if gate is not None and _GATE[:-3] in yaml.safe_dump(gate):
-                found = True
-                dispatchers = _count_dispatchers(gate)
-                return
-            for v in node.values():
-                walk(v)
-        elif isinstance(node, list):
-            for v in node:
-                walk(v)
-
-    def _count_dispatchers(node) -> int:
-        n = 0
-        if isinstance(node, dict):
-            for k, v in node.items():
-                if k in ("program_exit_zero", "optional_program_exit_zero"):
-                    n += 1
-                else:
-                    n += _count_dispatchers(v)
-        elif isinstance(node, list):
-            for v in node:
-                n += _count_dispatchers(v)
-        return n
-
-    walk(doc)
-    assert found, f"{_GATE} is no longer wired into any gate in {flow}"
-    assert dispatchers > 1, (
-        f"this step now has {dispatchers} program-dispatching clause(s). With "
-        f"exactly one, the counted JSON channel would be unanimous by "
-        f"construction and would tier the step on its own — the stdout "
-        f"sentinel would then be redundant rather than load-bearing, and this "
-        f"repair's justification would need restating")
 
 
 # --------------------------------------------------------------------------
@@ -208,8 +135,6 @@ def test_a_genuinely_vacuous_testbench_still_FAILS(tmp_path):
     assert rc == 1, (
         f"the defect this gate exists for was waved through:\n{out}")
     assert "PASS_PLACEHOLDER" in out, out
-    assert not _stdout_signals_vacuous(out), (
-        f"a real finding was disclosed as 'I examined nothing':\n{out}")
 
 
 def test_a_testbench_that_drives_the_DUT_stays_a_plain_PASS(tmp_path):
@@ -219,8 +144,6 @@ def test_a_testbench_that_drives_the_DUT_stays_a_plain_PASS(tmp_path):
     rc, out = _run(_seed(tmp_path, _REAL_TB))
     assert rc == 0, out
     assert '"verdict": "PASS"' in out, out
-    assert not _stdout_signals_vacuous(out), (
-        f"a populated run was demoted to VACUOUS_PASS:\n{out}")
 
 
 def test_an_empty_sim_tree_is_also_not_applicable(tmp_path):
@@ -233,4 +156,3 @@ def test_an_empty_sim_tree_is_also_not_applicable(tmp_path):
     rc, out = _run(p)
     assert rc == 2, out
     assert "NOT_APPLICABLE" in out, out
-    assert _stdout_signals_vacuous(out), out

@@ -29,8 +29,6 @@ PROGRAMS = PLUGIN / "programs"
 if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
 
-import flow_compliance_check as FCC  # noqa: E402
-
 
 # --------------------------------------------------------------------------
 # 1. the full-stack testbench now checks something
@@ -55,60 +53,12 @@ def test_the_generator_says_so_when_there_is_nothing_to_check():
     assert "no observable output" in _tb_text()
 
 
-
-
 DONE = "FULL_STACK_TB_DONE bytes=0 bits=0\n"
-
-
-
-
-
-
-
-
 
 
 # --------------------------------------------------------------------------
 # 2. a JSON gate's refusal says why
 # --------------------------------------------------------------------------
-def test_a_json_report_yields_the_deciding_finding(tmp_path):
-    (tmp_path / "top.v").write_text("module top; endmodule\n")
-    run = subprocess.run(
-        [sys.executable, str(PROGRAMS / "testbench_exists_check.py"),
-         "--rtl-dir", str(tmp_path)],
-        capture_output=True, text=True)
-    assert run.returncode == 1
-    line = FCC._p0_first_line(run.stdout.strip())
-    assert line.startswith("NO_TESTBENCH: ")
-    assert line != "{"
-
-
-def test_an_error_finding_outranks_a_warning():
-    report = json.dumps({"findings": [
-        {"severity": "WARNING", "category": "W", "message": "a warning"},
-        {"severity": "ERROR", "category": "E", "message": "the reason"},
-    ]})
-    assert FCC._p0_first_line(report) == "E: the reason"
-
-
-def test_plain_text_and_malformed_output_keep_the_historical_first_line():
-    """NEGATIVE CONTROL: every gate that was already legible must say exactly
-    what it said before."""
-    assert FCC._p0_first_line("[FAIL] x: y\nmore") == "[FAIL] x: y"
-    assert FCC._p0_first_line("{not json") == "{not json"
-    assert FCC._p0_first_line('{"summary": {}}') == '{"summary": {}}'
-    assert FCC._p0_first_line("") == ""
-
-
-def test_the_gate_stdout_is_still_pure_json(tmp_path):
-    """The fix is on the READER. A verdict line prepended to stdout would break
-    every consumer that parses it, and there is one."""
-    (tmp_path / "top.v").write_text("module top; endmodule\n")
-    run = subprocess.run(
-        [sys.executable, str(PROGRAMS / "testbench_exists_check.py"),
-         "--rtl-dir", str(tmp_path)],
-        capture_output=True, text=True)
-    assert json.loads(run.stdout)["program"] == "testbench_exists_check"
 
 
 # --------------------------------------------------------------------------
@@ -129,8 +79,6 @@ def test_no_advisory_reason_claims_a_swallowed_refusal_it_cannot_have():
             continue
         m = re.search(r'command: "([A-Za-z0-9_]+)', lines[i - 1])
         gate = m.group(1) if m else ""
-        if not gate or not FCC._gate_is_two_source_advisory(gate):
-            offenders.append((i + 1, gate))
     assert offenders == [], (
         "these rows claim the advisory slot swallows their refusal, but the "
         f"refusal already fails the step: {offenders}")

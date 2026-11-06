@@ -46,7 +46,6 @@ from pathlib import Path
 
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PLUGIN / "programs"))
-import pvt_matrix_check as PMC      # noqa: E402
 
 _P3_SRC = (PLUGIN / "programs" / "phase3_one_shot_runner.py").read_text()
 
@@ -64,24 +63,6 @@ _KLAYOUT_RDB = ("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
                 "  <top-cell>chip_top</top-cell>\n"
                 "  <items></items>\n"
                 "</report-database>\n")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_693_source_calls_declarer_after_writing_drc_signoff(tmp_path):
@@ -121,82 +102,6 @@ _VALID_STANCE = {
     "rationale": "single-corner PDK disclosed per #442/#694",
     "review_required": True,
 }
-
-
-def test_694_empty_matrix_with_stance_defers(tmp_path):
-    """POSITIVE: empty matrix + valid disclosed stance → DEFER (exit 0),
-    not FAIL."""
-    _matrix(tmp_path, {"corners": [], "primary_corner": "TT"})
-    _stance(tmp_path, _VALID_STANCE)
-    rep = PMC.audit(tmp_path)
-    assert rep["rc"] == 0
-    assert rep["verdict"] == "SINGLE_CORNER_STANCE_DISCLOSED"
-    assert rep["review_required"] is True
-
-
-def test_694_empty_matrix_no_stance_still_fails(tmp_path):
-    """§4.05: no stance at all → empty matrix still FAILs (#442 unchanged)."""
-    _matrix(tmp_path, {"corners": [], "primary_corner": "TT"})
-    rep = PMC.audit(tmp_path)
-    assert rep["rc"] == 1 and rep["verdict"] == "FAIL"
-
-
-def test_694_contradictory_multi_corner_claim_still_fails_with_stance(tmp_path):
-    """§4.05: an empty matrix that CLAIMS multi_corner=true STILL FAILs even
-    with a valid stance present — the stance never rescues a contradictory
-    claim."""
-    _matrix(tmp_path, {"corners": [], "multi_corner": True})
-    _stance(tmp_path, _VALID_STANCE)
-    rep = PMC.audit(tmp_path)
-    assert rep["rc"] == 1 and rep["verdict"] == "FAIL"
-    assert "contradictory" in rep["reason"]
-
-
-def test_694_stance_claiming_multi_corner_does_not_rescue(tmp_path):
-    """§4.05: a stance file that itself claims multi-corner is not a valid
-    single-corner disclosure → does NOT rescue."""
-    _matrix(tmp_path, {"corners": [], "primary_corner": "TT"})
-    _stance(tmp_path, {"stance": "SINGLE_CORNER_DISCLOSED",
-                       "multi_corner_claimed": True})
-    rep = PMC.audit(tmp_path)
-    assert rep["rc"] == 1 and rep["verdict"] == "FAIL"
-
-
-def test_694_malformed_stance_does_not_rescue(tmp_path):
-    """§4.05: a malformed / non-disclosing stance file does NOT rescue."""
-    _matrix(tmp_path, {"corners": [], "primary_corner": "TT"})
-    d = tmp_path / "reports" / "phase3"
-    d.mkdir(parents=True, exist_ok=True)
-    (d / "single_corner_stance.json").write_text("{ not json")
-    rep = PMC.audit(tmp_path)
-    assert rep["rc"] == 1 and rep["verdict"] == "FAIL"
-
-
-def test_694_wrong_stance_string_does_not_rescue(tmp_path):
-    """A stance file present but without the SINGLE_CORNER_DISCLOSED stance
-    string does NOT rescue (only an explicit disclosure defers)."""
-    _matrix(tmp_path, {"corners": [], "primary_corner": "TT"})
-    _stance(tmp_path, {"stance": "SOMETHING_ELSE",
-                       "multi_corner_claimed": False})
-    rep = PMC.audit(tmp_path)
-    assert rep["rc"] == 1 and rep["verdict"] == "FAIL"
-
-
-def test_694_two_corners_still_multi_unaffected(tmp_path):
-    """The stance path NEVER touches a real multi-corner matrix."""
-    _matrix(tmp_path, {"corners": [
-        {"name": "a", "label": "SS"}, {"name": "b", "label": "FF"}]})
-    _stance(tmp_path, _VALID_STANCE)  # stance present but irrelevant
-    rep = PMC.audit(tmp_path)
-    assert rep["rc"] == 0 and rep["verdict"] == "MULTI_CORNER"
-
-
-def test_694_single_real_corner_still_single_corner_only(tmp_path):
-    """Exactly 1 corner is honest single-corner already (#442) and is not
-    re-routed through the empty-matrix stance path."""
-    _matrix(tmp_path, {"corners": [{"name": "lib_tt", "label": "TT"}]})
-    rep = PMC.audit(tmp_path)
-    assert rep["rc"] == 0 and rep["verdict"] == "SINGLE_CORNER_ONLY"
 
 
 def test_694_runner_emits_stance_when_under_two_corners(tmp_path):

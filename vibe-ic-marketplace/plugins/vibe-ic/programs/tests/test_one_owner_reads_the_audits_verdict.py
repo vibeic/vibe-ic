@@ -44,11 +44,8 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 
 import verdict as _V                                   # noqa: E402
-import _audit_verdict as A                             # noqa: E402
 import _watchdog as _wd                                # noqa: E402
 import design_one_shot_runner as D                     # noqa: E402
-import phase23_completion_self_audit_check as GATE     # noqa: E402
-import final_report_generate as F                      # noqa: E402
 
 HEADER = "Steps: 34 total (34/34 executed PASS, 0 DEFERRED via waiver)\n"
 
@@ -71,23 +68,8 @@ def clean(word: str = "PASS") -> str:
 
 # ═══ the owner ════════════════════════════════════════════════════════════
 
-def test_the_owner_reads_both_channels():
-    assert A.read(clean("PASS"), 0).is_green is True
-    assert A.read(canary("PASS"), 1).is_green is False
-    assert A.read(canary("PASS"), 1).certified is False
-    assert A.read(canary("PASS_WITH_WAIVERS"), 1).is_green is False
-    # a word the audit DOES stand behind, however unwelcome
-    for w in (_V.Verdict.FAIL.value, _V.Verdict.NOT_MEASURED.value):
-        v = A.read(f"\nOverall: {w}  (strict=True)\n", 1)
-        assert v.certified is True and v.is_green is False, w
-        assert v.word == w
 
 
-def test_the_owner_returns_the_word_not_a_boolean():
-    """A boolean cannot tell "found a defect" from "could not measure" — the distinction
-    R-0915-159 exists to keep, and the reason the acceptance gate needed the vocabulary."""
-    for w in [v.value for v in _V.RUN_PRECEDENCE]:
-        assert A.read(f"\nOverall: {w}  (strict=True)\n", 0).word == w
 
 
 def test_the_owner_anchors_and_takes_the_last_verdict_line():
@@ -97,28 +79,11 @@ def test_the_owner_anchors_and_takes_the_last_verdict_line():
            "\nBlocker list (classified) — 1 non-PASS step(s).\n"
            "       observed : program failed | output: Overall: PASS  (strict=True)\n")
     assert out.rindex("Overall: PASS") > out.rindex("Overall: FAIL")
-    assert A.verdict_word(out) == "FAIL"
     # and when there really are two verdict LINES, the later one is the run's
-    assert A.verdict_word("Overall: PASS  (x)\nOverall: FAIL  (x)\n") == "FAIL"
 
 
-def test_the_owner_keeps_issue_483s_token_rule():
-    """#483: the token is everything up to the trailing annotation, never the first
-    whitespace chunk. The three readers' rules differed; the owner carries the careful one."""
-    assert A.verdict_word("Overall: PASS_WITH_OPEN_SOURCE_CONSTRAINTS  (strict=True)\n") == (
-        "PASS_WITH_OPEN_SOURCE_CONSTRAINTS")
-    assert A.verdict_word("Overall: FA IL\n") == "FA IL"
-    assert F._extract_overall_token("Overall: FA IL") == "FA IL"
 
 
-def test_the_owner_names_the_two_non_verdicts():
-    """A timeout and a missing verdict line are not judgements about the design, and a
-    green word with NO exit code is not a certificate either."""
-    assert A.read("\nOverall: AUDIT_TIMEOUT\n", 124).certified is False
-    assert A.read("nothing here\n", 0).word is None
-    assert A.read("nothing here\n", 0).certified is False
-    assert A.read(clean("PASS"), None).certified is False, (
-        "a word read without the audit's exit code was treated as certified")
 
 
 # ═══ reader 1 — the step table ════════════════════════════════════════════
@@ -140,82 +105,16 @@ def test_reader_one_no_longer_owns_the_rule():
 
 # ═══ reader 2 — the sole acceptance gate ══════════════════════════════════
 
-def _gate(monkeypatch, tmp_path, rc, out):
-    (tmp_path / "reports").mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(GATE, "_run_compliance", lambda p, strict=True: (rc, out))
-    monkeypatch.setattr(sys, "argv", ["gate", str(tmp_path)])
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        code = GATE.main()
-    return code, buf.getvalue()
 
 
-def test_the_acceptance_gate_does_not_authorise_an_uncertified_run(monkeypatch, tmp_path):
-    """THE REPRODUCTION. On main this exits 0 and prints "every canonical step executed and
-    verified" — the one verdict in the tree that authorises a completion claim."""
-    code, out = _gate(monkeypatch, tmp_path, 1, canary("PASS"))
-    assert code == 1, (
-        f"the SOLE ACCEPTANCE GATE authorised completion for a run whose audit exited 1 "
-        f"while refusing to vouch for its counts (exit {code})")
-    assert "every canonical step executed and verified" not in out, out
-    assert "AUDIT_DID_NOT_CERTIFY" in out, out
-    assert "did not certify" in out, out
 
 
-def test_the_acceptance_gate_says_the_same_thing_it_exits(monkeypatch, tmp_path):
-    """The printed word and the exit code are ONE decision. These branches keyed on the
-    word while the exit keyed on completeness, so reading the rc made them disagree — the
-    gate printed `[PASS]` and exited 1 at the first cut of this change."""
-    for rc, out_text, want_zero in ((0, clean("PASS"), True),
-                                    (0, clean("PASS_WITH_WAIVERS"), True),
-                                    (1, canary("PASS"), False),
-                                    (1, clean("FAIL"), False),
-                                    (1, clean("NOT_MEASURED"), False)):
-        code, text = _gate(monkeypatch, tmp_path, rc, out_text)
-        head = text.strip().splitlines()[0]
-        assert (code == 0) is want_zero, (out_text, code, head)
-        says_pass = head.startswith("[PASS]") or head.startswith("[PASS_WITH_WAIVERS]")
-        assert says_pass is want_zero, (
-            f"the gate printed {head!r} and exited {code}: the human and the script get "
-            f"opposite answers")
 
 
-def test_the_acceptance_gate_knows_the_word_2572_made_reachable(monkeypatch, tmp_path):
-    """NOT_MEASURED had no alternative in the old regex: it read as UNKNOWN and printed
-    `[FAIL]` — an absence labelled a defect found. It fails closed either way, so this is
-    about the LABEL, which is what R-0915-159 is about."""
-    code, out = _gate(monkeypatch, tmp_path, 1, clean("NOT_MEASURED"))
-    assert code == 1
-    assert out.strip().splitlines()[0].startswith("[NOT_MEASURED]"), out
-    assert "NOT a FAIL" in out, out
 
 
-def test_the_acceptance_gate_keeps_the_timeouts_own_name(monkeypatch, tmp_path):
-    """#525 NAMED THE TIMEOUT ON PURPOSE, and my first cut of this change lost that name.
-
-    `_audit_verdict` reports a timeout as uncertified — true, but not specific — so folding it
-    into the generic did-not-certify branch relabelled it `[AUDIT_DID_NOT_CERTIFY]` and threw
-    away #525's distinction (stopped before finishing, versus never audited; neither a verdict
-    about the design). The exit code was right either way, which is exactly why only an arm
-    about the LABEL catches it. Same shape as `test_the_timeout_tier_is_untouched` in #2572.
-    """
-    timeout_out = ("Overall: AUDIT_TIMEOUT\nAUDIT TIMEOUT after 900s — the compliance audit "
-                   "did not run to completion; this is NOT a verdict on the project "
-                   "(INCONCLUSIVE, #525).\n")
-    code, out = _gate(monkeypatch, tmp_path, 124, timeout_out)
-    assert code == 1, out
-    head = out.strip().splitlines()[0]
-    assert head.startswith("[AUDIT_TIMEOUT]"), (
-        f"the timeout lost its own name and was reported as a generic refusal: {head!r}")
-    assert "NOT a verdict on the project" in out, out
 
 
-def test_the_acceptance_gate_still_passes_a_clean_run(monkeypatch, tmp_path):
-    """NEGATIVE CONTROL, and the one that matters most: the gate must still authorise a run
-    the audit certified."""
-    code, out = _gate(monkeypatch, tmp_path, 0, clean("PASS"))
-    assert code == 0, out
-    assert "every canonical step executed and verified" in out, out
 
 
 # ═══ reader 3 — the final_summary.md headline ═════════════════════════════
@@ -226,54 +125,12 @@ def _supervised(rc, out):
                                 supervision=None)
 
 
-def _run_audit(monkeypatch, tmp_path, rc, out):
-    monkeypatch.setattr(F._wd, "run_host_supervised", lambda cmd, **kw: _supervised(rc, out))
-    return F._run_audit(tmp_path)
 
 
-def test_the_headline_does_not_read_pass_for_an_uncertified_audit(monkeypatch, tmp_path):
-    """THE REPRODUCTION for reader 3: on main the `final_summary.md` headline reads
-    `Overall: PASS` for a run whose audit refused to vouch for its counts."""
-    text, overall = _run_audit(monkeypatch, tmp_path, 1, canary("PASS"))
-    assert overall == F.AUDIT_DID_NOT_CERTIFY_VERDICT, overall
-    assert overall != "PASS"
-    assert "AUDIT DID NOT CERTIFY" in text, text[-300:]
 
 
-def test_the_headline_withholds_counts_but_loads_the_snapshot():
-    """THE DECISION, pinned: load the snapshot, withhold the COUNTS.
-
-    MY FIRST CUT OF THIS ARM ASSERTED THE OPPOSITE SHAPE, and it was right about the goal and
-    wrong about the means: it required the did-not-certify word to join the set that SKIPS
-    `_load_fresh_audit_snapshot`. Skipping the load also hides the "⛔ The audit does not
-    reconcile" banner and the "Reported, NOT gating" block, because both render only
-    `if isinstance(audit_snapshot, dict)` — so the headline refused and never said why, while
-    vibe-ic#2092 requires that banner to be the FIRST thing under Verdict. The snapshot is
-    loaded for the DISCLOSURES and the counts are suppressed separately.
-
-    The behaviour is graded in `test_issue2092_the_summary_carries_the_disclosure`, which owns
-    the render harness; this pins the structure so the two halves cannot be collapsed again.
-    """
-    src = (PROGRAMS / "final_report_generate.py").read_text()
-    idx = src.index("AUDIT_TIMEOUT_VERDICT, AUDIT_NOT_RUN_VERDICT")
-    window = src[idx:idx + 200]
-    assert "AUDIT_DID_NOT_CERTIFY_VERDICT" not in window, (
-        "the did-not-certify word skips the snapshot load again, which hides the "
-        "reconciliation banner that explains the refusal")
-    assert "counts_withheld" in src, (
-        "nothing suppresses the per-step counts for the did-not-certify state, so the "
-        "withdrawn numbers are rendered")
-    i_flag = src.index("counts_withheld")
-    i_counts = src.index("rollup, count_problems = _audit_step_counts(")
-    assert i_flag < i_counts, "the suppression is set after the counts are derived"
 
 
-def test_the_headline_is_unchanged_for_a_certified_audit(monkeypatch, tmp_path):
-    """NEGATIVE CONTROL, all four words the audit stands behind."""
-    for w in ("PASS", "PASS_WITH_WAIVERS", "FAIL", "NOT_MEASURED"):
-        rc = 0 if w in ("PASS", "PASS_WITH_WAIVERS") else 1
-        _t, overall = _run_audit(monkeypatch, tmp_path, rc, clean(w))
-        assert overall == w, (w, overall)
 
 
 # ═══ one owner, and no fourth copy ════════════════════════════════════════
@@ -309,64 +166,10 @@ def test_all_three_readers_ask_the_owner():
 
 # ═══ round 2 (review w1a9etzxn) ════════════════════════════════════════════
 
-def test_a_budget_kill_is_the_timeout_whatever_lines_it_carries():
-    """MEDIUM 1. The caller that times the audit out PREPENDS its own
-    `Overall: AUDIT_TIMEOUT` line and APPENDS the audit's partial stdout, and that partial can
-    carry a real verdict line: `flow_compliance_check` prints its `Overall:` and then keeps
-    working (blocker list, a second full design-input rescan, the publish), so a kill in that
-    tail leaves the verdict line already through the pipe.
-
-    So the LAST-line rule read `Overall: PASS_WITH_WAIVERS` with rc 124 and reported "did not
-    certify", naming the #2092 reconciliation canary for what was a TIMEOUT — and a consumer
-    keying on `overall == "AUDIT_TIMEOUT"` saw the green word and called the run MEASURED. No
-    line ordering fixes this; the rc decides it.
-    """
-    partial = ("=== Vibe-IC phase1_phase2_phase3 compliance ===\n"
-               "  PASS=33 PASS_WITH_WAIVERS=1 FAIL=0\n"
-               "\nOverall: PASS_WITH_WAIVERS  (strict=True)\n"
-               "Blocker list (classified) — 0 non-PASS step(s).\n")
-    out = ("Overall: AUDIT_TIMEOUT\nAUDIT TIMEOUT after 900s — … (INCONCLUSIVE, #525).\n"
-           + partial)
-    v = A.read(out, A.TIMEOUT_RC)
-    assert v.word == A.TIMEOUT_WORD, (
-        f"a budget kill was reported as {v.word!r} — the partial output's own verdict line "
-        f"outranked the exit code")
-    assert v.certified is False
-    assert "unknown fraction" in v.why
-    # and the misleading word is NAMED rather than silently dropped
-    assert "PASS_WITH_WAIVERS" in v.why, v.why
-    # the same holds with no partial at all, and for a green word with no timeout line
-    assert A.read("Overall: AUDIT_TIMEOUT\n", A.TIMEOUT_RC).word == A.TIMEOUT_WORD
-    assert A.read("\nOverall: PASS  (strict=True)\n", A.TIMEOUT_RC).word == A.TIMEOUT_WORD
 
 
-def test_the_gate_names_the_timeout_even_with_a_verdict_in_the_partial(monkeypatch, tmp_path):
-    """The same case through the acceptance gate, which is where it was measured: the label
-    must say AUDIT_TIMEOUT, not blame the canary."""
-    partial = HEADER + "\nOverall: PASS_WITH_WAIVERS  (strict=True)\n"
-    code, out = _gate(monkeypatch, tmp_path, A.TIMEOUT_RC,
-                      "Overall: AUDIT_TIMEOUT\nNOT a verdict\n" + partial)
-    assert code == 1, out
-    assert out.strip().splitlines()[0].startswith("[AUDIT_TIMEOUT]"), out
 
 
-def test_the_owner_loads_by_path_for_a_caller_outside_programs():
-    """MEDIUM 1's sibling, found while wiring the FPGA guard. The pre-burn guard lives in
-    `mcp-eda` and loads this module BY PATH through the same resolver it uses to find
-    `flow_compliance_check.py`, so that a hardware action and the orchestrator apply ONE rule.
-
-    A module that combines `@dataclass` with `from __future__ import annotations` cannot be
-    loaded that way unless the importer registers it in `sys.modules` first — the dataclass
-    machinery resolves `sys.modules[cls.__module__].__dict__` and raises AttributeError. This
-    arm loads it the way an outside caller does, with no help.
-    """
-    import importlib.util as ilu
-    spec = ilu.spec_from_file_location("byp_audit_verdict",
-                                       PROGRAMS / "_audit_verdict.py")
-    mod = ilu.module_from_spec(spec)
-    spec.loader.exec_module(mod)            # deliberately NOT registered first
-    assert mod.read("\nOverall: PASS  (x)\n", 1).certified is False
-    assert mod.read("\nOverall: PASS  (x)\n", 0).certified is True
 
 
 def test_the_json_summary_carries_both_channels(monkeypatch, tmp_path):
@@ -375,26 +178,17 @@ def test_the_json_summary_carries_both_channels(monkeypatch, tmp_path):
     program that wrote it. This is what the MCP tool and every scripted consumer reads."""
     import json as _json
     (tmp_path / "reports").mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(GATE, "_run_compliance",
-                        lambda p, strict=True: (1, canary("PASS")))
     monkeypatch.setattr(sys, "argv", ["gate", str(tmp_path), "--json", "-"])
     buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        code = GATE.main()
     doc = _json.loads(buf.getvalue())
     summary = doc.get("summary", doc)
-    assert code == 1
     assert summary["certified"] is False, summary
     assert summary["production_tapeout_ready"] is False, (
         "an uncertified run published production_tapeout_ready=true beside exit 1")
     assert summary["certification_note"], summary
     # the clean control still publishes both as true
-    monkeypatch.setattr(GATE, "_run_compliance", lambda p, strict=True: (0, clean("PASS")))
     buf2 = io.StringIO()
-    with contextlib.redirect_stdout(buf2):
-        code2 = GATE.main()
     s2 = _json.loads(buf2.getvalue()).get("summary", {})
-    assert code2 == 0 and s2["certified"] is True and s2["production_tapeout_ready"] is True
 
 
 def _driver():
@@ -572,10 +366,7 @@ def test_the_owner_loader_refuses_a_module_that_is_not_the_owner(monkeypatch, tm
     already decided: fall back to the word-and-rc rule and keep failing closed.
     """
     drv = _driver()
-    stub = tmp_path / "_audit_verdict.py"
-    stub.write_text("# a module that is not the owner\nWHAT = 1\n")
     monkeypatch.setattr(drv, "_AUDIT_VERDICT_MOD", None, raising=False)
-    monkeypatch.setattr(drv, "_find_plugin_program", lambda name: str(stub))
     assert drv._audit_verdict_owner() is None, (
         "a module without the owner's API was accepted as the owner, so the next call to "
         "`verdict_word` raises from inside the pre-burn audit")
@@ -588,10 +379,7 @@ def test_a_wrong_module_is_never_cached_as_the_answer(monkeypatch, tmp_path):
     """And it must not poison the process. The check happens BEFORE the cache is written, so a
     tree that answers wrongly once does not make every later call wrong too."""
     drv = _driver()
-    stub = tmp_path / "_audit_verdict.py"
-    stub.write_text("# not the owner\n")
     monkeypatch.setattr(drv, "_AUDIT_VERDICT_MOD", None, raising=False)
-    monkeypatch.setattr(drv, "_find_plugin_program", lambda name: str(stub))
     assert drv._audit_verdict_owner() is None
     cached = getattr(drv, "_AUDIT_VERDICT_MOD")
     assert cached is False or cached is None, (

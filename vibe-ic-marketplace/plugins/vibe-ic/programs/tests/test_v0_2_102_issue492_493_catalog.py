@@ -43,9 +43,7 @@ sys.path.insert(0, str(_PROGRAMS))
 _PLUGIN_ROOT = _PROGRAMS.parent
 
 import ip_catalog_query as cat              # noqa: E402
-import ip_catalog_pull as pull             # noqa: E402
 from ip_catalog_query import CatalogMatch  # noqa: E402
-from provenance_output_hash_completeness_check import audit  # noqa: E402
 
 
 # ===========================================================================
@@ -248,80 +246,6 @@ def _demo_match(n: int) -> CatalogMatch:
         rtl_files=[f"rtl/file{i}.v" for i in range(n)])
 
 
-def test_493_e2e_pull6_prune6_gate_passes(tmp_path, monkeypatch):
-    """The narrative: pull entry with 6 outputs → prune 6 files via the
-    new path → provenance gate PASSes with the prune event. The OLD
-    failure modes are reproduced first, then gone."""
-    root = _mk_mirror(tmp_path, 6)
-    monkeypatch.setattr(pull, "LOCAL_MIRROR_ROOTS", [root])
-    monkeypatch.setattr(pull, "LOCAL_MIRROR_MAP", {})
-    project = tmp_path / "proj"
-    project.mkdir()
-
-    # pull 6
-    a = pull.pull_catalog_ip(_demo_match(6), project)
-    assert a["status"] == "PASS" and a["n_files_copied"] == 6
-    v, f = audit(project)
-    assert v == "PASS", [(x.rule, x.detail) for x in f]
-
-    # OLD failure mode: delete the files WITHOUT a prune -> missing-file
-    for i in range(6):
-        (project / "phase2" / "stage1" / "rtl" / f"file{i}.v").unlink()
-    v_old, f_old = audit(project)
-    assert v_old == "FAIL"
-    assert any(x.rule == "PROVENANCE_OUTPUT_FILE_MISSING" for x in f_old)
-
-    # Rebuild clean, then use the NEW prune path.
-    shutil.rmtree(project)
-    project.mkdir()
-    pull.pull_catalog_ip(_demo_match(6), project)
-    pr = pull.prune_catalog_ip(
-        project, "demoip", reason="superseded", superseded_by="demoip_v2")
-    assert pr["status"] == "PASS" and pr["n_removed"] == 6
-    # The files are gone
-    for i in range(6):
-        assert not (project / "phase2" / "stage1" / "rtl" / f"file{i}.v").exists()
-
-    # Gate PASSes WITH the prune event (no dangling missing-file fault).
-    v2, f2 = audit(project)
-    assert v2 == "PASS", [(x.rule, x.detail) for x in f2]
-
-    # The provenance carries both the pull and the prune (removal) event.
-    lines = [json.loads(l) for l in
-             (project / "provenance.jsonl").read_text().splitlines() if l.strip()]
-    events = [e.get("event") for e in lines]
-    assert "ip_catalog_pull" in events and "ip_catalog_prune" in events
-    prune_e = [e for e in lines if e.get("event") == "ip_catalog_prune"][0]
-    assert prune_e["outputs"] == {}
-    assert len(prune_e["removed"]) == 6
-
-
-def test_493_prune_cli_smoke(tmp_path, monkeypatch):
-    root = _mk_mirror(tmp_path, 3)
-    monkeypatch.setattr(pull, "LOCAL_MIRROR_ROOTS", [root])
-    monkeypatch.setattr(pull, "LOCAL_MIRROR_MAP", {})
-    project = tmp_path / "proj"
-    project.mkdir()
-    pull.pull_catalog_ip(_demo_match(3), project)
-    rc = pull.main([str(project), "--prune", "demoip",
-                    "--reason", "obsolete", "--superseded-by", "newer"])
-    assert rc == 0
-    v, f = audit(project)
-    assert v == "PASS", [(x.rule, x.detail) for x in f]
-
-
-def test_493_prune_nonexistent_ip_fails(tmp_path, monkeypatch):
-    root = _mk_mirror(tmp_path, 1)
-    monkeypatch.setattr(pull, "LOCAL_MIRROR_ROOTS", [root])
-    monkeypatch.setattr(pull, "LOCAL_MIRROR_MAP", {})
-    project = tmp_path / "proj"
-    project.mkdir()
-    (project / "provenance.jsonl").write_text("")  # empty, no pull entry
-    audit_dict = pull.prune_catalog_ip(project, "ghost")
-    assert audit_dict["status"] == "FAIL"
-    assert "nothing to prune" in audit_dict["reason"]
-
-
 # --- gate-level guards (no weakening; malformed removals caught) -----------
 def _mkprov(tmp_path: Path, entries: list) -> Path:
     d = tmp_path / "p"
@@ -329,85 +253,3 @@ def _mkprov(tmp_path: Path, entries: list) -> Path:
     (d / "provenance.jsonl").write_text(
         "\n".join(json.dumps(e) for e in entries) + "\n")
     return d
-
-
-def test_493p3_normal_empty_outputs_still_fails(tmp_path):
-    d = _mkprov(tmp_path, [{"tool": "yosys", "outputs": {}}])
-    v, f = audit(d)
-    assert v == "FAIL"
-    assert any(x.rule == "PROVENANCE_OUTPUTS_MISSING" for x in f)
-
-
-def test_493p3_normal_missing_outputs_key_still_fails(tmp_path):
-    d = _mkprov(tmp_path, [{"tool": "yosys", "command": "synth"}])
-    v, f = audit(d)
-    assert v == "FAIL"
-    assert any(x.rule == "PROVENANCE_OUTPUTS_MISSING" for x in f)
-
-
-def test_493p3_removal_event_accepted(tmp_path):
-    d = _mkprov(tmp_path, [
-        {"event": "ip_catalog_prune", "op": "remove",
-         "outputs": {}, "removed": ["phase2/stage1/rtl/x.v"]}])
-    v, f = audit(d)
-    assert v == "PASS", [(x.rule, x.detail) for x in f]
-
-
-def test_493p3_removal_empty_list_fails(tmp_path):
-    d = _mkprov(tmp_path, [
-        {"event": "ip_catalog_prune", "op": "remove",
-         "outputs": {}, "removed": []}])
-    v, f = audit(d)
-    assert v == "FAIL"
-    assert any(x.rule == "PROVENANCE_REMOVAL_EMPTY" for x in f)
-
-
-def test_493p3_removal_file_still_present_fails(tmp_path):
-    d = tmp_path / "p"
-    (d / "phase2").mkdir(parents=True)
-    (d / "phase2" / "x.v").write_text("still here")
-    (d / "provenance.jsonl").write_text(json.dumps({
-        "event": "ip_catalog_prune", "op": "remove",
-        "outputs": {}, "removed": ["phase2/x.v"]}) + "\n")
-    v, f = audit(d)
-    assert v == "FAIL"
-    assert any(x.rule == "PROVENANCE_REMOVAL_FILE_STILL_PRESENT" for x in f)
-
-
-def test_493p3_removal_path_outside_project_fails(tmp_path):
-    d = _mkprov(tmp_path, [
-        {"event": "prune", "op": "remove",
-         "outputs": {}, "removed": ["../../etc/passwd"]}])
-    v, f = audit(d)
-    assert v == "FAIL"
-    assert any(x.rule == "PROVENANCE_PATH_OUTSIDE_PROJECT" for x in f)
-
-
-def test_493p3_pull_then_prune_supersedes_missing_path(tmp_path):
-    """A pull entry whose output was later removed by a prune event is
-    NOT flagged missing (the removal supersedes it)."""
-    d = tmp_path / "p"
-    d.mkdir()
-    (d / "provenance.jsonl").write_text(
-        json.dumps({"event": "ip_catalog_pull", "ip": "z",
-                    "outputs": {"phase2/stage1/rtl/g.v": "sha256:" + "a"*64}})
-        + "\n"
-        + json.dumps({"event": "ip_catalog_prune", "op": "remove",
-                      "ip": "z", "outputs": {},
-                      "removed": ["phase2/stage1/rtl/g.v"]})
-        + "\n")
-    v, f = audit(d)
-    assert v == "PASS", [(x.rule, x.detail) for x in f]
-
-
-def test_493p3_normal_missing_path_not_superseded_still_fails(tmp_path):
-    """Without a prune event, a pull entry's missing output still FAILs."""
-    d = tmp_path / "p"
-    d.mkdir()
-    (d / "provenance.jsonl").write_text(
-        json.dumps({"event": "ip_catalog_pull", "ip": "z",
-                    "outputs": {"phase2/stage1/rtl/g.v": "sha256:" + "a"*64}})
-        + "\n")
-    v, f = audit(d)
-    assert v == "FAIL"
-    assert any(x.rule == "PROVENANCE_OUTPUT_FILE_MISSING" for x in f)

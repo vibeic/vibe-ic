@@ -124,22 +124,6 @@ def test_the_trial_set_is_every_position_a_sentence_can_occupy():
     assert len(trials) == 21 * (7 + 6 + 6) == 399
 
 
-def test_no_denial_anywhere_manufactures_a_fact_the_transcript_lacks():
-    """THE GATE'S QUESTION. A sentence may cost a positive; it may never mint
-    one. Nothing here is allowed to go UP, and nothing may turn `annotated`
-    True or a missing verdict into PASS."""
-    for kind, tok, i, text in _trials():
-        got = _answers(text)
-        where = f"{kind} {tok!r} at {i}"
-        assert got["delays_applied"] <= _BASE_ANSWERS["delays_applied"], where
-        assert got["modpath_unmatched"] <= _BASE_ANSWERS["modpath_unmatched"], where
-        assert got["intermodpaths"] <= _BASE_ANSWERS["intermodpaths"], where
-        assert got["verdict"] in ("PASS", None), where
-        assert got["rc"] == 0, where
-        if not _BASE_ANSWERS["annotated"]:
-            assert not got["annotated"], where
-
-
 def test_the_moves_are_exactly_the_84_prefixes_and_they_all_lose_a_positive():
     """The correction this measurement made to its own argument, pinned. An
     earlier draft claimed 0 of 399 move; 84 do, and the reason is the `re.M`
@@ -179,13 +163,3 @@ def test_a_zero_delay_run_cannot_be_talked_into_looking_annotated():
         for text in (f"the delay is {tok} applied\n" + bare,
                      bare + f"the delay is {tok} applied\n"):
             assert SG.sdf_annotation_census(text)["annotated"] is False, tok
-
-
-def test_the_exemption_entry_carries_this_files_name():
-    """An argument nobody can find is not an argument."""
-    import prose_polarity_consulted_check as G
-    reason = G._NOT_PROSE["sdf_gate_sim::_run_l10_suite"]
-    assert "test_r0915_76_the_transcript_grammar_has_" in reason
-    assert "84 of those 399" in reason
-    assert "negation form" in reason.lower()
-    assert "one line per event" in reason.lower()

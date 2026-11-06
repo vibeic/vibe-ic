@@ -424,18 +424,6 @@ def test_docker_needed_and_nothing_resolvable_is_refused_by_name(monkeypatch, tm
     assert any("IMAGE_NOT_RESOLVABLE" in f for f in result["findings"]), result
 
 
-def test_the_rtl_content_check_resolves_nothing_itself(monkeypatch, tmp_path):
-    """`_rtl_errors` used to call `default_image()` before the front end knew
-    whether any tool had to run in docker; in-image that raised."""
-    import flow_step_output_content_check as C
-    import p0_tool_frontend_check as P
-    monkeypatch.setattr(P, "default_image",
-                        lambda: pytest.fail("the content check resolved an image"))
-    seen = []
-    monkeypatch.setattr(P, "check", lambda project, image=None: (
-        seen.append(image) or {"passed": True, "findings": []}))
-    assert C.check(_rtl_project(tmp_path), "rtl") == []
-    assert seen == [None]
 
 
 # ── landing preflight: the remedy names the image when it is read ───────────

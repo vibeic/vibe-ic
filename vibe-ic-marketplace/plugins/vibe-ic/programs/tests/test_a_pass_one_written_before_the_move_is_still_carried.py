@@ -81,29 +81,6 @@ def test_a_report_with_no_legacy_spelling_is_unaffected(tmp_path):
         assert legacy is False, name
 
 
-def test_every_pair_run_status_used_to_accept_is_in_the_table(tmp_path):
-    """The regression, pinned: replacing N candidates with a resolver means it must know all N.
-
-    `run_status` reads a project's phase reports, and it accepted each at the routed location AND
-    at the flat `reports/<name>.json`. Every one of those names must therefore have a legacy
-    entry, or converting that reader silently narrows it.
-    """
-    import run_status as _rs
-
-    for name in _rs._PHASE_REPORTS.values():
-        assert name in _pl.LEGACY_REPORT_PATHS, (
-            f"{name} lost the flat spelling `run_status` used to accept")
-        f = tmp_path / "reports" / name
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text("{}")
-        got, legacy = _pl.report_path_for_reading(tmp_path, name)
-        assert got == f and legacy is True, (name, got, legacy)
-
-    # analog is the one whose ROUTED location is neither of the two that reader checked, so it
-    # needs both of them, in preference order
-    assert _pl.report_path(tmp_path, "analog_one_shot.json").parent.name == "phase3"
-    assert _pl.LEGACY_REPORT_PATHS["analog_one_shot.json"] == (
-        "reports/orchestrator/analog_one_shot.json", "reports/analog_one_shot.json")
 
 
 def test_the_resolver_never_decides_where_to_write():

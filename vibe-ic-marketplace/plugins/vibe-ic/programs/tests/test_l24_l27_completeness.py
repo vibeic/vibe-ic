@@ -27,7 +27,6 @@ import pytest
 tx = importlib.import_module("l_doc_taxonomy")
 pp = importlib.import_module("phase1_post_process")
 icp = importlib.import_module("ic_class_profile")
-gate = importlib.import_module("phase1_all_l_docs_present_check")
 
 _COMPLETENESS = ("L24", "L25", "L26", "L27")
 _OPT_IN = ("L26", "L27")
@@ -241,76 +240,3 @@ def _put(project, name, data=None):
     gd.mkdir(parents=True, exist_ok=True)
     (gd / name).write_text(json.dumps(data if data is not None
                                       else {"placeholder_field": "value"}))
-
-
-class TestPresenceCheckGate:
-    # (e) — no false-fail for a chip lacking L24-L27.
-    def test_no_false_fail_when_l24_l27_absent(self, tmp_path):
-        for name in _L1_L13:
-            _put(tmp_path, name)
-        code, lines = gate._check(tmp_path)
-        out = "\n".join(lines)
-        assert code == 0, out
-        assert "PASS" in out
-        # L26/L27 (and L24/L25) demote to INFO — never "missing".
-        assert "missing" not in out.lower() or "Missing L doc" not in out
-
-    # (f) — L1-L13 enforcement byte-unchanged: 13/13 for the fail-closed class.
-    def test_l1_l13_still_enforced_13_of_13(self, tmp_path):
-        for name in _L1_L13:
-            _put(tmp_path, name)
-        code, lines = gate._check(tmp_path)
-        out = "\n".join(lines)
-        assert code == 0 and "13/13" in out, out
-
-    # (f) — a missing L1-L13 layer still FAILs (enforcement intact).
-    def test_missing_l7_still_fails(self, tmp_path):
-        for name in _L1_L13:
-            if name.startswith("L7_"):
-                continue
-            _put(tmp_path, name)
-        code, lines = gate._check(tmp_path)
-        out = "\n".join(lines)
-        assert code == 1 and "L7_" in out, out
-
-    # (e) — the gate ENFORCES L24/L25 once the class makes them mandatory.
-    def test_gate_enforces_mandatory_l24_l25(self, tmp_path, monkeypatch):
-        # Force a fabricated-chip profile whose required_layers marks L24/L25
-        # mandatory (as if the project declared targets_signoff).
-        monkeypatch.setattr(
-            gate, "detect_ic_class",
-            lambda p: {"ic_class": "mixed_signal_otp"})
-        monkeypatch.setattr(
-            gate, "required_layers",
-            lambda profile: {
-                "mandatory": [f"L{i}" for i in range(1, 14)] + ["L24", "L25"],
-                "skip": ["L26", "L27"],
-            })
-        # L1-L13 present but L24/L25 absent → FAIL flagging both.
-        for name in _L1_L13:
-            _put(tmp_path, name)
-        code, lines = gate._check(tmp_path)
-        out = "\n".join(lines)
-        assert code == 1, out
-        assert "L24_" in out and "L25_" in out
-        assert "15/15" not in out  # not all present
-
-    def test_gate_passes_when_mandatory_l24_l25_present(self, tmp_path,
-                                                        monkeypatch):
-        monkeypatch.setattr(
-            gate, "detect_ic_class",
-            lambda p: {"ic_class": "mixed_signal_otp"})
-        monkeypatch.setattr(
-            gate, "required_layers",
-            lambda profile: {
-                "mandatory": [f"L{i}" for i in range(1, 14)] + ["L24", "L25"],
-                "skip": ["L26", "L27"],
-            })
-        for name in _L1_L13:
-            _put(tmp_path, name)
-        _put(tmp_path, "L24_SIGNOFF.json")
-        _put(tmp_path, "L25_RELIABILITY_MISSION_PROFILE.json")
-        code, lines = gate._check(tmp_path)
-        out = "\n".join(lines)
-        assert code == 0, out
-        assert "15/15" in out

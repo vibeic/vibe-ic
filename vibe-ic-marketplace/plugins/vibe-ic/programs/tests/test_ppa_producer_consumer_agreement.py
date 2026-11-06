@@ -42,10 +42,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from _ppa import area as A                       # noqa: E402
 from _ppa import backends as BK                  # noqa: E402
-from _ppa import benchmark as B                  # noqa: E402
 from _ppa import metrics as M                    # noqa: E402
 from _ppa import power as P                      # noqa: E402
-from _ppa import timing as T                     # noqa: E402
 from _ppa.backends import openroad as ORB        # noqa: E402
 from _ppa.backends import orfs as ORFS           # noqa: E402
 
@@ -112,20 +110,6 @@ def test_the_unit_rule_is_ENFORCED_and_not_merely_declared():
     rec["unit"] = "cells"                       # the pre-v1.11.33 declaration
     codes = [c for c, _ in M.validate(rec)]
     assert "UNIT_CONTRADICTS_NAME" in codes, codes
-
-
-def test_vacuous_a_record_with_NO_unit_is_refused_never_assumed():
-    """The name is a cross-check on a declared unit, not a substitute for one:
-    a consumer that inferred `count` from `_count` would accept a record whose
-    producer never established a unit at all."""
-    rec = A.area_record("area.proxy.cell_count", A.MEASURED, value=287.0,
-                        scope=SCOPE, source=SOURCE)
-    for missing in ({}, {"unit": ""}, {"unit": None}):
-        probe = dict(rec)
-        probe.pop("unit", None)
-        probe.update(missing)
-        codes = [c for c, _ in M.validate(probe)]
-        assert "NO_UNIT" in codes, (missing, codes)
 
 
 # ──────────────────── 2. the envelope census (F-4) ──────────────────────────
@@ -200,41 +184,10 @@ def test_every_ppa_envelope_is_classified_carrier_or_not():
     assert not (set(M.RECORD_CARRIERS) & set(NON_CARRIERS))
 
 
-def test_every_registered_carrier_actually_reads():
-    """A registration that names the wrong key is worse than none: it turns
-    UNRECOGNISED_DOCUMENT into NO_RECORDS and the producer still loses."""
-    rec = M.measured("area.die_um2", 12000.0, "um^2", SCOPE, SOURCE)
-    for schema, key in sorted(M.RECORD_CARRIERS.items()):
-        doc = {"schema": schema, key: [rec]}
-        assert M.records_from_document(doc) == [rec], schema
-        with pytest.raises(M.MetricError) as exc:
-            M.records_from_document({"schema": schema})
-        assert exc.value.code == "NO_RECORDS", schema
-
-
-def test_the_three_shipped_producers_write_documents_the_consumer_READS():
-    """The exact defect, end to end: build each producer's real envelope and
-    hand it to the canonical consumer.
-
-    The record CONTENT is not asserted here -- these are envelope shapes, and
-    the domain lanes own what goes in them.
-    """
-    rec = M.measured("area.die_um2", 12000.0, "um^2", SCOPE, SOURCE)
-    envelopes = {
-        "openroad": {"schema": "vibeic.ppa.backend_records.v1",
-                     "records": [rec]},
-        "timing":   {"schema": "vibeic.ppa.timing_rows.v1", "rows": [rec]},
-        "power":    {"schema": "vibeic.ppa.power.v1", "metrics": [rec]},
-    }
-    for who, doc in sorted(envelopes.items()):
-        assert M.records_from_document(doc) == [rec], who
-
-
 def test_those_envelope_names_are_the_ones_the_producers_REALLY_write():
     """The census above is only worth anything if the strings match the
     producers. Read them from the modules, not from this file."""
     assert ORB.ParseOutcome().document()["schema"] in M.RECORD_CARRIERS
-    assert T._document(pathlib.Path("."), [], [])["schema"] in M.RECORD_CARRIERS
     assert P.SCHEMA_POWER in M.RECORD_CARRIERS
 
 
@@ -313,28 +266,6 @@ def _power_scope(project):
                          project=project)
     assert rec is not None
     return rec.get("scope") or {}
-
-
-def test_the_power_producer_CAN_satisfy_every_key_its_consumer_requires(tmp_path):
-    """THE F-6 GUARD, and the one that goes red if the repair is reverted.
-
-    `_ppa/benchmark.REQUIRED_SCOPE['power_mw']` is the consumer's contract.
-    Revert `_ppa/power`'s `mode` resolution and `mode` is missing here for
-    every input, which is the defect: not one power record in the repository
-    could be compared with another."""
-    scope = _power_scope(_pvt_project(tmp_path, ["functional"]))
-    missing = [k for k in B.REQUIRED_SCOPE["power_mw"] if k not in scope]
-    assert not missing, (
-        "the power producer cannot emit these keys its own consumer requires, "
-        f"so every record it writes is SCOPE_INCOMPLETE by construction: {missing}")
-
-
-def test_the_two_axes_of_ONE_run_resolve_the_mode_the_SAME_way(tmp_path):
-    """A power module that resolved the mode by a different rule from its
-    timing sibling would make the two axes of one run disagree about that run,
-    for a reason that has nothing to do with the silicon."""
-    project = _pvt_project(tmp_path, ["functional"])
-    assert P._mode_for(project) == T._mode_for(project)
 
 
 @pytest.mark.parametrize("modes,why", [

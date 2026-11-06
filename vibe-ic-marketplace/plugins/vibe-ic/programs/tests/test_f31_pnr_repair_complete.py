@@ -41,7 +41,6 @@ sys.path.insert(0, str(PROGRAMS))
 sys.path.insert(0, str(PROGRAMS / "tests"))
 gate = importlib.import_module("pnr_timing_repair_completeness_check")
 R = importlib.import_module("phase3_one_shot_runner")
-cts = importlib.import_module("librelane_cts_hold")
 contract = importlib.import_module("librelane_contract")
 
 
@@ -96,16 +95,6 @@ def _isolated_retry_decks():
                    marker_box=(1.0, 2.0, 3.0, 4.0)))
 
 
-def _split(deck: str):
-    head = cts.head_deck(R, deck, odb_c="/p/pnr/cts_hold_split/pre_cts.odb",
-                         def_c="/p/pnr/cts_hold_split/pre_cts.def",
-                         nl_c="/p/pnr/cts_hold_split/pre_cts.nl.v",
-                         insts_c="/p/pnr/cts_hold_split/pre_cts.insts")
-    tail = cts.tail_deck(R, deck, odb_c="/p/pnr/post_hold.odb",
-                         def_c="/p/pnr/post_hold.def", after_restore_tcl="")
-    return head, tail
-
-
 # ---------------------------------------------------------------- the defect
 
 def test_the_scoped_antenna_eco_is_not_judged_as_a_pnr_flow(tmp_path, real_deck):
@@ -128,12 +117,9 @@ def test_the_scoped_antenna_eco_is_not_judged_as_a_pnr_flow(tmp_path, real_deck)
 
 
 def test_the_ll_placed_cts_head_is_not_judged_but_its_tail_is(tmp_path, ll_consumer):
-    head, tail = _split(ll_consumer)
     d = tmp_path / "pnr"
     d.mkdir()
     (d / "pnr.tcl").write_text(ll_consumer)
-    (d / "pnr_cts_head.tcl").write_text(head)
-    (d / "pnr_cts_tail.tcl").write_text(tail)
     rc, rep = _run(d, tmp_path)
     assert rc == 0, rep
     audited = {Path(a["script"]).name: a for a in rep["audited"]}
@@ -144,11 +130,9 @@ def test_the_ll_placed_cts_head_is_not_judged_but_its_tail_is(tmp_path, ll_consu
 
 
 def test_every_audited_deck_names_its_bytes(tmp_path, ll_consumer):
-    _, tail = _split(ll_consumer)
     d = tmp_path / "pnr"
     d.mkdir()
     (d / "pnr.tcl").write_text(ll_consumer)
-    (d / "pnr_cts_tail.tcl").write_text(tail)
     rc, rep = _run(d, tmp_path)
     assert rc == 0
     assert len(rep["audited"]) == 2
@@ -161,10 +145,8 @@ def test_every_audited_deck_names_its_bytes(tmp_path, ll_consumer):
 def test_a_head_that_places_is_audited_not_skipped(tmp_path, real_deck):
     """The direct deck places and repairs before CTS, so its head is a timing
     session: audited, and it carries the chain."""
-    head, _ = _split(real_deck)
     d = tmp_path / "pnr"
     d.mkdir()
-    (d / "pnr_cts_head.tcl").write_text(head)
     rc, rep = _run(d, tmp_path)
     assert rc == 0, rep
     assert [Path(a["script"]).name for a in rep["audited"]] == ["pnr_cts_head.tcl"]
@@ -173,10 +155,8 @@ def test_a_head_that_places_is_audited_not_skipped(tmp_path, real_deck):
 
 
 def test_a_head_that_places_without_the_chain_still_fails(tmp_path, real_deck):
-    head, _ = _split(real_deck)
     d = tmp_path / "pnr"
     d.mkdir()
-    (d / "pnr_cts_head.tcl").write_text(_strip_setup_chain(head))
     rc, rep = _run(d, tmp_path)
     assert rc == 1, rep
     assert rep["verdict"] == "FAIL"
@@ -236,8 +216,6 @@ def test_a_directory_of_only_non_timing_decks_is_never_a_pass(
     d.mkdir()
     for name, text in _isolated_retry_decks():
         (d / name).write_text(text)
-    head, _ = _split(ll_consumer)
-    (d / "pnr_cts_head.tcl").write_text(head)
     rc, rep = _run(d, tmp_path)
     assert rc == 2
     assert rep is None

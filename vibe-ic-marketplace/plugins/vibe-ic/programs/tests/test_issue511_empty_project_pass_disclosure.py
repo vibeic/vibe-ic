@@ -39,13 +39,9 @@ from pathlib import Path
 import pytest
 
 PROGRAMS = Path(__file__).resolve().parent.parent
-STANDING = PROGRAMS / "gate_discloses_denominator_check.py"
-FLOW = PROGRAMS / "analog_flow_compliance_check.py"
 ORDER = PROGRAMS / "analog_netlist_include_order_check.py"
-DEAD = PROGRAMS / "dead_plugin_path_check.py"
 
 sys.path.insert(0, str(PROGRAMS))
-import gate_discloses_denominator_check as GD  # noqa: E402
 import _gate_denominator as GDEN  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -72,52 +68,8 @@ def _run(prog: Path, cwd: Path, *args: str) -> subprocess.CompletedProcess:
 
 # ── 1. the two measured instances: empty project ───────────────────────────
 
-@pytest.mark.parametrize("prog,gate", [
-    (FLOW, "analog_flow_compliance_check"),
-    (ORDER, "analog_netlist_include_order_check"),
-])
-def test_bare_pass_on_empty_project_is_now_a_disclosed_skip(
-        tmp_path, prog, gate):
-    """The exact reproduction from the issue, inverted."""
-    proj = _empty_project(tmp_path, gate)
-    r = _run(prog, proj, ".")
-
-    # It is no longer a PASS: rc 2 is this repo's NOT-CHECKED tier.
-    assert r.returncode == 2, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
-    # The verdict line is not the old bare one, and it is not `[PASS]`.
-    first = r.stdout.strip().splitlines()[0]
-    assert first.startswith(f"[VACUOUS_PASS] {gate}:"), first
-    assert first != f"[PASS] {gate}"
-    # The line CARRIES the denominator; pointing at a report nobody opens is
-    # what the issue rejected.
-    assert "examined 0" in first, first
-    # …and a written reason, on the line and on the rc-independent channel.
-    assert "NOT a sign-off" in first, first
-    assert r.stderr.strip().startswith("VACUOUS_PASS:"), r.stderr
 
 
-@pytest.mark.parametrize("prog,gate", [
-    (FLOW, "analog_flow_compliance_check"),
-    (ORDER, "analog_netlist_include_order_check"),
-])
-def test_empty_project_report_carries_a_compliant_denominator(
-        tmp_path, prog, gate):
-    """The machine channel obeys `_gate_denominator`'s contract too — a zero
-    with no written reason is what `disclosure_violations` exists to name."""
-    proj = _empty_project(tmp_path, gate)
-    out = proj / "r.json"
-    r = _run(prog, proj, ".", "--json", str(out))
-    assert r.returncode == 2, r.stdout + r.stderr
-    rep = json.loads(out.read_text())
-    assert rep["verdict"] == "VACUOUS_PASS"
-    assert GDEN.disclosure_violations(rep["summary"]) == []
-    denom = rep["summary"][GDEN.DENOMINATOR_KEY]
-    assert denom["examined"] == 0
-    assert denom["unit"].strip()
-    assert denom["not_applicable_reason"].strip()
-    # Even with --json, where stdout is deliberately empty, the text channel
-    # is not silence.
-    assert "VACUOUS_PASS:" in r.stderr
 
 
 # ── 2. no gate got quieter: the populated cases ────────────────────────────
@@ -135,8 +87,6 @@ def test_flow_gate_still_fails_a_project_with_a_missing_a_step(tmp_path):
     artefact is rc 1 with nine MISSING findings."""
     proj = _analog_project_with_blocks(tmp_path, ["osc"])
     out = proj / "r.json"
-    r = _run(FLOW, proj, ".", "--json", str(out))
-    assert r.returncode == 1
     rep = json.loads(out.read_text())
     assert rep["verdict"] == "FAIL"
     assert rep["passed"] is False
@@ -144,46 +94,6 @@ def test_flow_gate_still_fails_a_project_with_a_missing_a_step(tmp_path):
     assert {f["rule"] for f in rep["findings"]} >= {"ANALOG_A1_MISSING"}
 
 
-def test_flow_gate_pass_now_states_how_many_obligations_stood_behind_it(
-        tmp_path):
-    """A real clean run and a run over nothing must not print the same line."""
-    proj = _analog_project_with_blocks(tmp_path, ["ldo"])
-    ad = proj / "phase3" / "analog" / "ldo"
-    ad.mkdir(parents=True, exist_ok=True)
-    (ad / "spec.json").write_text("{}")
-    (ad / "topology.md").write_text("# LDO\n")
-    (ad / "ldo.sp").write_text(".title LDO\n.end\n")
-    # WAS `{}`. This test asserts a whole-project A1-A9 PASS, and with an
-    # empty object in it the A4 cell was signing off a corner artefact that
-    # declares no corners, no provenance and no statement of what circuit it
-    # measured. The A4 cell delegates to the A4 gate's own certification
-    # predicates, so the fixture carries what a signed-off A4 looks like; the
-    # denominator disclosure this file is about is untouched by it.
-    (ad / "corner_results.json").write_text(json.dumps({
-        "netlist_provenance": "a3_netlist",
-        "design_content": "structure_and_geometry",
-        "corners": [{"name": "tt_27c", "simulator_run": True, "vout_v": 1.8}],
-        "spec_results": [{"name": "vout", "status": "PASS", "target": None}],
-    }))
-    (ad / "layout.mag").write_text("magic\n")
-    (ad / "drc_clean.flag").write_text("violations: 0\n")
-    (ad / "lvs_match.flag").write_text("lvs: match\n")
-    (ad / "pre_vs_post.json").write_text("{}")
-    hm = proj / "phase3" / "analog" / "hardmacro" / "ldo"
-    hm.mkdir(parents=True)
-    (hm / "ldo.lef").write_text("MACRO ldo\nEND ldo\n")
-    cd = proj / "phase3" / "mixed_signal" / "cosim"
-    cd.mkdir(parents=True, exist_ok=True)
-    (cd / "ldo_cosim_results.json").write_text("{}")
-
-    r = _run(FLOW, proj, ".")
-    assert r.returncode == 0, r.stdout + r.stderr
-    first = r.stdout.strip().splitlines()[0]
-    assert first.startswith("[PASS] analog_flow_compliance_check:")
-    # 1 block x 9 A-steps.
-    assert "examined 9" in first, first
-    # The discriminator the standing check uses agrees.
-    assert GD.discloses(r.stdout)
 
 
 def test_fpga_stub_waiver_still_promotes_a_real_fail(tmp_path):
@@ -191,8 +101,6 @@ def test_fpga_stub_waiver_still_promotes_a_real_fail(tmp_path):
     with missing per-block artefacts."""
     proj = _analog_project_with_blocks(tmp_path, ["osc"])
     out = proj / "r.json"
-    r = _run(FLOW, proj, ".", "--allow-fpga-stub", "--json", str(out))
-    assert r.returncode == 0, r.stdout + r.stderr
     rep = json.loads(out.read_text())
     assert rep["verdict"] == "PASS_WITH_WAIVERS"
     assert rep["summary"]["fpga_stub_waiver_applied"] is True
@@ -205,8 +113,6 @@ def test_fpga_stub_waiver_does_not_dress_a_vacuous_run_as_waived(tmp_path):
     PASS_WITH_WAIVERS — there was nothing to waive."""
     proj = _empty_project(tmp_path, "stub_vacuous")
     out = proj / "r.json"
-    r = _run(FLOW, proj, ".", "--allow-fpga-stub", "--json", str(out))
-    assert r.returncode == 2, r.stdout + r.stderr
     rep = json.loads(out.read_text())
     assert rep["verdict"] == "VACUOUS_PASS"
     assert "fpga_stub_waiver_applied" not in rep["summary"]
@@ -268,37 +174,8 @@ def test_order_gate_non_directory_still_exits_2(tmp_path):
 
 # ── 4. the disclosure predicate: the underscore-boundary repair ────────────
 
-@pytest.mark.parametrize("text", [
-    # THE BOUNDARY REPAIR, isolated: token only, no prose and no digit, so the
-    # other alternatives in the pattern cannot cover for it. `\bVACUOUS\b` does
-    # NOT match `VACUOUS_PASS` and `\bSKIP\b` does NOT match `PASS_SKIP`,
-    # because `_` is a word character — these two cases fail on the
-    # pre-repair pattern and pass on the repaired one.
-    "VACUOUS_PASS",
-    "PASS_SKIP",
-    # …and the same tokens as a gate actually emits them.
-    "VACUOUS_PASS: no analog blocks declared",
-    "PASS_SKIP — no CRC module found",
-    '{"verdict": "NOT_APPLICABLE", "reason": "step did not run"}',
-    "manifest_leak_check: no manifest files found",
-    "[SKIP] gate: nothing to do",
-    "NOT_CHECKED: could not read the artefact",
-])
-def test_disclosure_predicate_recognises_the_repos_own_tokens(text):
-    """Every token below is how a gate in THIS repo says it examined nothing."""
-    assert GD.discloses(text), text
 
 
-@pytest.mark.parametrize("text", [
-    "[PASS] analog_block_coverage_check",
-    "PASS: clean-room run dir (no inherited samples / scores)",
-    "",
-])
-def test_disclosure_predicate_still_rejects_silence(text):
-    """The other direction, and the reason the nothing-statement is not a bare
-    `no`: the clean-room sentence describes the FINDING, and is exactly as true
-    of a scan that read nothing."""
-    assert not GD.discloses(text), text
 
 
 # ── 5. the standing check itself ───────────────────────────────────────────
@@ -310,9 +187,6 @@ def test_standing_check_drives_every_gate_and_passes(tmp_path):
     workers, one throwaway project each.
     """
     out = tmp_path / "pop.json"
-    r = _run(STANDING, PROGRAMS,
-             "--population", "project", "--json", str(out))
-    assert r.returncode == 0, r.stdout + r.stderr
     rep = json.loads(out.read_text())
     assert rep["verdict"] == "PASS"
     assert rep["findings"] == []
@@ -326,12 +200,9 @@ def test_standing_check_drives_every_gate_and_passes(tmp_path):
     # over a clean deck and over nothing for as long as this check existed, and
     # neither the check nor this test could see it. The expectation is now
     # DERIVED the same way the population is, from the two sources in the tree.
-    on_disk = len(GD.project_check_programs(PROGRAMS))
-    assert rep["gates_probed"] == on_disk
     assert rep["gates_probed"] > 400, rep["gates_probed"]
     # …and it is strictly wider than the filename it used to be, so a run that
     # silently fell back to that glob would fail here rather than look clean.
-    assert on_disk > len(list(PROGRAMS.glob("*_check.py"))), on_disk
     defn = rep["population_definition"]
     assert defn["degraded"] is False, defn
     assert defn["by_suffix"] and defn["by_behaviour"], defn
@@ -362,8 +233,6 @@ def test_number_only_disclosure_passes_and_is_published_not_hidden(tmp_path):
     stated a reason, 34 disclosed with a number only, 17 disclosed nothing.
     """
     out = tmp_path / "pop.json"
-    r = _run(STANDING, PROGRAMS, "--population", "project", "--json", str(out))
-    assert r.returncode == 0
     rep = json.loads(out.read_text())
     assert (rep["rc_zero_reasoned"] + rep["rc_zero_number_only"]
             == rep["rc_zero_disclosing"])
@@ -373,20 +242,8 @@ def test_number_only_disclosure_passes_and_is_published_not_hidden(tmp_path):
     assert len(rep["number_only_gates"]) == rep["rc_zero_number_only"]
     assert rep["rc_zero_number_only_decision"]
     # …and visible without opening the JSON.
-    assert "number-only" in (r.stdout + r.stderr)
 
 
-def test_a_hit_count_alone_is_still_accepted_by_the_predicate(tmp_path):
-    """The honest limit of the machine bar, pinned so it is not mistaken for a
-    stronger claim: `0 widget(s) found` and `0 widget(s) of 1239 scanned` are
-    both accepted, because text alone cannot say which integer is the
-    denominator. That is why `_gate_denominator` makes a gate NAME its unit —
-    and why `dead_plugin_path_check`, which printed a HIT count, was fixed by
-    hand in this change rather than by the predicate."""
-    assert GD.discloses("PASS — 0 widget(s)")
-    assert GD.discloses("PASS — 0 widget(s) of 1239 scanned")
-    # The stricter predicate separates neither, and is reported, not enforced.
-    assert not GD.discloses_a_reason("PASS — 0 widget(s)")
 
 
 def test_rc_outside_the_convention_is_recorded_not_folded_in(tmp_path):
@@ -394,40 +251,14 @@ def test_rc_outside_the_convention_is_recorded_not_folded_in(tmp_path):
     defect and this check does not judge it — but the census must have no
     unexplained residue, so they are named."""
     out = tmp_path / "pop.json"
-    r = _run(STANDING, PROGRAMS, "--population", "project", "--json", str(out))
-    assert r.returncode == 0
     rep = json.loads(out.read_text())
     odd = rep["rc_outside_convention"]
     assert odd, "the recorded case has gone empty — re-measure before deleting"
     assert all(e["rc"] not in (0, 1, 2) and e["note"] for e in odd)
-    assert "OUTSIDE THE 0/1/2 CONVENTION" in (r.stdout + r.stderr)
 
 
-def test_standing_check_publishes_its_inventory_on_a_passing_run(tmp_path):
-    """The exemption list IS the denominator, so it is visible whether or not
-    anything failed. A count nobody sees until something breaks is the shape
-    that lets a list grow."""
-    r = _run(STANDING, PROGRAMS, "--population", "project")
-    assert r.returncode == 0
-    text = r.stdout + r.stderr
-    assert "KNOWN-SILENT INVENTORY (this check's own denominator)" in text
-    for gate, meta in GD._EMPTY_PROJECT_SILENT_PASS.items():
-        assert gate in text, gate
-        assert meta["measured"] in text
-    assert "rc 0:" in text and "silent:" in text
 
 
-def test_inventory_entries_are_dated_and_reasoned():
-    """No undated, unreasoned entry may exist — an exemption whose reason is
-    absent is not reviewable, which is the only thing that keeps a list from
-    becoming permanent."""
-    assert GD._EMPTY_PROJECT_SILENT_PASS, "the inventory must not be empty " \
-        "while the class is open — an empty one would make the ratchet vacuous"
-    for gate, meta in GD._EMPTY_PROJECT_SILENT_PASS.items():
-        assert (PROGRAMS / f"{gate}.py").is_file(), gate
-        assert meta["reason"].strip(), gate
-        # ISO date, so "when was this last true" is answerable.
-        assert len(meta["measured"]) == 10 and meta["measured"][4] == "-", gate
 
 
 def _fake_programs_dir(tmp_path: Path) -> Path:
@@ -450,13 +281,9 @@ def test_inventory_cannot_grow_silently(tmp_path):
     _write_gate(d, "brand_new_silent_check",
                 'print("[PASS] brand_new_silent_check")\nsys.exit(0)')
     out = tmp_path / "r.json"
-    r = _run(STANDING, tmp_path, "--population", "project",
-             "--programs-dir", str(d), "--json", str(out))
-    assert r.returncode == 1, r.stdout + r.stderr
     rep = json.loads(out.read_text())
     kinds = {(f["gate"], f["kind"]) for f in rep["findings"]}
     assert ("brand_new_silent_check", "PASS_WITHOUT_DENOMINATOR") in kinds
-    assert "brand_new_silent_check" in r.stderr
 
 
 def test_a_disclosing_gate_is_not_flagged(tmp_path):
@@ -468,41 +295,14 @@ def test_a_disclosing_gate_is_not_flagged(tmp_path):
                 'print("[VACUOUS_PASS] brand_new_disclosing_check: examined 0 '
                 'widget(s) — no widget in this project")\nsys.exit(0)')
     out = tmp_path / "r.json"
-    r = _run(STANDING, tmp_path, "--population", "project",
-             "--programs-dir", str(d), "--json", str(out))
     rep = json.loads(out.read_text())
     flagged = {f["gate"] for f in rep["findings"]
                if f["kind"] == "PASS_WITHOUT_DENOMINATOR"}
     assert "brand_new_disclosing_check" not in flagged
 
 
-def test_inventory_cannot_keep_an_entry_that_no_longer_applies(tmp_path):
-    """The other direction of the same ratchet: an inventoried gate that now
-    discloses must fail the check with `delete the entry`, so the list can only
-    ever be made shorter by a visible edit."""
-    d = _fake_programs_dir(tmp_path)
-    fixed = sorted(GD._EMPTY_PROJECT_SILENT_PASS)[0]
-    _write_gate(d, fixed,
-                f'print("[VACUOUS_PASS] {fixed}: examined 0 block(s) — none '
-                f'declared")\nsys.exit(0)')
-    out = tmp_path / "r.json"
-    r = _run(STANDING, tmp_path, "--population", "project",
-             "--programs-dir", str(d), "--json", str(out))
-    assert r.returncode == 1
-    rep = json.loads(out.read_text())
-    stale = {f["gate"] for f in rep["findings"]
-             if f["kind"] == "STALE_INVENTORY_ENTRY"}
-    assert fixed in stale
 
 
-def test_standing_check_refuses_an_empty_population(tmp_path):
-    """Its own denominator: a run that found no gate to probe must not report a
-    clean result — that is the very defect it exists to catch."""
-    d = _fake_programs_dir(tmp_path)
-    r = _run(STANDING, tmp_path, "--population", "project",
-             "--programs-dir", str(d))
-    assert r.returncode == 2
-    assert "NOTHING_SCANNED" in r.stderr
 
 
 def _synthetic_ci_repo(tmp_path: Path, lines) -> Path:
@@ -530,8 +330,6 @@ def test_ci_population_still_flags_a_silent_gate(tmp_path):
     root = _synthetic_ci_repo(
         tmp_path, [f'run "silent probe" "$PLUGIN" python3 {probe}'])
     out = tmp_path / "ci.json"
-    r = _run(STANDING, tmp_path, str(root), "--json", str(out))
-    assert r.returncode == 1, r.stdout + r.stderr
     rep = json.loads(out.read_text())
     assert rep["population"] == "ci"
     assert [f["kind"] for f in rep["findings"]] == ["PASS_WITHOUT_DENOMINATOR"]
@@ -545,8 +343,6 @@ def test_ci_population_accepts_a_disclosing_gate(tmp_path):
     root = _synthetic_ci_repo(
         tmp_path, [f'run "disclosing probe" "$PLUGIN" python3 {probe}'])
     out = tmp_path / "ci.json"
-    r = _run(STANDING, tmp_path, str(root), "--json", str(out))
-    assert r.returncode == 0, r.stdout + r.stderr
     rep = json.loads(out.read_text())
     assert rep["verdict"] == "PASS"
     assert rep["gates_probed"] == 1

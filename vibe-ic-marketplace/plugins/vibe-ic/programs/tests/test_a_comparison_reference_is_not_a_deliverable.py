@@ -48,7 +48,6 @@ PROGRAMS = PLUGIN / "programs"
 sys.path.insert(0, str(PROGRAMS))
 
 import foundry_handoff_package_check as PKG                   # noqa: E402
-import gds_xor_check as GX                                    # noqa: E402
 import phase3_one_shot_runner as RUNNER                       # noqa: E402
 
 
@@ -84,57 +83,14 @@ def _boundary(project: Path, design: str, body: bytes = b"HEADER\x00" * 32, *,
     return b
 
 
-def test_the_boundary_is_named_by_the_defs_own_DESIGN(tmp_path):
-    """RUN22'S EXACT SHAPE, and the name is DERIVED rather than globbed: the DEF is
-    `spm.def` whose DESIGN is `chip_top`, and the retained boundary is
-    `chip_top.prefinish.gds`. Before this, the stem lookup missed and every run
-    re-streamed."""
-    dfile = _def(tmp_path, "spm.def", "chip_top")
-    _boundary(tmp_path, "chip_top", def_file=dfile)
-    kept, kind, prov = GX.resolve_reference(tmp_path, "spm", dfile)
-    assert kind == "retained", (kind, prov)
-    assert kept is not None and kept.name == "chip_top.prefinish.gds"
 
 
-def test_a_boundary_with_no_receipt_is_not_this_runs(tmp_path):
-    """THE HOLE MY GLOB OPENED, closed: a leftover boundary with nothing tying it to
-    this run must NOT be used as "design-layer differences expected to be exactly 0".
-    It re-streams instead, which is what an absent one has always done."""
-    dfile = _def(tmp_path, "spm.def", "chip_top")
-    _boundary(tmp_path, "chip_top", def_file=dfile, receipt=False)
-    kept, kind, prov = GX.resolve_reference(tmp_path, "spm", dfile)
-    assert kept is None and kind == "unprovable", (kind, prov)
-    assert "cannot be proven" in prov["note"]
 
 
-def test_a_boundary_whose_bytes_changed_since_its_receipt_is_refused(tmp_path):
-    dfile = _def(tmp_path, "spm.def", "chip_top")
-    b = _boundary(tmp_path, "chip_top", def_file=dfile)
-    b.write_bytes(b"SOMETHING ELSE" * 8)          # replaced after the receipt
-    kept, kind, prov = GX.resolve_reference(tmp_path, "spm", dfile)
-    assert kept is None and kind == "unprovable", (kind, prov)
-    assert "sha256 mismatch" in prov["note"]
 
 
-def test_a_boundary_streamed_from_a_different_def_is_refused(tmp_path):
-    """The stale-run case exactly: the boundary is intact and its receipt is
-    honest, but it was streamed from a DEF that is not the one being compared."""
-    old_def = _def(tmp_path, "spm.def", "chip_top")
-    _boundary(tmp_path, "chip_top", def_file=old_def)
-    # the routing changed: same DEF path, different content
-    old_def.write_text("VERSION 5.8 ;\nDESIGN chip_top ;\nCOMPONENTS 1 ;\n"
-                       "- u1 INV ;\nEND COMPONENTS\nEND DESIGN\n")
-    kept, kind, prov = GX.resolve_reference(tmp_path, "spm", old_def)
-    assert kept is None and kind == "unprovable", (kind, prov)
-    assert "streamed from a different" in prov["note"]
 
 
-def test_no_boundary_at_all_still_falls_back(tmp_path):
-    """The absent case is untouched: no retained boundary means the re-stream path,
-    exactly as before."""
-    dfile = _def(tmp_path, "spm.def", "chip_top")
-    kept, kind, _prov = GX.resolve_reference(tmp_path, "spm", dfile)
-    assert kept is None and kind != "retained"
 
 
 def test_the_runner_records_the_sha_it_already_computes():

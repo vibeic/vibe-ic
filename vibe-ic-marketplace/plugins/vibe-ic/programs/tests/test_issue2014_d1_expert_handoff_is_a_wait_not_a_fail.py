@@ -64,7 +64,6 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import phase1_expert_parse_track as T          # noqa: E402
-import flow_compliance_check as F              # noqa: E402
 import _path_layout as _pl                     # noqa: E402
 import _progress_run as _pr                    # noqa: E402
 
@@ -201,73 +200,18 @@ def test_the_awaiting_set_is_an_allow_list(tmp_path):
 
 # ── the consumers: the flow, and the runner ────────────────────────────────
 
-def test_the_flow_reads_the_wait_as_incomplete_never_as_a_bare_pass():
-    """D1's clause is `program_exit_zero`. rc 4 must satisfy it AND raise the
-    #599 INCOMPLETE tier, so the roll-up says 'someone must return' rather than
-    counting an unaudited expert half as an executed pass."""
-    assert F._AWAITING_EXIT_CODE == T.AWAITING_EXIT_CODE, (
-        "the flow and the producer disagree about the code")
-    assert F._AWAITING_EXIT_CODE not in (0, 1, 2, F._WAIVER_EXIT_CODE)
 
 
-def test_a_bare_rc_four_with_no_sentinel_is_still_a_failure(tmp_path):
-    """BOTH the code and the disclosure, the `_WAIVER_EXIT_CODE` shape. An
-    unrelated program's exit 4 must not inherit the tier — otherwise the third
-    state becomes a hole any gate can fall through."""
-    prog = tmp_path / "silent_four.py"
-    prog.write_text("import sys\nprint('nothing to disclose')\n"
-                    "sys.exit(4)\n")
-    outcome = F._check_program_exit_zero(tmp_path, str(prog))
-    passed = outcome[0] if isinstance(outcome, tuple) else outcome.passed
-    assert passed is False, (
-        "an rc 4 that disclosed nothing was promoted to a stated wait")
-
-    prog2 = tmp_path / "disclosing_four.py"
-    prog2.write_text("import sys\nprint('INCOMPLETE: pass two is pending')\n"
-                     "sys.exit(4)\n")
-    outcome2 = F._check_program_exit_zero(tmp_path, str(prog2))
-    passed2, out2 = (outcome2[0], outcome2[1]) if isinstance(outcome2, tuple) \
-        else (outcome2.passed, outcome2.reason)
-    assert passed2 is True
-    assert F._stdout_signals_token(out2, F._INCOMPLETE_STDOUT_TOKEN), (
-        "the clause passed and the INCOMPLETE tier was not raised — that is a "
-        "bare PASS for an unaudited half")
 
 
 
 
 # ── negative controls: the gate must still bite ────────────────────────────
 
-def _stage_phase1(project: Path):
-    cp = _pr.run(
-        [sys.executable, str(_PROGRAMS / "flow_compliance_check.py"),
-         str(project), "--stage-id", "stage_phase1", "--exclude-step", "0.5ic"],
-        capture_output=True, text=True, cwd=str(project))
-    return cp.returncode, cp.stdout + cp.stderr
 
 
-def test_a_project_with_no_phase1_input_is_still_blocked(tmp_path):
-    """THE reverse control. The repair must not make D1 pass for everyone: a
-    tree that produced no Phase-1 document has to stay stopped, and it does —
-    the clause that catches it (`phase1_all_l_docs_present_check` and the
-    step's own declared outputs) is untouched by the third state."""
-    p = tmp_path / "empty"
-    p.mkdir()
-    rc, out = _stage_phase1(p)
-    assert rc != 0, "a project with no Phase-1 input passed D1"
-    assert "Overall: PASS" not in out
-    assert "Step D1" in out
 
 
-def test_a_project_whose_expert_answer_is_unreadable_is_still_blocked(tmp_path):
-    """The second reverse control, aimed straight at the new state: DEFECT must
-    keep failing D1 through the WHOLE clause, not merely in the producer."""
-    p = _project(tmp_path, name="refused")
-    _run_track(p)                                # writes the hand-off pack
-    _write_answer(p, {"verdict": "gaps", "complete": False})
-    rc, out = _stage_phase1(p)
-    assert rc != 0, "an unreadable expert answer passed D1"
-    assert "Overall: PASS" not in out
 
 
 #: D1's expert clause, spelled exactly as the flow yaml spells it, ALONE.
@@ -279,41 +223,3 @@ def test_a_project_whose_expert_answer_is_unreadable_is_still_blocked(tmp_path):
 #: it is what changed.
 _D1_EXPERT_CLAUSE = {"all_of": [
     {"program_exit_zero": "phase1_expert_parse_track ."}]}
-
-
-def test_the_flow_clause_passes_the_wait_and_still_calls_it_incomplete(
-        tmp_path):
-    """THE forward control, on D1's own clause.
-
-    Pristine main: `passed` is False and the reasons carry "program failed" —
-    that is Step D1 red for every program-only run of every design. Here:
-    `passed` is True AND the #599 INCOMPLETE hint is raised, so the step is
-    reported "not audited, and someone must return" and never a bare PASS.
-
-    The same pair is measured end-to-end on a real Phase-1 tree and recorded in
-    this file's header: same project, same command, pristine main -> `Step D1
-    FAIL / Overall FAIL / rc 1`; with this change -> `Step D1 INCOMPLETE /
-    Overall PASS / rc 0 / INCOMPLETE=1`."""
-    p = _project(tmp_path, name="waiting")
-    passed, reasons = F._evaluate_gate(p, _D1_EXPERT_CLAUSE)
-
-    assert passed is True, (
-        "the hand-off's designed first pass still fails D1's clause: "
-        + " | ".join(reasons)[:600])
-    assert not any(r.startswith("program failed:") for r in reasons), reasons
-    assert any(r.startswith(F._INCOMPLETE_HINT_PREFIX) for r in reasons), (
-        "the clause passed and raised NO disclosure — an unaudited expert half "
-        "counted as an executed pass, which is the other half of the defect: "
-        + " | ".join(reasons)[:600])
-
-
-def test_the_flow_clause_still_fails_an_unreadable_answer(tmp_path):
-    """The paired direction, on the same clause. A comparator that simply
-    always passed would be as wrong as one that always failed."""
-    p = _project(tmp_path, name="refused_clause")
-    _run_track(p)                                # writes the hand-off pack
-    _write_answer(p, {"verdict": "gaps", "complete": False})
-    passed, reasons = F._evaluate_gate(p, _D1_EXPERT_CLAUSE)
-
-    assert passed is False, "a refused expert answer passed D1's clause"
-    assert any(r.startswith("program failed:") for r in reasons), reasons

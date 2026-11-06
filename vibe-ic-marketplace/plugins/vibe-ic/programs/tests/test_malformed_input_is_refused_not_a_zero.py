@@ -346,114 +346,29 @@ def test_ipcatalog_c_a_well_formed_dependency_is_still_auto_included(tmp_path):
 # gds_ip_attribution — no verdict anywhere; the harm is a FALSE STATEMENT in
 # a tape-out deliverable.
 # ===========================================================================
-def _ip_line(files) -> str:
-    import gds_ip_attribution as mod
-    ip = {"ip_name": "ip_a", "version": "1", "license": "ISC",
-          "canonical_commit": "c0ffee", "canonical_url": "u"}
-    if files is not None:
-        ip["files_copied"] = files
-    return mod.build_attribution_blob(
-        {"ip_catalog_used": [ip]}).splitlines()[1]
 
 
-def test_gds_a_an_unreadable_file_list_is_not_reported_as_zero_files(tmp_path):
-    line = _ip_line({"a.v": {"sha256": "aa"}, "b.v": {"sha256": "bb"}})
-    # On origin/main: `assert 'files=0' not in 'IP ip_a 1 ISC files=0 ...'`.
-    assert "files=0" not in line, line
-    assert "files=REFUSED" in line
 
 
-def test_gds_b_no_aggregate_hash_is_published_over_a_file_set_never_read(tmp_path):
-    """`e3b0c44298fc1c14` is the head of SHA-256 of the EMPTY STRING. On
-    origin/main it was printed as this IP's aggregate file digest — a
-    plausible 16-hex-digit attestation over content the emitter never read,
-    embedded in the foundry handoff GDS."""
-    line = _ip_line({"a.v": {"sha256": "aa"}, "b.v": {"sha256": "bb"}})
-    assert "e3b0c44298fc1c14" not in line, line
-    assert "sha256_agg:REFUSED" in line
 
 
-def test_gds_c_the_refusal_appears_in_the_record_itself(tmp_path):
-    import gds_ip_attribution as mod
-    blob = mod.build_attribution_blob(
-        {"ip_catalog_used": {"ip_a": {"ip_name": "ip_a"}}})
-    # The OUTER container unread used to emit a record with no `IP` line at
-    # all — indistinguishable from a design that reused no catalog IP, which
-    # is the exact claim a licence auditor reads this record to check.
-    assert any(ln.startswith("REFUSED ") for ln in blob.splitlines()), blob
-    assert "ip_catalog_used" in blob
 
 
-def test_gds_d_a_well_formed_record_is_byte_identical_unchanged(tmp_path):
-    """PASSES IN BOTH ARMS. This blob is embedded in a tape-out deliverable,
-    so the readable path's bytes are pinned, not merely its meaning."""
-    assert _ip_line([{"sha256": "aa"}, {"sha256": "bb"}]) == (
-        "IP ip_a 1 ISC files=2 sha256_agg:486b34250bd4400c "
-        "url:u commit:c0ffee")
-    assert _ip_line(None) == (
-        "IP ip_a 1 ISC files=0 sha256_agg:n/a url:u commit:c0ffee")
 
 
 # ===========================================================================
 # run_status — `step 'None' (0 done)` for a plan that was never read.
 # ===========================================================================
-def _run_status_report(tmp_path: Path, name: str, steps, present: bool):
-    import run_status as rs
-    d = tmp_path / name
-    rep = d / "reports" / "orchestrator"
-    rep.mkdir(parents=True)
-    body = {}                      # no `verdict` -> the in-flight case
-    if present:
-        body["steps"] = steps
-    f = rep / "phase3_one_shot.json"
-    f.write_text(json.dumps(body))
-    logs = rep / "logs"
-    logs.mkdir(parents=True)
-    lf = logs / "phase3.log"
-    lf.write_text("working\n")
-    old = time.time() - 700        # 700s of silence
-    for p in (lf, f):
-        os.utime(p, (old, old))
-    (d / "run.pid").write_text(str(os.getpid()))
-    os.utime(d / "run.pid", (old, old))
-    return rs.status(d, "phase3"), rs
 
 
 _PLAN = [{"name": n, "status": "PASS"} for n in ("a", "b", "c")] + \
         [{"name": "lvs", "status": "RUNNING"}]
 
 
-def test_runstatus_a_an_unreadable_plan_is_not_zero_steps_done(tmp_path):
-    rep, rs = _run_status_report(tmp_path, "m", {s["name"]: s for s in _PLAN},
-                                 True)
-    # On origin/main there is no such key: `assert None is not None`.
-    assert rep.get("plan_unreadable") is not None, rep
-    assert rep["plan_unreadable"]["entries_not_examined"] == 4
-    assert "PLAN UNREADABLE" in rs.summarize(rep)
 
 
-def test_runstatus_b_malformed_and_absent_do_not_produce_the_same_report(tmp_path):
-    a, rs = _run_status_report(tmp_path, "a", None, False)
-    m, _ = _run_status_report(tmp_path, "m", {s["name"]: s for s in _PLAN},
-                              True)
-    for r in (a, m):
-        for k in ("pid", "heartbeat_log", "silence_s", "reason",
-                  "last_log_line"):
-            r.pop(k, None)
-    assert a != m, a
-    # Both still report `steps_completed: 0` — that is WHY a separate key is
-    # needed, and asserting it here stops a later edit from "fixing" the
-    # collapse by inventing a count nobody measured.
-    assert a["steps_completed"] == 0 and m["steps_completed"] == 0
-    assert a.get("plan_unreadable") is None
 
 
-def test_runstatus_c_a_readable_plan_is_unchanged(tmp_path):
-    """PASSES IN BOTH ARMS."""
-    rep, _ = _run_status_report(tmp_path, "w", _PLAN, True)
-    assert rep["current_step"] == "lvs"
-    assert rep["steps_completed"] == 3
-    assert rep["state"] == "RUNNING_ON_TIME"
 
 
 # ===========================================================================

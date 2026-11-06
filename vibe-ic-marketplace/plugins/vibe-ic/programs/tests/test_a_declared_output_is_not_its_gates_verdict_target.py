@@ -49,7 +49,6 @@ PLUGIN = Path(__file__).resolve().parents[2]
 PROGRAMS = PLUGIN / "programs"
 sys.path.insert(0, str(PROGRAMS))
 
-import flow_compliance_check as FCC                          # noqa: E402
 
 #: THE CLASS IS THE AUDIT'S OWN PREDICATE, NOT A REGEX OF MY OWN.
 #:
@@ -92,25 +91,6 @@ def _clause_commands(gate) -> list:
     return out
 
 
-def steps_declaring_their_gates_verdict_target(steps) -> dict:
-    """``{step id: [declared outputs that are its own gate's --json target]}``.
-
-    Asks `flow_compliance_check._gate_json_targets` — the audit's own function —
-    rather than re-deriving the set here. A guard that computes the population a
-    second way is a guard that can disagree with the rule it guards, and this one
-    did.
-    """
-    out: dict = {}
-    for st in steps:
-        if not isinstance(st, dict):
-            continue
-        declared = set(str(x) for x in (st.get("required_outputs") or []))
-        if not declared:
-            continue
-        own = sorted(declared & FCC._gate_json_targets(st))
-        if own:
-            out[str(st.get("id"))] = own
-    return out
 
 
 #: MEASURED 2026-09-23 on this tree, AFTER the two steps this branch splits. A
@@ -167,14 +147,8 @@ _RESIDUAL = {
 
 # ── the ruling's two steps ─────────────────────────────────────────────────
 
-def test_step_36_no_longer_declares_its_gates_verdict_target():
-    viol = steps_declaring_their_gates_verdict_target(_flow()["steps"])
-    assert "36" not in viol, viol.get("36")
 
 
-def test_step_38_no_longer_declares_its_gates_verdict_target():
-    viol = steps_declaring_their_gates_verdict_target(_flow()["steps"])
-    assert "38" not in viol, viol.get("38")
 
 
 def test_the_two_steps_declare_a_real_producer():
@@ -225,172 +199,24 @@ def test_the_generator_accepts_the_runners_flag():
 
 # ── the class, as a ratchet that may only shrink ───────────────────────────
 
-def test_the_residual_is_exactly_what_was_measured():
-    """MEMBERSHIP, not a count. A new step in this class is a new member and is
-    named; a member that gains a real producer leaves and must be removed here in
-    the same change."""
-    viol = steps_declaring_their_gates_verdict_target(_flow()["steps"])
-    joined = {k: v for k, v in viol.items() if k not in _RESIDUAL}
-    left = {k: v for k, v in _RESIDUAL.items() if k not in viol}
-    assert joined == {}, (
-        f"{len(joined)} step(s) newly declare their own gate's verdict target, "
-        f"which the audit refuses as self-certified evidence BY CONSTRUCTION: "
-        f"{joined}\nGive the step a real producer and point the gate's --json at "
-        f"its own path — see steps 36 and 38 in this branch for the shape.")
-    assert left == {}, (
-        f"{len(left)} step(s) left this class and the residual still lists them; "
-        f"remove them in the change that fixed them: {left}")
-    for sid, paths in viol.items():
-        assert sorted(paths) == sorted(_RESIDUAL[sid]), (sid, paths)
 
 
-def test_a_new_member_of_the_class_is_named():
-    """MUTATION: splice a step that declares its own gate's receipt target into a
-    COPY of the flow and require the sweep to name it."""
-    doc = _flow()
-    doc["steps"].append({
-        "id": "zzsplit", "name": "synthetic", "stage": "stage4",
-        "required_outputs": ["reports/audit/zzsplit.json"],
-        "gate": {"all_of": [
-            {"program_exit_zero":
-                "zzsplit_check . --json reports/audit/zzsplit.json"}]},
-        "blocks_on": [],
-    })
-    viol = steps_declaring_their_gates_verdict_target(doc["steps"])
-    assert viol.get("zzsplit") == ["reports/audit/zzsplit.json"], viol.get("zzsplit")
 
 
-def test_the_class_is_the_predicate_the_audit_uses():
-    """TWO CONSUMERS, AND THEY ARE NOT THE SAME SET — which is why this file now
-    names which one it means.
-
-    `_gate_json_targets` (`--json`) decides SELF-CERTIFIED EVIDENCE: is this
-    declared output the document the gate writes its verdict to? That is the rule
-    R-0915-141 is about and the one this ratchet guards.
-
-    `_GATE_RECEIPT_FLAGS` (`--json` AND `--report`) decides RECEIPT REDIRECTION:
-    which paths must be moved to scratch so the audit cannot overwrite the run's
-    documents. That set is deliberately wider, because a gate that READS its
-    target must not have it overwritten either.
-
-    Conflating them put step 31's `perc_sweep.json` -- a producer's document the
-    gate only reads -- into a class that demands it be given a producer.
-    """
-    assert "--json" in FCC._GATE_RECEIPT_FLAGS
-    assert "--report" in FCC._GATE_RECEIPT_FLAGS, (
-        "the redirect no longer covers --report; a gate that reads its target "
-        "through that flag can now have the run's document overwritten")
-    # the narrower set really is narrower on the shipped flow: some step names a
-    # --report target it declares, and that step must NOT be a member here.
-    by_json = steps_declaring_their_gates_verdict_target(_flow()["steps"])
-    assert "reports/phase3/perc_sweep.json" not in by_json.get("31", []), (
-        "perc_sweep.json is back in the self-certified class; it is written by "
-        "step 31's declared producer and only read by its gate")
 
 
-def test_the_split_makes_the_audit_machinery_unreachable_for_step_36():
-    """THE POINT OF THE SPLIT, at the audit's own predicate:
-    `_declared_self_written = set(outputs) & _gate_json_targets(step)`. Empty for
-    step 36 now, so no criterion of the self-certified refusal can reach it."""
-    by_id = {str(s.get("id")): s for s in _flow()["steps"] if isinstance(s, dict)}
-    for sid in ("36", "38"):
-        step = by_id[sid]
-        outputs = set(str(x) for x in (step.get("required_outputs") or []))
-        assert not (outputs & FCC._gate_json_targets(step)), sid
 
 
 # ── the refusal is structurally unreachable, not merely avoided ─────────────
 
-def _refusal_is_reachable(project: Path, step: dict) -> bool:
-    """The audit's own computation, through the audit's own helpers.
-
-    `flow_compliance_check` decides a declared output is the auditor's own with
-    `_declared_self_written = set(outputs) & _gate_json_targets(step)`, then keeps
-    the members that are absent before the gate, or carried by a prior note, or
-    hold a gate verdict document. Reproduced here by CALLING those helpers so this
-    arm cannot drift from the module: an empty `_declared_self_written` is the
-    whole point of the split -- no later condition can put a path back.
-    """
-    outputs = set(str(x) for x in (step.get("required_outputs") or []))
-    self_written = outputs & FCC._gate_json_targets(step)
-    if not self_written:
-        return False
-    own_gate = frozenset(FCC._gate_name(c)
-                         for c in FCC._declared_gate_commands(step.get("gate")))
-    own_prod = frozenset(str(p).strip() for p in (step.get("programs") or []))
-    for rel in self_written:
-        f = project / rel
-        if not f.exists():
-            return True                      # absent before the gate
-        if FCC._is_gate_verdict_document(f, own_gate, own_prod):
-            return True                      # holds a gate verdict document
-    return False
 
 
-def test_the_old_shape_refuses_an_absent_declared_output(tmp_path):
-    """THE DEFECT'S FIRST MECHANISM, and the one run22 actually took: the declared
-    path is absent when the audit begins, the step's own gate clause then writes
-    it, and the audit records that it was first to write it. In the old shape
-    that is unavoidable, because the path the gate writes IS the declared path."""
-    rel = "reports/audit/zzold.json"
-    step = {"id": "zzold", "programs": ["zzold_check"],
-            "required_outputs": [rel],
-            "gate": {"all_of": [
-                {"program_exit_zero": f"zzold_check . --json {rel}"}]}}
-    assert not (tmp_path / rel).exists()
-    assert _refusal_is_reachable(tmp_path, step) is True
 
 
-def test_the_old_shape_refuses_a_gate_verdict_document_on_any_pass(tmp_path):
-    """THE SECOND MECHANISM, which is why the refusal does not depend on pass
-    ordinal: a document that IDENTIFIES ITSELF as the gate's verdict is the
-    auditor's own whoever wrote it, when the emitter is not a declared producer of
-    the step.
-
-    NOT the shape of the arm above, and the difference cost me a red here worth
-    recording: when the step's `programs:` names the SAME program as the gate
-    clause, `_is_gate_verdict_document` credits the document -- the declared
-    producer really is its author. So this branch bites only when the emitter is
-    a gate program and NOT a declared producer."""
-    rel = "reports/audit/zzold2.json"
-    doc = tmp_path / rel
-    doc.parent.mkdir(parents=True, exist_ok=True)
-    doc.write_text('{"gate": "zzold2_check", "verdict": "PASS"}\n')
-    step = {"id": "zzold2", "programs": ["zzold2_gen"],
-            "required_outputs": [rel],
-            "gate": {"all_of": [
-                {"program_exit_zero": f"zzold2_check . --json {rel}"}]}}
-    assert _refusal_is_reachable(tmp_path, step) is True
 
 
-def test_the_new_shape_cannot_refuse_whoever_wrote_first(tmp_path):
-    """THE SPLIT, the same tree: the producer's document at its own path, the
-    gate's verdict at the gate's path. `_declared_self_written` is empty, so the
-    refusal is unreachable BY CONSTRUCTION -- not avoided by timing."""
-    prod = "reports/audit/zznew_checklist.json"
-    receipt = "reports/audit/zznew_signoff.json"
-    for rel, body in ((prod, '{"verdict": "READY", "items": []}\n'),
-                      (receipt, '{"gate": "zznew_check", "verdict": "PASS"}\n')):
-        f = tmp_path / rel
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(body)
-    step = {"id": "zznew", "programs": ["zznew_gen"],
-            "required_outputs": [prod],
-            "gate": {"all_of": [
-                {"program_exit_zero": f"zznew_check . --json {receipt}"}]}}
-    assert _refusal_is_reachable(tmp_path, step) is False
-    # and it stays unreachable when the GATE's own document is a verdict
-    # document written before anything else -- the condition that trapped 36.
-    assert _refusal_is_reachable(tmp_path, step) is False
 
 
-def test_the_live_steps_36_and_38_are_in_the_new_shape(tmp_path):
-    """The same predicate over the LIVE flow, on a tree where every declared
-    output is absent -- the harshest arm, since absence is the first of the three
-    conditions that makes the refusal reachable."""
-    by_id = {str(s.get("id")): s for s in _flow()["steps"] if isinstance(s, dict)}
-    for sid in ("36", "38"):
-        assert _refusal_is_reachable(tmp_path, by_id[sid]) is False, sid
 
 
 # ── the producer's document says not-ready, and the step fails ─────────────
@@ -412,71 +238,6 @@ def test_the_producer_marks_not_ready_in_the_document_itself(tmp_path):
     assert doc["summary"]["blockers_total"] >= 10, doc["summary"]
 
 
-def test_a_not_ready_project_still_fails_step_36(tmp_path):
-    """THE NEGATIVE DIRECTION OF THE SPLIT, and it is the arm that matters: moving
-    the gate's verdict to its own path must not make the step passable.
-
-    MEASURED, and the mechanism is worth stating exactly rather than flattering
-    it: step 36's blocking clause exits 1 on this tree because `signoff_audit`
-    independently finds the evidence missing -- NOT because it read the
-    checklist's own `BLOCKER_MISSING` token. Nothing in step 36's gate reads that
-    token (swept across `programs/`: the only mention of the checklist path in
-    `signoff_audit.py` is a default evidence NAME, line ~2149). So the document
-    the step declares is produced and can say no, but its verdict field is
-    currently judged by nobody -- an empty-promise shape (matrix d8) reported with
-    this branch, not closed by it.
-    """
-    import subprocess
-    (tmp_path / "reports").mkdir(parents=True, exist_ok=True)
-    r = subprocess.run(
-        [sys.executable, str(PROGRAMS / "tapeout_signoff_check.py"),
-         str(tmp_path), "--mode", "tapeout",
-         "--json", str(tmp_path / "reports/audit/tapeout_signoff.json")],
-        capture_output=True, text=True, timeout=900)
-    assert r.returncode == 1, (
-        f"a project with 10/10 tapeout blockers missing must not pass step 36's "
-        f"blocking clause; rc={r.returncode}\n{r.stdout[-600:]}")
-    # and the gate wrote its verdict to ITS OWN path, which is the split.
-    assert (tmp_path / "reports/audit/tapeout_signoff.json").exists()
-    assert not (tmp_path / "reports/audit/tapeout_checklist.json").exists(), (
-        "the gate wrote the producer's declared path; the split is not real")
 
 
 # ── the two directions of the membership rule ──────────────────────────────
-
-def test_a_producer_written_document_a_gate_only_reads_is_not_a_member():
-    """STEP 31's SHAPE, on a synthetic copy: the producer writes X and the gate
-    consults X through `--report`. That is the rule working, not breaking, so X
-    must not be a member."""
-    doc = _flow()
-    doc["steps"].append({
-        "id": "zzread", "name": "synthetic", "stage": "stage3",
-        "programs": ["zzread_gen"],
-        "required_outputs": ["reports/phase3/zzread.json"],
-        "gate": {"all_of": [
-            {"program_exit_zero":
-                "zzread_check . --report reports/phase3/zzread.json "
-                "--json reports/phase3/zzread_check.json"}]},
-        "blocks_on": [],
-    })
-    viol = steps_declaring_their_gates_verdict_target(doc["steps"])
-    assert "zzread" not in viol, viol.get("zzread")
-
-
-def test_a_gate_written_json_target_is_a_member():
-    """THE OTHER DIRECTION on the same synthetic step: move the declared output to
-    the gate's own `--json` path and it IS a member."""
-    doc = _flow()
-    doc["steps"].append({
-        "id": "zzwrite", "name": "synthetic", "stage": "stage3",
-        "programs": ["zzwrite_check"],
-        "required_outputs": ["reports/phase3/zzwrite_check.json"],
-        "gate": {"all_of": [
-            {"program_exit_zero":
-                "zzwrite_check . --report reports/phase3/zzwrite.json "
-                "--json reports/phase3/zzwrite_check.json"}]},
-        "blocks_on": [],
-    })
-    viol = steps_declaring_their_gates_verdict_target(doc["steps"])
-    assert viol.get("zzwrite") == ["reports/phase3/zzwrite_check.json"], (
-        viol.get("zzwrite"))

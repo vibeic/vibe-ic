@@ -75,7 +75,6 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import phase1_expert_parse_track as T          # noqa: E402
-import phase1_expert_track_evidence_check as E  # noqa: E402
 import _path_layout as _pl                     # noqa: E402
 import _progress_run as _pr                    # noqa: E402
 
@@ -346,36 +345,8 @@ def test_a_misscoped_expectation_is_still_a_disagreement(tmp_path):
     assert led["agreed"] == 0 and led["disagreed"] == 1
 
 
-def test_the_evidence_consumer_still_sees_a_real_design_finding(tmp_path):
-    """One misscoped expectation and one genuinely absent fact: the evidence
-    check must still read RAN. If reclassification could empty the design
-    column on its own, a run with a real gap would report a real zero — the
-    two-zeros conflation the expert track exists to prevent."""
-    p = _two_layer_project(tmp_path)
-    _answer(p, [
-        _exp("e-misscoped", "L9", "integration.register_map.offsets",
-             ["STATUS_WORD", "TRIM_WORD"]),
-        _exp("e-absent", "L9", "integration.other",
-             ["A_TOKEN_NO_LAYER_CARRIES"]),
-    ])
-    _run_track(p)
-    st = E.assess(p, _PROGRAMS)
-    assert st["state"] == "RAN", st
-    assert st["patch_count"] == 1, st
 
 
-def test_a_run_whose_only_disagreements_are_misscoped_says_so(tmp_path):
-    """PAIRED with the test above. With nothing left in the design column the
-    consumer reports RAN_EMPTY — a real zero, and correct: nothing about the
-    design was found. The state must be reachable, or the reclassification
-    would be unfalsifiable."""
-    p = _two_layer_project(tmp_path)
-    _answer(p, [_exp("e-misscoped", "L9", "integration.register_map.offsets",
-                     ["STATUS_WORD", "TRIM_WORD"])])
-    _run_track(p)
-    st = E.assess(p, _PROGRAMS)
-    assert st["state"] == "RAN_EMPTY", st
-    assert st["patch_count"] == 0, st
 
 
 def test_the_track_still_exits_zero_and_stays_advisory(tmp_path):

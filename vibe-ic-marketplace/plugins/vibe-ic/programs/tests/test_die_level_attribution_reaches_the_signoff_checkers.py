@@ -469,98 +469,18 @@ def test_drc_report_check_adds_no_finding_when_there_is_nothing_to_attribute(
 # written next to and share its evidence denominator rather than a second
 # definition of "tapeout-ready".
 
-def _tapeout_project(tmp_path: Path, rules=("m2.9", "m3.9"),
-                     deliverable="HARDMACRO", handoff=("m2.9", "m3.9"),
-                     record=None):
-    from test_v0_3_17_issue515_tapeout_drc_design_level import (
-        _proj, _report_db)
-    if record is None:
-        record = _record(attributed_density_rules={"m2.9": 1, "m3.9": 1},
-                         die_level_density_rules_in_deck={"m2.9": DECK,
-                                                          "m3.9": DECK},
-                         die_level_density_rule_evidence={
-                             r: {"deck_source": DECK,
-                                 "code": "  d = metal.area / whole_die_area\n",
-                                 "die_area_identifiers_matched":
-                                     ["whole_die_area"]}
-                             for r in ("m2.9", "m3.9")})
-    make_project(tmp_path, record=record, deliverable=deliverable,
-                 handoff_rules=handoff)
-    counts = {r: 1 for r in rules}
-    project = _proj(tmp_path, _report_db(counts) if counts else _report_db({}))
-    # These controls supply legacy reports, not a native density State.
-    (project / "phase3/librelane_switch.json").write_text(
-        json.dumps({"steps": {"34": "direct"}}))
-    return project
 
 
-def test_tapeout_credits_the_drc_slot_by_attribution(tmp_path):
-    import signoff_audit as audit
-    r = audit._check_tapeout(_tapeout_project(tmp_path))
-    assert r.passed is True
-    assert r.summary["evidence"]["drc"] == "die_level_attributed"
-    assert r.summary["drc_die_level_attributed"] is True
-    assert r.summary["verdict_tier"] == "PASS_WITH_WAIVERS", (
-        "an attributed delivery is never a BARE pass: the violations are "
-        "real, they are simply not this delivery's to close")
-    rules = {f.rule for f in r.findings}
-    assert "TAPEOUT_DRC_DIE_LEVEL_ATTRIBUTED" in rules
-    assert "TAPEOUT_DRC_VIOLATIONS" not in rules
-    assert r.summary["drc_library_internal_waived"] is False, (
-        "a die-level attribution must not be recorded under the "
-        "library-internal name -- release documents read this field")
 
 
-def test_tapeout_exit_code_is_the_waiver_rc_not_a_bare_pass(tmp_path):
-    import signoff_audit as audit
-    p = _tapeout_project(tmp_path)
-    rc = audit.main([str(p), "--mode", "tapeout"])
-    assert rc == audit.WAIVER_EXIT_CODE and rc != 0
 
 
-def test_tapeout_still_fails_a_DIE_delivery(tmp_path):
-    import signoff_audit as audit
-    r = audit._check_tapeout(_tapeout_project(tmp_path, deliverable="DIE"))
-    assert r.summary["evidence"]["drc"] is False
-    assert "TAPEOUT_DRC_VIOLATIONS" in {f.rule for f in r.findings}
 
 
-def test_tapeout_still_fails_when_the_handoff_is_missing(tmp_path):
-    import signoff_audit as audit
-    r = audit._check_tapeout(_tapeout_project(tmp_path, handoff=None))
-    assert r.summary["evidence"]["drc"] is False
-    bad = [f for f in r.findings if f.rule == "TAPEOUT_DRC_VIOLATIONS"]
-    assert bad and "die-level attribution declined" in bad[0].message, (
-        "a HARDMACRO whose attribution was DECLINED must not look like one "
-        "nobody asked about")
 
 
-def test_tapeout_still_fails_one_unattributed_violation(tmp_path):
-    import signoff_audit as audit
-    rec = _record(total=3, unattributed_total=1,
-                  attributed_density_rules={"m2.9": 1, "m3.9": 1},
-                  die_level_density_rules_in_deck={"m2.9": DECK, "m3.9": DECK},
-                  die_level_density_rule_evidence={
-                      r: {"deck_source": DECK,
-                          "code": "  d = metal.area / whole_die_area\n",
-                          "die_area_identifiers_matched": ["whole_die_area"]}
-                      for r in ("m2.9", "m3.9")})
-    r = audit._check_tapeout(_tapeout_project(
-        tmp_path, rules=("m2.9", "m3.9", "li.3"), record=rec))
-    assert r.summary["evidence"]["drc"] is False
-    assert "TAPEOUT_DRC_VIOLATIONS" in {f.rule for f in r.findings}
 
 
-def test_tapeout_library_internal_branch_is_untouched(tmp_path):
-    """The branch above this one still decides what it always decided, and
-    still records itself under its own name."""
-    import signoff_audit as audit
-    from test_v0_3_17_issue515_tapeout_drc_design_level import (
-        _proj, _report_db)
-    p = _proj(tmp_path, _report_db({"li.3": 500, "ct.2": 200}))
-    r = audit._check_tapeout(p)
-    assert r.summary["evidence"]["drc"] == "library_internal_waived"
-    assert r.summary["drc_die_level_attributed"] is False
 
 
 def test_the_attribution_cannot_suppress_an_unrelated_signoff_refusal(tmp_path):

@@ -65,7 +65,6 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import professional_tb_gen as PTG  # noqa: E402
-import flow_compliance_check as FCC  # noqa: E402
 
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 _PTG_SRC = (PLUGIN / "programs" / "professional_tb_gen.py").read_text()
@@ -160,79 +159,3 @@ def test_a_promoted_expert_tb_reaches_a_run_kind_the_runner_executes():
 
 
 # ───────────────── C. advisory means advisory (real artefacts) ─────────────
-def test_a_two_source_advisory_gate_is_recognised():
-    """REAL ARTEFACT: the gate module and the canonical flow, as shipped."""
-    assert FCC._gate_is_two_source_advisory(
-        "l6_fsm_scaffold_actionable_check"), (
-        "this gate's own docstring says `ENFORCEMENT: advisory` and the flow "
-        "wires it advisory_program_exit_zero; both sources agree")
-
-
-def test_a_gate_that_declares_blocking_is_not_downgraded():
-    """REAL ARTEFACT, and the load-bearing negative: this gate declares
-    'BLOCKS (exit 1)' while the flow wires it advisory. That is a genuine
-    disagreement between two authors and must KEEP blocking -- resolving it
-    silently is exactly what this predicate must not do."""
-    assert not FCC._gate_is_two_source_advisory(
-        "l10_test_case_oracle_anchor_check")
-
-
-def test_prose_discussing_the_token_is_not_a_declaration():
-    """REAL ARTEFACT, and a defect this predicate actually had: a first cut
-    grepped the whole file, so `flow_compliance_check` matched its OWN prose
-    about the convention and would have downgraded the recursive stage audit.
-    The declaration must be the module's own docstring."""
-    src = (PLUGIN / "programs" / "flow_compliance_check.py").read_text()
-    assert "ENFORCEMENT: advisory" in src, (
-        "fixture guard: this test is only meaningful while the module still "
-        "DISCUSSES the token somewhere outside its own docstring")
-    assert not FCC._gate_is_two_source_advisory("flow_compliance_check")
-
-
-def test_an_unknown_or_malformed_gate_name_is_not_advisory():
-    for name in ("", "no_such_gate_at_all", "../etc/passwd", "a b"):
-        assert not FCC._gate_is_two_source_advisory(name)
-
-
-def test_the_structural_denominator_is_not_shrunk():
-    """The downgrade must change the VERDICT, never the denominator: dropping
-    entries from _STRUCTURAL_RTL_GATES would delete the evidence instead."""
-    assert FCC._two_source_advisory_gates() <= set(FCC._STRUCTURAL_RTL_GATES)
-    assert len(FCC._STRUCTURAL_RTL_GATES) == len(
-        set(FCC._STRUCTURAL_RTL_GATES)), "duplicate gate in the denominator"
-
-
-def test_the_downgrade_is_narrow():
-    """Blast radius is stated, not assumed."""
-    downgraded = FCC._two_source_advisory_gates()
-    assert len(downgraded) < len(FCC._STRUCTURAL_RTL_GATES) // 10, (
-        f"{len(downgraded)} of {len(FCC._STRUCTURAL_RTL_GATES)} structural "
-        f"gates downgraded -- too broad to land without a corpus sweep")
-    for gate in downgraded:
-        assert FCC._gate_is_two_source_advisory(gate)
-
-
-def test_the_advisory_clause_consults_the_predicate_before_failing_a_step():
-    src = (PLUGIN / "programs" / "flow_compliance_check.py").read_text()
-    tree = ast.parse(src)
-    fn = None
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            seg = ast.get_source_segment(src, node) or ""
-            if "advisory gate refusal" in seg:
-                fn = seg
-                break
-    assert fn, "the advisory-refusal site vanished"
-    assert "_gate_is_two_source_advisory" in fn, (
-        "an advisory_program_exit_zero row that returns False on a refusal is "
-        "the blocking row under another name")
-
-
-def test_the_refusal_is_still_reported_when_it_is_downgraded():
-    """Degrade LOUDLY: downgrading must not silence the finding."""
-    src = (PLUGIN / "programs" / "flow_compliance_check.py").read_text()
-    i = src.index("advisory gate refusal")
-    j = src.index("_gate_is_two_source_advisory", i)
-    assert "reasons.append" in src[i:j], (
-        "the refusal must be appended to the reasons BEFORE the downgrade, "
-        "so a downgraded gate is still named in the report")

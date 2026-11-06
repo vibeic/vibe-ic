@@ -266,78 +266,11 @@ endmodule
 # ---------------------------------------------------------------------
 # Attack 3 — fake LIN protocol on EXAMPLE_PROTOCOL-class IC.
 # ---------------------------------------------------------------------
-def test_attack_lin_protocol_with_aid_inout_fails(tmp_path: Path) -> None:
-    """SF4 — slave_tx / rx_byte_valid gates must FAIL on
-    L2.protocol_type='lin' when RTL exposes inout id_bus."""
-    project = tmp_path / "ic_attack3"
-    _build_aid_class_skeleton(project)
-    # Add the lying L2 — claim LIN.
-    _write_json(project / "phase1/generated_docs/L2_FRS.json", {
-        **_evidence("L2"),
-        "ic_name": "EXAMPLE_PROTOCOL-X",
-        "protocol_type": "lin",
-    })
-    # Slave TX gate.  We can't directly invoke without an inspect
-    # wrapper; use the runner via importlib.
-    sys.path.insert(0, str(PROGRAMS))
-    try:
-        from slave_tx_no_device_break_check import (  # type: ignore
-            inspect as slave_tx_inspect,
-        )
-        from rx_byte_valid_requires_ibt_gate_check import (  # type: ignore
-            run_audit as rx_audit,
-        )
-    finally:
-        sys.path.pop(0)
-    # slave_tx
-    failures, _, summary = slave_tx_inspect(project)
-    assert any("inconsistency" in f.lower() for f in failures), (
-        f"SF4 (slave_tx) escape: failures={failures} summary={summary}")
-    # rx_byte_valid
-    result = rx_audit(project)
-    verdict = getattr(result, "verdict", None)
-    assert verdict == "FAIL", (
-        f"SF4 (rx_byte_valid) escape: verdict={verdict}")
-    inconsistency = any(
-        "inconsistency" in (f.message or "").lower()
-        for f in getattr(result, "findings", [])
-    )
-    assert inconsistency, (
-        f"SF4 (rx_byte_valid) wrong message: "
-        f"{[f.message for f in result.findings]}")
 
 
 # ---------------------------------------------------------------------
 # Attack 4 — facts.yaml comment-line escape must be ignored.
 # ---------------------------------------------------------------------
-def test_attack_facts_yaml_comment_escape_ignored(tmp_path: Path) -> None:
-    """MF3 — substring grep is gone. A `# no_fsm: true` comment must
-    not silence the fsm requirement."""
-    project = tmp_path / "ic_attack4"
-    project.mkdir(parents=True, exist_ok=True)
-    _write_text(project / "facts.yaml",
-                "# no_fsm: true   (this is a comment, not a flag)\n"
-                "ic_name: dummy\n")
-    sys.path.insert(0, str(PROGRAMS))
-    try:
-        # _facts_yaml_escape_flags is the hardened entrypoint.
-        from l_doc_structured_field_count_check import (  # type: ignore
-            _facts_yaml_escape_flags,
-        )
-    finally:
-        sys.path.pop(0)
-    flags = _facts_yaml_escape_flags(project)
-    assert flags == {
-        "no_command_protocol": False,
-        "no_fsm": False,
-        "no_timing_classification": False,
-    }, f"MF3 escape leaked: {flags}"
-    # Also test nested mapping — must NOT leak.
-    _write_text(project / "facts.yaml",
-                "metadata:\n  no_fsm: true\nic_name: dummy\n")
-    flags2 = _facts_yaml_escape_flags(project)
-    assert flags2["no_fsm"] is False, (
-        f"MF3 nested-key escape leaked: {flags2}")
 
 
 # ---------------------------------------------------------------------

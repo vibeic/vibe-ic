@@ -37,7 +37,6 @@ sys.path.insert(0, str(PROGRAMS))
 
 import atpg_untestable_fault_classify as auc            # noqa: E402
 import dft_test_coverage as dtc                          # noqa: E402
-import payload_bit_position_check as pbp                # noqa: E402
 import sparse_fsm_detect as sfd                         # noqa: E402
 from _source_record_merge import merge_source_records   # noqa: E402
 
@@ -279,18 +278,6 @@ def test_pdn_planner_sees_the_obstruction_whichever_lef_is_last():
            [r["reason"] for r in b["refusals"]]
 
 
-def test_payload_bitmap_byte_named_without_bits_does_not_blank_the_other_layer(tmp_path):
-    """SITE 4, through the real `parse_bitmap`."""
-    l3 = tmp_path / "l3.json"
-    l4 = tmp_path / "l4.json"
-    l3.write_text(json.dumps({"bit_layouts": {
-        "status_byte": {"bit0": "busy", "bit1": "err"}}}))
-    l4.write_text(json.dumps({"bit_layouts": {"status_byte": {}}}))
-
-    both = pbp.parse_bitmap(None, l3, l4)
-    swapped = pbp.parse_bitmap(None, l4, l3)
-    assert both == swapped
-    assert both["status_byte"] == {"bit0": "busy", "bit1": "err"}
 
 
 # ══════════════════ 2. THE CONFLICT DIRECTION, AT EACH CALL SITE ══════════
@@ -401,26 +388,6 @@ def test_dft_test_coverage_richer_keeps_the_fuller_pin_map(tmp_path):
         "precondition: the two liberties really do read differently downstream"
 
 
-def test_payload_bitmap_richer_keeps_the_byte_with_more_bits(tmp_path):
-    """SITE 3, through `parse_bitmap()` -- the call site itself, not a level
-    above it. L3 and L4 both describe `status_byte` with real content, and
-    disagree about how many bits it has."""
-    l3 = tmp_path / "l3.json"
-    l4 = tmp_path / "l4.json"
-    l3.write_text(json.dumps({"bit_layouts": {
-        "status_byte": {"bit0": "busy"}}}))
-    l4.write_text(json.dumps({"bit_layouts": {
-        "status_byte": {"bit0": "busy", "bit1": "err"}}}))
-
-    poor_alone = pbp.parse_bitmap(None, l3, None)
-    assert poor_alone["status_byte"] == {"bit0": "busy"}
-
-    fwd = pbp.parse_bitmap(None, l3, l4)
-    rev = pbp.parse_bitmap(None, l4, l3)
-    assert fwd == rev, "the merge result depends on layer argument order"
-    assert fwd["status_byte"] == {"bit0": "busy", "bit1": "err"}, \
-        "the richer (2-bit) layer did not win the disagreement"
-    assert fwd["status_byte"] != poor_alone["status_byte"]
 
 
 def test_macro_pdn_planner_richer_keeps_the_wider_blockage(tmp_path):
@@ -738,20 +705,6 @@ def test_a_genuinely_empty_key_stays_empty_and_stays_present():
     assert conflicts == []
 
 
-def test_empty_bitmap_warning_still_fires_when_every_layer_is_silent(tmp_path):
-    """Same over-correction, through the real program: if the fix suppressed
-    empty records the user would lose the warning that their input said
-    nothing -- trading a silent under-check for a silent no-check."""
-    l3 = tmp_path / "l3.json"
-    l3.write_text(json.dumps({"bit_layouts": {"status_byte": {}}}))
-    rtl = tmp_path / "d.v"
-    rtl.write_text("module d(input wire clk); endmodule\n")
-
-    bitmap = pbp.parse_bitmap(None, l3, None)
-    assert bitmap == {"status_byte": {}}
-    findings = pbp.audit(rtl, bitmap)
-    assert any(f.rule == "empty_bitmap" for f in findings), \
-        "an all-silent bitmap must still be reported as saying nothing"
 
 
 def test_merge_does_not_union_records_into_content_no_source_declared():

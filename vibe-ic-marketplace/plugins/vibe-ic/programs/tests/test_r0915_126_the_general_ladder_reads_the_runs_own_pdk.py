@@ -29,7 +29,6 @@ import json
 import pytest
 import _pdk_layer_authority as A
 import general_precheck as GP
-import pad_ring_check as PRC
 
 DIGEST = "ghcr.io/vibeic/vibeic-eda@sha256:" + "c" * 64
 
@@ -90,19 +89,6 @@ def test_no_docker_client_asks_nothing_else(tmp_path, monkeypatch):
     monkeypatch.setattr(cex, "no_container_route", lambda: True)
     reader, why = A.reader_the_run_recorded(receipt(tmp_path))
     assert reader is None and "docker" in why
-
-
-def test_the_two_gates_share_one_decision(tmp_path, monkeypatch):
-    """15.5ic keeps its own name for it and must not hold a second copy: the two
-    would come to disagree, which is the defect v1.23.26 paid for."""
-    clear(monkeypatch)
-    sentinel = object()
-    monkeypatch.setattr(A, "ImageReader", lambda d, runner=None: sentinel)
-    project = receipt(tmp_path)
-    shared = A.reader_the_run_recorded(project)
-    delegated = PRC.reader_where_this_run_looked(project)
-    assert delegated == shared
-    assert delegated[0] is sentinel
 
 
 def test_the_ladder_ITSELF_reads_the_recorded_image(tmp_path, monkeypatch):

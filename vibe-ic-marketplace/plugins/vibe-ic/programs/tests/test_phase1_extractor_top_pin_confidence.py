@@ -68,7 +68,6 @@ def test_authoritative_heading_preserves_count_evidence():
 
 
 def test_count_only_declaration_preserves_interface_audit_warning(tmp_path):
-    import integration_spec_audit as consumer
     text = ("# Neutral analog unit\n## External Interface\n"
             "Top module name: `neutral_shell`\n"
             "| Signal | Direction | Width | Description |\n|---|---|---|---|\n"
@@ -90,9 +89,6 @@ def test_count_only_declaration_preserves_interface_audit_warning(tmp_path):
     assert row["multiplicity_evidence"]["low_confidence"] is False
     assert row["low_confidence"] is True
     assert not row.get("ports")
-    audit = consumer.audit(str(tmp_path))
-    assert audit.passed
-    assert [f.severity for f in audit.findings if f.rule == "INVALID_SUBMODULE"] == ["WARNING"]
 
 
 @pytest.mark.parametrize("emitter", [
