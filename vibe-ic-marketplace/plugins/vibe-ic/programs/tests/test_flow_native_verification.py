@@ -977,6 +977,41 @@ def test_chip_eqy_preserves_mapped_state_alias_matchpoints(tmp_path, different):
     assert "u_core.stored[0]" in matched
 
 
+@pytest.mark.parametrize("different", [False, True])
+def test_chip_eqy_partitions_independent_matched_state_cones(tmp_path, different):
+    if not shutil.which("eqy"):
+        pytest.skip("Native EQY is required")
+    reset_docs(tmp_path)
+    gold,gate,cells,pads = [tmp_path/n for n in ("gold.v","gate.v","cells.lib","pads.v")]
+    wrapper = ("module unit(input clk,rst_n,a,b,output qa,qb); wire ic,ir,ia,ib,oa,ob;\n"
+        "INPAD pc(.PAD(clk),.Y(ic));\nINPAD pr(.PAD(rst_n),.Y(ir));\n"
+        "INPAD pa(.PAD(a),.Y(ia));\nINPAD pb(.PAD(b),.Y(ib));\n"
+        "OUTPAD pqa(.A(oa),.PAD(qa));\nOUTPAD pqb(.A(ob),.PAD(qb));\n")
+    gold.write_text(wrapper+"core u_core(ic,ir,ia,ib,oa,ob); endmodule\n"
+        "module core(input clk,rst_n,a,b,output qa,qb); reg [7:0] left,right;\n"
+        "always @(posedge clk) if(!rst_n) begin left<=0;right<=0;end\n"
+        "else begin left<={left[6:0],a};right<={right[6:0],b};end\n"
+        "assign qa=left[7];assign qb=right[7];endmodule\n")
+    gate.write_text(wrapper+"reg [7:0] left_g,right_g;\n"
+        "wire [7:0] \\u_core.left , \\u_core.right ;\n"
+        "assign \\u_core.left =left_g;assign \\u_core.right =right_g;\n"
+        "always @(posedge ic) if(!ir) begin left_g<=0;right_g<=0;end\n"
+        f"else begin left_g<={{left_g[6:0],{'~ia' if different else 'ia'}}};right_g<={{right_g[6:0],ib}};end\n"
+        "assign oa=left_g[7];assign ob=right_g[7];endmodule\n")
+    cells.write_text("library(neutral) {}\n")
+    pads.write_text("(* blackbox *) module INPAD(inout PAD,output Y); endmodule\n"
+                   "(* blackbox *) module OUTPAD(input A,inout PAD); endmodule\n")
+    config={"DESIGN_NAME":"unit","VERILOG_FILES":[str(gold)],"DEFAULT_CORNER":"typical",
+            "LIB":{"typical":[str(cells)]},"PAD_VERILOG_MODELS":[str(pads)]}
+    result=eqy(tmp_path,tmp_path,{},Commands(tmp_path),state={"nl":str(gate)},config=config)
+    rows={r["name"]:r["status"] for r in result["native_steps"]}
+    assert rows["Yosys.Wrapper"]=="PASS",result
+    assert rows["Yosys.EQY.Core"]==("FAIL" if different else "PASS"),result
+    assert len(list((tmp_path/"scratch/partitions").glob("*.json")))>1
+    matched=(tmp_path/"scratch/matched.ids").read_text()
+    assert "u_core.left[0]" in matched and "u_core.right[0]" in matched
+
+
 @pytest.mark.parametrize("direct_output", [False, True])
 def test_pad_boundary_removes_logical_package_outputs_and_keeps_core_outputs(tmp_path, direct_output):
     if not shutil.which("yosys"):
