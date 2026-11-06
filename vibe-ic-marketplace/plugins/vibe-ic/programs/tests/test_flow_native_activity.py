@@ -56,6 +56,104 @@ def test_native_activity_dump_and_vector_power_read_the_state_netlist(activity_c
     assert "report_power" in (project / "result/power.tcl").read_text()
 
 
+@pytest.mark.parametrize("backend", ["icarus", "verilator"])
+@pytest.mark.parametrize("scenario", ["pass", "failure", "assertion", "skipped", "no_trace"])
+def test_native_cocotb_activity_runs_hdl_and_reads_only_its_dump(activity_case, monkeypatch, backend, scenario):
+    native_tools()
+    if not shutil.which("cocotb-config") or not shutil.which("verilator"):
+        pytest.skip("Native cocotb and Verilator are required")
+    import flow_native_adapters
+    from sim_activity_dump import vcd_scopes
+
+    project,state,config,tool=activity_case
+    bench=project/"tb_activity.py"
+    bench.write_text("import cocotb\nfrom cocotb.triggers import Timer\n"
+        f"@cocotb.test(skip={scenario=='skipped'})\nasync def workload(dut):\n"
+        "    for value in (0,1,0,1):\n        dut.a.value=value\n"
+        "        await Timer(1,unit='ns')\n        assert int(dut.y.value)==value\n"
+        + ("    assert False, 'native scenario failure'\n" if scenario=="failure" else ""))
+    tool["testbenches"]=[str(bench)]
+    if backend=="verilator":
+        available=shutil.which
+        monkeypatch.setattr(shutil,"which",lambda name: None if name in {"iverilog","vvp"} else available(name))
+    if scenario=="assertion":
+        Path(config["CELL_VERILOG_MODELS"][0]).write_text(
+            "module plain(input A,output Y); assign Y=A;\n"
+            "always @* if(A===1'b1) assert(A==0) else $fatal(1,\"native design assertion\"); endmodule\n")
+    if scenario=="no_trace":
+        run=flow_native_adapters.cocotb_run
+        def without_trace(*args,**kwargs):
+            kwargs["waves"]=False
+            return run(*args,**kwargs)
+        monkeypatch.setattr(flow_native_adapters,"cocotb_run",without_trace)
+    original=bench.read_bytes()
+    result=run_case(activity_case)
+    expected="PASS" if scenario=="pass" else "FAIL" if scenario in {"failure","assertion"} else "NOT_MEASURED"
+    assert evaluate(ToolResult(**result),[])==expected,result
+    assert any(r["name"]=="make" for r in result["native_steps"]),result
+    assert bench.read_bytes()==original
+    if expected=="PASS":
+        assert result["metrics"]["activity__annotated_pin_count"]>0,result
+        manifest=json.loads((project/"result/activity/activity.json").read_text())
+        trace=Path(manifest["vcd"])
+        assert trace.is_file() and trace.stat().st_size>0
+        assert manifest["scope"] in vcd_scopes(trace)
+        assert str(trace) in (project/"result/power.tcl").read_text()
+    else:
+        assert "activity__annotated_pin_count" not in result["metrics"],result
+
+
+@pytest.mark.parametrize("scoped_sdc", [False, True])
+@pytest.mark.parametrize("core_sdc_source", ["state", "config", "missing"])
+def test_native_cocotb_core_scenario_annotates_the_wrapper(activity_case, scoped_sdc, core_sdc_source):
+    native_tools()
+    if not shutil.which("cocotb-config"):
+        pytest.skip("Native cocotb is required")
+    project,state,config,tool=activity_case
+    core_netlist=Path(state["nl"])
+    chip=project/"work/flow/chip"
+    chip.mkdir(parents=True)
+    core_sdc = chip/"core.sdc"
+    core_sdc.write_text("current_design unit\n" + Path(config["SIGNOFF_SDC_FILE"]).read_text())
+    core_state = {"nl":str(core_netlist)}
+    if core_sdc_source == "state":
+        core_state["sdc"] = str(core_sdc)
+    elif core_sdc_source == "config":
+        (chip/"config.json").write_text(json.dumps({"SIGNOFF_SDC_FILE":str(core_sdc)}))
+    (chip/"core_state.json").write_text(json.dumps(core_state))
+    (chip/"sizing.json").write_text(json.dumps({"top":"unit","state_out":str(chip/"core_state.json")}))
+    wrapper="module package_unit(input pad_a,output pad_y); unit compute_stage(.a(pad_a),.y(pad_y)); endmodule\n"
+    (chip/"wrapper.v").write_text(wrapper)
+    mapped=project/"chip.v"
+    mapped.write_text(core_netlist.read_text()+wrapper)
+    state["nl"],config["DESIGN_NAME"]=str(mapped),"package_unit"
+    if scoped_sdc:
+        Path(config["SIGNOFF_SDC_FILE"]).write_text(
+            'current_design package_unit\ncreate_clock -name reference -period 10\n'
+            'set_load 0.1 [get_ports pad_y]\nputs "SCOPED_SDC_READ"\n')
+    bench=project/"tb_activity.py"
+    bench.write_text("import cocotb\nfrom cocotb.triggers import Timer\n"
+        "@cocotb.test()\nasync def workload(dut):\n"
+        "    for value in (0,1,0,1):\n        dut.a.value=value\n"
+        "        await Timer(1,unit='ns')\n        assert int(dut.y.value)==value\n")
+    tool["testbenches"]=[str(bench)]
+    result=run_case(activity_case)
+    if core_sdc_source == "missing":
+        assert evaluate(ToolResult(**result),[]) == "NOT_MEASURED", result
+        assert result["metrics"] == {}
+        assert "native core SDC" in result["detail"]
+        return
+    assert evaluate(ToolResult(**result),[])=="PASS",result
+    assert result["metrics"]["activity__annotated_pin_count"]>0,result
+    manifest=json.loads((project/"result/activity/activity.json").read_text())
+    assert manifest["dut_module"]=="unit"
+    assert "compute_stage" in (project/"result/power.tcl").read_text()
+    if scoped_sdc:
+        native = (project/"result/power.rpt").read_text()
+        assert "current_design for other than top cell" not in native
+        assert native.count("SCOPED_SDC_READ") == 1
+
+
 @pytest.mark.parametrize("instance", ["compute_stage", "signal_core"])
 @pytest.mark.parametrize("flattened", [False, True, "yosys", "renamed"])
 def test_native_core_scenario_annotates_the_wrapper_core(activity_case, monkeypatch, instance, flattened):
@@ -72,7 +170,9 @@ def test_native_core_scenario_annotates_the_wrapper_core(activity_case, monkeypa
     chip = project / "work/flow/chip"
     chip.mkdir(parents=True)
     core_state = chip / "core_state.json"
-    core_state.write_text(json.dumps({"nl": str(core_netlist)}))
+    core_sdc = chip / "core.sdc"
+    core_sdc.write_text("current_design unit\n" + Path(config["SIGNOFF_SDC_FILE"]).read_text())
+    core_state.write_text(json.dumps({"nl": str(core_netlist), "sdc": str(core_sdc)}))
     (chip / "sizing.json").write_text(json.dumps({"top": "unit", "state_out": str(core_state)}))
     wrapper = f"module package_unit(input [1:0] pad_a, output [1:0] pad_y); unit {instance}(.a(pad_a), .y(pad_y)); endmodule\n"
     (chip / "wrapper.v").write_text(wrapper)

@@ -364,15 +364,7 @@ def run_window(project, args, *, features=None):
             result = _run_window(project, args, features=features)
         finally:
             if work.publish() is not None:
-                for folder in ("reports", "phase3"):
-                    for path in (project / folder).glob("**/*.json"):
-                        try:
-                            before = json.loads(path.read_text())
-                        except (ValueError, OSError):
-                            continue
-                        after = tempfile.relocate(before, work.mapping)
-                        if after != before:
-                            write_json(path, after)
+                tempfile.relocate_project(project, work.mapping)
         return tempfile.relocate(result, work.mapping)
 
 

@@ -2002,7 +2002,8 @@ def _declared_spellings(project: Optional[Path]) -> set:
     return out
 
 
-def _selected_interface_ports(project: Path, ports: List[Port], top: str) -> List[Port]:
+def _selected_interface_ports(project: Path, ports: List[Port], top: str,
+                              *, port_sources: Optional[dict] = None) -> List[Port]:
     """Use declared names and document widths for delegated port roles.
 
     An incomplete or ambiguous choice leaves the document default intact.
@@ -2035,7 +2036,7 @@ def _selected_interface_ports(project: Path, ports: List[Port], top: str) -> Lis
                     any(role in selected for role in ("read_address", "write_address")))):
             continue
         pattern = re.compile(r"(?:^|_)" + re.escape(interface) + r"_(.+)$", re.I)
-        replacements, used = {}, set()
+        replacements, selected_sources, used = {}, {}, set()
         for port in ports:
             match = pattern.search(port.name)
             if not match or _l3_fixed_port_name(project, port.name):
@@ -2058,6 +2059,11 @@ def _selected_interface_ports(project: Path, ports: List[Port], top: str) -> Lis
                 continue
             replacements[port.name] = [Port(selected[role], port.direction, port.width,
                                              port.optional) for role in targets]
+            if port_sources is not None:
+                for role in targets:
+                    selected_sources[selected[role]] = [*port_sources.get(port.name, []),
+                        {"file": str(project / "plugin_output/declaration.json"),
+                         "field": f"{key}.{role}", "value": selected[role]}]
             used.update(targets)
         if used != set(roles):
             continue
@@ -2069,6 +2075,11 @@ def _selected_interface_ports(project: Path, ports: List[Port], top: str) -> Lis
             by_name[port.name] = port
         else:
             ports = list(by_name.values())
+            if port_sources is not None:
+                sources = {p.name: selected_sources.get(p.name, port_sources.get(p.name, []))
+                           for p in ports}
+                port_sources.clear()
+                port_sources.update(sources)
     return ports
 
 
@@ -2935,6 +2946,26 @@ def main(argv: Optional[List[str]] = None) -> int:
     _iproj = _project_root_of(files, "input/docs") or _project_root_of(
         files, "plugin_output/declaration.json")
     if _iproj is not None:
+        if spec_path.suffix == '.json':
+            _content = json.loads(spec_raw)
+            if isinstance(_content, dict):
+                _rosters = [_content[key] for key in ('ports', 'top_ports', 'top_module_pins')
+                            if isinstance(_content.get(key), list)]
+                if _rosters and any(rows != _rosters[0] for rows in _rosters):
+                    _binding_findings.append(Finding(chosen, 'ERROR',
+                        'selected-interface-binding-invalid', top or rtl_name,
+                        'selected interface port rosters disagree'))
+                from l9_rtl_pin_consistency_check import _l3_fixed_port_name
+                # Delegating illustrative names does not retire a fixed-name
+                # obligation, even without an old selected-interface record.
+                _fixed = {port['name'] for rows in _rosters for port in rows
+                          if isinstance(port, dict) and port.get('name')
+                          and (port.get('required') is True or port.get('mandatory') is True
+                               or _l3_fixed_port_name(_iproj, port['name']))}
+                for name in sorted(_fixed - {port.name for port in rtl_ports}):
+                    _binding_findings.append(Finding(chosen, 'ERROR', 'port-missing', name,
+                        f"required spec port '{name}' is absent from RTL; an interface "
+                        "choice cannot rename an explicitly fixed or mandatory port"))
         _doc_text = []
         _docs_dir = _iproj / "input" / "docs"
         if _docs_dir.is_dir():

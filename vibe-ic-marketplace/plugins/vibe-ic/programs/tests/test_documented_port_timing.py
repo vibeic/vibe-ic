@@ -85,6 +85,8 @@ def test_actual_row_excludes_documented_ports_and_keeps_other_findings(tmp_path,
 
 
 @pytest.mark.parametrize("description", ["May be unused", "Asynchronous? Undecided", "Not unused; required interface",
+                                          "Unused; active in operation", "Asynchronous; maybe synchronous",
+                                          "Unused? Needs verification",
                                           "Unused during sleep; active in operation"])
 def test_ambiguous_or_denied_statement_excludes_nothing(tmp_path, description):
     _, sdc = declared_project(tmp_path, description)

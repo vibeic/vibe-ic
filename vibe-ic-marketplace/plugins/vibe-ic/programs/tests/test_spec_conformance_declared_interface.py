@@ -36,7 +36,7 @@ The memory sub-port names are illustrative and chosen in declaration.json.
 """
 
 
-def run_check(project, *, choice=CHOICE, rtl=RTL, doc=DOC, manifest=None):
+def run_check(project, *, choice=CHOICE, rtl=RTL, doc=DOC, manifest=None, spec=SPEC):
     source = project / "phase2/stage1/rtl"
     source.mkdir(parents=True)
     (source / "controller.v").write_text(rtl)
@@ -49,10 +49,10 @@ def run_check(project, *, choice=CHOICE, rtl=RTL, doc=DOC, manifest=None):
         declaration = project / "plugin_output/declaration.json"
         declaration.parent.mkdir()
         declaration.write_text(json.dumps(choice))
-    spec = project / "L9.json"
-    spec.write_text(json.dumps(SPEC))
+    spec_path = project / "L9.json"
+    spec_path.write_text(json.dumps(spec))
     result = project / "findings.json"
-    proc = subprocess.run([sys.executable, str(PROGRAM), "--spec", str(spec),
+    proc = subprocess.run([sys.executable, str(PROGRAM), "--spec", str(spec_path),
                            "--rtl-dir", str(source), "--top", "controller",
                            "--json", str(result)], capture_output=True, text=True)
     findings = json.loads(result.read_text())
@@ -116,6 +116,17 @@ def test_fixed_document_name_is_not_replaced(tmp_path):
     proc, findings = run_check(tmp_path, doc=DOC + "o_memory_addr is a mandatory fixed port name.\n")
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert any(f["rule"] == "port-missing" and f["symbol"] == "o_memory_addr" for f in findings)
+
+
+@pytest.mark.parametrize("flag", ["required", "mandatory"])
+def test_required_document_name_survives_a_declared_choice(tmp_path, flag):
+    spec = json.loads(json.dumps(SPEC))
+    spec["ports"][1][flag] = True
+    proc, findings = run_check(tmp_path, spec=spec)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert any(f["rule"] == "port-missing" and f["symbol"] == "o_memory_addr"
+               for f in findings)
+    assert not (tmp_path / "phase2/stage1/rtl/SOURCE_MANIFEST.json").exists()
 
 
 def test_declaration_cannot_override_an_undelegated_interface(tmp_path):

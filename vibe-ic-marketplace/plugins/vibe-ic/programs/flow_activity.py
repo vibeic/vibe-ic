@@ -31,6 +31,43 @@ def _word(value):
     return "{" + str(value).replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}") + "}"
 
 
+def _cocotb_activity(files, bench, top, directory, commands):
+    from flow_native_adapters import cocotb_run
+    from _sim_results_bridge import parse_junit
+    import sim_activity_dump
+
+    directory.mkdir(parents=True, exist_ok=True)
+    files = list(map(Path, files))
+    simulator = "icarus" if shutil.which("iverilog") and shutil.which("vvp") else "verilator"
+    run = directory / simulator
+    completed = cocotb_run(run, bench, files, top, commands, simulator,
+                           sorted({Path(f).parent for f in files}), waves=True)
+    summary = parse_junit(run / "results.xml")
+    activity = {"status": "NOT_MEASURED", "tb": str(bench), "dut_module": top}
+    if completed is None:
+        activity["reason"] = "The native cocotb executable is unavailable."
+    elif completed.returncode or summary and (summary["failures"] or summary["errors"]):
+        activity.update(status="FAIL", reason="The native cocotb HDL scenario failed.")
+    elif not summary or not summary["tests"] or summary["skipped"]:
+        activity["reason"] = "The native cocotb HDL scenario has no complete passing test population."
+    else:
+        for trace in [*sorted(run.rglob("*.vcd")), *sorted(run.rglob("*.fst"))]:
+            scopes = sim_activity_dump.vcd_scopes(trace)
+            matching = [s for s in scopes if s.split("/")[-1] == top]
+            if not matching and simulator == "verilator" and "TOP" in scopes:
+                matching = ["TOP"]
+            if matching:
+                scope = min(matching, key=lambda s: s.count("/"))
+                waveform = directory / "activity.vcd"
+                trace.replace(waveform)
+                activity.update(status="PASS", vcd=str(waveform), scope=scope, scope_verified=True)
+                break
+        else:
+            activity["reason"] = "The native cocotb simulator wrote no readable DUT-scoped VCD."
+    sim_activity_dump.write_json(directory / sim_activity_dump.MANIFEST, activity)
+    return activity
+
+
 def execute(project, directory, tool, route, *, state=None, config=None):
     from flow_native_adapters import Commands, testbenches
     from sdf_gate_sim import netlist_used_cells, verilog_model_closure
@@ -67,9 +104,9 @@ def execute(project, directory, tool, route, *, state=None, config=None):
                 or any(not path.is_file() for path in [*netlist, *libraries, *sdc, *models])):
             return result("NOT_MEASURED", "Activity needs the State netlist, configured top/default corner, "
                           "Liberty libraries, SDC and declared functional cell models.")
-        candidates = [bench for bench in testbenches(project, tool)
-                      if bench.is_file() and bench.suffix in {".v", ".sv"}]
-        simulation_top, simulation_netlist, core_scope = top, netlist, ""
+        scenarios = [bench for bench in testbenches(project, tool) if bench.is_file()]
+        candidates = [bench for bench in scenarios if bench.suffix in {".v", ".sv"}]
+        simulation_top, simulation_netlist, simulation_sdc, core_scope = top, netlist, sdc, ""
         benches = [bench for bench in candidates if sim_activity_dump.dut_instance(bench.read_text(), top)]
         sizing = project / "work/flow/chip/sizing.json"
         if not benches and sizing.is_file():
@@ -77,14 +114,28 @@ def execute(project, directory, tool, route, *, state=None, config=None):
             wrapped = sim_activity_dump.dut_instance((sizing.parent / "wrapper.v").read_text(), core["top"])
             if wrapped and wrapped[0] == top:
                 simulation_top, core_scope = core["top"], wrapped[1]
-                simulation_netlist = _paths(json.loads(Path(core["state_out"]).read_text()).get("nl"), project, corner)
+                core_state_path = Path(core["state_out"])
+                core_state = json.loads(core_state_path.read_text())
+                core_config_path = core_state_path.with_name("config.json")
+                core_config = json.loads(core_config_path.read_text()) if core_config_path.is_file() else {}
+                simulation_netlist = _paths(core_state.get("nl"), project, corner)
+                simulation_sdc = _paths(core_config.get("SIGNOFF_SDC_FILE") or core_config.get("PNR_SDC_FILE")
+                    or core_state.get("sdc") or core_config.get("FALLBACK_SDC"), project, corner)
                 benches = [bench for bench in candidates
                            if sim_activity_dump.dut_instance(bench.read_text(), simulation_top)]
+        if not benches:
+            benches = [bench for bench in scenarios if bench.suffix == ".py"]
         if not benches:
             return result("NOT_MEASURED", f"No functional HDL scenario instantiates {simulation_top}.")
         if len(simulation_netlist) != 1 or not simulation_netlist[0].is_file():
             return result("NOT_MEASURED", "No native netlist for the functional scenario.")
-        absent = [name for name in ("iverilog", "vvp", "sta") if not shutil.which(name)]
+        if core_scope and (len(simulation_sdc) != 1 or not simulation_sdc[0].is_file()):
+            return result("NOT_MEASURED", "Core activity needs its native core SDC from the captured State/config.")
+        python_scenario = benches[0].suffix == ".py"
+        required = ("cocotb-config", "make", "sta") if python_scenario else ("iverilog", "vvp", "sta")
+        absent = [name for name in required if not shutil.which(name)]
+        if python_scenario and not (shutil.which("iverilog") and shutil.which("vvp")) and not shutil.which("verilator"):
+            absent.append("Icarus or Verilator")
         if absent:
             return result("NOT_MEASURED", "Activity executables unavailable: " + ", ".join(absent))
         closure = verilog_model_closure(models, netlist_used_cells(simulation_netlist[0].read_text()))
@@ -95,12 +146,15 @@ def execute(project, directory, tool, route, *, state=None, config=None):
             completed = commands.run(argv, cwd=cwd)
             return completed.returncode, completed.stdout, completed.stderr
 
-        activity = sim_activity_dump.dump([str(simulation_netlist[0]), *closure["files"]],
-            [str(path) for path in benches], simulation_top, directory / "activity", simulate)
-        if any(row["exit_code"] for row in commands.records):
-            return result("FAIL", activity.get("reason", "Native functional simulation failed."))
+        files = [str(simulation_netlist[0]), *closure["files"]]
+        activity = (_cocotb_activity(files, benches[0], simulation_top, directory / "activity", commands)
+                    if python_scenario else sim_activity_dump.dump(files,
+                        [str(path) for path in benches], simulation_top, directory / "activity", simulate))
+        activity_reports = [directory / "activity" / sim_activity_dump.MANIFEST]
+        if any(row["exit_code"] for row in commands.records) or python_scenario and activity.get("status") == "FAIL":
+            return result("FAIL", activity.get("reason", "Native functional simulation failed."), reports=activity_reports)
         if activity.get("status") != "PASS":
-            return result("NOT_MEASURED", activity.get("reason", "No DUT-scoped activity waveform."))
+            return result("NOT_MEASURED", activity.get("reason", "No DUT-scoped activity waveform."), reports=activity_reports)
         spef = _paths(state.get("spef"), project, corner)
         if len(spef) > 1 or any(not path.is_file() for path in spef):
             return result("NOT_MEASURED", "The State has no unique readable SPEF for the default corner.")
@@ -108,7 +162,7 @@ def execute(project, directory, tool, route, *, state=None, config=None):
         lines = [*("read_liberty " + _word(path) for path in libraries)]
         if core_scope:
             lines += ["read_verilog " + _word(simulation_netlist[0]), "link_design " + _word(simulation_top),
-                "read_sdc " + _word(sdc[0]),
+                "read_sdc " + _word(simulation_sdc[0]),
                 "read_vcd -scope " + _word(activity["scope"]) + " " + _word(activity["vcd"]),
                 "set core_activity {}",
                 "foreach pin [get_pins -hierarchical *] {",

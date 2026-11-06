@@ -91,8 +91,10 @@ def cdc(project, directory, tool, commands, *, state=None, config=None):
     script = directory / "elaborate.ys"
     if implemented:
         import fnmatch
-        from lec_post_layout_check import _LIB_CELL_RE
+        from lec_post_layout_check import _LIB_CELL_RE, _NETLIST_MODULE_RE
         from sdf_gate_sim import missing_empty_cell_stubs, netlist_used_cells
+        from flow_chip_inputs import _paths
+        from _pad_ring import parse_lef_macro_classes, parse_lef_pin_roles
         netlist = state.get("nl") if state is not None else None
         if not netlist or not Path(netlist).is_file():
             return commands.result(detail="Implemented CDC needs the native State netlist and Liberty models.")
@@ -117,11 +119,47 @@ def cdc(project, directory, tool, commands, *, state=None, config=None):
             return commands.result(detail="Implemented CDC needs the native State netlist and Liberty models.")
         defined = {name for path in liberty if path.is_file()
                    for name in _LIB_CELL_RE.findall(path.read_text())}
+        defined.update(match["name"] for match in _NETLIST_MODULE_RE.finditer(text))
+        pad_stubs = {}
+        for key in ("PAD_LEFS", "CELL_LEFS", "EXTRA_LEFS"):
+            for path in _paths(config.get(key)):
+                path = path if path.is_absolute() else project / path
+                if not path.is_file():
+                    continue
+                lef = path.read_text()
+                classes = parse_lef_macro_classes(lef)
+                delimiters = re.search(r'BUSBITCHARS\s+"(.)(.)"\s*;', lef)
+                left, right = delimiters.groups() if delimiters else ("[", "]")
+                bit_pin = re.compile(r"(.+)" + re.escape(left) + r"([0-9]+)" + re.escape(right) + r"$")
+                for master, pins in parse_lef_pin_roles(lef).items():
+                    if master not in used - defined or (key != "PAD_LEFS"
+                            and not classes.get(master, "").startswith("PAD")):
+                        continue
+                    if any(direction not in {"INPUT", "OUTPUT", "INOUT"} for direction, _ in pins.values()):
+                        continue
+                    ports, buses = [], {}
+                    for pin, (direction, _) in pins.items():
+                        match = bit_pin.fullmatch(pin)
+                        if match:
+                            buses.setdefault(match[1], []).append((int(match[2]), direction))
+                        else:
+                            ports.append(f"{direction.lower()} \\{pin} ")
+                    if any(len({direction for _, direction in bits}) != 1
+                           or {index for index, _ in bits} != set(range(min(index for index, _ in bits),
+                                                                       max(index for index, _ in bits) + 1))
+                           for bits in buses.values()):
+                        continue
+                    for name, bits in buses.items():
+                        lo, hi = min(index for index, _ in bits), max(index for index, _ in bits)
+                        ports.append(f"{bits[0][1].lower()} [{hi}:{lo}] \\{name} ")
+                    pad_stubs[master] = f"(* blackbox *) module \\{master} (" + ", ".join(ports) + "); endmodule"
+                    defined.add(master)
         stubs = missing_empty_cell_stubs(text, used - defined, "")
         models = []
-        if stubs:
+        if stubs or pad_stubs:
             physical = directory / "physical_cells.v"
-            physical.write_text("\n".join(f"module {name} (); endmodule" for name in stubs) + "\n")
+            physical.write_text("\n".join([*pad_stubs.values(),
+                *(f"module {name} (); endmodule" for name in stubs)]) + "\n")
             models.append("read_verilog -lib " + _word(physical))
         script.write_text("\n".join([
             *["read_liberty" + (" -lib" if path in pad_liberty else "")
@@ -243,21 +281,25 @@ def simulation_sources(project, files, top, benches):
             list(dict.fromkeys(path.parent for path in [*benches, *selected])))
 
 
-def cocotb_run(directory, tb, files, top, commands, simulator, include_dirs):
+def cocotb_run(directory, tb, files, top, commands, simulator, include_dirs, *, waves=False):
     import verilator_coverage_measure as coverage
     directory.mkdir()
     makefile = directory / "simulation.mk"
-    flags = " ".join(coverage.COVERAGE_INSTRUMENTATION_FLAGS)
+    flags = "" if waves else " ".join(coverage.COVERAGE_INSTRUMENTATION_FLAGS)
     includes = " ".join(str(path.resolve()) for path in include_dirs)
     makefile.write_text(
         f"SIM = {simulator}\nTOPLEVEL_LANG = verilog\n"
         f"VERILOG_SOURCES = {' '.join(str(f.resolve()) for f in files)}\n"
         f"TOPLEVEL = {top}\nMODULE = {tb.stem}\nVERILOG_INCLUDE_DIRS = {includes}\n"
         + (f"COMPILE_ARGS += --timing {flags} -Wno-fatal -Wno-lint\n" if simulator == "verilator" else "")
+        + ("COMPILE_ARGS += --assert\nVERILATOR_TRACE = 1\nSIM_ARGS += --trace-file "
+           + shlex.quote(str(directory.resolve() / "activity.vcd")) + "\n"
+           if waves and simulator == "verilator" else "")
         + "SIM_BUILD = build\nCOCOTB_RESULTS_FILE = results.xml\n"
         f"export PYTHONPATH := {tb.parent.resolve()}:$(PYTHONPATH)\n"
         "include $(shell cocotb-config --makefiles)/Makefile.sim\n")
-    return commands.run(["make", "-f", makefile, "-j8"], cwd=directory)
+    return commands.run(["make", "-f", makefile, "-j8",
+                         *(["WAVES=1", "FST=-vcd"] if waves and simulator == "icarus" else [])], cwd=directory)
 
 
 def simulation(project, directory, tool, commands):
@@ -606,7 +648,9 @@ def formal(project, directory, tool, commands):
                         native_read += "--top " + top_match[1] + " "
                     native_read += "-I " + _word(config.parent / "src") + " " + reads[0][1]
                     native_read += ("\nsetundef -undriven -anyseq a:anyseq>0"
-                                    "\nsetundef -undriven -anyconst a:anyconst>0")
+                                    "\nsetundef -anyseq a:anyseq>0 %ci1 t:$buf %i"
+                                    "\nsetundef -undriven -anyconst a:anyconst>0"
+                                    "\nsetundef -anyconst a:anyconst>0 %ci1 t:$buf %i")
                     retry = config.parent / "slang_frontend.sby"
                     retry.write_text(original_body[:reads[0].start()] + native_read + original_body[reads[0].end():])
                     destination = config.parent / "slang_frontend"
@@ -679,9 +723,16 @@ def formal(project, directory, tool, commands):
     return result
 
 
-def macro_views(project, directory, tool, commands):
+def macro_views(project, directory, tool, commands, route=None):
     """Use the existing pre-netlist macro integration component's own verdict."""
     from ip_integration_check import audit
+    from flow_macro_views import produce
+    try:
+        produced = produce(project, directory, commands, route or {})
+    except (OSError, ValueError, ImportError) as exc:
+        return {**commands.result(detail=str(exc)), "ran": False, "exit_code": None}
+    if produced is not None:
+        return produced
     started = time.perf_counter()
     report = audit(project)
     path = directory / "macro_views.json"
@@ -848,6 +899,8 @@ def execute(project, directory, tool, route, *, state=None, config=None):
     parent = tempfile.current_run("adapter", directory.name) / directory.name
     work = Path(tempfile.mkdtemp(prefix="native_", dir=parent))
     commands = Commands(work)
+    if tool.get("adapter") == "macro_views":
+        return macro_views(project, work, tool, commands, route)
     if tool.get("adapter") == "path_delay_atpg":
         from flow_atpg import path_delay
         return path_delay(project, work, state=state, config=config)

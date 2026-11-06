@@ -216,6 +216,29 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
     prepared = (f"[gold]\nread_verilog -formal -sv {_word(core / 'gold.v')}\n"
                 f"[gate]\nread_verilog -formal -sv -icells {_word(core / 'gate.v')}\n"
                 "[script]" + preparation.replace(str(directory) + "/", str(core) + "/"))
+    aliases = []
+    for side in ("gold", "gate"):
+        bits = {}
+        module = json.loads((core / (side + '.json')).read_text())["modules"][top]
+        for name, wire in module["netnames"].items():
+            if wire.get("hide_name"):
+                continue
+            width = len(wire["bits"])
+            for index, bit in enumerate(wire["bits"]):
+                if type(bit) is not int:
+                    continue
+                index = wire.get("offset", 0) + (width - 1 - index if wire.get("upto") else index)
+                point = f"{name}[{index}]" if width > 1 else name
+                bits.setdefault(bit, set()).add(point)
+        aliases.append(list(bits.values()))
+    shared = set.union(*aliases[0]) & set.union(*aliases[1]) if all(aliases) else set()
+    groups = {tuple(sorted(names & shared)) for side in aliases for names in side
+              if len(names & shared) > 1}
+    if groups:
+        # EQY inserts directional buffers between aliases. Keep each native
+        # wire together so a differently ordered alias cannot become a free cut.
+        prepared += "\n[collect *]\n" + "\n".join(
+            "group /^(?:" + "|".join(map(re.escape, group)) + ")$/" for group in sorted(groups)) + "\n"
     return reset_script(prepared, boundary), len(differences), reports, "Pads are black boxes on both sides."
 
 
@@ -296,7 +319,8 @@ def eqy(project, directory, tool, commands, *, state, config):
         netlist = state["pnl"]
     script = directory / "equivalence.eqy"
     source = eqy_script(top, rtl, Path(netlist), liberty[0], synthesis=config,
-        views=directory, liberty_files=list(map(Path, liberty)), model_verilog=models)
+        views=directory, liberty_files=list(map(Path, liberty)), model_verilog=models,
+        group_all=not pad_types)
     if physical:
         removal = "\n".join("delete */t:" + master for master in sorted(physical)) + "\n"
         source = source.replace("[gate]", removal + "[gate]", 1).replace("[script]", removal + "[script]", 1)
