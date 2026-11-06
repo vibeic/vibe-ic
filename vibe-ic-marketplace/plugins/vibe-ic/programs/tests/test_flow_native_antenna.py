@@ -1,4 +1,3 @@
-"""The public antenna row runs both native checks against their own rules."""
 from pathlib import Path
 import shutil
 from types import SimpleNamespace
