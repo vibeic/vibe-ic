@@ -12,6 +12,37 @@ from flow_native_adapters import Commands, formal
 from flow_native_verification import eqy, eqy_partitions, gls, reset_boundary, xor
 
 
+@pytest.mark.parametrize("clock,set_level,reset_level", [
+    (c,s,r) for c in (0,1) for s in (0,1) for r in (0,1)])
+def test_mapped_cdc_refuses_unmodeled_native_set_reset_state(tmp_path, clock, set_level, reset_level):
+    if not shutil.which("yosys"):
+        pytest.skip("Native Yosys is required")
+    from flow_native_adapters import cdc
+
+    cells = tmp_path / "cells.lib"
+    cells.write_text('library(neutral) { cell(MAILBOX) { ff(IQ,IQN) {'
+        f'clocked_on:"{"" if clock else "!"}C"; next_state:"D"; '
+        f'preset:"{"" if set_level else "!"}S"; clear:"{"" if reset_level else "!"}R"; '
+        'clear_preset_var1:L; clear_preset_var2:H; } '
+        'pin(C){direction:input;} pin(S){direction:input;} pin(R){direction:input;} '
+        'pin(D){direction:input;} pin(Q){direction:output; function:"IQ";} }}\n')
+    mapped = tmp_path / "mapped.v"
+    mapped.write_text("module unit(input source_clk,destination_clk,set_state,reset_state,data,output reg q);\n"
+        "reg source_state; wire captured; reg stage1;\n"
+        "always @(posedge source_clk) source_state<=data;\n"
+        "MAILBOX mailbox(.C(source_clk),.S(set_state),.R(reset_state),.D(source_state),.Q(captured));\n"
+        "always @(posedge destination_clk) begin stage1<=captured; q<=stage1; end\nendmodule\n")
+    result = cdc(tmp_path,tmp_path,{"adapter":"implemented_cdc"},Commands(tmp_path),
+        state={"nl":str(mapped)},config={"DESIGN_NAME":"unit","DEFAULT_CORNER":"typical",
+                                      "LIB":{"typical":[str(cells)]}})
+    assert "new_unexplained_crossings" not in result["metrics"],result
+    assert "unresolved_crossings" not in result["metrics"],result
+    assert "CDC_NETLIST_UNSUPPORTED_ASYNC_CONTROL" in result["detail"],result
+    assert "$_DFFSR_" in result["detail"],result
+    graph = json.loads((tmp_path/"graph.json").read_text())["modules"]["unit"]
+    assert any(c["type"].startswith("$_DFFSR_") for c in graph["cells"].values())
+
+
 @pytest.mark.parametrize("event", ["posedge clk", "negedge clk", "posedge clk or posedge reset"])
 @pytest.mark.parametrize("legacy", [False, True])
 def test_native_formal_preserves_global_clock_state_checks(tmp_path, event, legacy):

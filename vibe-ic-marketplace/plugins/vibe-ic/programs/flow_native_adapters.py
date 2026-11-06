@@ -136,7 +136,10 @@ def cdc(project, directory, tool, commands, *, state=None, config=None):
     normalized = commands.run(["yosys", "-s", script])
     if normalized is None or normalized.returncode or not graph.is_file():
         return commands.result(reports=[raw, script], detail="Native CDC graph normalization did not complete.")
-    netlist = native.load(graph, top)
+    try:
+        netlist = native.load(graph, top)
+    except native.Refusal as exc:
+        return commands.result(reports=[raw, graph, script], detail=str(exc))
     native._load_latched_clock_gates(netlist)
     crossing, reset = {}, {}
     findings = native.judge(netlist, "reg_crossing", metadata=crossing, calibrate=False)
