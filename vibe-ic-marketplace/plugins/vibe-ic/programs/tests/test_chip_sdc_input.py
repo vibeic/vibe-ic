@@ -49,6 +49,17 @@ def test_supplied_sdc_reaches_native_config_with_secondary_clock(project):
         assert config[key] == str(project / "input/constraints/constraint.sdc")
 
 
+def test_explicit_native_sdc_selection_precedes_staged_constraints(project):
+    selected = project / "selected.sdc"
+    selected.write_text("create_clock -name selected -period 6 [get_ports clk]\n")
+    declaration = project / "plugin_output/declaration.json"
+    declaration.parent.mkdir()
+    declaration.write_text(json.dumps({"PNR_SDC_FILE": str(selected)}))
+    config = build_config(project, route="ip")
+    assert config["PNR_SDC_FILE"] == str(selected)
+    assert config["CLOCK_PERIOD"] == 6
+
+
 def test_native_chip_sdc_keeps_both_clock_domains_and_authored_exceptions(project):
     sta = shutil.which("sta")
     root = os.environ.get("PDK_ROOT")

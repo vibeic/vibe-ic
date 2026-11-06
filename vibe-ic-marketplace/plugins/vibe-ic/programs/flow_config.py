@@ -388,7 +388,8 @@ def build_config(project: Path | str, *, route: str | None = None, pdk: str | No
     from sdc_constraints import collect_sdc_files
 
     sdcs = collect_sdc_files(project)
-    sdc = sdcs[0] if sdcs else project / "phase3/stage3/pnr/constraint.sdc"
+    sdc = (Path(config["PNR_SDC_FILE"]) if config.get("PNR_SDC_FILE") else
+           sdcs[0] if sdcs else project / "phase3/stage3/pnr/constraint.sdc")
     if sdc.is_file():
         from sdc_constraints import create_clocks_in_text
 
