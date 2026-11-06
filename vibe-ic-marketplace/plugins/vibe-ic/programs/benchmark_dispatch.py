@@ -2097,7 +2097,7 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
                         "prompt_structural_contract schema also supports scope='top_module_ports' "
                         "with expectations={'ports_from_prompt_header': true}. Bind requirement_source.quote "
                         "to the exact original header and carry its exact prompt_header_preservation. "
-                        "The pinned native backend derives all port names, declaration order, directions, "
+                        "The configured native backend derives all port names, declaration order, directions, "
                         "widths, bounds, orientation and signedness from that header; caller-authored "
                         "port expectations are refused. Initial header differences may be natively measured; "
                         "Candidate attributes or preprocessing are NOT_MEASURED because they can override "
@@ -2111,11 +2111,6 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
                         "sha256": prompt_sha,
                         "quote": "<unique exact public prompt quote declaring structure>",
                         "quote_sha256": "<sha256 of the exact quote>",
-                    },
-                    "backend": {
-                        "kind": "docker",
-                        "image": "<immutable image reference ending @sha256:<64 hex>>",
-                        "image_id": "<sha256:<64 hex> local immutable image id>",
                     },
                     "expectations": {
                         "required_cell_types": {"<Yosys $cell type>": "<positive minimum>"},
@@ -3892,7 +3887,8 @@ def _run_review_structural_proof(task: dict, candidate: dict,
     This is the pre-repair admission side of ``rtl_repair_contract``.  It reads
     the immutable review snapshot, never the mutable working RTL, and resolves
     the exact public-original path rather than guessing by basename.  The
-    contract itself owns the fixed Yosys recipe and tool/input identity checks.
+    contract owns the fixed Yosys recipe and reviewed input references; tool
+    selection comes from the operator's environment or run configuration.
     """
     import benchmark_io_adapter as bio                 # noqa: PLC0415
     import rtl_repair_contract as repair_contract      # noqa: PLC0415
