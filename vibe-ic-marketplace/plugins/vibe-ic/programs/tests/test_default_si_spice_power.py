@@ -414,7 +414,7 @@ def test_step30_model_publication_matches_the_selected_execution_namespace(tmp_p
     original = p / 'phase3/librelane/22-config/OpenROAD.STAPostPNR.json'
     put(original, config)
     fp = json.loads((folder / 'input_fingerprint.json').read_text())
-    fp.update(config=LC.digest(original), config_files=LC.config_file_hashes(config, [(root / 'neutral', '/pdk/neutral')]),
+    fp.update(config=LC.digest(original),
               liberty_files={'/pdk/neutral/neutral.lib': LC.digest(lib)})
     fp['state_files'][str(nl)] = LC.digest(nl)
     seal(folder, fp)

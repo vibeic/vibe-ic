@@ -10,7 +10,7 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 import librelane_fill_dfm as fill
 from metal_fill_config_gen import build_metal_fill_config
-from librelane_contract import Refusal
+from librelane_contract import Refusal, digest
 
 
 def _put(path, value):
@@ -503,7 +503,7 @@ def test_density_declared_numeric_strings_match_numbers(tmp_path, extent_from_de
     top.shapes(layout.layer(61, 0)).insert(k.Box(0, 0, 40000, 100000))
     gds = tmp_path / 'neutral.gds'; layout.write(str(gds))
     specs = {'M1.4': {'layers': [[61, 0]]}}
-    before = fill.digest(gds)
+    before = digest(gds)
     numeric = emitter.measure(gds, specs, [0, 0, 100, 100], extent_from_deck=extent_from_deck)
     strings = emitter.measure(gds, specs, ['0', '0.0', '1e2', '100.000'],
                               extent_from_deck=extent_from_deck)
@@ -511,7 +511,7 @@ def test_density_declared_numeric_strings_match_numbers(tmp_path, extent_from_de
     assert strings['status'] == 'MEASURED'
     assert strings['layers']['M1.4']['ratio'] == .4
     assert strings['extent_matches_declared_die'] is True
-    assert fill.digest(gds) == before
+    assert digest(gds) == before
 
 
 @pytest.mark.parametrize('extent_from_deck', [False, True])
