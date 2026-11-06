@@ -406,12 +406,16 @@ def native_diagnostics(process, argv, project, require_phase2=True):
     if not path.is_file():
         return {"status": "NOT_MEASURED", "reason": "The native owner produced no report.",
                 "argv": argv, "rc": process.rc}
-    report = json.loads(path.read_text())
-    if not report.get("steps"):
+    try:
+        report = json.loads(path.read_text())
+    except (OSError, ValueError):
+        report = {}
+    rows = report.get("steps") if isinstance(report, dict) else None
+    if not isinstance(rows, list) or not rows:
         return {"status": "NOT_MEASURED", "reason": "The native owner reported no tool results.",
                 "argv": argv, "rc": process.rc}
     return {"status": "REPORTS_AVAILABLE", "fresh_reports": [name],
-            "argv": argv, "rc": process.rc, "native_verdict": report["verdict"]}
+            "argv": argv, "rc": process.rc, "native_verdict": report.get("verdict", "NOT_MEASURED")}
 
 
 
