@@ -2804,10 +2804,15 @@
       "tool": {
         "kind": "librelane",
         "imports": [
-          "librelane_plugins.librelane_plugin_vibeic.postroute_repair"
+          "librelane_plugins.librelane_plugin_vibeic.postroute_sizing"
         ],
         "steps": [
-          "Vibeic.PostRouteRepair",
+          "Vibeic.RCXBeforeRepair",
+          "Vibeic.PostRouteSizing",
+          "OpenROAD.DetailedPlacement",
+          "OpenROAD.GlobalRouting",
+          "OpenROAD.DetailedRouting",
+          "OpenROAD.FillInsertion",
           "OpenROAD.RCX",
           "OpenROAD.STAPostPNR"
         ]
