@@ -143,6 +143,139 @@ def test_prose_wins_over_configs(tmp_path):
     assert c["die_area_budget_um"] == "2000x3000"
 
 
+@pytest.mark.parametrize("mode", ["json", "tcl", "prose"])
+def test_exact_rectangle_preserves_fractional_nonzero_origin(tmp_path, mode):
+    proj = tmp_path / "p"
+    rect = [12.25, -7.5, 812.875, 592.75]
+    if mode == "json":
+        _write(proj / "input/config.json", _openlane_config("neutral_top", rect))
+    elif mode == "tcl":
+        _write(proj / "input/config.tcl",
+               'set ::env(FP_SIZING) "absolute"\n'
+               'set ::env(DIE_AREA) "12.25 -7.5 812.875 592.75"\n')
+    else:
+        _write(proj / "input/docs/L9_floorplan.md",
+               "`FP_SIZING = absolute`, "
+               "`DIE_AREA = [12.25, -7.5, 812.875, 592.75]` um.\n")
+
+    contract = FPC.extract_floorplan_contract(proj)
+
+    assert contract["die_area_budget_um"] == "801x600"
+    assert contract.get("die_area_um") == rect
+
+
+def test_exact_rectangle_uses_selected_top_config(tmp_path):
+    proj = tmp_path / "p"
+    rect = [10.25, 20.5, 310.75, 420.875]
+    for name, area in (("neutral_top", rect), ("neutral_leaf", [0, 0, 80, 90])):
+        _write(proj / f"input/{name}/config.json", _openlane_config(name, area))
+
+    assert FPC.extract_floorplan_contract(proj, "neutral_top").get("die_area_um") == rect
+    assert FPC.extract_floorplan_contract(proj, "neutral_leaf").get("die_area_um") == [0, 0, 80, 90]
+
+
+def test_budget_prose_does_not_adopt_config_rectangle(tmp_path):
+    proj = tmp_path / "p"
+    _write(proj / "input/docs/L9_floorplan.md", "Die area budget: 1200 x 1400 um.\n")
+    _write(proj / "input/config.json",
+           _openlane_config("neutral_top", [20, 30, 1220, 1430]))
+
+    contract = FPC.extract_floorplan_contract(proj, "neutral_top")
+
+    assert contract["die_area_budget_um"] == "1200x1400"
+    assert contract.get("die_area_um") is None
+
+
+def test_shared_dimensions_do_not_resolve_distinct_origins(tmp_path):
+    proj = tmp_path / "p"
+    for name, area in (("neutral_a", [0, 0, 800, 600]),
+                       ("neutral_b", [10, 20, 810, 620])):
+        _write(proj / f"input/{name}/config.json", _openlane_config(name, area))
+
+    contract = FPC.extract_floorplan_contract(proj)
+
+    assert contract["die_area_budget_um"] == "800x600"
+    assert contract.get("die_area_um") is None
+
+
+@pytest.mark.parametrize("other_rect,other_mode", [
+    ([10, 20, 810, 620], "absolute"),
+    ([0, 0, 800, 600], "relative"),
+])
+def test_matching_top_configs_do_not_resolve_distinct_rectangles_or_modes(
+        tmp_path, other_rect, other_mode):
+    proj = tmp_path / "p"
+    _write(proj / "input/a/config.json",
+           _openlane_config("neutral_top", [0, 0, 800, 600]))
+    _write(proj / "input/b/config.json",
+           _openlane_config("neutral_top", other_rect, sizing=other_mode))
+
+    contract = FPC.extract_floorplan_contract(proj, "neutral_top")
+
+    assert contract["die_area_budget_um"] == "800x600"
+    assert contract.get("die_area_um") is None
+
+
+def test_equivalent_matching_top_configs_keep_exact_rectangle(tmp_path):
+    proj = tmp_path / "p"
+    rect = [10, 20, 810, 620]
+    for name in ("a", "b"):
+        _write(proj / f"input/{name}/config.json", _openlane_config("neutral_top", rect))
+
+    assert FPC.extract_floorplan_contract(proj, "neutral_top").get("die_area_um") == rect
+
+
+@pytest.mark.parametrize("sizing", ["", "`FP_SIZING = absolute`, "])
+def test_prose_rectangle_does_not_adopt_unrelated_relative_mode(tmp_path, sizing):
+    proj = tmp_path / "p"
+    _write(proj / "input/docs/L9_floorplan.md",
+           sizing + "`DIE_AREA = [10, 20, 810, 620]` um is the fixed die.\n")
+    _write(proj / "input/docs/unrelated.md", "`FP_SIZING = relative`.\n")
+
+    assert FPC.extract_floorplan_contract(proj).get("die_area_um") == [10, 20, 810, 620]
+
+
+@pytest.mark.parametrize("mode", ["json", "tcl", "prose"])
+def test_relative_sizing_does_not_turn_dormant_rectangle_into_exact_extent(
+        tmp_path, mode):
+    proj = tmp_path / "p"
+    if mode == "json":
+        _write(proj / "input/config.json",
+               _openlane_config("neutral_top", [0, 0, 800, 600], sizing="relative"))
+    elif mode == "tcl":
+        _write(proj / "input/config.tcl",
+               'set ::env(DESIGN_NAME) "neutral_top"\n'
+               'set ::env(FP_SIZING) "relative"\n'
+               'set ::env(DIE_AREA) "0 0 800 600"\n')
+    else:
+        _write(proj / "input/docs/L9_floorplan.md",
+               "`FP_SIZING = relative`, `DIE_AREA = [0, 0, 800, 600]` um.\n")
+
+    contract = FPC.extract_floorplan_contract(proj, "neutral_top")
+
+    assert contract["die_area_budget_um"] == "800x600"
+    assert contract.get("die_area_um") is None
+    assert any(h["kind"] == "fp_sizing" and h["value"] == "relative"
+               for h in contract["floorplan_hints"])
+
+
+@pytest.mark.parametrize("mode", ["json", "tcl"])
+def test_default_relative_sizing_does_not_publish_config_rectangle(tmp_path, mode):
+    proj = tmp_path / "p"
+    if mode == "json":
+        _write(proj / "input/config.json", json.dumps({
+            "DESIGN_NAME": "neutral_top", "DIE_AREA": [0, 0, 800, 600]}))
+    else:
+        _write(proj / "input/config.tcl",
+               'set ::env(DESIGN_NAME) "neutral_top"\n'
+               'set ::env(DIE_AREA) "0 0 800 600"\n')
+
+    contract = FPC.extract_floorplan_contract(proj, "neutral_top")
+
+    assert contract["die_area_budget_um"] == "800x600"
+    assert contract.get("die_area_um") is None
+
+
 # ===========================================================================
 # 3. no-contract → stays null
 # ===========================================================================
@@ -319,6 +452,64 @@ def _seed_librelane_declaration(proj: Path) -> None:
                "top_cell": "neutral_top",
                "die_area_um": [0, 0, 120, 140],
                "core_area_um": [10, 10, 110, 130]}}))
+
+
+def test_exact_prose_rectangle_reaches_native_config(tmp_path):
+    from flow_config import build_config
+
+    proj = tmp_path / "p"
+    l19 = _seed_librelane_contract_inputs(proj)
+    _write(proj / "input/docs/L9_floorplan.md",
+           "`FP_SIZING = absolute`, "
+           "`DIE_AREA = [12.25, -7.5, 812.875, 592.75]` um.\n")
+    _write(proj / "phase2/stage1/rtl/neutral_top.v",
+           "module neutral_top(input clk); endmodule\n")
+
+    P1._post_emit_floorplan_contract(proj)
+    config = build_config(proj, route="ip")
+
+    assert json.loads(l19.read_text())["fields"].get("die_area_um") == [12.25, -7.5, 812.875, 592.75]
+    assert config.get("DIE_AREA") == [12.25, -7.5, 812.875, 592.75]
+    assert config.get("FP_SIZING") == "absolute"
+
+
+def test_selected_top_config_rectangle_reaches_l19(tmp_path):
+    proj = tmp_path / "p"
+    l19 = _seed_librelane_contract_inputs(proj)
+    rect = [10.25, 20.5, 310.75, 420.875]
+    for name, area in (("neutral_top", rect), ("neutral_leaf", [0, 0, 80, 90])):
+        _write(proj / f"input/{name}/config.json", _openlane_config(name, area))
+
+    P1._post_emit_floorplan_contract(proj)
+
+    assert json.loads(l19.read_text())["fields"].get("die_area_um") == rect
+
+
+def test_budget_only_does_not_emit_native_rectangle(tmp_path):
+    proj = tmp_path / "p"
+    l19 = _seed_l19(proj)
+    _write(proj / "input/docs/L9_floorplan.md", "Die area budget: 1200 x 1400 um.\n")
+
+    P1._post_emit_floorplan_contract(proj)
+
+    fields = json.loads(l19.read_text())["fields"]
+    assert fields["die_area_budget_um"] == "1200x1400"
+    assert fields.get("die_area_um") is None
+
+
+def test_existing_typed_rectangle_is_not_overwritten(tmp_path):
+    proj = tmp_path / "p"
+    l19 = _seed_l19(proj)
+    original = [1.25, 2.5, 101.75, 202.875]
+    doc = json.loads(l19.read_text())
+    doc["fields"]["die_area_um"] = original
+    _write(l19, json.dumps(doc))
+    _write(proj / "input/config.json",
+           _openlane_config("neutral_top", [0, 0, 800, 600]))
+
+    P1._post_emit_floorplan_contract(proj)
+
+    assert json.loads(l19.read_text())["fields"]["die_area_um"] == original
 
 
 def test_structured_core_util_reaches_l19_and_actual_librelane_consumer(

@@ -18,6 +18,33 @@ sys.path.insert(0, str(SCRIPT.parent))
 import verilator_coverage_measure as gate  # noqa: E402
 
 
+@pytest.mark.parametrize("relative", [False, True])
+def test_native_coverage_reads_relative_testbench_payload(tmp_path, monkeypatch, relative):
+    if not shutil.which("verilator"):
+        pytest.skip("Native Verilator is required")
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    (bundle / "payload.hex").write_text("01\n")
+    rtl = tmp_path / "unit.v"
+    rtl.write_text("module unit(input a, output z); assign z=~a; endmodule\n")
+    tb = bundle / "tb_unit.v"
+    tb.write_text('module tb_unit; reg [7:0] seed[0:0]; reg a; wire z; '
+                  'unit dut(a,z); initial begin $readmemh("payload.hex",seed); '
+                  'a=seed[0][0]; #1; '
+                  'if(z===0) $display("ORACLE_TB_DONE pass=1/1"); '
+                  'else $display("ORACLE_TB_DONE pass=0/1"); $finish; end endmodule\n')
+    run = tmp_path / "run"
+    monkeypatch.chdir(tmp_path)
+    build_arg = "build" if relative else str(tmp_path / "build")
+    run_arg = "run" if relative else str(run)
+    data = gate.verilate_tb_and_run([str(rtl)], str(tb), build_arg, run_arg)
+    transcript = (run / "simulation.log").read_text()
+    assert "ORACLE_TB_DONE pass=1/1" in transcript
+    assert "file not found" not in transcript
+    assert Path(data).parent == run
+    assert not (bundle / "coverage.dat").exists()
+
+
 def test_failed_native_simulation_keeps_its_diagnostic(tmp_path):
     rtl = tmp_path / "unit.v"
     tb = tmp_path / "tb_unit.sv"
