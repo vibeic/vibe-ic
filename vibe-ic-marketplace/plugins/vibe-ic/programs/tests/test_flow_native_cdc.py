@@ -70,6 +70,41 @@ def test_implemented_cdc_uses_liberty_functions_with_udp_models(tmp_path, fault)
     assert result["metrics"]["new_unexplained_crossings"] == result["metrics"]["unresolved_crossings"]
 
 
+@pytest.mark.parametrize("crossing", [False, True])
+def test_implemented_cdc_reads_pad_bus_interfaces_as_native_library(tmp_path, crossing):
+    if not shutil.which("yosys"):
+        pytest.skip("Native Yosys is required")
+    pads, cells, netlist = [tmp_path/name for name in ("pads.lib","cells.lib","mapped.v")]
+    pads.write_text('library(pads) { type(mode_bus) { base_type: array; data_type: bit; '
+        'bit_width: 2; bit_from: 1; bit_to: 0; downto: true; } '
+        'cell(PADBUF) { pin(PAD) {direction: input;} pin(Y) {direction: output; function:"PAD";} '
+        'bus(MODE) {bus_type:mode_bus; direction:input;} }}\n')
+    cells.write_text('library(neutral) { cell(STORAGE) { '
+        'ff(IQ,IQN) {clocked_on:"C"; next_state:"D";} '
+        'pin(C) {direction:input; clock:true;} pin(D) {direction:input;} '
+        'pin(Q) {direction:output; function:"IQ";} }}\n')
+    netlist.write_text('module unit(input clk,other_clk,data,output q); wire internal_clk,stored;\n'
+        'PADBUF clock_pad(.PAD(clk),.MODE(2\'b00),.Y(internal_clk));\n'
+        'STORAGE source_state(.C(internal_clk),.D(data),.Q(stored));\n'
+        f'STORAGE destination_state(.C({"other_clk" if crossing else "internal_clk"}),.D(stored),.Q(q));\n'
+        'endmodule\n')
+    config = {"DESIGN_NAME":"unit","DEFAULT_CORNER":"typical",
+              "LIB":{"typical":[str(cells)]},"PAD_LIBS":{"typical":[str(pads)]}}
+    result = execute(tmp_path,tmp_path/"native",{"adapter":"implemented_cdc"},{},
+                     state={"nl":str(netlist)},config=config)
+    assert (result["metrics"].get("new_unexplained_crossings",-1)>0)==crossing,result
+    assert result["metrics"].get("new_unexplained_crossings")==int(crossing),result
+    graph_path = next(Path(p) for p in result["reports"] if p.endswith("/graph.json"))
+    graph = json.loads(graph_path.read_text())["modules"]["unit"]
+    pad = graph["cells"]["clock_pad"]
+    assert pad["type"]=="PADBUF"
+    assert pad["port_directions"]=={"PAD":"input","Y":"output","MODE":"input"}
+    assert pad["connections"]["PAD"]==graph["ports"]["clk"]["bits"]
+    assert pad["connections"]["MODE"]==["0","0"]
+    cdc = json.loads((graph_path.parent/"cdc.json").read_text())
+    assert cdc["crossings"]["decoded_flops"]==2
+
+
 @pytest.mark.parametrize("source,physical,pad_role", [
     ("core_rtl", False, None), ("netlist_only", False, None),
     ("explicit", True, None), ("core_rtl", True, "PAD_LIBS"),
