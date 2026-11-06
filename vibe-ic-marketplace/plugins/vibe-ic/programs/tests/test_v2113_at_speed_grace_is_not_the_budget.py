@@ -42,6 +42,7 @@ sys.path.insert(0, str(_PROGRAMS))
 import transition_fault_atpg_run as TDF     # noqa: E402
 import fault_atpg_run as F                  # noqa: E402
 import _watchdog as W                       # noqa: E402
+import _eda_pin                            # noqa: E402
 
 #: Two DISTINCT non-default numbers, so neither can be confused with the other
 #: nor with anything the primitive would have supplied on its own.
@@ -128,6 +129,11 @@ def _pin_route(monkeypatch, *, container: bool) -> None:
     `ceiling_notice` + `hard_ceiling_s` and no `kill` at all (vibe-ic#2145).
     Both routes exist and both are asserted, each in its own arm.
     """
+    if container:
+        try:
+            F.docker_image()
+        except _eda_pin.ImageNotResolvable as exc:
+            pytest.skip(f"NOT_MEASURED: container launch image unavailable: {exc}")
     monkeypatch.setattr(TDF._CE, "no_container_route",
                         lambda: container is False)
 
