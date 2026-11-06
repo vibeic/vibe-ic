@@ -53,8 +53,9 @@ oracle/harness/golden.
 CONSULT the source-of-truth — do NOT guess the flow or the routing:
   • `agents/ic-expert-agent.md` — your identity, the L1-L24 review checklists, and
     the "§ IC-EXPERT OPERATING MAP" (phase → program → gate → skill trigger table).
-  • `flow/phase1_phase2_phase3.yaml` — the canonical 44-step flow (single source of
-    truth; `flow_compliance_check.py` enforces it — never claim PASS without exit 0).
+  • `flow/steps.json` — executable tool/adapter rows; `flow/native_limits.json`
+    supplies the original bounds. Report native tool results against those bounds.
+    `flow/phase1_phase2_phase3.yaml` supplies the user-facing stage/step map.
   • `benchmark/CAPTURE_ROUTING.json` — step → program → skill routing.
 
 Phases: Phase 1 (NL/docs → L1-L27 JSON, IC-Expert dialogue) → Phase 2 (RTL gen →

@@ -17,15 +17,12 @@
 <!--
   Paste the commands you ran. At minimum:
     ( cd vibe-ic-marketplace/plugins/vibe-ic && ./run_tests.sh )
-    python3 vibe-ic-marketplace/plugins/vibe-ic/programs/source_chip_agnostic_check.py \
-            vibe-ic-marketplace/plugins/vibe-ic
 -->
 
 ## Checklist
 
 - [ ] I read [CONTRIBUTING.md](../CONTRIBUTING.md)
 - [ ] `vibe-ic-marketplace/plugins/vibe-ic/run_tests.sh` passes (it is the full suite — bare `pytest` runs ONE tree by design)
-- [ ] `source_chip_agnostic_check.py` PASSes (no private chip / vendor / protocol names)
 - [ ] If I added a walker / regex / merge patch, I shipped a real-shape fixture under `tests/fixtures/real_benchmark/`
 - [ ] If I changed behaviour, I updated the relevant `docs/` page
 - [ ] If I bumped a version, I updated `plugin.json`, `marketplace.json`, and `package.json` together
