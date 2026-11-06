@@ -41221,6 +41221,31 @@ def _v1_0_44_harvest_bring_up_steps_from_prose(
     return out
 
 
+# v1.6.241 — for #104. The v1.6.239 filename filter
+# `r"test|engineer|debug|mode"` missed canonical RV verification
+# filenames (`tracer.rst`, `rvfi.rst`, `verification.rst`,
+# `coverage_plan.rst`, `testplan.rst`) so L7 emitted null on
+# every IC despite rich Interface / Parameters tables in those
+# files. Expanded vocabulary covers the standard ASIC test /
+# debug / verification doc-naming conventions.
+#
+# v1.6.242 — for #104 field-agent round-2 feedback. `\b` word
+# boundary failed on production inputs because
+# `extract_text_pipeline` flattens subdir paths via `__` and
+# `_` is a `\w` char (so `\b` never fires before `_debug`).
+# Switched to explicit boundary class `(?:^|[/_.])...(?:[_.]|$)`
+# which honours the `__`-separator convention. `debug.rst` (unit
+# test form) and `03_reference__debug.rst` (production form)
+# both now match.
+_L7_FILE_KEYWORDS = re.compile(
+    r"(?i)(?:^|[/_.])"
+    r"(?:test|tests|testplan|test_modes?|engineer|"
+    r"debug|trace|tracer|rvfi|verification|verif|"
+    r"validation|qualification|coverage|coverage_plan|"
+    r"jtag|dft|scan|atpg|bist|mode)"
+    r"(?:[/_.]|$)"
+)
+
 def _harvest_named_verification_scenarios(extracted):
     """Read named L7 list items, retaining wrapped text and physical lines."""
     rows = []
@@ -41228,11 +41253,7 @@ def _harvest_named_verification_scenarios(extracted):
                       r"([A-Za-z0-9][\w .+\-/]{0,60}?)\s*\*\*"
                       r"\s*[\u2014\u2013:\-]\s*(.*)$")
     for source, text in (extracted or {}).items():
-        if not isinstance(text, str) or not re.search(
-                r"(?i)(?:^|[/_.])(?:test|tests|testplan|test_modes?|engineer|"
-                r"debug|trace|tracer|rvfi|verification|verif|validation|"
-                r"qualification|coverage|coverage_plan|jtag|dft|scan|atpg|bist|mode)"
-                r"(?:[/_.]|$)", source):
+        if not isinstance(text, str) or not _L7_FILE_KEYWORDS.search(source):
             continue
         lines = text.splitlines()
         fence = None
@@ -41271,30 +41292,6 @@ def gen_l7_test_debug(project: Path,
     ic_name = _ic_name_from_docs(extracted, project)
     test_modes: List[Dict[str, Any]] = []
     evidence: Dict[str, List[Dict[str, str]]] = {}
-    # v1.6.241 — for #104. The v1.6.239 filename filter
-    # `r"test|engineer|debug|mode"` missed canonical RV verification
-    # filenames (`tracer.rst`, `rvfi.rst`, `verification.rst`,
-    # `coverage_plan.rst`, `testplan.rst`) so L7 emitted null on
-    # every IC despite rich Interface / Parameters tables in those
-    # files. Expanded vocabulary covers the standard ASIC test /
-    # debug / verification doc-naming conventions.
-    #
-    # v1.6.242 — for #104 field-agent round-2 feedback. `\b` word
-    # boundary failed on production inputs because
-    # `extract_text_pipeline` flattens subdir paths via `__` and
-    # `_` is a `\w` char (so `\b` never fires before `_debug`).
-    # Switched to explicit boundary class `(?:^|[/_.])...(?:[_.]|$)`
-    # which honours the `__`-separator convention. `debug.rst` (unit
-    # test form) and `03_reference__debug.rst` (production form)
-    # both now match.
-    _L7_FILE_KEYWORDS = re.compile(
-        r"(?i)(?:^|[/_.])"
-        r"(?:test|tests|testplan|test_modes?|engineer|"
-        r"debug|trace|tracer|rvfi|verification|verif|"
-        r"validation|qualification|coverage|coverage_plan|"
-        r"jtag|dft|scan|atpg|bist|mode)"
-        r"(?:[/_.]|$)"
-    )
     for fname, text in extracted.items():
         if not _L7_FILE_KEYWORDS.search(fname):
             continue

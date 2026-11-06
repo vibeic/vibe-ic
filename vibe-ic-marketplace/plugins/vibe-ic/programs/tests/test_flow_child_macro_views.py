@@ -14,7 +14,7 @@ def project(root, child_config=True, hardening=True):
     docs.mkdir(parents=True)
     (docs / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({"top_module": "neutral_wrapper",
         "hard_macros": [{"name": "compute_tile", "hardening_required": hardening}]}))
-    (docs / "L19_CONSTRAINTS_PDK.json").write_text(json.dumps({"pdk_target": "neutral_pdk"}))
+    (docs / "L19_CONSTRAINTS_PDK.json").write_text(json.dumps({"pdk_target": "sky130A"}))
     source = root / "input/design_src"
     source.mkdir(parents=True)
     (source / "tile.v").write_text("module compute_tile(input a, output z); assign z=a; endmodule\n")
@@ -146,7 +146,12 @@ def test_non_hardened_macros_still_consume_supplied_views(tmp_path):
     assert not (tmp_path / "work/flow/children").exists()
 
 
-def test_child_phase1_reads_its_supplied_sdc_without_rewriting_it(tmp_path):
+@pytest.mark.parametrize("sdc_keys", [
+    ("FALLBACK_SDC", "PNR_SDC_FILE", "SIGNOFF_SDC_FILE"),
+    ("FALLBACK_SDC_FILE",),
+    ("RCX_SDC_FILE",),
+])
+def test_child_phase1_reads_its_supplied_sdc_without_rewriting_it(tmp_path, sdc_keys):
     from types import SimpleNamespace
     import flow_macro_views as macros
     from phase1_port_extract import annotate_timing_ports
@@ -161,7 +166,8 @@ def test_child_phase1_reads_its_supplied_sdc_without_rewriting_it(tmp_path):
             "set_output_delay 2 -clock clk [get_ports {parent_only}]\n")
     sdc.write_text(text)
     raw = json.loads((source / "child.json").read_text())
-    raw.update(FALLBACK_SDC=str(sdc), PNR_SDC_FILE=str(sdc), SIGNOFF_SDC_FILE=str(sdc))
+    raw.update({key: [str(sdc)] if key == "FALLBACK_SDC_FILE" else str(sdc)
+                for key in sdc_keys})
     found = {}
 
     def observe(argv):
@@ -175,7 +181,7 @@ def test_child_phase1_reads_its_supplied_sdc_without_rewriting_it(tmp_path):
         return subprocess.CompletedProcess(argv, 9, "", "staging observed")
 
     child, summary, code = macros._child(tmp_path, "compute_tile", source / "child.json",
-                                         raw, "neutral_pdk", SimpleNamespace(run=observe))
+                                         raw, "sky130A", SimpleNamespace(run=observe))
     assert summary == {} and code == 9
     ports = {p["name"]: p for p in found["top_ports"]}
     assert ports["a"].get("timing_class") == ports["z"].get("timing_class") == "asynchronous"
@@ -184,7 +190,8 @@ def test_child_phase1_reads_its_supplied_sdc_without_rewriting_it(tmp_path):
     assert len(copies) == 1 and copies[0].read_text() == text
     assert sdc.read_text() == text
     overrides = json.loads((child / "work/flow/native_overrides.json").read_text())
-    assert overrides["PNR_SDC_FILE"] == str(sdc)
+    for key in sdc_keys:
+        assert overrides[key] == ([str(sdc)] if key == "FALLBACK_SDC_FILE" else str(sdc))
     assert "parent_only" in copies[0].read_text()
     assert all((child / s["file"]).is_file() and s["line"] in {1, 2, 4, 5}
                for name in ("a", "z") for s in ports[name]["timing_class_sources"])
