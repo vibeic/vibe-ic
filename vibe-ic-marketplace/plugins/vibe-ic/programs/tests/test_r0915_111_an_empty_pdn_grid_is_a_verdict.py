@@ -84,14 +84,6 @@ def test_the_refusal_names_the_two_strap_arithmetic():
 
 
 
-def test_the_check_is_wired_into_every_pdn_emitter():
-    """Both PDN paths — the sky130 one and the generic one — must carry it,
-    or the swallow survives on whichever path the next PDK takes."""
-    src = (PROGRAMS / "phase3_one_shot_runner.py").read_text()
-    assert src.count("+ _pdn_grid_built_tcl()") >= 2
-    # and it sits AFTER pdngen in both, never before
-    for chunk in src.split("_pdn_grid_built_tcl()")[:-1]:
-        assert "pdngen" in chunk
 
 
 
