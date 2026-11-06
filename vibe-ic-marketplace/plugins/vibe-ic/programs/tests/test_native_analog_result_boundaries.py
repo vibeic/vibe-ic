@@ -1,5 +1,6 @@
 """Retained native data needs engineering checks without identity records."""
 import copy
+import csv
 import json
 from pathlib import Path
 import sys
@@ -116,8 +117,16 @@ def test_measured_ir_overlimit_stays_fail_with_missing_supply_coverage(tmp_path)
 @pytest.mark.parametrize("missing", ["summary_only", "csv_first", "csv_last"])
 def test_measured_em_violation_stays_fail_with_another_supply_missing(density, missing):
     project, reports, doc, row = density
-    row.update(Status="VIOLATED", Ratio=2)
+    density_value = 2 * row["Jlimit(A/um^2)"]
+    row.update(Status="VIOLATED", Ratio=2, **{
+        "J(A/um^2)": density_value,
+        "Current(A)": density_value * row["Area(um^2)"]})
     write_rows(reports / "em_openroad_density_VDD.csv", [row])
+    psm_path = reports / "em_segments_VDD.csv"
+    with psm_path.open(newline="") as source:
+        psm = list(csv.DictReader(source))
+    psm[0]["Current"] = row["Current(A)"]
+    write_rows(psm_path, psm)
     subject_path = reports / "em.json"
     subject = json.loads(subject_path.read_text())
     subject["nets_analysed"].append("VSS")
