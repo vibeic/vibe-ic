@@ -41221,6 +41221,50 @@ def _v1_0_44_harvest_bring_up_steps_from_prose(
     return out
 
 
+def _harvest_named_verification_scenarios(extracted):
+    """Read named L7 list items, retaining wrapped text and physical lines."""
+    rows = []
+    item = re.compile(r"^([ \t]*)(?:\d+[.)]|[-*+])\s+\*\*\s*"
+                      r"([A-Za-z0-9][\w .+\-/]{0,60}?)\s*\*\*"
+                      r"\s*[\u2014\u2013:\-]\s*(.*)$")
+    for source, text in (extracted or {}).items():
+        if not isinstance(text, str) or not re.search(
+                r"(?i)(?:^|[/_.])(?:test|tests|testplan|test_modes?|engineer|"
+                r"debug|trace|tracer|rvfi|verification|verif|validation|"
+                r"qualification|coverage|coverage_plan|jtag|dft|scan|atpg|bist|mode)"
+                r"(?:[/_.]|$)", source):
+            continue
+        lines = text.splitlines()
+        fence = None
+        for index, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped.startswith(("```", "~~~")):
+                marker = stripped[:3]
+                fence = None if marker == fence else (fence or marker)
+                continue
+            if fence:
+                continue
+            match = item.match(line)
+            if not match:
+                continue
+            indent = len(match[1].expandtabs(4))
+            parts = [match[3].strip()]
+            for following in lines[index + 1:]:
+                if not following.strip():
+                    break
+                expanded = following.expandtabs(4)
+                if (len(expanded) - len(expanded.lstrip()) <= indent
+                        or _V634_VERIF_BULLET_RE.match(following)
+                        or following.lstrip().startswith(("#", "```", "~~~", "|"))):
+                    break
+                parts.append(following.strip())
+            rows.append({"name": match[2].strip(), "description": " ".join(parts).strip(),
+                         "source": source, "source_line": index + 1,
+                         "evidence": f"{source}:{index + 1}",
+                         "extraction_strategy": "named_scenario_list"})
+    return rows
+
+
 def gen_l7_test_debug(project: Path,
                       extracted: Dict[str, str]) -> LDocResult:
     """L7: test mode + engineer mode opcodes."""
@@ -42069,43 +42113,15 @@ def gen_l7_test_debug(project: Path,
         if len(test_scenarios) >= 24:
             break
 
-    # field (caravel L7 named-scenario list) — a verification plan that
-    # enumerates its DV scenarios as a numbered / bulleted list of BOLD-named
-    # items ("1. **io_ports** - ...", "- **la_test1** - ...") rather than a
-    # table. The two table harvesters above read only tables, so a plan that
-    # clearly NAMES >=3 DV scenarios in a bolded list scored 0 typed
-    # test_scenarios and FAILed the L7 >=3 floor on genuine, harvestable
-    # content. Capture each bold-named list item as a typed scenario. Gated on
-    # an L7-keyworded input filename (SAME gate as the harvesters above) plus
-    # the bold-name + dash/colon + description shape, so ordinary prose bullets
-    # and non-verification docs are not swept in. Deduped by name against the
-    # table-harvested scenarios. chip-AGNOSTIC: a list-item shape, no chip
-    # literal.
-    _named_scen_re = re.compile(
-        r"(?m)^\s*(?:\d+[.)]|[-*])\s+\*\*\s*"
-        r"([A-Za-z0-9][\w .+\-/]{1,60}?)\s*\*\*"
-        r"\s*[\u2014\u2013:\-]\s*([^\n]{3,200})")
-    for _fname, _text in extracted.items():
-        if not isinstance(_text, str) or not _text:
+    # Share the source-list parser with L10; L7 records declared scenarios,
+    # while L10 separately requires a stated stimulus and expected result.
+    for scenario in _harvest_named_verification_scenarios(extracted):
+        if scenario['name'] in _ts_seen or len(scenario['description']) < 3:
             continue
-        if not _L7_FILE_KEYWORDS.search(_fname):
-            continue
-        for _m in _named_scen_re.finditer(_text):
-            _nm = _m.group(1).strip()
-            _desc = _m.group(2).strip()
-            if not _nm or _nm in _ts_seen:
-                continue
-            _ts_seen.add(_nm)
-            test_scenarios.append({
-                "name": _nm,
-                "kind": "named_scenario",
-                "stimulus": _desc,
-                "expected": "documented DV scenario reproduced",
-                "evidence": _fname,
-                "extraction_strategy": "named_scenario_list",
-            })
-            if len(test_scenarios) >= 24:
-                break
+        _ts_seen.add(scenario['name'])
+        test_scenarios.append({**scenario, "kind": "named_scenario",
+            "stimulus": scenario['description'],
+            "expected": "documented DV scenario reproduced"})
         if len(test_scenarios) >= 24:
             break
 
@@ -56156,6 +56172,41 @@ def gen_l10_test_cases(project: Path,
     # RECORDED below, never silently dropped.
     _v2055_observable_vocab = _v2055_observables(project)
     _v2055_refusals: List[Dict[str, Any]] = []
+    named = _harvest_named_verification_scenarios(extracted)
+    meanings = {}
+    for scenario in named:
+        name = re.sub(r"[^a-z0-9]+", "_", scenario["name"].lower()).strip("_")
+        if name[:1].isdigit():
+            name = "scenario_" + name
+        scenario["name"] = name
+        meanings.setdefault(name, set()).add(scenario["description"])
+    for scenario in named:
+        desc = scenario["description"]
+        expected = re.search(r"(?i)(?:[,;]\s*|\band\s+)?\b"
+                             r"(?:checks?|verif(?:y|ies)|asserts?|expects?|expected)"
+                             r"(?:\s+that)?[\s:]+(.+)", desc)
+        stimulus = desc[:expected.start()].strip(" ,;:.") if expected else ""
+        answer = expected[1].strip() if expected else ""
+        reason = _v2055_refuse_verification_intent(desc, _v2055_observable_vocab)
+        if len(meanings[scenario["name"]]) > 1:
+            reason = ("AMBIGUOUS_SCENARIO_NAME", "The same scenario name has conflicting descriptions.")
+        elif reason is not None:
+            pass
+        elif not expected or not re.search(r"\w", answer) or re.fullmatch(
+                r"(?i)(?:TBD|TODO|not[ _]stated|unspecified|pass(?:ed)?|ok|success|"
+                r"correct(?:ly)?|as appropriate)[.!?\s]*", answer):
+            reason = ("SCENARIO_EXPECTATION_NOT_STATED",
+                      "No explicit expected result is stated; the named activity is not an oracle.")
+        elif not stimulus:
+            reason = ("SCENARIO_STIMULUS_NOT_STATED", "No stimulus is stated before the expected result.")
+        if reason:
+            _v2055_refusals.append({**scenario, "sentence": desc,
+                                   "reason_code": reason[0], "reason": reason[1]})
+        elif scenario["name"] not in _existing_names:
+            cases.append({**scenario, "kind": "named_scenario", "stimulus": stimulus, "expected": answer})
+            _existing_names.add(scenario["name"])
+        evidence.setdefault(scenario["source"], []).append({
+            "literal": desc, "label": f"named scenario at line {scenario['source_line']}"})
     for _vi in _v634_harvest_verification_intent(extracted):
         if _vi["name"] in _existing_names:
             continue
