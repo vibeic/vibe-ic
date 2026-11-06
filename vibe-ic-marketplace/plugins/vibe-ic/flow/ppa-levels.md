@@ -27,16 +27,25 @@ does not establish this. The report names skipped/inactive axes. Padding aliases
 and global/per-layer route aliases are deduplicated by their native effect.
 Document density aliases pin the canonical density target. Native ORFS's density
 addon is used by Stage A; LibreLane consumes its native density-target setting.
-Execution currently stays local within the CPU budget; the generic spool port
-is pending. This is not a fleet search-engine implementation.
+Execution stays local within the CPU budget by default. The optional
+`--spool OUTPUT RESULTS` publishes self-contained jobs through the caller's
+job-folder spool. Each folder contains `job.json` and `run.sh`; the worker writes
+its native `exit-code.txt` after collecting the native project under `reports/`.
+The adapter reads native reports and preserves failed results. It removes its
+own published job copy after collection; returned evidence stays in RESULTS.
+Container scratch comes from the job environment, with `VIBEIC_TMP` set to the
+mounted scratch root. The adapter contains no host inventory or dispatcher.
 Levels 3 and 4 require the native-tool result handoff and are not implemented by
 this knob enumerator. Level 3 belongs to the unchanged native tools; Level 4
 enhances their best all-PASS result. This change adds no independent search engine.
 
 Reference execution precedes the other proposals. Subsequent runs occupy
 disjoint CPU affinity groups; each group runs only one child at a time. The
-8-CPU total budget is shared between at most two children. Every proposal invokes
-the ordinary public entry with the same forwarded route/window arguments.
+8-CPU total budget is shared between at most two children. With a spool, the
+same CPU count is declared per job and concurrency belongs to the external
+dispatcher. Every proposal invokes the ordinary public entry with the same
+forwarded route/window arguments. Reports include each child's kernel CPU time
+and wall time; spool waiting/packaging is visible in total exploration wall time.
 
 Only an all-PASS result with comparable native PPA can win. The objective retains
 raw area, power and slack, and computes percentage improvement against the
