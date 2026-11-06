@@ -319,6 +319,7 @@ def test_later_step_reads_retained_project_reference_after_cleanup(root, tmp_pat
     project = tmp_path / "project"
     cache = project / cache_name
     paths = []
+    consumed = []
     def command(current_project, directory, tool):
         if tool["argv"] == ["produce"]:
             run = temp.current_run()
@@ -335,6 +336,7 @@ def test_later_step_reads_retained_project_reference_after_cleanup(root, tmp_pat
         state = Path(json.loads(cache.read_text())["state_out"])
         assert state.is_relative_to(project / "reports/native")
         assert json.loads(state.read_text()) == {"native": "retained"}
+        consumed.append(str(state))
         return engine.ToolResult(True, 0, metrics={"retained_state_read": 1})
     monkeypatch.setattr(engine, "command_tool", command)
     def run(name):
@@ -347,4 +349,5 @@ def test_later_step_reads_retained_project_reference_after_cleanup(root, tmp_pat
     source = json.loads((project / "input/source.json").read_text())
     assert source["state_out"].startswith(str(paths[0]))
     result = run("consume")
-    assert result["steps"][0]["metrics"]["retained_state_read"] == 1
+    assert result["steps"][0]["status"] == "PASS"
+    assert consumed == [json.loads(cache.read_text())["state_out"]]

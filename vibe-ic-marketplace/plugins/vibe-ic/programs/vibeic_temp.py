@@ -181,6 +181,24 @@ def relocate(value, mapping):
     return value
 
 
+def relocate_project(project, mapping):
+    from _atomic_artefact import write_json
+
+    for directory, folders, files in os.walk(project):
+        folders[:] = [name for name in folders if name not in {"input", ".git"}]
+        for name in files:
+            path = Path(directory) / name
+            if path.suffix.casefold() != ".json" or path.is_symlink():
+                continue
+            try:
+                before = json.loads(path.read_text())
+            except (ValueError, OSError):
+                continue
+            after = relocate(before, mapping)
+            if after != before:
+                write_json(path, after)
+
+
 class Execution:
     def __init__(self, who, what, *, keep=False, destination=None, owner_pid=None):
         self.who, self.what = who, what
