@@ -329,6 +329,7 @@ def _signal_table_rows(text: str) -> Dict[str, Dict[str, Any]]:
                     # a legitimate `1 (not used)` still reads as width 1.
                     _wdenial = _prose_is_denied(_wcell) if _wcell else None
                     out[nm] = {
+                        "line": j + 1,
                         "row": lines[j].strip(),
                         "width_cell": _wcell,
                         "width_cell_denial": _wdenial,
@@ -1463,6 +1464,104 @@ def emit_interface_prose(content: Dict[str, Any],
     else:
         content.pop("notes", None)
         content["no_interface_prose_in_input"] = True
+
+
+def annotate_timing_ports(project: Path, content: Dict, extracted=None) -> int:
+    """Carry explicit external timing scope into L9's canonical port records.
+
+    OpenSTA knows connectivity, not documentary scope. Read affirmative port
+    table descriptions, or an SDC's explicit asynchronous I/O mode and the
+    literal ports in its disabled synchronous-delay blocks. No SDC is executed
+    or changed. Unsupported/conditional prose declares nothing.
+    """
+    from floorplan_contract import _iter_input_files
+
+    if not any(key in content for key in ("top_ports", "ports")) and isinstance(content.get("fields"), dict):
+        content = content["fields"]
+    documents = {name: text for name, _, text in _iter_input_files(project)}
+    for name, text in (extracted or {}).items():
+        key = name if (project / name).is_file() else "input/docs/" + name
+        documents.setdefault(key, text)
+    declarations = {}
+
+    def add(name, kind, sources):
+        declarations.setdefault(name, []).append((kind, sources))
+
+    for source, text in documents.items():
+        owner_pattern = (r"(?m)^[ \t]*current_design[ \t]+\{?([A-Za-z_]\w*)"
+                         if Path(source).suffix.lower() == ".sdc" else
+                         r"\bmodule\s+([A-Za-z_]\w*)\s*(?:#\s*\(|\()")
+        owners = set(re.findall(owner_pattern, text))
+        if owners and content.get("top_module") and owners != {content["top_module"]}:
+            continue
+        lines = text.splitlines()
+        for name, row in _signal_table_rows(text).items():
+            description = row.get("description") or ""
+            match = re.search(r"(?:^|[;(])\s*(?:(?:this\s+)?(?:port|pin|signal)\s+is\s+)?"
+                              r"(unused|asynchronous)(?:\s+by\s+(?:this|the)\s+design|"
+                              r"\s+(?:input|output|port|signal))?\s*(?=[);.]|$)", description, re.I)
+            if (match and not _prose_is_denied(description, ignore_bracketed=False)
+                    and not re.search(r"\b(?:if|when|during|may|might|could|unless|only)\b",
+                                      description, re.I)):
+                add(name, match[1].lower(), [{"file": source, "line": row["line"]}])
+            elif re.search(r"\b(?:unused|asynchronous)\b", description, re.I):
+                add(name, None, [])
+        if Path(source).suffix.lower() != ".sdc":
+            continue
+        comments = [(i + 1, line.lstrip()[1:].strip()) for i, line in enumerate(lines)
+                    if line.lstrip().startswith("#")]
+        asynchronous = [number for number, comment in comments
+                        if re.search(r"\b(?:I/?O\s+ports?|ports?)\s+(?:are|is)\s+"
+                                     r"(?:assumed\s+to\s+be\s+)?asynchronous\b",
+                                     comment.split(".")[0], re.I)
+                        and not _prose_is_denied(comment.split(".")[0])]
+        if not asynchronous:
+            continue
+        for condition in re.finditer(r"(?m)^[ \t]*if\s*\{\s*\$::env\((\w+)\)\s*\}\s*\{", text):
+            switch = condition[1]
+            mode_comments = [number for number, comment in comments if number in asynchronous
+                             and re.search(r"\bif\b[^.]*\bsynchronous\b[^.]*\b(?:set|update)\b[^.]*\b"
+                                           + re.escape(switch) + r"\s+(?:to\s+)?1\b", comment, re.I)]
+            if not mode_comments:
+                continue
+            assignments = list(re.finditer(r"(?m)^[ \t]*set\s+::env\(" + re.escape(switch)
+                                           + r"\)\s+([^\s;]+)\s*$", text))
+            if len(assignments) != 1 or assignments[0][1] not in {"0", "false"}:
+                continue
+            prefix = text[:assignments[0].start()]
+            if sum(line.count("{") - line.count("}") for line in prefix.splitlines()
+                   if not line.lstrip().startswith("#")):
+                continue
+            start, end, depth = condition.end(), condition.end(), 1
+            while end < len(text) and depth:
+                depth += (text[end] == "{") - (text[end] == "}")
+                end += 1
+            if depth:
+                continue
+            body = text[start:end - 1]
+            for command in re.finditer(r"(?m)^[ \t]*set_(?:input|output)_delay\b[^\n]+", body):
+                for ports in re.finditer(r"\[get_ports\s+(?:\{([^}]+)\}|([A-Za-z_]\w*))\s*\]", command[0]):
+                    for selector in (ports[1] or ports[2]).split():
+                        port = re.fullmatch(r"([A-Za-z_]\w*)(?:\[\*\])?", selector)
+                        if port:
+                            sources = [{"file": source, "line": mode_comments[0]},
+                                       {"file": source, "line": text.count("\n", 0, assignments[0].start()) + 1},
+                                       {"file": source, "line": text.count("\n", 0, start + command.start()) + 1}]
+                            add(port[1], "asynchronous", sources)
+    changed = 0
+    for port in content.get("top_ports") or content.get("ports") or []:
+        entries = declarations.get(port.get("name"), [])
+        fields = {}
+        if entries and entries[0][0] is not None and len({kind for kind, _ in entries}) == 1:
+            sources = [dict(t) for t in dict.fromkeys(tuple(s.items()) for _, ss in entries for s in ss)]
+            fields = {"timing_class": entries[0][0], "timing_class_sources": sources}
+        previous = {key: port[key] for key in ("timing_class", "timing_class_sources") if key in port}
+        if previous != fields:
+            for key in previous:
+                port.pop(key)
+            port.update(fields)
+            changed += 1
+    return changed
 
 
 def extract(prompt: str) -> Dict:

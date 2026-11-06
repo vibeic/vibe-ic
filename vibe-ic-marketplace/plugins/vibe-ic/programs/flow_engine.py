@@ -696,15 +696,16 @@ def finish_step(project, row, tool, native, config, features, *, elapsed,
         native.reports.extend(preparation.reports)
         if preparation.exit_code:
             native.exit_code = preparation.exit_code
+    reader_observations = []
     for reader in tool.get("report_readers", []):
         module, function = reader["reader"].rsplit(".", 1)
         source = directory / reader["native_step"].lower().replace(".", "_")
         report = getattr(importlib.import_module(module), function)(
-            source, read_json(source / "config.json") or config)
+            source, read_json(source / "config.json") or config, project=project)
         native.metrics.update(report.get("metrics", {}))
         native.reports.extend(report.get("reports", []))
         native.detail += " " + report.get("detail", "")
-    reader_observations = []
+        reader_observations.extend(report.get("observations", []))
     checks = [check for check in row["checks"] if check.get("when") != "otherwise"
               or tool.get("selected_profile", "otherwise") == "otherwise"]
     for reader in tool.get("check_readers", []):
