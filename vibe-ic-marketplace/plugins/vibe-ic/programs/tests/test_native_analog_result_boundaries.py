@@ -9,6 +9,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import analog_a2_topology_emit as topology
 import analog_incremental_capture as capture
+import em_current_density_check as em
+from test_native_em_result_cutover import density, write_rows
 
 
 @pytest.fixture(scope="module")
@@ -99,3 +101,25 @@ def test_native_execution_failure_keeps_its_fail_verdict(incomplete_native_recor
     incomplete_native_record["executions"][0]["returncode"] = 1
     result = capture.coherent_sndr([incomplete_native_record], 4, 1, 12)
     assert result["status"] == "FAIL"
+
+
+def test_measured_ir_overlimit_stays_fail_with_missing_supply_coverage(tmp_path):
+    reports = tmp_path / "reports/phase3"
+    reports.mkdir(parents=True)
+    (reports / "ir_drop.json").write_text(json.dumps({
+        "verdict": "PASS", "native_rc": 0, "worst_ir_uv": 60000,
+        "vdd_v": 1.0, "unconnected_supply_pins": 1}))
+    result = em.validate_primary_ir(tmp_path)
+    assert result["verdict"] == "FAIL"
+
+
+def test_measured_em_violation_stays_fail_with_another_supply_missing(density):
+    project, reports, _, row = density
+    row.update(Status="VIOLATED", Ratio=2)
+    write_rows(reports / "em_openroad_density_VDD.csv", [row])
+    subject_path = reports / "em.json"
+    subject = json.loads(subject_path.read_text())
+    subject["nets_analysed"].append("VSS")
+    subject_path.write_text(json.dumps(subject))
+    result = em.validate_native_density(project, segment_geometry={})
+    assert result["verdict"] == "FAIL"
