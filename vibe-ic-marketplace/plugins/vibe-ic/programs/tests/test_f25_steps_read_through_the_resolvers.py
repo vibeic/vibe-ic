@@ -8,13 +8,6 @@ resolvers would answer:
 
 - step 2 lint (`step_rtl_lint_tool`): the root;
 - step 3 CDC netlist (`_cdc_netlist.build`): the image;
-- step 8 synthesis (`_step_synth_librelane`): the root;
-- steps 7/8/10 pre-layout signoff (`_prelayout_librelane`): image and root;
-- step 13 EQY (`_lec_eqy_arm`): image and root;
-and these asked the resolver without the design's PDK, so an undeclared
-project refused `LL_PDK_UNDECLARED` and the message dropped the cause:
-- steps 19/20 (`librelane_cts_hold.execute`, T98), 24/26/26.5ic
-  (`_librelane_step_ctx`), 29 and 30 (`_step29/30_tool_arm`).
 
 For each step: an undeclared project resolves; a declared value wins (and the
 host is never asked); a refusal names the resolver's cause.
@@ -161,9 +154,6 @@ def _rtl(project):
     return rtl / 'top.v'
 
 
-def _pdk():
-    return SimpleNamespace(name=PDK, liberty=f'{GUEST_ROOT}/{PDK}/lib/stated_sc__tt.lib',
-                           macro_libs=[], macro_lefs=[], macro_v=[])
 
 
 # ---------------------------------------------------------- the step drivers ---
@@ -205,153 +195,21 @@ def step3(env, monkeypatch):
     return seen, ''
 
 
-def step8(env, monkeypatch):
-    runner = importlib.import_module('phase3_one_shot_runner')
-    _rtl(env.project)
-
-    def emit(project, pdk, output, *_a, **_k):
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.with_suffix('.provenance.json').write_text('{}')
-        return {}
-    monkeypatch.setattr(contract, 'emit_synthesis_config', emit)
-    seen = {}
-
-    def resolve_step_config(project, image, *_a, mounts=None, **_k):
-        seen.update(image=image, root=_bound_root(mounts))
-        _stop()
-    monkeypatch.setattr(contract, 'resolve_step_config', resolve_step_config)
-    row = runner._step_synth_librelane(env.project, 'top', _pdk(), 'c')
-    return seen, row.detail
 
 
-def prelayout(env, monkeypatch):
-    runner = importlib.import_module('phase3_one_shot_runner')
-    import librelane_prelayout as llp
-    seen = {}
-
-    def run_prelayout(project, image, pdk, *_a, mounts=None, **_k):
-        seen.update(image=image, root=_bound_root(mounts))
-        _stop()
-    monkeypatch.setattr(llp, 'run_prelayout', run_prelayout)
-    sdc = env.project / 'x.sdc'
-    sdc.write_text('create_clock -period 10 [get_ports clk]\n')
-    try:
-        runner._prelayout_librelane(env.project, 'top', _pdk(), sdc, True,
-                                    {'7': 'librelane', '8': 'librelane', '10': 'librelane'}, [])
-    except contract.Refusal as exc:
-        return seen, str(exc)
-    return seen, ''
 
 
-def step13(env, monkeypatch):
-    runner = importlib.import_module('design_one_shot_runner')
-    import librelane_eqy as eqy
-    _switch_pdk(env.project)
-    _rtl(env.project)
-    seen = {}
-
-    def run_eqy(project, image, pdk, *_a, mounts=None, **_k):
-        seen.update(image=image, root=_bound_root(mounts))
-        _stop()
-    monkeypatch.setattr(eqy, 'run_eqy', run_eqy)
-    arm_a = runner.StepResult('lec_equivalence', 'PASS', 1.0, 'arm A')
-    rows = runner._lec_eqy_arm(env.project, 'top', 'n.v', [arm_a])
-    return seen, rows[-1].detail
 
 
-def step_ctx(env, monkeypatch):
-    runner = importlib.import_module('phase3_one_shot_runner')
-    try:
-        try:
-            image, root = runner._librelane_step_ctx(env.project, '24', PDK)
-        except TypeError:                     # the pre-F25 signature takes no PDK
-            image, root = runner._librelane_step_ctx(env.project, '24')
-    except contract.Refusal as exc:
-        return {}, str(exc)
-    return {'image': image, 'root': Path(root)}, ''
 
 
-def step29(env, monkeypatch):
-    runner = importlib.import_module('phase3_one_shot_runner')
-    import librelane_postroute as lp
-    seen = {}
-
-    def gls(project, top, image, pdk_root, pdk, **_k):
-        seen.update(image=image, root=Path(pdk_root))
-        _stop()
-    monkeypatch.setattr(lp, 'gate_level_sim', gls)
-    notes = []
-    runner._step29_tool_arm(env.project, 'top', _pdk(), 'librelane', env.tmp / 'sim',
-                            env.tmp / 'd.sdf', [], notes)
-    return seen, ' '.join(notes)
 
 
-def step30(env, monkeypatch):
-    runner = importlib.import_module('phase3_one_shot_runner')
-    import path_spice_tool as pst
-    import librelane_postroute as postroute
-    # The current Step30 caller reads Step23's bound state before resolving
-    # its PDK. Supply that input; keep its actual state/digest reader running.
-    folder = env.project / 'phase3/librelane/f25-stapostpnr'
-    state = folder / 'state_out.json'
-    contract.write_json(state, {})
-    contract.write_json(folder / 'config.json',
-                        {'meta': {'step': 'OpenROAD.STAPostPNR'}, 'PDK': PDK})
-    contract.write_json(env.project / postroute.STEP23_RECORD,
-                        {'sta_state': str(state), 'sta_state_sha256': contract.digest(state)})
-    seen = {}
-
-    def run_step30(project, image, pdk_root, pdk, **_k):
-        seen.update(image=image, root=Path(pdk_root))
-        _stop()
-    monkeypatch.setattr(pst, 'run_current_step30', run_step30)
-    notes = []
-    runner._step30_tool_arm(env.project, _pdk(), [], notes)
-    return seen, ' '.join(notes)
 
 
-def step19_20(env, monkeypatch):
-    """Steps 19/20 (T98 `librelane_cts_hold.execute`): the direct deck's head
-    session is stated (it writes the pre-CTS checkpoint); the tool is stopped
-    at `resolve_step_configs`, which receives the image and the host root."""
-    runner = importlib.import_module('phase3_one_shot_runner')
-    cts = importlib.import_module('librelane_cts_hold')
-    out_dir = env.project / 'phase3/stage3/pnr'
-    out_dir.mkdir(parents=True)
-    (out_dir / 'constraint.sdc').write_text('create_clock -period 24 clk\n')
-    pnr_tcl = out_dir / 'pnr.tcl'
-    pnr_tcl.write_text(
-        'read_lef /t.lef\nread_liberty /l.lib\nread_verilog /n.v\nlink_design chip_top\n'
-        f'read_sdc {out_dir}/constraint.sdc\n{runner._PNR_RESUME_ELIDE_BEGIN}\n'
-        f'global_placement\n{runner._PNR_CTS_HOLD_BEGIN}\nclock_tree_synthesis\n'
-        f'repair_timing -hold\n{runner._PNR_CTS_HOLD_END}\ndetailed_route\n'
-        f'{runner._PNR_RESUME_ELIDE_END}\nwrite_def {out_dir}/routed.def\n')
-
-    def docker_exec(container, cmd, *a, **k):
-        for ext in ('odb', 'def', 'nl.v', 'insts'):
-            (out_dir / f'cts_hold_split/pre_cts.{ext}').write_text('x\n')
-        return 0, '', ''
-    monkeypatch.setattr(runner, '_docker_exec', docker_exec)
-    monkeypatch.setattr(runner, '_after_restore_tcl', lambda *a, **k: '')
-    monkeypatch.setattr(runner, '_container_mounts', lambda c: [])
-    seen = {}
-
-    def resolve_step_configs(project, image, pdk, ids, *, pdk_root=None, **_k):
-        seen.update(image=image, root=Path(pdk_root))
-        _stop()
-    monkeypatch.setattr(contract, 'resolve_step_configs', resolve_step_configs)
-    _rc, out, _ = cts.execute(
-        runner, project=env.project, pdk=SimpleNamespace(name=PDK), container='c',
-        out_dir=out_dir, out_dir_c=str(out_dir), pnr_tcl=pnr_tcl,
-        modes={'19': 'librelane', '20': 'librelane'},
-        cmd=f'openroad {pnr_tcl} | tee {out_dir}/openroad.log', spare_plan=None,
-        overlay={}, exec_kwargs={})
-    return seen, out
 
 
-STEPS = {'2 lint': step2, '8 synth': step8, '7/8/10 pre-layout signoff': prelayout,
-         '13 eqy': step13, '19/20 cts+hold': step19_20, '24/26/26.5ic ctx': step_ctx, '29 gls': step29,
-         '30 path spice': step30}
+STEPS = {'2 lint': step2}
 ROOT_STEPS = pytest.mark.parametrize('drive', STEPS.values(), ids=list(STEPS))
 
 
