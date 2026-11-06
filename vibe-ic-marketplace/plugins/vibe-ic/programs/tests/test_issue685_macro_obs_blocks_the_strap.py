@@ -81,7 +81,7 @@ def _with_obs(lef: str, layers, size=None):
 
 
 def _plan(lef):
-    return R._macro_pdn_grid_plan([lef], T.TECH_LEF, T.STRIPES, "L1")
+    return R._macro_pdn_grid_outcome([lef], T.TECH_LEF, T.STRIPES, "L1")["plan"]
 
 
 # ── the OBS parser, on its own ────────────────────────────────────────────
