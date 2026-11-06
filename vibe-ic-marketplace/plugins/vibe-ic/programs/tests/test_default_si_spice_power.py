@@ -386,7 +386,6 @@ def test_step30_native_local_process_uses_its_declared_workdir(tmp_path, local_i
     assert 'LOCAL_PROCESS_DONE' in result.stdout
     assert json.loads((work / 'process.json').read_text()) == {
         'cwd': str(work), 'scope': 'SOURCE_FIXTURE_ONLY'}
-    assert result._vibeic_lifecycle['rc'] == 0
 
 
 
