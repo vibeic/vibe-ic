@@ -513,11 +513,11 @@ def _wrapper(core: str, top: str, ports: list[dict], chosen: dict, ordered: dict
         ties[level] = {"master": master, "pin": pin}
     aux, used = electrical._auxiliary_pin_signal_connections(chosen, ties)
     ranges = lambda port: f"[{port['msb']}:{port['lsb']}] " if port["indexed"] else ""
-    # A bidirectional bond terminal remains inout even in receiver-only mode.
-    # The original core directions still determine core wiring and SDC budgets.
+    # Receiver ports must accept the pad model's bidirectional connection.
+    # Logical outputs stay outputs; they have no external timing driver.
     bidirectional = {entry["port"] for entry in chosen.values() if entry.get("core_pin")
                      and library["cells"][entry["master"]][entry["terminal"]]["direction"] == "inout"}
-    declarations = [f"    {'inout' if bidirectional.intersection(_bits(port)) else port['direction']} wire "
+    declarations = [f"    {'inout' if port['direction'] == 'input' and bidirectional.intersection(_bits(port)) else port['direction']} wire "
                     f"{ranges(port)}{_identifier(port['name'])}" for port in ports]
     declarations += [f"    inout wire {_identifier(name)}" for name in supplies]
     lines = [f"module {_identifier(top)} (", ",\n".join(declarations), ");"]

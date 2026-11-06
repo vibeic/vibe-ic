@@ -2829,7 +2829,8 @@
             "OpenROAD.FillInsertion",
             "OpenROAD.RCX"
           ]
-        }
+        },
+        "restore_input_on_failure": true
       },
       "checks": [],
       "legacy_id": {

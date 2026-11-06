@@ -425,7 +425,7 @@ def test_prepare_writes_usable_chip_inputs_and_preserves_pdn(inputs):
         assert result[key] == config[key]
     wrapper = Path(result["VERILOG_FILES"][-1]).read_text()
     assert "input wire [5:2] data" in wrapper
-    assert "inout wire result" in wrapper
+    assert "output wire result" in wrapper
     assert "wire [5:2] _core_port_2;" in wrapper
     assert ".PAD(data[5])" in wrapper
     assert ".Y(_core_port_2[5])" in wrapper
@@ -548,6 +548,54 @@ def test_unidirectional_pad_terminals_keep_their_native_direction(direction):
                             {"N": ["u_pad"]}, [], native, library)
     assert f"{direction} wire signal" in wrapper
     assert "inout wire signal" not in wrapper
+
+
+def test_native_output_pad_sdf_has_no_external_driver(tmp_path):
+    import shutil
+    import subprocess
+
+    for tool in ("sta", "iverilog", "vvp"):
+        assert shutil.which(tool), f"Native {tool} is required"
+    ports = [{"name": "signal", "direction": "output", "width": 1, "indexed": False},
+             {"name": "launch", "direction": "input", "width": 1, "indexed": False}]
+    chosen = {"bond": {"port": "signal", "master": "pad", "terminal": "BOND",
+                       "direction": "output", "core_pin": "CORE"},
+              "receive": {"port": "launch", "master": "receiver", "terminal": "BOND",
+                          "direction": "input", "core_pin": "CORE"}}
+    library = {"cells": {"pad": {"BOND": {"direction": "inout"}},
+                         "receiver": {"BOND": {"direction": "input"}}},
+               "pg_pins": {}, "verilog": []}
+    native = {"SYNTH_TIEHI_CELL": "high/Y", "SYNTH_TIELO_CELL": "low/Y"}
+    wrapper = chip._wrapper("unit", "package_unit", ports, chosen,
+                            {"N": ["bond", "receive"]}, [], native, library)
+    _write(tmp_path / "design.v", wrapper
+        + "module unit(input launch,output signal); assign signal=launch; endmodule\n")
+    _write(tmp_path / "pad.lib", 'library(neutral) { time_unit : "1ns"; '
+        'cell(pad) { pin(CORE) { direction : input; } '
+        'pin(BOND) { direction : inout; function : "CORE"; } } '
+        'cell(receiver) { pin(BOND) { direction : input; } '
+        'pin(CORE) { direction : output; function : "BOND"; } } }\n')
+    _write(tmp_path / "write.tcl", "read_liberty pad.lib\nread_verilog design.v\n"
+        "link_design package_unit\nwrite_sdf -include_typ delays.sdf\nexit\n")
+    sta = subprocess.run(["sta", "-no_init", "-exit", "write.tcl"], cwd=tmp_path,
+                         capture_output=True, text=True)
+    assert sta.returncode == 0, sta.stdout + sta.stderr
+    _write(tmp_path / "sim.v", '`timescale 1ns/1ps\n'
+        "module pad(input CORE,inout BOND); bufif1 #1 (BOND,CORE,1'b1); endmodule\n"
+        "module receiver(input BOND,output CORE); assign CORE=BOND; endmodule\n"
+        'module workload; reg launch=0; wire signal; package_unit dut(signal,launch); initial begin\n'
+        '$sdf_annotate("delays.sdf",dut); #2 launch=1; #2; '
+        'if(signal!==1) $fatal(1,"wrong output"); $finish; end endmodule\n')
+    built = subprocess.run(["iverilog", "-g2012", "-ginterconnect", "-gspecify", "-s", "workload",
+                            "-o", "sim.vvp", "design.v", "sim.v"], cwd=tmp_path,
+                           capture_output=True, text=True)
+    assert built.returncode == 0, built.stdout + built.stderr
+    ran = subprocess.run(["vvp", "sim.vvp", "-sdf-info"], cwd=tmp_path,
+                         capture_output=True, text=True)
+    transcript = ran.stdout + ran.stderr
+    assert ran.returncode == 0, transcript
+    assert "SDF ERROR:" not in transcript, transcript
+    assert "Putting delay:" in transcript, transcript
 
 
 @pytest.mark.parametrize("wide_side", ["N", "E"])
