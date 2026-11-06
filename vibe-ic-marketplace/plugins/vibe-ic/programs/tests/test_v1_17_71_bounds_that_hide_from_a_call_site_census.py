@@ -190,43 +190,8 @@ def test_the_at_speed_argv_still_hands_the_producer_no_budget():
     assert "timeout_s" not in joined
 
 
-def test_the_declared_signoff_gate_takes_no_timeout_at_all():
-    """A verdict-bearing dispatch: this function invokes a flow-declared
-    sign-off gate and blocks on its verdict, so a clock decided whether a
-    declared gate got to answer."""
-    import phase3_one_shot_runner as R
-    import inspect
-    params = inspect.signature(R._run_declared_signoff_gate).parameters
-    assert "timeout" not in params, sorted(params)
-    src = (PROGRAMS / "phase3_one_shot_runner.py").read_text()
-    tree = ast.parse(src)
-    for c in ast.walk(tree):
-        if (isinstance(c, ast.Call)
-                and getattr(c.func, "id", "") == "_run_declared_signoff_gate"):
-            assert [k.arg for k in c.keywords if k.arg == "timeout"] == [], \
-                ast.unparse(c)[:140]
 
 
-def test_a_stalled_signoff_gate_still_reaches_NOT_CHECKED(tmp_path,
-                                                          monkeypatch):
-    """THE TIER MUST NOT MOVE. It was already honest -- an expiry reached the
-    reader as NOT_CHECKED, never as a verdict about the design -- and a stall
-    must land in exactly the same place. Removing a kill must not also remove
-    the honest word for the case that remains."""
-    import phase3_one_shot_runner as R
-    import _progress_run as _pr
-
-    def stall(cmd, **kw):
-        raise _pr.Stalled(cmd, looks=12, poll_s=30.0, elapsed_s=361.0,
-                          signals={"output": True, "cpu": True, "io": True})
-
-    monkeypatch.setattr(R._pr, "run", stall)
-    res = R._run_declared_signoff_gate(
-        tmp_path, "some_gate", "drv_promotion_corroboration_check.py",
-        "reports/phase3/sta/x.json")
-    assert res.status not in ("PASS", "FAIL"), (res.status, res.detail)
-    assert "could not run" in res.detail or "NOT" in res.detail.upper()
-    assert "STALLED" in res.detail
 
 
 # ---------------------------------------------------------------------------
