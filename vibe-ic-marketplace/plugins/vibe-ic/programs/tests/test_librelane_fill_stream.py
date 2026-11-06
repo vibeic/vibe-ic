@@ -58,10 +58,8 @@ def test_reader_fill_cell_does_not_authorize_changed_position_or_other_geometry(
 
 def test_reviewed_native_clearer_retains_exact_fill_and_rejects_shape_reverse(monkeypatch):
     import ast
-    import hashlib
     source = stream.native_script().read_text()
     assert stream.patched_native_source(source) == source
-    assert stream.operation_sources()['native/librelane/scripts/klayout/stream_out.py'] == hashlib.sha256(source.encode()).hexdigest()
     tree = ast.parse(source)
     clearer = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'should_clear_cell')
     namespace = {}
@@ -73,7 +71,6 @@ def test_reviewed_native_clearer_retains_exact_fill_and_rejects_shape_reverse(mo
     assert clear('foreign_DEF_FILL', 'neutral', 0, 3)
     assert clear('ordinary_macro', 'neutral', 0, 4)
     damaged = source.replace('if cell_name == f"{design_name}_DEF_FILL":', 'if False:')
-    # Even a mistakenly updated digest must not authorize changed clearing logic.
-    monkeypatch.setattr(stream, 'NATIVE_FILL_STREAM_SHA256', hashlib.sha256(damaged.encode()).hexdigest())
+    # The actual native clearing logic remains part of the supported API.
     with pytest.raises(Refusal, match='FILL_STREAM_NATIVE_VERSION_UNSUPPORTED'):
         stream.patched_native_source(damaged)

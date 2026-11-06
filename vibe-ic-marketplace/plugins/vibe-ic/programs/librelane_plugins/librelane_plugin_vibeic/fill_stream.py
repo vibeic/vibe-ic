@@ -55,7 +55,7 @@ class FillAwareStreamOut(StreamOut):
         proof = bridge.geometry_proof(source, bare_gds, Path(argv[output_index]), mapping['layer_map'])
         write_json(Path(self.step_dir) / 'fill_stream_geometry.json', {
             'schema': bridge.SCHEMA, 'component_status': 'PASS',
-            'operation_sources': bridge.operation_sources(), 'geometry_proof': proof,
+            'geometry_proof': proof,
             'inputs': inputs, 'bare_gds': bridge._record(Path(self.step_dir), bare_gds),
             'filled_gds': bridge._record(Path(self.step_dir), Path(argv[output_index])),
             'commands': commands,

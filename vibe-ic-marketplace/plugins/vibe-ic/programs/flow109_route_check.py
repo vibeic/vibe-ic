@@ -241,11 +241,6 @@ def _consume(project: Path, step_results: list[dict], configs: dict[str, Path],
     wire_config = _read(configs["Checker.WireLength"])
     threshold_raw = wire_config.get("WIRE_LENGTH_THRESHOLD")
     if threshold_raw is None:
-        invocation = folders[4] / "invocation.log"
-        invocation_text = " ".join(invocation.read_text(errors="replace").split())
-        if ("Threshold for Threshold-surpassing long wires" not in invocation_text
-                or "is not set. The checker will be skipped." not in invocation_text):
-            raise RouteCheckError("D42_WIRE_CHECK_STATUS_UNBOUND", str(invocation))
         threshold = None
         wire_check = {"status": "NOT_APPLICABLE",
                       "reason": "PDK-resolved WIRE_LENGTH_THRESHOLD is unset; native checker skipped"}

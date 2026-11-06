@@ -898,7 +898,7 @@ def selected_provider_precheck(assembly):
                 raise ValueError("provider package material missing: " + str(path))
             materials.append({"path": str(path), "sha256": sha256_file(path)})
         provider.update(status="NOT_SUBMITTED", technical_precheck_status=status,
-                        retained_report={"source": str(source), "sha256": sha256_file(source)},
+                        retained_report={"source": str(source)},
                         materials=materials, reason=reason + "; provider acceptance is separate")
     except (OSError, ValueError, KeyError, TypeError) as exc:
         provider["reason"] = str(exc)

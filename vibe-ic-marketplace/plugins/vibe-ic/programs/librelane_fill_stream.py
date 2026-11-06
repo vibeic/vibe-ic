@@ -129,15 +129,6 @@ def native_script():
     return Path(get_script_dir()) / 'klayout/stream_out.py'
 
 
-def operation_sources():
-    paths = [Path(__file__), HERE / 'librelane_fill_stream_native.py']
-    sources = {'programs/' + p.name: _sha(p) for p in paths}
-    try:
-        source = native_script()
-    except ImportError:
-        return sources
-    sources['native/librelane/scripts/klayout/stream_out.py'] = _sha(source)
-    return sources
 
 
 
