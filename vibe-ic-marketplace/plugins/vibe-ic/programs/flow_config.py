@@ -397,7 +397,7 @@ def build_config(project: Path | str, *, route: str | None = None, pdk: str | No
         declared = create_clocks_in_text(sdc.read_text())
         ports = list(dict.fromkeys(clock["port_name"] for clock in declared if clock["port_name"]))
         periods = [clock["period_ns"] for clock in declared if clock["period_ns"] is not None]
-        if ports:
+        if ports and "CLOCK_PORT" not in implementation:
             config["CLOCK_PORT"] = ports[0] if len(ports) == 1 else ports
         if periods:
             config["CLOCK_PERIOD"] = min(periods)
