@@ -108,3 +108,60 @@ def test_real_native_controls_and_document_declarations_both_required(tmp_path, 
         assert all(Path(s["report"]).is_file() for s in native)
     assert source.read_text() == "# Authored timing deck remains untouched\n"
     assert result["tool_seconds"] > 0
+
+
+@pytest.mark.parametrize("missing,remaining", [
+    ("none", 0), ("protocol", 2), ("delegation", 2), ("wrong_top", 2), ("control_rx", 1),
+])
+def test_selected_interface_direction_keeps_both_sources(tmp_path, missing, remaining):
+    if not shutil.which("sta"):
+        pytest.skip("native OpenSTA required")
+    from flow_native_timing import read_sta_reports
+
+    liberty, netlist = project_inputs(tmp_path, missing)
+    doc = ("Top module: `unit`.\n"
+           "The memory sub-port names are illustrative and chosen in declaration.json.\n"
+           "| Port | Dir | Width | Description |\n|---|---|---|---|\n"
+           "| o_memory_addr | output | 10 | address (typical) |\n"
+           "| o_memory_data | output | 8 | write data (typical) |\n"
+           "| i_memory_data | input | 8 | read data (typical) |\n"
+           "| o_memory_we | output | 1 | write enable (typical) |\n")
+    if missing == "delegation":
+        doc = doc.replace("illustrative", "fixed").replace("(typical)", "")
+    (tmp_path / "input/docs/L3_interface.md").write_text(doc)
+    docs = {p.name: p.read_text() for p in (tmp_path / "input/docs").iterdir()}
+    phase1.gen_l1_datasheet(tmp_path, docs)
+    phase1.gen_l9_integration_spec(tmp_path, docs, {})
+    l9 = tmp_path / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+    original_l9 = l9.read_bytes()
+    choice = {"top_module": "unit", "memory_interface_protocol": "separate_address",
+              "memory_interface": {"read_address": "read_pointer", "write_address": "write_pointer",
+                                   "write_data": "payload_o", "read_data": "payload_i",
+                                   "write_enable": "commit_o"}}
+    if missing == "protocol":
+        del choice["memory_interface_protocol"]
+    elif missing == "wrong_top":
+        choice["top_module"] = "another_unit"
+    declaration = tmp_path / "plugin_output/declaration.json"
+    declaration.parent.mkdir()
+    declaration.write_text(json.dumps(choice))
+    netlist.write_text(netlist.read_text().replace("rx", "payload_i").replace("tx", "payload_o"))
+    directory = tmp_path / "steps/pre_layout_timing/openroad_staprepnr"
+    corner = directory / "tt"
+    corner.mkdir(parents=True)
+    (corner / "checks.rpt").write_text(
+        "check_setup -verbose\nWarning: There is 1 input port missing set_input_delay.\n  payload_o\n"
+        "Warning: There is 1 unconstrained endpoint.\n  payload_i\n")
+    (directory / "state_in.json").write_text(json.dumps({"nl": str(netlist)}))
+    result = read_sta_reports(directory, {"DESIGN_NAME": "unit_chip", "LIB": [str(liberty)],
+                                          "DEFAULT_CORNER": "tt"}, project=tmp_path)
+    assert result["metrics"]["unconstrained_required_paths"] == remaining, result
+    records = result["observations"]
+    assert len(records) == 2 - remaining
+    for record in records:
+        assert any(s["file"] == str(l9) for s in record["sources"])
+        assert any(s["file"] == str(declaration)
+                   and s.get("field") in {"memory_interface.write_data", "memory_interface.read_data"}
+                   for s in record["sources"])
+        assert any(s.get("controls") for s in record["sources"])
+    assert l9.read_bytes() == original_l9
