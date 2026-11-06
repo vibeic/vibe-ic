@@ -825,6 +825,44 @@ def test_chip_eqy_uses_native_power_view_and_keeps_supply_checks(tmp_path, chang
             assert not any(name in {"supply_high", "supply_low"} or name.endswith((".VP", ".VN")) for name in ports)
 
 
+@pytest.mark.parametrize("different", [False, True])
+def test_chip_eqy_preserves_mapped_state_alias_matchpoints(tmp_path, different):
+    if not shutil.which("eqy"):
+        pytest.skip("Native EQY is required")
+    reset_docs(tmp_path)
+    gold, gate, cells, pads, lef = [tmp_path / name for name in
+        ("gold.v", "gate.v", "cells.lib", "pads.v", "pads.lef")]
+    wrapper = ("module unit(input clk,rst_n,a,output q); wire ic,ir,ia,oq;\n"
+        "INPAD pclk(.PAD(clk),.Y(ic));\nINPAD prst(.PAD(rst_n),.Y(ir));\n"
+        "INPAD pa(.PAD(a),.Y(ia));\nOUTPAD pq(.A(oq),.PAD(q));\n")
+    gold.write_text(wrapper + "core u_core(ic,ir,ia,oq); endmodule\n"
+        "module core(input clk,rst_n,a,output q); reg [8:0] stored;\n"
+        "always @(posedge clk) if(!rst_n) stored<=0; else stored<={stored[7:0],a};\n"
+        "assign q=stored[8]^stored[0]; endmodule\n")
+    data = "~ia" if different else "ia"
+    gate.write_text(wrapper + "reg [8:0] implemented; wire [8:0] \\u_core.stored ;\n"
+        "assign \\u_core.stored = implemented; assign oq=implemented[8]^implemented[0];\n"
+        "always @(posedge ic) if(!ir) implemented<=0; "
+        f"else implemented<={{implemented[7:0],{data}}}; endmodule\n")
+    cells.write_text("library(neutral) {}\n")
+    pads.write_text("(* blackbox *) module INPAD(input PAD,output Y); endmodule\n"
+        "(* blackbox *) module OUTPAD(input A,output PAD); endmodule\n")
+    lef.write_text("MACRO INPAD\n CLASS PAD INPUT ;\nEND INPAD\n"
+        "MACRO OUTPAD\n CLASS PAD OUTPUT ;\nEND OUTPAD\n")
+    config = {"DESIGN_NAME": "unit", "VERILOG_FILES": [str(gold)],
+        "DEFAULT_CORNER": "typical", "LIB": {"typical": [str(cells)]},
+        "PAD_VERILOG_MODELS": [str(pads)], "PAD_LEFS": [str(lef)]}
+    result = eqy(tmp_path, tmp_path, {}, Commands(tmp_path), state={"nl": str(gate)}, config=config)
+    rows = {row["name"]: row["status"] for row in result["native_steps"]}
+    assert rows["Yosys.Wrapper"] == "PASS", result
+    assert rows["Yosys.EQY.Core"] == ("FAIL" if different else "PASS"), result
+    for side in ("gold", "gate"):
+        module = json.loads((tmp_path / "core" / (side + ".json")).read_text())["modules"]["unit"]
+        assert "u_core.stored" in module["netnames"], side
+    matched = (tmp_path / "scratch/matched.ids").read_text()
+    assert "u_core.stored[0]" in matched
+
+
 @pytest.mark.parametrize("direct_output", [False, True])
 def test_pad_boundary_removes_logical_package_outputs_and_keeps_core_outputs(tmp_path, direct_output):
     if not shutil.which("yosys"):
