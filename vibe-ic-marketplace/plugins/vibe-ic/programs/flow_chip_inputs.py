@@ -588,6 +588,30 @@ def _clock_periods(project: Path, config: dict) -> dict:
             for clock in clocks}
 
 
+def _pad_sdc(chosen: dict, library: dict) -> str:
+    """Model DC bonds, using PDK supply roles and native output constants."""
+    lines = []
+    for instance, entry in chosen.items():
+        if not entry.get("port"):
+            continue
+        port = _tcl_word(entry["port"])
+        bond = f"[get_ports [list [[[sta::top_instance] cell] find_port {port}]]]"
+        if entry.get("is_supply_pad"):
+            use = library["roles"][entry["master"]][entry["terminal"]][1]
+            if use in {"POWER", "GROUND"}:
+                lines.append(f"set_case_analysis {int(use == 'POWER')} {bond}")
+        elif entry.get("direction") == "output":
+            pin = _tcl_word(instance + "/" + entry["core_pin"])
+            # A fixed output pad drives its bond from this pin. Dynamic
+            # values remain X and receive no case analysis.
+            lines.extend((
+                f"set _chip_pad_value [sta::pin_sim_logic_value [sta::find_pin {pin}]]",
+                "if {$_chip_pad_value in {0 1}} {",
+                f"  set_case_analysis $_chip_pad_value {bond}",
+                "}"))
+    return "\n".join(lines) + "\n" if lines else ""
+
+
 def _sdc(project: Path, config: dict, ports: list[dict], input_masters: set[str] | None = None) -> str:
     directions = {bit: port["direction"] for port in ports for bit in _bits(port)}
     def collection(names):
@@ -596,6 +620,12 @@ def _sdc(project: Path, config: dict, ports: list[dict], input_masters: set[str]
     original = config.get("PNR_SDC_FILE")
     if original:
         text = Path(str(original)).read_text()
+        core = config.get("DESIGN_NAME")
+        if core:
+            name = re.escape(core)
+            text = re.sub(r"(?m)^([ \t]*current_design[ \t]+)(?:" + name +
+                          r"|\{" + name + r"\}|\"" + name + r"\")(?=[ \t]*(?:;|$))",
+                          lambda match: match[1] + _tcl_word(core + "_chip"), text)
         inputs = [bit for bit, value in directions.items() if value == "input"]
         outputs = [bit for bit, value in directions.items() if value == "output"]
         clocks = config.get("CLOCK_PORT") or []
@@ -717,7 +747,8 @@ def prepare(project: Path, core_config: dict[str, Any], on_tool_run=None) -> dic
                                 supplies, native, library))
     sdc = destination / "constraints.sdc"
     input_masters = {entry["master"] for entry in chosen.values() if entry.get("direction") == "input"}
-    sdc.write_text(_sdc(project, {**native, **core_config}, ports, input_masters))
+    sdc.write_text(_sdc(project, {**native, **core_config}, ports, input_masters)
+                   + _pad_sdc(chosen, library))
     result = dict(core_config)
     result.update(pdn_settings)
     from flow_clock_geometry import clock_settings
