@@ -311,3 +311,43 @@ def test_analog_window_copies_native_reports_before_cleanup(root, tmp_path, monk
     assert report.is_relative_to(project / "reports/analog_native")
     assert report.read_text() == "native output\n"
     assert all(not path.exists() for path in paths)
+
+
+@pytest.mark.parametrize("cache_name", ["work/flow/chip/sizing.json", "generated/cache.json", "cache.json"])
+def test_later_step_reads_retained_project_reference_after_cleanup(root, tmp_path, monkeypatch, cache_name):
+    import flow_engine as engine
+    project = tmp_path / "project"
+    cache = project / cache_name
+    paths = []
+    consumed = []
+    def command(current_project, directory, tool):
+        if tool["argv"] == ["produce"]:
+            run = temp.current_run()
+            paths.extend([run, temp.scratch()])
+            state = run / "core_inputs/native/state_out.json"
+            state.parent.mkdir(parents=True)
+            state.write_text(json.dumps({"native": "retained"}))
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_text(json.dumps({"state_out": str(state)}))
+            source = project / "input/source.json"
+            source.parent.mkdir()
+            source.write_text(cache.read_text())
+            return engine.ToolResult(True, 0)
+        state = Path(json.loads(cache.read_text())["state_out"])
+        assert state.is_relative_to(project / "reports/native")
+        assert json.loads(state.read_text()) == {"native": "retained"}
+        consumed.append(str(state))
+        return engine.ToolResult(True, 0, metrics={"retained_state_read": 1})
+    monkeypatch.setattr(engine, "command_tool", command)
+    def run(name):
+        row = {"name": name, "title": name, "when": "always", "legacy_id": {},
+               "tool": {"kind": "command", "argv": [name]}, "checks": []}
+        route = {"entry_step": name, "verify_through": name, "delivery_target": "rtl", "input_contract": "structured"}
+        return engine.run(project, table={"steps": [row]}, route=route)
+    run("produce")
+    assert all(not path.exists() for path in paths)
+    source = json.loads((project / "input/source.json").read_text())
+    assert source["state_out"].startswith(str(paths[0]))
+    result = run("consume")
+    assert result["steps"][0]["status"] == "PASS"
+    assert consumed == [json.loads(cache.read_text())["state_out"]]
