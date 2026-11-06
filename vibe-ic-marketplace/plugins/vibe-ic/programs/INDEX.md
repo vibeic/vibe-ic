@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 670
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 1 (of 670)
+- **Total programs (excluding helpers / shims):** 667
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 1 (of 667)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 0 |
-| `any` | 669 |
+| `any` | 666 |
 
 ## Alphabetical listing
 
@@ -401,7 +401,6 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `librelane_fill_dfm` | any | — | Default Step-34 tool fill and its existing Step-35 DFM consumer. |
 | `librelane_fill_stream` | any | — | Lossless DEF FILLS -> native LibreLane/KLayout stream bridge. |
 | `librelane_fill_stream_native` | any | — | Run reviewed LibreLane stream producer with only its fill-clear bug patched. |
-| `librelane_ir_antenna` | any | — | Opt-in steps 24, 26 and 26.5ic through LibreLane tool steps. |
 | `librelane_postmap` | any | — | Optional post-map native product, owned by the synthesis handoff. |
 | `librelane_postroute` | any | — | Steps 28, 29 and 33 read the post-route state the tool already produced. |
 | `librelane_postroute_repair` | any | — | step 32 (post-route repair) on LibreLane (T102). |
@@ -519,7 +518,6 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `provenance_logger` | any | — | Wrap a tool invocation, record hashed provenance. |
 | `provider_bond_pad_edge` | any | — | Read-only provider assembly measurement, consumed by its existing precheck. |
 | `psi5_protocol_synth` | any | — | Peripheral Sensor Interface 5 (PSI5) protocol synth helper. |
-| `psm_analysis_coverage` | any | — | which power nets did the grid analysis actually answer? |
 | `ptp_protocol_synth` | any | — | IEEE 1588 Precision Time Protocol (PTP) synth helper (protocol #76). |
 | `pulse_width_rearm_contract` | any | — | Source-bound pulse-width timeout/rearm contract extraction. |
 | `qsf_gen` | any | Wave 72 | auto-generate Quartus QSF (FPGA pin assignments). |
@@ -684,7 +682,6 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `verilog_selfcheck_lint` | any | — | PROGRAM-FIRST verilator -Wall self-lint gate. |
 | `verilog_width_resolve` | any | — | SHARED parameterized-width reader (Verilog/SystemVerilog spec prose). chip-AGNOSTIC: any benchmark (CVDP/VerilogEval/RTLLM) or Phase-1 de... |
 | `version_bump_monotonic_check` | any | — | strict version-bump gate for the core-agent loop (extracted from vibe-ic:core-agent-loop §Step 3). |
-| `vibe_ic_entry_guard` | any | — | enforce single entry point for benchmark + IC runs. |
 | `vibe_ic_one_shot_runner` | any | — | Public all entry for the step-table runner. |
 | `wafer_space_precheck` | any | — | Run the official wafer.space flow with LibreLane's typed initial state. |
 | `waveform_ext_synth` | any | — | DETERMINISTIC waveform → RTL synthesizer, COMPLEMENT to ``waveform_truth_table_synth.py`` (v1.1.76 completeness wave-2 absorption). |
@@ -722,7 +719,7 @@ _(no programs in this group)_
 
 _(no programs in this group)_
 
-### `any` (669 programs)
+### `any` (666 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `accumulate_synth` — deterministic SOLVER for the CVDP sequential ACCUMULATOR / running-op family:
@@ -1099,7 +1096,6 @@ _(no programs in this group)_
 - `librelane_fill_dfm` — Default Step-34 tool fill and its existing Step-35 DFM consumer.
 - `librelane_fill_stream` — Lossless DEF FILLS -> native LibreLane/KLayout stream bridge.
 - `librelane_fill_stream_native` — Run reviewed LibreLane stream producer with only its fill-clear bug patched.
-- `librelane_ir_antenna` — Opt-in steps 24, 26 and 26.5ic through LibreLane tool steps.
 - `librelane_postmap` — Optional post-map native product, owned by the synthesis handoff.
 - `librelane_postroute` — Steps 28, 29 and 33 read the post-route state the tool already produced.
 - `librelane_postroute_repair` — step 32 (post-route repair) on LibreLane (T102).
@@ -1217,7 +1213,6 @@ _(no programs in this group)_
 - `provenance_logger` — Wrap a tool invocation, record hashed provenance.
 - `provider_bond_pad_edge` — Read-only provider assembly measurement, consumed by its existing precheck.
 - `psi5_protocol_synth` — Peripheral Sensor Interface 5 (PSI5) protocol synth helper.
-- `psm_analysis_coverage` — which power nets did the grid analysis actually answer?
 - `ptp_protocol_synth` — IEEE 1588 Precision Time Protocol (PTP) synth helper (protocol #76).
 - `pulse_width_rearm_contract` — Source-bound pulse-width timeout/rearm contract extraction.
 - `qsf_gen` — auto-generate Quartus QSF (FPGA pin assignments).  _[Wave 72]_
@@ -1382,7 +1377,6 @@ _(no programs in this group)_
 - `verilog_selfcheck_lint` — PROGRAM-FIRST verilator -Wall self-lint gate.
 - `verilog_width_resolve` — SHARED parameterized-width reader (Verilog/SystemVerilog spec prose). chip-AGNOSTIC: any benchmark (CVDP/VerilogEval/RTLLM) or Phase-1 de...
 - `version_bump_monotonic_check` — strict version-bump gate for the core-agent loop (extracted from vibe-ic:core-agent-loop §Step 3).
-- `vibe_ic_entry_guard` — enforce single entry point for benchmark + IC runs.
 - `vibe_ic_one_shot_runner` — Public all entry for the step-table runner.
 - `wafer_space_precheck` — Run the official wafer.space flow with LibreLane's typed initial state.
 - `waveform_ext_synth` — DETERMINISTIC waveform → RTL synthesizer, COMPLEMENT to ``waveform_truth_table_synth.py`` (v1.1.76 completeness wave-2 absorption).
