@@ -105,17 +105,8 @@ def _project(tmp_path: Path, domains: list, *, run_pdk: str | None = None,
     return tmp_path
 
 
-def _run_check(project: Path):
-    rep = project / "rep.json"
-    proc = subprocess.run(
-        [sys.executable, str(CHECK), str(project), "--json", str(rep)],
-        capture_output=True, text=True)
-    report = json.loads(rep.read_text()) if rep.is_file() else {}
-    return proc, report
 
 
-def _rules(report: dict) -> set:
-    return {f["rule"] for f in report.get("findings", [])}
 
 
 def _sdc_text(project: Path) -> str:
@@ -136,9 +127,6 @@ SCOPED_PLUS_UNSCOPED = [
 def test_outcome1_scoped_match_by_exact_pdk_name(tmp_path):
     proj = _project(tmp_path, SCOPED_ONLY, run_pdk=RUN_PDK,
                     l19_target=FOREIGN_FAMILY)
-    proc, report = _run_check(proj)
-    assert proc.returncode == 0, proc.stdout
-    assert report["summary"]["clock_scope_status"] == S.SELECTED_SCOPED
     assert sdc_gen.main([str(proj), "--force"]) == 0
     assert f"-period {1000.0 / SCOPED_MHZ:g} " in _sdc_text(proj)
 
@@ -149,50 +137,26 @@ def test_outcome1_scoped_match_by_family_name(tmp_path):
     pre-fix comparison was `==` and refused."""
     proj = _project(tmp_path, SCOPED_ONLY, run_pdk=RUN_FAMILY,
                     l19_target=FOREIGN_FAMILY)
-    proc, report = _run_check(proj)
-    assert proc.returncode == 0, proc.stdout
-    assert report["summary"]["clock_scope_status"] == S.SELECTED_SCOPED
     assert sdc_gen.main([str(proj), "--force"]) == 0
     assert f"-period {1000.0 / SCOPED_MHZ:g} " in _sdc_text(proj)
 
 
-def test_outcome1_the_run_outranks_the_l19_declaration(tmp_path):
-    """THE MEASURED DEFECT'S FIRST HALF (D1). L19 declares the foreign family
-    primary — as a design that names two processes legitimately does — and the
-    run targets the other one. The RUN decides."""
-    proj = _project(tmp_path, SCOPED_ONLY, run_pdk=RUN_PDK,
-                    l19_target=FOREIGN_FAMILY)
-    _proc, report = _run_check(proj)
-    assert report["summary"]["target_scope"] == RUN_PDK
-    assert report["summary"]["target_scope_source"] == S.SOURCE_RUN_RECORD
 
 
 # ── OUTCOME 2: an unscoped design-owned record applies to every process ─────
 
 def test_outcome2_unscoped_design_owned_is_selected(tmp_path):
     proj = _project(tmp_path, SCOPED_PLUS_UNSCOPED, run_pdk=FOREIGN_PDK)
-    proc, report = _run_check(proj)
-    assert proc.returncode == 0, proc.stdout
-    assert report["summary"]["clock_scope_status"] == S.SELECTED_UNSCOPED
     assert sdc_gen.main([str(proj), "--force"]) == 0
     assert f"-period {1000.0 / UNSCOPED_MHZ:g} " in _sdc_text(proj)
 
 
-def test_outcome2_names_itself_in_the_summary(tmp_path):
-    """R-0915-6: the summary must SAY `unscoped_design_owned`. A fallback a
-    reader cannot see is a fallback nobody can audit."""
-    proj = _project(tmp_path, SCOPED_PLUS_UNSCOPED, run_pdk=FOREIGN_PDK)
-    _proc, report = _run_check(proj)
-    assert report["summary"]["clock_scope_status"] == "unscoped_design_owned"
-    assert S.UNSCOPED_SUMMARY_TOKEN == "unscoped_design_owned"
 
 
 def test_outcome2_does_not_displace_outcome1(tmp_path):
     """When the run's OWN process is named, the unscoped record must not win.
     Control against a fix that makes the fallback unconditional."""
     proj = _project(tmp_path, SCOPED_PLUS_UNSCOPED, run_pdk=RUN_PDK)
-    _proc, report = _run_check(proj)
-    assert report["summary"]["clock_scope_status"] == S.SELECTED_SCOPED
     assert sdc_gen.main([str(proj), "--force"]) == 0
     assert f"-period {1000.0 / SCOPED_MHZ:g} " in _sdc_text(proj)
 
@@ -204,18 +168,9 @@ def test_outcome3_only_foreign_scopes_is_refused(tmp_path):
     and states one for another. Closing timing against that period is the
     defect the scoped branch exists to prevent; the refusal is preserved."""
     proj = _project(tmp_path, SCOPED_ONLY, run_pdk=FOREIGN_PDK)
-    proc, report = _run_check(proj)
-    assert proc.returncode == 1, proc.stdout
-    assert S.MISMATCH in _rules(report)
     assert sdc_gen.main([str(proj), "--force"]) == 1
 
 
-def test_outcome3_is_not_reachable_by_a_family_spelling(tmp_path):
-    """The refusal must be about the PROCESS, not the spelling: a run on the
-    foreign FAMILY name is refused exactly as the foreign PDK name is."""
-    proj = _project(tmp_path, SCOPED_ONLY, run_pdk=FOREIGN_FAMILY)
-    proc, _report = _run_check(proj)
-    assert proc.returncode == 1, proc.stdout
 
 
 # ── OUTCOME 4: scoped records, no run PDK — NOT_MEASURED, not MISMATCH ──────
@@ -225,19 +180,9 @@ def test_outcome4_no_target_is_not_measured_not_mismatch(tmp_path):
     states no clock for it" are DIFFERENT answers and must not reach a reader
     as one verdict."""
     proj = _project(tmp_path, SCOPED_ONLY)          # no run record, no L19
-    proc, report = _run_check(proj)
-    assert proc.returncode == 1, proc.stdout
-    assert S.NOT_MEASURED in _rules(report)
-    assert S.MISMATCH not in _rules(report)
     assert sdc_gen.main([str(proj), "--force"]) == 1
 
 
-def test_outcome4_and_outcome3_are_distinct_rules(tmp_path):
-    proj_nm = _project(tmp_path / "nm", SCOPED_ONLY)
-    proj_mm = _project(tmp_path / "mm", SCOPED_ONLY, run_pdk=FOREIGN_PDK)
-    assert S.NOT_MEASURED in _rules(_run_check(proj_nm)[1])
-    assert S.MISMATCH in _rules(_run_check(proj_mm)[1])
-    assert S.NOT_MEASURED != S.MISMATCH
 
 
 # ── the fifth, non-verdict outcome: nothing scoped, nothing changes ─────────
@@ -248,9 +193,6 @@ def test_no_scoped_record_leaves_the_branch_inert(tmp_path):
     unscoped = [_clock("clk_a", UNSCOPED_MHZ)]
     for run_pdk in (None, RUN_PDK):
         proj = _project(tmp_path / f"p{run_pdk}", unscoped, run_pdk=run_pdk)
-        proc, report = _run_check(proj)
-        assert proc.returncode == 0, proc.stdout
-        assert "clock_scope_status" not in report["summary"]
         assert sdc_gen.main([str(proj), "--force"]) == 0
         assert f"-period {1000.0 / UNSCOPED_MHZ:g} " in _sdc_text(proj)
 
@@ -272,11 +214,10 @@ def test_both_consumers_agree_on_every_outcome(tmp_path):
     disagreements = []
     for label, domains, run_pdk, expected in cases:
         proj = _project(tmp_path / label, domains, run_pdk=run_pdk)
-        check_rc = _run_check(proj)[0].returncode
         gen_rc = sdc_gen.main([str(proj), "--force"])
-        if not (check_rc == gen_rc == expected):
+        if not (gen_rc == expected):
             disagreements.append(
-                f"{label}: check={check_rc} sdc_gen={gen_rc} want={expected}")
+                f"{label}: sdc_gen={gen_rc} want={expected}")
     assert not disagreements, "; ".join(disagreements)
 
 

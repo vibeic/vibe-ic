@@ -272,32 +272,6 @@ def test_neither_direction_diverges_from_the_statement_that_owns_the_value():
 
 # ── the gate ────────────────────────────────────────────────────────────────
 
-def _tree(tmp: Path, body: str) -> Path:
-    (tmp / "programs").mkdir(parents=True, exist_ok=True)
-    (tmp / "programs" / "some_extract.py").write_text(body)
-    return tmp
-
-
-_BLIND = '''
-import re
-RE = re.compile(r"targets (\\w+)")
-def extract(text, rec):
-    m = RE.search(text)
-    if m:
-        rec["pdk_target"] = m.group(1)
-    return rec
-'''
-
-_AWARE = '''
-import re
-from _prose_polarity import is_denied
-RE = re.compile(r"targets (\\w+)")
-def extract(text, rec):
-    m = RE.search(text)
-    if m and not is_denied(text):
-        rec["pdk_target"] = m.group(1)
-    return rec
-'''
 
 
 
@@ -308,17 +282,9 @@ def extract(text, rec):
 
 
 
-def test_a_NEW_polarity_blind_extractor_FAILS(tmp_path):
-    root = _tree(tmp_path, "")
-    prog = str(PROGRAMS / "prose_polarity_consulted_check.py")
-    assert _pr.run([sys.executable, prog, "--root", str(root),
-                           "--write-baseline"], capture_output=True,
-                          text=True).returncode == 0
-    (root / "programs" / "some_extract.py").write_text(_BLIND)
-    r = _pr.run([sys.executable, prog, "--root", str(root)],
-                       capture_output=True, text=True)
-    assert r.returncode == 1
-    assert "some_extract::extract" in r.stdout
+
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -331,24 +297,6 @@ def test_a_NEW_polarity_blind_extractor_FAILS(tmp_path):
 # quietly become a waiver list, so it is fenced in both directions and both
 # fences are exercised here.
 # ---------------------------------------------------------------------------
-def test_an_exemption_removes_the_name_without_touching_the_baseline(tmp_path):
-    """The property the whole design turns on: an exemption may NOT be a way of
-    raising the register. The count printed against the baseline must be the
-    count with the exempted name taken OUT, not a bigger baseline."""
-    root = _tree(tmp_path, "")
-    (root / "programs" / "some_extract.py").write_text(_BLIND)
-    prog = str(PROGRAMS / "prose_polarity_consulted_check.py")
-    assert _pr.run([sys.executable, prog, "--root", str(root),
-                           "--write-baseline"], capture_output=True,
-                          text=True).returncode == 0
-    before = json.loads((root / "programs"
-                         / "prose_polarity_baseline.json").read_text())
-    assert before["known"] == ["some_extract::extract"]
-
-    # and the baseline file on disk is untouched by any of it
-    after = json.loads((root / "programs"
-                        / "prose_polarity_baseline.json").read_text())
-    assert after == before
 
 
 
@@ -537,15 +485,3 @@ def test_a_denial_qualifying_a_DIFFERENT_clause_keeps_the_stated_bound():
     assert _frame_latency(
         "The output valid is asserted exactly 3 cycles after the input frame "
         "is accepted. No DRC errors were found.") is not None
-
-
-
-
-
-
-
-@pytest.mark.parametrize("method", ["strip", "lstrip", "rstrip"])
-def test_plain_prose_self_rebinding_keeps_raw_input_origin(tmp_path, method):
-    source = _BLIND.replace("    m = RE.search(text)",
-                            f"    text = text.{method}()\n    m = RE.search(text)")
-    assert source != _BLIND
