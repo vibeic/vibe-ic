@@ -4480,6 +4480,9 @@
   "report_check_readers": {
     "candidate_power_analysis": [
       "flow_config.declared_power_checks"
+    ],
+    "final_electrical_analysis": [
+      "flow_config.declared_fanout_checks"
     ]
   }
 }
