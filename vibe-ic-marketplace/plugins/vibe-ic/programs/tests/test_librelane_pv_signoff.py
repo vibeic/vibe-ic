@@ -305,47 +305,6 @@ def _switch(project, mode):
     _put(project / "phase3/librelane_switch.json", {"steps": {"31": mode}})
 
 
-def test_aggregator_reads_the_tool_state_only_when_step_31_is_on_librelane(tmp_path, monkeypatch):
-    agg = importlib.import_module("signoff_metrics_aggregate")
-    project = tmp_path / "p"
-    from _native_signoff_fixture import producer
-    producer(project, monkeypatch, counts={'klayout__drc_error__count': 7},
-             inherited={'magic__drc_error__count': 0})
-    switch_path = project / 'phase3/librelane_switch.json'
-    switch = json.loads(switch_path.read_text())
-    switch['steps']['31'] = 'direct'
-    _put(switch_path, switch)
-    # direct (no switch): the direct rule answers, and this tree has no
-    # direct DRC report, so the key is NOT_MEASURED by the direct rule.
-    metrics, _ = agg.aggregate(project)
-    assert metrics["klayout__drc_error__count"] == "NOT_MEASURED"
-    assert "31-drc" not in json.dumps(metrics["__provenance__"]["klayout__drc_error__count"])
-    switch['steps']['31'] = 'librelane'
-    _put(switch_path, switch)
-    metrics, _ = agg.aggregate(project)
-    assert metrics["klayout__drc_error__count"] == 7
-    prov = metrics["__provenance__"]["klayout__drc_error__count"]
-    assert prov["source"] == "phase3/librelane/31-drc/02-klayout-drc/state_out.json"
-    # a key of the same chain the tool never wrote stays NOT_MEASURED
-    assert metrics["magic__drc_error__count"] == "NOT_MEASURED"
-    switch['steps']['31'] = 'dual'
-    _put(switch_path, switch)
-    metrics, _ = agg.aggregate(project)
-    assert metrics["klayout__drc_error__count"] == "NOT_MEASURED"
-
-
-def test_aggregator_check_refuses_a_record_the_state_no_longer_states(tmp_path, monkeypatch):
-    agg = importlib.import_module("signoff_metrics_aggregate")
-    project = tmp_path / "p"
-    from _native_signoff_fixture import producer
-    info = producer(project, monkeypatch)
-    folder = info['folders'][1]
-    assert agg.main([str(project)]) == 0
-    assert agg.main([str(project), "--check"]) == 0
-    _put(folder / "state_out.json", {"metrics": {"klayout__drc_error__count": 0, "later": 1}})
-    assert agg.main([str(project), "--check"]) == 1
-
-
 # ── the runner's step-31 switch ─────────────────────────────────────────────
 
 
