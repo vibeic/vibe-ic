@@ -47,18 +47,9 @@ Collect:
 
 The fix is always the same: **slow down the data path** by inserting buffers or delay cells.
 
-Strategy selection (slack-bucket → strategy) is a pure numeric-threshold lookup —
-**enforced by `programs/hold_fix_planner.py`** (`pick_strategy`: `> -50 ps` →
-single buffer; `-200..-50 ps` → 2-3 buffer chain; `< -200 ps` → delay cell /
-restructure). Feed it the per-endpoint hold-slack list; do not re-read a prose
-table.
+Use native OpenSTA path details to choose a hold repair. Rerun hold and setup analysis at the same required corners and confirm that the repair does not break setup or the original area budget.
 
-Buffer cell selection from the PDK Liberty list (prefer minimum-drive buffers,
-prefer delay-gate cells, reject clock buffers / inverters / high-drive cells) is
-a deterministic library-cell ranking — **enforced by
-`programs/hold_buffer_cell_picker.py`**. Pass it the candidate cell-name list; it
-returns the SKILL-preferred minimum-drive delay/buffer and FAILs honestly when no
-safe buffer/delay cell exists.
+Select a delay/buffer cell from the actual available Liberty and physical views. Check input count, delay, drive and legal placement against the path and PDK requirements.
 
 ### Step 3: Execute Hold Fix in OpenROAD
 
@@ -105,12 +96,7 @@ Iteration 3: WHS = +5 ps, THS = 0 ps, 0 endpoints
   -> CLEAN. Hold fixed.
 ```
 
-Convergence criteria (WHS >= margin AND THS == 0 AND setup WNS not degraded AND
-area within budget) and the iterate-until-clean loop are **enforced by
-`programs/iterative_search.py` + `programs/loop_admission_guard.py`** (the
-`ConvergenceChecker` classifies `CONVERGED` / `PLATEAU` / `REGRESSION` /
-`EXHAUSTED`). Do **not** hand-roll an iteration counter — see "Canonical loop
-infrastructure" below for the wiring.
+Choose the next bounded design change from the failing native measurements and engineering sensitivity. Keep the stated iteration budget, record the changed parameters, and rerun the owning native tools with unchanged limits.
 
 Typical iteration count: 2-4 rounds for a clean design.
 
@@ -126,9 +112,7 @@ non-fast corner or if no hold analysis is present at all:
 python3 ../../programs/hold_corner_coverage_check.py <hold_analysis.tcl_or_log>
 ```
 
-Broader SS/TT/FF Liberty presence across the whole tree is audited separately by
-`programs/corner_coverage_audit.py`. Sanity checks at TT across temperatures are
-still good practice.
+Review the native configuration and reports for every required corner and analysis role. Record missing libraries or unexecuted corners as NOT_MEASURED.
 
 ## Constraints and Guardrails
 
@@ -136,10 +120,7 @@ The two numeric/template guardrails are enforced by programs (not prose):
 
 1. **Never violate setup while fixing hold** (`-allow_setup_violations false`) —
    enforced by `programs/openroad_hold_repair_tcl_gen.py` (refuses `true`).
-2. **Area budget** (hold buffers <= 5% of total cell area) — enforced by
-   `programs/hold_area_budget_check.py`. If it FAILs (budget exceeded), THEN apply
-   the LLM judgment below: investigate WHY (possible CTS imbalance / over-skewed
-   clock tree) rather than just inserting more buffers.
+2. Read hold-buffer area from the native implementation database and keep the stated 5% total-cell-area budget. If it is exceeded, investigate CTS imbalance or skew rather than blindly adding buffers.
 
 The remaining guardrails need LLM intent/spec judgment and stay here:
 
@@ -172,82 +153,20 @@ Hold timing: T_hold < T_clk_skew + T_data_delay. When CTS adds clock insertion d
 - New hold after routing -> re-run this skill post-route
 - Signoff -> `/tapeout-checklist` includes hold clean as gate
 
-## Canonical loop infrastructure (mandatory — shared with all *-fix loops)
+## Iterate using native results
 
-The "Iterate Until Clean" loop (Step 5) MUST be driven by the two shared
-closed-loop primitives so every fix loop in Vibe-IC obeys one
-convergence / plateau / regression policy and one runaway / dedup guard —
-do **not** hand-roll a bespoke iteration counter or duplicate-check.
+Run the owning tool on each proposed change and read its native result against
+the original limit. Keep the previous design and measured result so you can
+revert a regression. Stop when the declared requirements are met, the approved
+run budget is exhausted, or another trial cannot resolve the remaining cause.
+Report the best measured result and every unresolved requirement. Do not add an
+admission record or change a limit to obtain a pass.
 
-**1. `programs/iterative_search.py` — the parameter sweep.**
-Model the hold-fix knobs as a typed `SearchSpace` and let `IterativeSearch`
-propose the next buffer/skew trial; `ConvergenceChecker` classifies the slack
-history (`CONVERGED` / `PLATEAU` / `REGRESSION` / `EXHAUSTED` / `CONTINUE`):
+## Preserve the ECO reserve
 
-```python
-import iterative_search as it
-space = it.SearchSpace([
-    it.Dimension("buffers", "integer", lo=0, hi=512),     # delay cells to insert
-    it.Dimension("skew_ps", "continuous", lo=-50.0, hi=50.0),
-    it.Dimension("strategy", "enumerate", choices=["repair_hold", "buffer", "pad"]),
-])
-# target=0 WHS, tolerance = margin; patience guards against a stuck loop
-checker = it.ConvergenceChecker(target=0.0, tolerance=1.0, patience=4)
-search  = it.IterativeSearch(space, checker, maximize=True, seed=7, max_rounds=20)
-
-def evaluate(point):          # caller runs OpenROAD repair_timing -hold + OpenSTA here
-    return measured_WHS_ps    # higher (toward 0) is better
-outcome = search.run(evaluate)
-# outcome.status, outcome.best_point, outcome.best_score, outcome.rounds
-```
-
-`IterativeSearch` internally constructs an `AdmissionGuard(bounds=space.bounds(),
-max_iterations=max_rounds)`, so every proposed point is already runaway- and
-dedup-guarded when you use `search.propose()` / `search.run()`.
-
-**2. `programs/loop_admission_guard.py` — admit each iteration BEFORE the EDA run.**
-If you drive the loop manually (not via `search.run`), wrap every proposed
-buffer/skew trial through `AdmissionGuard.admit()` and only spend the expensive
-OpenROAD/OpenSTA round when `res.admitted` is true:
-
-```python
-import loop_admission_guard as g
-guard = g.AdmissionGuard(
-    bounds={"skew_ps": (-50.0, 50.0)},      # clamp into range
-    caps={"buffers": 512},                  # REJECT a runaway buffer count
-    max_iterations=20)                       # hard RUNAWAY iteration budget
-res = guard.admit({"buffers": 143, "skew_ps": -22.0})
-if res.admitted:
-    run_iteration(res.proposal)              # res.proposal is post-clamp / safe
-# else res.reason in {DUPLICATE, RUNAWAY_CAP, RUNAWAY_ITERATION_BUDGET}
-```
-
-CLI one-shot decision (exit 0 = ADMITTED, 1 = REJECTED):
-
-```bash
-python3 programs/loop_admission_guard.py decision.json
-# decision.json: {"bounds":{...},"caps":{...},"max_iterations":20,
-#                 "history":[...prior proposals...],"proposal":{...}}
-```
-
-`canonical_fingerprint(proposal)` (md5, key-order- and float-noise-stable) is
-the dedup key — an already-tried buffer/skew combination is rejected with
-`reason="DUPLICATE"` instead of burning another STA run. This replaces the
-informal "Typical iteration count: 2-4 rounds" expectation with an enforced
-budget and plateau/regression exit, while leaving every existing convergence
-criterion in Step 5 unchanged.
-
-## ⛔ ECO spare-cell preservation (mandatory)
-
-> ⛔ **ECO spare-cell preservation:** cells/gates/pads carrying the `dont_touch` /
-> `keep` attribute (or otherwise tagged spare/ECO) are RESERVED for a future
-> metal-only ECO. NEVER delete, resize, re-purpose, or optimize them away. Hold
-> fixing INSERTS buffers/delay cells — it is fine to *physically realize* a
-> brand-new buffer ON a spare site, but you must NOT silently CONSUME a spare
-> buffer without replacing it: if a hold fix repurposes a keep-marked spare, you
-> must re-insert an equivalent spare so the ECO pool is not depleted, and the
-> consumed instance's keep attribute must not be stripped from the surviving
-> pool. No `opt_clean` / `remove_buffers` / area-recovery on keep-marked
-> instances. After hold fix, `spare_cell_preservation_check.py` MUST still PASS
-> (spare set + keep attrs intact, 0 removed); a dropped spare is a regression —
-> restore it and re-run the checker. See the `design-for-eco` skill.
+Keep unused spare cells, ECO gates and reserved pads through synthesis and
+physical repair. Compare the native netlist or database before and after the
+change. No unused reserve instance may disappear, and its keep attributes must
+remain intact. A consumed spare must be named in the intended ECO. Restore any
+unintentionally removed spare before rerunning the native tools. See
+`design-for-eco` for the design intent.

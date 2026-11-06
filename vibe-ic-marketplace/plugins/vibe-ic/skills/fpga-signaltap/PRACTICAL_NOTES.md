@@ -9,21 +9,13 @@
 
 The fpga-signaltap skill auto-generates Quartus SignalTap II `.stp` configuration files. The skill was developed during CD4013B FPGA-test debugging to capture DUT internal signals when BIST fails.
 
-> **TWO PRODUCERS, AND THEY DISAGREE (measured 2026-08-03, vibe-ic#693).**
-> This document describes `tools/signaltap_gen.py`; `SKILL.md` names the MCP
-> tool `eda_rtl_signaltap_autogen`. They are not interchangeable. Validated with
-> `programs/signaltap_stp_completeness_check.py` against the same published RTL:
-> `signaltap_gen.py` **PASSES** (ports + BIST group + populated trigger + depth
-> + clock); `eda_rtl_signaltap_autogen` **FAILS** on its default invocation
-> (one heuristic signal, no ports, no BIST group, empty `<trigger_set/>`).
-> Whichever you use, run the validator on the output before you spend a
-> Quartus round-trip on it.
+> Use Quartus SignalTap to resolve the sampling clock and probe nodes against the current compiled hierarchy. Confirm the trigger, depth and DUT/BIST signal coverage in the actual capture configuration.
 
 ---
 
 ## 2. Port-parsing caveats
 
-signaltap_gen.py parses the module port list from SystemVerilog source. Known pitfalls:
+The repository developer utility `tools/signaltap_gen.py` parses the module port list from SystemVerilog source. Known pitfalls:
 
 ### 2.1 Formats that parse successfully
 
@@ -51,7 +43,7 @@ module foo (
 
 For modules where parsing fails, use `--ports` to specify manually:
 ```bash
-python3 signaltap_gen.py --module lm75 \
+python3 tools/signaltap_gen.py --module lm75 \
     --ports "clk:I:1,rst_n:I:1,scl_i:I:1,sda_i:I:1,sda_o:O:1,sda_oe:O:1,addr:I:3,temp_data:I:9,os_out:O:1"
 ```
 

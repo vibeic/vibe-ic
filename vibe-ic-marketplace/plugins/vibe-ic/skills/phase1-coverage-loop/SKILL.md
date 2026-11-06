@@ -13,7 +13,7 @@ and the ownership of each fact across the generated layers.
 
 1. Run the normal Phase 1 public entry on the current input.
 2. Read the source documents and generated fields. Verify each admitted fact where its actual downstream consumer reads it.
-3. Use `phase1_input_vs_generated_completeness_check.py` for its existing token-coverage measurement. Read its JSON result without turning the measurement into whole-design acceptance.
+3. Compare the source facts with the generated fields and their actual consumers. Token presence alone does not establish semantic completeness or whole-design acceptance.
 4. Review semantic omissions and incorrect ownership independently. A correct token in an unrelated layer is still a consumer gap.
 5. Reproduce a general extractor defect, fix its owning producer, and rerun the affected extraction and tests.
 6. Save the input, generated result, exact discrepancy, and verification scope outside the plugin repository.

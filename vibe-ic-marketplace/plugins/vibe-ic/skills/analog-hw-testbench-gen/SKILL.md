@@ -63,14 +63,9 @@ altera_adc_control u_adc (
 
 - Do not generate testbenches that require commercial FPGA IP (use only free Quartus Lite primitives)
 - Do not assume specific breadboard wiring — always generate a wiring guide
-- Pin double-assignment (board short) and a missing pin map are **enforced by
-  `programs/analog_hw_tb_de10lite_budget_check.py`** — run it on the emitted
-  `.qsf` (flow step A9 also runs it over `phase3/analog/`):
+- Read Quartus pin-assignment and fitter reports for the emitted testbench. Resolve any duplicate signal assignment, unavailable pin, voltage-bank conflict or missing required connection before programming the board.
 
-  ```bash
-  python3 programs/analog_hw_tb_de10lite_budget_check.py \
-      analog/<block>/hw_test/pin_assignments.qsf --json report.json
-  ```
+Read Quartus pin-assignment and fitter reports for the emitted testbench. Resolve any duplicate signal assignment, unavailable pin, voltage-bank conflict or missing required connection before programming the board.
   Exit 0 = PASS, 1 = FAIL (a pin shorted to two signals, or no
   `set_location_assignment` anywhere in the target), 2 = QSF missing or not a
   DE10-Lite (MAX10 10M50DAF484C7G) board (out of scope — cannot judge). The

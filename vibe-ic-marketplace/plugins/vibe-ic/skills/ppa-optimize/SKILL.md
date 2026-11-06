@@ -68,10 +68,7 @@ Trigger when the user:
   would refute it.
 - Do not compare a candidate against a baseline at a different stage, corner,
   mode or activity basis. That comparison is `UNDETERMINED`.
-- Do not propose deleting, resizing or reclaiming spare / `dont_touch` / ECO
-  cells to recover area. That reserve is a deliberate investment and removing it
-  is caught later by `spare_cell_preservation_check.py`. Report the spare pool
-  separately as reserve, not as overhead. See the `design-for-eco` skill.
+- Compare the native netlist or implementation database before and after optimization. Preserve every unused ECO spare, its keep attributes and the reserved pads; an unintentionally removed spare must be restored.
 - Do not propose relaxing a rule deck, waiving a check, or hand-editing a
   layout. An improvement obtained that way is worth less than the number it replaces.
 - Do not fill a required field with a placeholder. `X_no_placeholder_fields`
@@ -126,20 +123,6 @@ The deliverable is one markdown proposal. The template below is the whole shape.
 Baseline and candidate numbers travel as canonical records, never as loose
 figures in the table above:
 
-```json
-{
-  "schema": "vibeic.ppa.metric.v1",
-  "metric": "timing.setup.wns_ns",
-  "status": "MEASURED",
-  "value": -0.124,
-  "unit": "ns",
-  "scope": {"stage": "post_route_extracted", "mode": "functional",
-            "process": "ss", "voltage_v": 1.62, "temperature_c": 125,
-            "rc_corner": "max", "clock": "clk", "check": "setup"},
-  "source": {"path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
-             "sha256": "sha256:e61d2c88", "tool": "opensta",
-             "parser": "ppa_metric_extract.py"}
-}
-```
+Read the requested PPA values from the actual native synthesis, timing, power or physical reports. Name the design scope, corner, units and source paths; an absent measurement remains NOT_MEASURED.
 
 Serialize with `programs/_ppa/canonical_json.py` and nothing else.

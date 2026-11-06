@@ -132,24 +132,10 @@ k-induction requires depth ≥ longest counter/timer path; deep counters, large
 memory arrays, and many-FF state spaces all defeat unbounded proof — the
 **state explosion problem**, fundamental to model checking.
 
-**Do not eyeball the module to decide prove-vs-bmc.** The per-module
-feasibility decision (FF count, deepest counter/timer terminal, memory-array
-bit width, FSM state count → `recommended_mode` + `min_k_bound` +
-`infeasible_reason`) is **enforced by `programs/formal_complexity_classify.py`**.
-Run it and treat its verdict as ground truth:
-
-```bash
-python3 programs/formal_complexity_classify.py <rtl_dir> --json
-```
-
-- `recommended_mode: "prove"` → k-induction feasible; use it at `min_k_bound`.
-- `recommended_mode: "bmc"`  → exceeds the prove envelope; run `mode bmc
-  depth>=min_k_bound` and apply Solutions B-F below to chase a complete proof.
-- exit 2 (NO_MODULE / NO_RTL) → honest missing-data; do **not** claim proven.
-
-The classifier reproduces the worked benchmark table (timer_block / crc8_engine
-prove-feasible at k=20; aid_transceiver k≥135; otp_controller 376 mem-bits +
-k≥1650; cmd_processor 336-bit memory) directly from the RTL — no hand table.
+Use the native elaborated design and solver behavior to choose prove or
+bounded model checking. Deep counters, memories and long traces affect proof
+cost. Report the actual engine, bound, assumptions and timeout. A bounded
+result is not an unbounded proof.
 
 ## Solutions for Complex Modules
 
@@ -249,8 +235,7 @@ For `otp_controller`'s 47-byte array:
 
 ## Workflow
 
-1. **Classify module complexity** — run `programs/formal_complexity_classify.py`
-   to choose k-induction (prove) vs BMC per module (do not eyeball it)
+1. **Choose the proof scope.** Read the elaborated state, required property and native solver results to choose unbounded proof or a disclosed BMC bound.
 2. **Generate assertions** — deterministic floor first, then this skill for the
    exact unresolved obligation IDs
 3. **Write `.sby` config** with appropriate mode and depth

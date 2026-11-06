@@ -414,10 +414,7 @@ Do not delete a journal or overwrite owner edits to make resume advance.
 Before invoking any official host scorer, run the deterministic cwd guard over
 the exact design and scorer working directory (and testbench when applicable):
 
-```bash
-python3 programs/benchmark_score_cwd_guard.py \
-  --design <DESIGN_DIR> --cwd <SCORER_CWD> [--tb <TESTBENCH>]
-```
+Run the existing official scorer from its documented working directory and preserve actor isolation. A separate working-directory receipt is not a scoring result.
 
 A non-zero guard verdict blocks scoring; do not treat it as advisory.
 
@@ -489,10 +486,9 @@ number. Never infer a floor merely because one attempt failed.
 After writing the per-problem triage record, validate both its internal
 consistency and whether every general recovery was absorbed into the product:
 
-```bash
-python3 programs/triage_record_check.py <TRIAGE_RECORDS.json>
-python3 programs/benchmark_triage_absorption_audit.py <TRIAGE_RECORDS.json>
-```
+Retain the failed case, native evidence, diagnosed cause, fix location and verification scope in the benchmark report. An unresolved case remains visible in the result population.
+
+Review every triage entry against its actual failed input, tool output and implemented fix. Do not let a record schema or status label replace that evidence.
 
 Either non-zero verdict blocks the result handoff.
 

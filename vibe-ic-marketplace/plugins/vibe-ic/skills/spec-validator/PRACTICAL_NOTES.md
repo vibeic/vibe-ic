@@ -1,3 +1,6 @@
+> Historical record. Program names in this record describe the earlier run;
+> use the current skill and native step table for execution.
+
 # Spec Validator — PRACTICAL_NOTES
 
 > Source: 135-IC v2 Campaign Regression (2026-04-09 ~ 04-10)

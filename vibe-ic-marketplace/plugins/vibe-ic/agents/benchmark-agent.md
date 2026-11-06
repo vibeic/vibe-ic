@@ -179,12 +179,7 @@ Before any run, follow **`vibe-ic:open-benchmark-methodology`**:
 
 ## Record native benchmark evidence
 
-Keep the design documents, selected native step results, and official scorer
-outputs in the run directory outside the plugin repository. Read each native
-measurement against its original spec or PDK limit and record what remains
-unmeasured. `flow_engine_report.py` can render the native result table. Open RTL
-benchmarks still require Program First, independent blind AI review and backup,
-and official scoring through `benchmark_dispatch.py`.
+Read reports/flow_engine.json and the selected native tool reports. Use programs/flow_engine.py report --project <project> for the current report entry.
 
 ## Keep run evidence separate from product code
 

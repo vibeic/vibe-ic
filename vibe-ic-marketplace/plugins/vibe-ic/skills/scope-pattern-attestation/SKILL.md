@@ -8,26 +8,13 @@ description: Layer-3 hardware attestation — talk to an oscilloscope via SCPI t
 > **Doctrine (v0.1.50):** 把修法寫進工具，而非寫進 prompt.
 > Programs run the pattern-match; AI is the backstop on waveform interpretation.
 
-## Mandatory Deterministic Preflight
+## Read the native capture
 
-```bash
-# 1. Capture the scope trace via MCP-EDA:
-device_scope_capture({ channel: 1, duration_ms: 100 })
-
-# 2. Then run the pattern-specific check:
-python3 plugins/vibe-ic/programs/scope_periodic_pulse_check.py \
-    --trace <trace.csv> --strict        # forbidden-pattern absence
-python3 plugins/vibe-ic/programs/scope_reply_preamble_check.py \
-    --trace <trace.csv> --strict        # required-pattern presence
-python3 plugins/vibe-ic/programs/scope_response_byte_decode_check.py \
-    --trace <trace.csv>
-python3 plugins/vibe-ic/programs/scope_long_decode.py \
-    --trace <trace.csv>                 # long-frame decode
-```
-
-The MCP captures the trace; the 4 programs decide pattern PASS / FAIL
-deterministically. **Refuse to attest a pattern by visual inspection
-of the scope screenshot** when the program can decide it.
+Use the actual scope trace and its acquisition settings. The existing
+`scope_periodic_pulse_check.py` measures its supported pulse-pattern checks.
+For other preambles, response bytes and long frames, use the native scope or
+protocol decoder and compare the measured values with the source requirement.
+Do not claim an unexecuted pattern check passed.
 
 ---
 
@@ -36,15 +23,9 @@ PASS and static-RTL PASS together are still not proof; the only proof
 that an IC exhibits (or does not exhibit) a behavioral pattern in
 silicon is to put a probe on the line and capture it.
 
-## Why This Exists
+## Why hardware capture matters
 
-A real bug, caught in v0.64, motivates this skill. The static analyser
-`timer_freeze_after_state_check.py` flagged a wake-timer freeze defect
-in `wake_ctrl.v`: after the bus had entered the awake state, a periodic
-timer kept firing pulses on the IO line. A Keysight DSO-X 3014T probe
-captured the offending IO line and saw 10 LOW pulses in a 50 ms window
-— each ~26 µs wide, gaps 5.000-5.001 ms apart — exactly the buggy
-waveform predicted from the static finding.
+Verify the source-required timer behavior in the relevant state through an executable stimulus and native simulation or hardware capture.
 
 The static checker (v0.64) and the runtime scope checker (this v0.65
 skill) are **complementary layers**, not duplicates:
@@ -52,7 +33,7 @@ skill) are **complementary layers**, not duplicates:
 | Layer | Catches | Misses |
 |---|---|---|
 | 1. Sim (testbench) | Logic bugs that the testbench stimulates | Anything not stimulated |
-| 2. Static (timer_freeze_after_state_check, etc.) | RTL anti-patterns | Synthesis / mapping artefacts; analog issues |
+| 2. Static RTL analysis | RTL anti-patterns | Synthesis / mapping artefacts; analog issues |
 | 3. **scope-pattern-attestation (this skill)** | **Real silicon behavior** | Anything you forgot to probe |
 
 Use this skill whenever Layers 1 + 2 PASS but the consequence of being

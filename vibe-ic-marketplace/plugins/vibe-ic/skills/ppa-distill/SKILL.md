@@ -93,11 +93,7 @@ The deliverable is one markdown case record. The template below is the whole sha
 
     ## Case
 
-    What failed: timing.setup.wns_ns = -0.124 ns at post_route_extracted / ss
-    Deterministic path: _ppa/agent_router.py rc=2, no path detail produced
-    What judgement did: identified a high-fanout enable net from the shared-endpoint
-    pattern and proposed buffering it before re-running PnR
-    Result after: timing.setup.wns_ns = -0.031 ns, same scope, remeasured
+Read the actual native path or metric breakdown and record the engineering hypothesis and measured effect of its fix. The retired diagnostic router supplies no current result.
 
     ## Counter-examples
 

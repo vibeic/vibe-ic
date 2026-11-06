@@ -28,24 +28,9 @@ Run the simulation-only loop until all PVT corners pass. This phase is fully aut
 
 ### Phase 2: Hardware verification (max 3 iterations)
 
-```
-For each iteration:
-  1. analog-hw-testbench-gen → generate FPGA stimulus RTL
-  2. eda_fpga_compile → eda_fpga_program → program DE10-Lite
-  3. Prompt user: "Confirm the breadboard circuit has been built"
-     - Display component BOM derived from sizing_final.json
-     - Show wiring diagram from hw_test/README.md
-  4. analog-hw-measure → scope capture + ADC readings
-  5. Three-way comparison + verdict — enforced by `programs/analog_hil_three_way_verdict.py`
-  6. Iterate per the verdict; single-knob + iteration-cap discipline enforced by program (see below)
-```
+Compare hardware, SPICE and the original specification under matching conditions. State which comparisons were measured and which remain open.
 
-## Three-way comparison logic (enforced by program)
-
-The four-row decision table (SPICE-vs-Spec, HW-vs-Spec, HW-vs-SPICE-discrepancy)
-→ {CONVERGED | CONVERGED_WARNING | MODEL_INACCURACY | BACK_TO_PHASE1} is a pure
-lookup — **enforced by `programs/analog_hil_three_way_verdict.py`** (PASS on a
-CONVERGED variant, FAIL on MODEL_INACCURACY / BACK_TO_PHASE1, SKIP on no data).
+## Three-way comparison
 
 | SPICE vs Spec | HW vs Spec | HW vs SPICE | Verdict |
 |:---:|:---:|:---:|---|
@@ -57,15 +42,12 @@ CONVERGED variant, FAIL on MODEL_INACCURACY / BACK_TO_PHASE1, SKIP on no data).
 ## Convergence criteria
 
 - **MUST**: Hardware measurement within spec limits
-- **TARGET**: Hardware vs SPICE discrepancy < 20% per metric — enforced by `programs/analog_hw_spice_correlation_check.py`
+- Calculate hardware-versus-SPICE differences from the actual measurements and compare them with the original declared correlation limits. Keep missing hardware data unmeasured.
 - **IDEAL**: All three (hardware, SPICE, spec) agree within 10%
 
 ## Output format
 
-### `analog/<block>/hw_tuning_report.json`
-Schema (block_name, converged, total_iterations.{spice,hardware}, per-metric
-final_comparison.{spec,spice,hw,discrepancy_pct}, convergence_status) is
-**structurally validated by `programs/analog_hil_report_schema_check.py`**.
+Report the hardware and SPICE measurements, conditions, iteration history and unresolved differences directly. A report schema does not establish convergence.
 
 **`convergence_status` accepts EITHER vocabulary**, because this document
 defines two and never said which one to write:
@@ -78,54 +60,22 @@ defines two and never said which one to write:
 | `MODEL_INACCURACY` | hardware out of spec — add margin, re-sim + re-measure | not `true` |
 | `BACK_TO_PHASE1` | SPICE itself out of spec — should not have reached Phase 2 | not `true` |
 
-The right-hand four are exactly what the decision table above produces and what
-`programs/analog_hil_three_way_verdict.py` computes from the same
-`final_comparison` block. The validator used to accept only the first three, so
-a report carrying the honest `MODEL_INACCURACY` outcome came back as a SCHEMA
-violation — a real bench finding reported as a format complaint. Writing a
-non-converged verdict together with `"converged": true` is still a FAIL: that
-is a self-contradiction, not a vocabulary choice.
-```json
-{
-  "block_name": "ldo_1v8",
-  "converged": true,
-  "total_iterations": {"spice": 3, "hardware": 1},
-  "final_comparison": {
-    "vout_dc": {"spec": 1.80, "spice": 1.8002, "hw": 1.803, "discrepancy_pct": 0.16}
-  },
-  "convergence_status": "IDEAL",
-  "notes": []
-}
-```
-
 ## Do not
 
 - Do not skip Phase 1 (SPICE) — always converge in simulation before going to hardware
-- Do not exceed 3 hardware iterations — enforced by `programs/analog_hil_iteration_cap_check.py` (escalate a model-accuracy issue instead of iterating)
+- Keep the stated maximum of 3 hardware iterations. If those iterations do not converge, report the remaining model discrepancy and investigate it before another hardware trial.
 - Do not assume breadboard is pre-built — always display wiring guide and wait for user confirmation (interactive human-in-the-loop gate — kept as judgment)
-- Do not adjust more than 1 component per hardware iteration — enforced by `programs/analog_hil_single_knob_check.py` (records sizing-per-iteration in `analog/<block>/hw_sizing_history.json`)
+- Change at most one component per hardware iteration so the measured effect can be attributed to that change. Record the changed component and native before/after measurements.
 
-## Enforcement status (read this before trusting a green A9)
+## Review the native hardware result
 
-The three programs above are wired into flow step **A9** as
-`advisory_program_exit_zero` — they RUN and their verdicts are printed and
-carried into the step's JSON report, but they cannot fail the step yet.
-
-The reason is a producer gap, and it is measured: **nothing in this repository
-writes `hw_tuning_report.json` or `hw_sizing_history.json`** — zero files
-repo-wide, no program emits them, and this document is the only place that
-describes their shape. So all three report **exit 2 = NOT CHECKED** on every
-published run, which the flow renders as `n/a (input not present)` rather than
-`ok`. A blocking gate over an artefact with no producer would certify nothing.
-
-**When you author these two files** (that is your job in Phase 2 above — they
-are agent-authored by design), the gates start judging real content. Once a
-runner step emits them, promote all three to `program_exit_zero` in
-`flow/phase1_phase2_phase3.yaml`: they already return exit 1 for every defect,
-including a malformed report.
+Record the actual scope/ADC data, SPICE conditions and source specification.
+Keep hardware that was unavailable or not executed explicitly NOT_MEASURED.
+Do not introduce a report-schema or iteration-history gate to qualify a native
+measurement.
 
 ## Handoff
 
 - Converged block with `hw_tuning_report.json` → `analog-hardmacro-gen`
 - If model accuracy issue detected → document in `analog/<block>/model_calibration_notes.md`
-- Final hardware measurements → `analog_hw_spice_correlation_check` gate
+- Final hardware measurements → native measurement and correlation review

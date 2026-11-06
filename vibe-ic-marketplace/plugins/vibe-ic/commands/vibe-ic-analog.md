@@ -7,7 +7,6 @@ argument-hint: <project-dir> [--container <image>] [--blocks <comma-list>] [--al
 > `/vibe-ic-analog <project-dir>`.
 > The AI must NOT guess the path; a concrete project path is required before continuing.
 
-
 # /vibe-ic-analog — Analog A1-A9
 
 This is the standalone front door for the analog track. Phase 1 remains the
@@ -61,19 +60,9 @@ After the runner finishes:
 
 Run both final gates after the review:
 
-```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/programs/analog_flow_compliance_check.py \
-    <project-dir> --json <project-dir>/reports/analog_compliance.json
-python3 ${CLAUDE_PLUGIN_ROOT}/programs/analog_a8_before_floorplan_check.py \
-    <project-dir> --json <project-dir>/reports/analog_a8_before_floorplan.json
-```
+Confirm that the actual hardmacro LEF, Liberty, GDS and behavioral views needed by floorplanning are available before the native physical tool consumes them. Use the dependencies in the current step table.
 
-`analog_flow_compliance_check.py` must exit 0 before declaring the analog
-track PASS or PASS_WITH_WAIVERS. The ordering gate must not FAIL. Its exit 2
-means the A8-before-floorplan relation was NOT CHECKED (for example, floorplan
-has not run yet), not PASS; report that state verbatim and re-run the gate once
-floorplan exists. A9 is the only analog step allowed to continue in parallel
-with digital Step 15 and later.
+Review every selected analog native result against its original limit and disclose any failed or unmeasured block. A separate compliance receipt does not make the track complete.
 
 Never promote `SKIP`, `VACUOUS_PASS`, `PASS_STRUCTURE_ONLY`, a missing report,
 or a killed run to PASS. Apply the shared anti-fabrication rules in

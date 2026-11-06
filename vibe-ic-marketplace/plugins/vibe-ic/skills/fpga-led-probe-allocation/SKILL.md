@@ -66,7 +66,7 @@ module fpga_top(
     inout  ID_BUS_PIN,
     output [9:0] LEDR
 );
-    // ... 2-FF synchronisers (see fpga_async_input_synchronizer_check) ...
+    // ... 2-FF synchronisers (verify native CDC and simulation results) ...
     // ... DUT instantiation ...
     wire tx_done_pulse, cmd_decoded_pulse;
     wire [7:0] last_response_byte;
@@ -98,20 +98,9 @@ diff to confirm the expected LEDs lit up.
 
 ## Anti-patterns (run the lint — do NOT eyeball these)
 
-> **Doctrine (user, 2026-05-29):** 把修法寫進工具，而非寫進 prompt.
->
-> The four deterministic structural anti-patterns below are now enforced
-> by **`programs/fpga_led_probe_lint.py`** (17 pytest cases pin each
-> rule + every no-false-alert guard). Run the program on your emitted
-> top BEFORE claiming the LED allocation is sound — the prose below is
-> the rationale, not the rule applicator.
+> Review the LED assignments against the actual RTL and board pin map. Simulate probe polarity, pulse stretching and sticky behavior, then read Quartus compile/fit diagnostics.
 
-```bash
-python3 plugins/vibe-ic/programs/fpga_led_probe_lint.py \
-    <your_fpga_top.v> \
-    [--qsf <board.qsf>] \
-    [--json fpga_led_probe_lint.json]
-```
+Review the LED assignments against the actual RTL and board pin map. Simulate probe polarity, pulse stretching and sticky behavior, then read Quartus compile/fit diagnostics.
 
 Exit codes: `0` = PASS (ERROR-free; WARNINGs may still be reported);
 `1` = ERROR anti-pattern found; `2` = **NOTHING EXAMINED** — no input file, or
@@ -177,9 +166,9 @@ the code is internally consistent.
 
 This skill emits a *template*. Validate with:
 
-- `fpga_async_input_synchronizer_check` — ensure inputs are properly
+- Native CDC/RDC analysis and source-derived simulation ensure inputs are properly
   synchronised before driving FSMs that LEDs probe.
-- `fpga_pullup_lint` — ensure tri-state pins have the correct pull-up
+- Native board/pin assignments and electrical reports establish tri-state pull-up
   declarations.
 
 When camera capture is part of the verification flow, the LED probe

@@ -15,15 +15,9 @@ pragmas / directives and hands off to `/rtl-review`.
 
 ## Mandatory Deterministic Preflight
 
-```bash
-# 1. After HLS emits RTL, the standard plugin gates apply IMMEDIATELY:
-python3 plugins/vibe-ic/programs/rtl_review_aggregate.py \
-    --rtl-dir <hls-output-dir>     # see skills/rtl-review for backing
-python3 plugins/vibe-ic/programs/rtl_hygiene_lint.py \
-    <hls-output-dir>/*.v
-python3 plugins/vibe-ic/programs/reset_discipline_check.py \
-    --rtl-dir <hls-output-dir>
-```
+Review clock/reset domains and use native elaboration, simulation and CDC/RDC results to check the specified reset polarity, assertion and release behavior.
+
+Run the selected native RTL lint/elaboration tools and read their diagnostics, then review unresolved semantic requirements independently. A review score or receipt is not a native result.
 
 HLS-emitted RTL is NOT exempt from plugin gates — many HLS tools emit
 RTL with subtle latch / reset-discipline issues that downstream

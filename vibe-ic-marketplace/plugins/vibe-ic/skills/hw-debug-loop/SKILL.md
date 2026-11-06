@@ -3,7 +3,6 @@ name: hw-debug-loop
 description: Closed-loop hardware debug methodology for half-duplex protocol ICs when BFM passes but real-silicon connect_test FAILs (Category B/C from the A/B/C extraction-gap analysis). Use after spec-to-rtl and the selected native tool results meet their original requirements, the SOF has been burned to FPGA, and the host-side acceptance test (e.g., <half-duplex-tester> byte[6]=0x02) is FAILing. The skill drives a deterministic bisect using scope capture + oracle bytewise dump + controlled wrapper-flip experiments until byte[6]=0xF2 PASS or until the failing item is recorded as an irreducible Category-B silicon discrepancy. Triggers on "byte[6]=0x02 FAIL", "BFM passes HW fails", "connect_test FAIL", "silicon-vs-spec mismatch", or "I have an oracle SOF and need to bisect".
 ---
 
-
 <!-- WAVE_76_CHIP_AGNOSTIC_BANNER -->
 
 > **Case-study notation.** This skill cites the <chip-class> / <half-duplex-tester> /
@@ -195,10 +194,7 @@ verdict, the frame bytes, the SOF sha256.
 
 After byte[6]=0xF2 PASS:
 
-```bash
-python3 plugins/vibe-ic/programs/hw_acceptance_test_passed_check.py \
-    <project_dir>
-```
+Run the requested hardware acceptance test against the actual device and original requirements. Read the captured waveform, transaction or measurement result; a test name or report presence does not establish success.
 
 This gate verifies:
 

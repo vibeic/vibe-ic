@@ -33,20 +33,12 @@ the corresponding report type; they do not override the run's native paths.
 ## Verification checklist
 
 1. **Synth quality**:
-   - Inferred-latch (FATAL) + implicit-width-truncation detection is **enforced by
-     `programs/synth_doctor.py`** (LATCH_INFERENCE + WIDTH_MISMATCH classifiers).
-     Run `python3 programs/synth_doctor.py phase3/synth/synth.log --json` and treat any
-     `LATCH_INFERENCE` finding as FATAL (fix RTL). Do NOT re-derive these by eye.
+   - Read the actual Yosys log and native elaboration/synthesis result. Resolve inferred latches, width truncation, unresolved modules and other tool diagnostics in the design or tool before rerunning synthesis.
    - AI residual only: read cells/area/gate-types and compare cell count to L8
      typical_gate_count if defined (judgment, no fixed threshold in spec).
 
 2. **Floorplan / utilization**:
-   - Utilization band is **enforced by `programs/utilization_band_check.py`** (advisory
-     50-75% band; hard FAIL only on the universal impossible range — utilization ≤0 or
-     >100%). Run `python3 programs/utilization_band_check.py <project_dir> --json /tmp/util.json`.
-     The 40/50/75/85 numbers are a free-die rule-of-thumb, **advisory WARN only** — fixed-die /
-     harness-bounded designs legitimately sit well below 50% (corpus 13-85%), so do NOT treat
-     low utilization as a failure.
+   - Read utilization from the native physical database. Retain the advisory 50–75% planning band; fixed-die designs may legitimately differ. A value at or below zero or above 100% requires investigation, not a fabricated placement result.
    - AI residual only: confirm core_area covers all macro instances + std cells, and that the
      IO ring + power straps are not overlapping the core (structural judgment).
 
@@ -68,12 +60,8 @@ the corresponding report type; they do not override the run's native paths.
    - Device count mismatches indicate wrong macro picked
 
 6. **GDS sanity**:
-   - File existence / non-empty / valid GDSII header / minimum size is **enforced by
-     `programs/gds_size_check.py`** (`--gds-file phase3/final.gds [--min-size-kb N]`).
-   - Top-cell-name equality (top cell matches the `--top-name` argument) is **enforced by
-     `programs/gds_topcell_name_check.py`** (`--gds-file phase3/final.gds --top-name <top>` —
-     parses STRNAME/SNAME records, FAILs if the named cell is absent, WARNs if it is a
-     referenced sub-cell rather than the hierarchy root). Do NOT eyeball the cell name.
+   - Open the final GDS with the native layout tool. Check that the intended geometry was loaded and compare its measured extent and content with the required design scope.
+   - Read the GDS hierarchy with the native layout tool and confirm that the selected top cell is the intended root, with all required child cells resolved.
    - AI residual only: sanity-check that the file size is consistent with a merged macro
      PA-GDS (size jumps when a hard macro is merged) — judgment, no fixed threshold.
 

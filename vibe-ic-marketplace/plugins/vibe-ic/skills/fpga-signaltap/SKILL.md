@@ -20,115 +20,25 @@ Auto-generate Quartus SignalTap II logic analyzer configurations for post-synthe
 - **DE10-Nano** target board (or any Intel/Altera FPGA with JTAG)
 - **USB-Blaster** JTAG cable for signal capture
 
-## Tool: .stp generation (deterministic — MCP tool, not prose)
+## Configure the native SignalTap capture
 
-The `.stp` is generated deterministically by the MCP tool
-**`eda_rtl_signaltap_autogen`** — it scans the RTL for the DUT port list +
-timing-critical signals and emits the Quartus SignalTap XML (`.stp`) or Vivado
-ILA `.tcl`. Defaults: `clock_signal=CLOCK_50`, `depth=2048`, trigger on the
-BIST fail event. Pass `extra_signals=[...]` to add anything the heuristic misses.
-
-```text
-eda_rtl_signaltap_autogen(rtl_dir=..., top_module=..., target="quartus",
-                          clock_signal="CLOCK_50", depth=2048)
-  -> <top_module>_debug.stp
-```
-
-> ⚠️ **MEASURED 2026-08-03 (vibe-ic#693) — this tool does NOT yet satisfy the
-> policy stated in the next section, and it reports `status: "PASS"` anyway.**
-> Driven for real against a published memory-mapped DUT's RTL directory it
-> emitted **one** signal (a heuristic `state` match), **no DUT ports**, **no
-> BIST group**, and an EMPTY self-closing `<trigger_set …/>`.
-> `signaltap_stp_completeness_check` on that output:
-> 4 × `MISSING_BIST_SIGNAL` + 8 × `MISSING_PORT` + `NO_TRIGGER`.
-> Its signal selection is four name patterns
-> (`tx_start|rx_done|state|delimiter`), not a port-list parse.
->
-> Until that is fixed: **always** validate the emitted `.stp` with
-> `signaltap_stp_completeness_check` (step 2 of the workflow below) and add
-> what is missing via `extra_signals=[...]`, or use the other shipped producer
-> `tools/signaltap_gen.py --module <m> --sv <top.sv>`, which parses the port
-> list and emits the BIST group and a populated trigger, and PASSES the
-> validator both with and without `--sv`. This split is why
-> `signaltap_stp_completeness_check` is deliberately NOT wired as a blocking
-> post-condition of the MCP tool: doing so today would break the declared
-> generator 100% of the time.
-
-## Generated .stp policy — enforced by `programs/signaltap_stp_completeness_check.py`
-
-The capture-signal include-set and the trigger/depth/clock policy are NOT
-judgment — they are a fixed checklist verified by
-`programs/signaltap_stp_completeness_check.py`. The generated `.stp` MUST contain:
-
-1. **All DUT input signals** + **all DUT output signals** (parsed from `--sv`
-   or `--ports "name:dir:width,..."`) — a port driven on the board but absent
-   from the capture is a `MISSING_PORT` FAIL.
-2. **The four BIST-engine signals** `bist_state`, `test_index`, `pass_count`,
-   `fail_count` — any absent is a `MISSING_BIST_SIGNAL` FAIL.
-3. A **trigger** (default = rising edge of `bist_fail`), a positive
-   **sample_depth** (default 1024), and a capture **clock** (default
-   `CLOCK_50`) — missing any is `NO_TRIGGER` / `BAD_DEPTH` / `NO_CLOCK`.
-
-```bash
-python3 programs/signaltap_stp_completeness_check.py <module>_debug.stp \
-    --sv rtl/<module>.sv --json stp_check.json
-# 0=PASS  1=FAIL(findings)
-# 2=SKIP — NOTHING EXAMINED (no .stp given), or io-error. Never a pass.
-```
-
-Rule 3's trigger test requires a trigger with **content**. An empty
-`<trigger_set …/>` is `NO_TRIGGER`: an analyzer that triggers on nothing
-free-runs, and the capture window will not be aligned on the failure.
-
-**This gate is not wired into the flow, on purpose.** No flow step produces a
-`.stp` and none exists in any published run, so any automatic wiring would be a
-permanently silent rc=2. It is registered in
-`flow/phase1_phase2_phase3.yaml` step 39's `programs:` list with that reason
-written down, and driven EXPLICITLY from step 2 of the workflow below.
+Create the `.stp` in Quartus SignalTap for the selected device and compiled
+hierarchy. Choose the actual sampling clock, DUT I/O, relevant FSM/BIST state,
+trigger and buffer depth. Use node names from the current netlist. Do not
+invent a clock or node name to satisfy a wrapper.
 
 ## Typical Debug Workflow
 
-```
-1. BIST runs on FPGA → reports FAIL via UART
-2. AI Agent runs eda_rtl_signaltap_autogen to create the .stp
-   → validate it with programs/signaltap_stp_completeness_check.py
-3. Re-compile SOF with SignalTap enabled (4 stages, in THIS order):
-   quartus_stp <module>_fpga --stp_file=<module>_debug.stp
-   quartus_map <module>_fpga  (re-fit with logic analyzer)
-   quartus_fit <module>_fpga
-   quartus_asm <module>_fpga
-   → validate the sequence with programs/signaltap_recompile_sequence_check.py
-4. Program FPGA, run BIST again
-5. SignalTap captures signals around the failure point
-6. Analyze waveforms in Quartus SignalTap Viewer  ← LLM judgment (see below)
-7. Identify root cause → fix RTL → re-verify
-```
+After changing SignalTap assignments, run the supported Quartus compile sequence, regenerate the programming file and program that result before collecting the native capture.
 
-### Recompile sequence — enforced by `programs/signaltap_recompile_sequence_check.py`
+Use Quartus SignalTap to resolve the sampling clock and probe nodes against the current compiled hierarchy. Confirm the trigger, depth and DUT/BIST signal coverage in the actual capture configuration.
 
-The 4-stage Quartus pipeline is a fixed, ordered command sequence — not prose.
-`programs/signaltap_recompile_sequence_check.py` verifies all four stages are
-present, in canonical order (`quartus_stp → map → fit → asm`), with a real
-`.stp` attached via `--stp_file`. It catches the common silicon-debug defect
-where an agent omits `quartus_stp` and ships a SOF with **no logic analyzer at
-all** (`STAGE_MISSING`), or attaches the `.stp` after the fit (`WRONG_ORDER`).
+### Recompile and capture
 
-```bash
-python3 programs/signaltap_recompile_sequence_check.py recompile.sh \
-    --expect-stp <module>_debug.stp --json recompile_check.json
-# 0=PASS  1=FAIL
-# 2=SKIP — NOTHING EXAMINED (no input, or no quartus_* sequence in it), or
-#          io-error. Never a pass.
-```
-
-**This gate is not wired into the flow, on purpose.** The flow's only FPGA
-command line is `quartus_sh --flow compile <base>`, which contains none of the
-four tokens; repo-wide there are 0 `compile.log`, 0 `*.map.rpt` and 0 `*.sof`
-files, so any automatic wiring would be rc=2 on every published run. It is
-registered in `flow/phase1_phase2_phase3.yaml` step 39's `programs:` list with
-that reason written down, and driven EXPLICITLY from step 3 of the workflow
-above — paste the recompile block you are about to run into a file and check it
-*before* spending the ~30-minute Quartus round-trip.
+After changing the `.stp` or project assignments, use Quartus's supported
+compile sequence to regenerate the programming file, program the device and
+run SignalTap. Read the native compile, fit and timing results before
+interpreting the capture. Record the actual sampling clock and trigger.
 
 ### LLM-judgment step (NOT a program)
 

@@ -8,52 +8,27 @@ description: Read Static Timing Analysis reports, triage setup/hold/recovery/rem
 > **Doctrine (v0.1.50):** 把修法寫進工具，而非寫進 prompt。
 > Mandatory program preflight first; AI is the backstop, not the lead.
 
-STA signoff runs in a commercial tool (PrimeTime, Tempus, OpenSTA). The
-deterministic triage (constraint-boundary states plus 5 implementation
-categories → fix strategies) is now in
-`programs/sta_triage_classify.py`; this skill is the wrapper that runs
-it, narrates residual interpretation, and refuses to override the
-program's category counts.
+STA signoff uses the selected native OpenSTA, PrimeTime or Tempus reports.
+Read the launch and capture paths, SDC clocks and exceptions, Liberty corner,
+SPEF and electrical drive/load model before proposing an implementation fix.
 
-## Mandatory Deterministic Preflight
+## Read the native timing results
 
-Before any narrative:
-
-```bash
-# 1. STA report audit (presence, WNS/TNS extraction, basic structure):
-python3 plugins/vibe-ic/programs/sta_report_check.py \
-    --rpt <sta.rpt> --json /tmp/sta_check.json
-
-# 2. Endpoint categorisation. For an I/O path, include --boundary-json and
-#    boundary_role=input|output on the corresponding endpoint record.
-python3 plugins/vibe-ic/programs/sta_triage_classify.py \
-    --endpoints-json <endpoints.json> \
-    [--boundary-json <source_bound_io_boundary.json>] \
-    --wns <wns_ns> --tns <tns_ns> \
-    --out-md /tmp/sta_triage.md --out-json /tmp/sta_triage.json
-```
-
-The program first returns `constraint_boundary_limited` or
-`constraint_boundary_unresolved` when source/deck hashes and the electrical
-drive/load model do not establish a legal boundary. It does not recommend RTL
-or ECO changes in those states. Once the boundary is legal, it returns the
-implementation categories (cell_delay_limited /
-net_delay_limited / logic_depth_limited / clock_skew_limited /
-hold_violation) plus the fix strategy per category. **Do not author
-these counts by reading the report.**
+Read the selected rows in `<project>/reports/flow_engine.json` and open their
+native `reports`. `flow/steps.json` names each current tool and
+`flow/native_limits.json` retains its original limits. Review `tool_ran`,
+`native_steps`, `native_metrics`, and each metric's value, operator and limit.
+A missing native measurement is `NOT_MEASURED`. AI reviews the engineering
+meaning of every result and fixes problems in the design, tool or plugin.
 
 ```bash
-# 3. (when reviewing a PnR Tcl script) confirm the mandatory
-#    setup-timing-repair sequence is present, not hold-fix-only:
-python3 plugins/vibe-ic/programs/pnr_timing_repair_completeness_check.py \
-    <pnr.tcl> --json /tmp/pnr_repair.json
+python3 programs/flow_engine.py report --project <project>
 ```
 
-`pnr_timing_repair_completeness_check.py` FAILs any OpenROAD PnR script
-that runs only `repair_timing -hold` without `set_wire_rc` +
-`repair_design` + `repair_timing -setup` (the sha256 silicon-DOA
-anti-pattern). The phase3 runner already emits the full chain; this
-gate is the static backstop when reviewing a hand-authored script.
+Classify the reported failing paths as cell delay, net delay, logic depth,
+clock skew or hold problems. If the I/O constraints or drive/load model are
+unresolved, fix those constraints before attributing the failure to RTL.
+Use the actual path components to support each classification.
 
 ## When to use
 

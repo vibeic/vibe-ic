@@ -10,118 +10,42 @@ paired_program: design_one_shot_runner.py
 > **Doctrine (v0.1.50):** 把修法寫進工具，而非寫進 prompt.
 > Programs first; AI is the backstop on residual narrative.
 
-## Mandatory Deterministic Preflight
+## Read the native verification results
+
+Read the selected rows in `<project>/reports/flow_engine.json` and open their
+native `reports`. `flow/steps.json` names each current tool and
+`flow/native_limits.json` retains its original limits. Review `tool_ran`,
+`native_steps`, `native_metrics`, and each metric's value, operator and limit.
+A missing native measurement is `NOT_MEASURED`. AI reviews the engineering
+meaning of every result and fixes problems in the design, tool or plugin.
 
 ```bash
-python3 plugins/vibe-ic/programs/phase2_verify_aggregate.py \
-    <project_dir> \
-    --out-md /tmp/phase2_verify.md \
-    --out-json /tmp/phase2_verify.json --strict
+python3 programs/flow_engine.py report --project <project>
 ```
 
-The aggregator runs `rtl_precheck_gate`, `spec_conformance_check`, and
-`rtl_hygiene_lint`, AND checks RTL/SOF/TB artifact presence. **Refuse
-to claim Phase 2 PASS without the aggregator's `verdict: PASS`.**
+## Review the completed verification window
 
-## How you are invoked: the stage-1 ON-PASS review
-
-This skill is the AI half of `stage1.on_pass_review` in
-`flow/phase1_phase2_phase3.yaml` — the flow's ONE declaration of it. Until that
-block existed, this skill (and the other seven in the `verification` tier)
-appeared ZERO times in the flow: every `skills:` array there hangs on a FAILURE
-trigger, so the AI was wired as an author and as a repairer and never as a
-reviewer of a program that PASSED.
-
-Order, and it is not negotiable:
-
-1. **The program runs first.** `design_one_shot_runner` produces the stage-1
-   artefact; the stage's gates pass.
-2. **The deterministic on-pass rung runs next.**
-
-   ```bash
-   python3 programs/stage_on_pass_review.py <project> --stage stage1 \
-       --compliance reports/audit/flow_compliance.json \
-       --json reports/phase2/gates/stage1_on_pass_review.json
-   ```
-
-   It reads the INTENT (`phase1/generated_docs/L9_INTEGRATION_SPEC.json`) and
-   the ARTEFACT (`phase2/stage1/rtl/`, `reports/phase2/`). Exit 0 = ACCEPT,
-   1 = REJECT with evidence, 2 = NOT CHECKED. On a rejection it WRITES the
-   run's own regression under `reports/phase2/gates/on_pass_review/` — a test
-   that FAILS on this run and passes when it is repaired.
-3. **You take what is left.** Everything the program ACCEPTED or reported as
-   `NOT CHECKED` is your input, not your conclusion. Read its `--json` record
-   first: `rules[]` says which contract was decided deterministically, so you
-   do not re-derive it and do not contradict it without new evidence.
-
-Three rules bind you here:
-
-* **DO NOT RE-DERIVE THE ARTEFACT.** You review the RTL the runner produced.
-  Regenerating it, or re-running a tool to compare, replaces the program
-  instead of reviewing it — and your regenerated copy is not the artefact that
-  will be taped out.
-* **§4.05.** Read the design INPUT — the L-docs and the prompt. Never the
-  oracle, the harness or the golden. The program refuses a declared intent path
-  under any of those; you are held to the same line without a program to
-  enforce it.
-* **A REJECTION CARRIES EVIDENCE OR IT IS NOT A REJECTION.** Name the intent
-  you read (file + field + value), the artefact fact you read (file + what is
-  there), the contradiction in one sentence, and an executable test that FAILS
-  TODAY on this run and passes when repaired — written into the run tree beside
-  the program's, not into the plugin's suite. No test, no rejection. Whether
-  your finding BLOCKS is the flow's decision (`verdict:` in that same block),
-  never yours.
-
-<!-- WAVE_76_CHIP_AGNOSTIC_BANNER -->
-
-> **Case-study notation.** This skill cites the <chip-class> / <half-duplex-tester> /
-> MDV-A1101 <benchmark> reference project as concrete evidence for the
-> rules below. The rules themselves are chip-AGNOSTIC and apply to
-> any IC of the matching `ic_class` (see
-> `vibe-ic-marketplace/plugins/vibe-ic/programs/ic_class_profile.py`).
-
-**Purpose**: phase2 runner generates RTL via `aid_class_rtl_gen.py` (or registry-dispatched per class), then runs reference TB + Quartus + the project's `<host_tester>`. PASS verdict means:
-- iverilog reference TB outputs `PROTOCOL_REFERENCE_TB_PASS`
-- Quartus emits SOF
-- `<host_tester>` reads byte[6]=expected_verdict_byte_hex N/N runs
-
-> **Case study reference.** Concrete `<host_tester>` examples (e.g.
-> <chip-class> → <half-duplex-tester> byte[6]=0xF2 verdict) are documented in
-> `docs/design/CASE_STUDIES/AS3616_MD905_byte6_verdict.md`.
-
-But the RTL itself may still:
-- have unused signals / unused states / dangling registers
-- be hardware-correct for byte[6] but emit device-side BR or other Wave-34/35-class violations
-- not actually match L9 ports contract beyond the bytes the TB exercises
+Review the exact RTL and native outputs from the selected public window.
+Keep design-input-only authoring and independent review. When semantic
+review rejects RTL, demonstrate the issue with a source-derived executable
+test before repair. Rerun the affected native tools after the fix.
 
 ## Verification checklist
 
-1. **L9 contract conformance**: open `generated_docs/L9_INTEGRATION_SPEC.json`. Confirm rtl/chip_top.sv top-level ports == L9.ports[]. Confirm submodule list matches L9.submodules. Use `frontend_backend_handoff_check.py`.
-
-2. **State-machine coverage**: open `rtl/main_fsm.sv`. List declared states. Confirm every L9.fsm_states[].name appears. Run `fsm_state_coverage_check.py`.
-
-3. **Dead-RTL audit** — *enforced by `programs/rtl_hygiene_lint.py`* (already wired into the Mandatory Deterministic Preflight aggregator above). Its `rule_undriven_and_unread` emits `undriven-wire` (ERROR: `wire X` never driven) and `unread-reg` (WARN: `reg/logic X` written but never read); its `rule_case_coverage` flags missing case-default / un-covered case-arms. Do NOT hand-grep — read the aggregator's `rtl_hygiene_lint` verdict. AI only adjudicates a flagged signal as *intentional* (e.g. spare-cell tie-off) vs a real regression.
-
-4. **Wave-34 device-BR forbidden**: scan rtl/tx_phy.sv + rtl/main_fsm.sv for any state that drives id_bus low for >= BR_MIN ticks. Use `slave_tx_no_device_break_check.py`.
-
-5. **Self-RX mask**: confirm rtl/chip_top.sv has `id_in_masked = id_bus_drive_low ? 1 : id_in` pattern. Use `self_rx_mask_required_check.py`.
-
-6. **OTP image cite**: confirm L11.otp_bytes[] addresses + values match what altsyncram / behavioral RAM is loading from `input/otp/<name>.{hex,mif}`.
-
-7. **Reference TB transcript completeness** — *enforced by `programs/l10_tb_conformance_check.py`* + *`programs/l10_test_cases_cover_l3_constraints_check.py`*. The first FAILs unless EVERY case in `generated_docs/L10_TEST_CASES.json` has TB evidence (opcode literal driven in `sim/tb/*.v` AND a matching PASS record in the sim summary) — i.e. it counts the full prescribed scenario set, not just the canonical 5. The second FAILs unless every L3.opcodes[] constraint (addr_max / len_max / `pre_wake_allowed=false` / response template) has both a positive AND a negative L10 case (the "18 opcodes × {happy, addr_max, len_max, pre_wake_false}" expansion). Run both and read their verdicts:
-
-```bash
-python3 plugins/vibe-ic/programs/l10_tb_conformance_check.py \
-    --l10 generated_docs/L10_TEST_CASES.json \
-    --tb-dir phase2/stage1/sim/tb \
-    --summary phase2/stage1/sim/work/summary.txt \
-    --out reports/gates/l10_tb_conformance.json
-python3 plugins/vibe-ic/programs/l10_test_cases_cover_l3_constraints_check.py <project_dir>
-```
-
-AI does NOT eyeball PASS-line counts — it only reviews any case the gates list as lacking evidence to confirm it is a genuine gap (re-spin) vs a documented waiver.
-
-8. **byte[6]=0xF2 across SOF rebuild stress**: verify byte[6] PASS persists across at least 5 rebuild + reburn cycles (not just 5 connect_test runs of one SOF).
+1. Compare native elaborated ports, widths, directions and submodules with the
+   actual L9 integration contract.
+2. Check required FSM states and transitions through native simulation or
+   formal coverage, including source-declared normal and error behavior.
+3. Read native lint and `rtl_hygiene_lint.py` diagnostics for undriven signals,
+   unread state, incomplete cases, width/sign changes and unintended latches.
+4. For a protocol that forbids device-generated break, verify the relevant
+   transmit states and durations against the original protocol limit.
+5. If self-receive masking is required, test its behavior while the device
+   drives the bus. Do not infer it from a signal name.
+6. Compare OTP addresses and values with the actual loaded memory image.
+7. Exercise every source-declared scenario and its boundary/default behavior.
+   Read the native transcript and coverage for each required case. Keep any
+   missing execution explicitly unmeasured.
 
 ## Spot-check actions
 

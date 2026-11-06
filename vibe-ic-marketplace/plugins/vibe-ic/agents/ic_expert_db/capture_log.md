@@ -1,3 +1,6 @@
+> Historical record. Program names in this record describe the earlier run;
+> use the current skill and native step table for execution.
+
 # IC Expert DB — capture log
 
 Append-only chronological record of lessons filed into `ic_expert_db.json` via

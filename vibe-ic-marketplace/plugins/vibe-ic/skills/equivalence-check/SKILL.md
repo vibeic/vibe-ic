@@ -31,23 +31,7 @@ The tool returns `equiv_cells_total / proven / unproven` plus
 without built-in SAT models), and writes the result to `reports/lec.json`
 (+ optional `reports/lec.rpt`).
 
-**The PASS verdict is NOT decided in this prose — it is enforced by
-`programs/lec_equivalence_check.py`.** That deterministic substance gate
-independently re-parses the artefacts (alias-resilient across Yosys
-`equiv_*` / Cadence Conformal / Synopsys Formality field spellings) and
-returns rc=0 (PASS) iff `equivalent==true` AND compared-points > 0 (non-vacuous)
-AND non-equivalent points == 0 AND unproven/aborted points == 0 — with an
-anti-vacuous-claim guard so a bare `{"equivalent": true}` over 0 compared
-points is an HONEST FAIL, never a vacuous PASS. Missing/unparseable
-`reports/lec.json` is also an honest FAIL (`LEC_REPORT_MISSING` /
-`LEC_REPORT_UNPARSEABLE`), so absence of evidence can never be claimed PASS.
-
-```bash
-# Verdict gate (run AFTER eda_lvs / eda_equiv has written reports/lec.json):
-python3 programs/lec_equivalence_check.py <project_dir> --json reports/lec_gate.json
-# rc 0 = PASS, 1 = FAIL (NOT_EQUIVALENT / NONEQUIV / UNPROVEN / VACUOUS /
-#                        NO_POINT_EVIDENCE), 2 = bad-arg / not-a-dir.
-```
+Run the selected native equivalence tool and read its compared-point count, unmatched points and proven/unproven status. An empty or incomplete comparison is NOT_MEASURED, not equivalence.
 
 Refuse to claim PASS based on log inspection alone — the rc of the program
 above is the verdict.

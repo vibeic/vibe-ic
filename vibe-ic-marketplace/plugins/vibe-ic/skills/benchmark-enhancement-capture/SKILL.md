@@ -39,10 +39,7 @@ Keep the lesson general. Do not copy a design's identity, customer data,
 source text, hidden expected answer, or source-specific values into general
 control logic. Preserve the IC Expert DB and per-layer craft.
 
-Use `enhancement_emit.py` only for the useful candidate output it already
-supports. Its output does not authorize a new artifact admission requirement,
-qualify a tool during a case, or establish a signoff verdict. A report about
-one run must state that run's measured scope.
+Capture the reproducible discrepancy, affected source fact or native result, owning design/tool/plugin fix and the verification performed. Keep this evidence outside the plugin repository when required by the task.
 
 ## Verify and deliver
 
