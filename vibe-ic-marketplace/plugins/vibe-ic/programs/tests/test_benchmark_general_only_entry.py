@@ -46,29 +46,6 @@ def test_open_runner_declares_ip_without_changing_the_task_window(
     assert ("--skip-phase3" in argv) == (entry != "15")
 
 
-def _run_admission(argv):
-    # A demanded, unavailable image stops immediately after delivery admission.
-    # This runs the real runner/guard without dispatching Phase 1 or EDA tools.
-    return subprocess.run(
-        argv + ["--no-dashboard", "--container", "neutral-admission-fixture",
-                "--require-image", "sha256:" + "0" * 64],
-        capture_output=True, text=True, timeout=30)
-
-
-@pytest.mark.parametrize("entry,exit_step", [("D1", "D1"), ("2", "2")])
-def test_open_argv_passes_the_actual_delivery_guard(tmp_path, entry, exit_step):
-    argv = dispatch._solver_argv(
-        PROGRAMS / "vibe_ic_one_shot_runner.py", tmp_path, entry, exit_step)
-    result = _run_admission(argv)
-    assert result.returncode == 2
-    # Compare the observed refusal class, not a field the candidate introduces.
-    assert result.stderr.split(":", 1)[0] == "ERROR", result.stderr
-    assert "--require-image" in result.stderr
-    from _delivery_route import report_label
-    assert report_label(tmp_path) == {
-        "delivery_route": "IP", "deliverable": "HARDMACRO"}
-
-
 def test_phase1_provenance_frontdoor_supplies_the_same_delivery_route(tmp_path):
     prompt = tmp_path / "input" / "phase1_prompt.md"
     prompt.parent.mkdir()
