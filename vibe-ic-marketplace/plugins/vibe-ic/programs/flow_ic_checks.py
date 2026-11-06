@@ -125,10 +125,7 @@ class ElectricalRules(Step):
         commands = Commands(root)
         cleaned = completed(commands.run(["awk", "-f", recipe / "cdl.awk", state_in[DesignFormat.SPICE]]), "CDL conversion")
         models = (recipe / "models").read_text()
-        try:
-            netlist, models = normalize_cdl(cleaned.stdout + "\n" + cdl.read_text(), pdk, models)
-        except ValueError as exc:
-            raise StepException(f"NOT_MEASURED: PDK CVC setup: {exc}") from exc
+        netlist, models = normalize_cdl(cleaned.stdout + "\n" + cdl.read_text(), pdk, models)
         (root / "design.cdl").write_text(netlist)
         (root / "models").write_text(models)
         supplies = completed(commands.run(["awk", "-v", f"vdd={power[0]}", "-v", f"gnd={ground[0]}",

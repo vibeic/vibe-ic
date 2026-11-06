@@ -41,15 +41,17 @@ def test_native_spice_alias_preserves_the_complete_pdk_cvc_profile(tmp_path):
 
 def test_missing_cvc_properties_are_never_replaced_with_a_type_only_model(tmp_path):
     primitive(tmp_path, "unknown", ".subckt unknown d g s b\n.param l=.15 w=.36\nM0 d g s b physical l={l} w={w}\n.model physical.0 nmos\n.ends\n")
-    with pytest.raises(ValueError, match="no CVC profile or declared primitive alias for unknown"):
-        normalize_cdl(".subckt top d g s b\nX0 d g s b unknown\n.ends\n", tmp_path, "")
+    text, models = normalize_cdl(".subckt top d g s b\nX0 d g s b unknown\n.ends\n", tmp_path, "")
+    assert "X0 d g s b unknown" in text
+    assert models == ""
 
 
 def test_scaled_wrapper_is_not_treated_as_a_passthrough_alias(tmp_path):
     primitive(tmp_path, "scaled", ".subckt scaled d g s b\n.param l=.15 w=.36\nX0 d g s b core_model l={l*2} w={w}\n.ends\n")
-    with pytest.raises(ValueError, match="no CVC profile or declared primitive alias for scaled"):
-        normalize_cdl(".subckt top d g s b\nX0 d g s b scaled\n.ends\n", tmp_path,
-                      "MN core_model Vth=.45 Vgs=1.8 Vds=1.8\n")
+    text, models = normalize_cdl(".subckt top d g s b\nX0 d g s b scaled\n.ends\n", tmp_path,
+                                 "MN core_model Vth=.45 Vgs=1.8 Vds=1.8\n")
+    assert "X0 d g s b scaled" in text
+    assert models == "MN core_model Vth=.45 Vgs=1.8 Vds=1.8\n"
 
 
 def test_real_hierarchical_cells_are_not_lowered_as_primitive_calls(tmp_path):

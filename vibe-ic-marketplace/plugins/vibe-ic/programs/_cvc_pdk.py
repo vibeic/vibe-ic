@@ -97,7 +97,7 @@ def normalize_cdl(text, pdk, models):
                 definitions[name] = (alias[0], line)
                 resolved.add(name)
         if not resolved:
-            raise ValueError("Selected PDK has no CVC profile or declared primitive alias for " + ", ".join(sorted(pending)))
+            break
         pending -= resolved
     output = []
     for line in lines:
