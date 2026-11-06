@@ -271,8 +271,50 @@ def _tcl(value) -> str:
 
 
 ORFS_SETTINGS = {"FP_CORE_UTIL": ("CORE_UTILIZATION", 1),
-                 "PL_TARGET_DENSITY_PCT": ("PLACE_DENSITY", .01),
-                 "MAX_FANOUT_CONSTRAINT": ("MAX_FANOUT", 1)}
+                 "PL_TARGET_DENSITY_PCT": ("PLACE_DENSITY", .01)}
+
+
+def _orfs_sdc(original: Path, declared: dict, destination: Path) -> None:
+    from flow_chip_inputs import _electrical_sdc
+
+    electrical = _electrical_sdc(declared)
+    if not electrical:
+        shutil.copy2(original, destination)
+        return
+    preserved = destination.with_name("constraint-original.sdc")
+    shutil.copy2(original, preserved)
+    # OpenSTA setters replace same-object bounds and expose no corresponding getters.
+    prefix = '''namespace eval ::level3_sdc {
+  variable original [dict create]
+  variable merge 0
+  proc limit {command code result op} {
+    variable original
+    variable merge
+    if {$code != 0} {return}
+    set key [list [namespace tail [lindex $command 0]] {*}[lrange $command 1 2]]
+    set value [lindex $command 3]
+    if {!$merge} {
+      dict set original $key $value
+    } elseif {[dict exists $original $key] && [dict get $original $key] < $value} {
+      namespace eval ::sta [lreplace $command 3 3 [dict get $original $key]]
+    }
+  }
+}
+foreach command {set_cell_fanout_limit set_slew_limit_cell set_pin_capacitance_limit} {
+  trace add execution ::sta::$command leave ::level3_sdc::limit
+}
+try {
+'''
+    suffix = '''
+} finally {
+  foreach command {set_cell_fanout_limit set_slew_limit_cell set_pin_capacitance_limit} {
+    trace remove execution ::sta::$command leave ::level3_sdc::limit
+  }
+  namespace delete ::level3_sdc
+}
+'''
+    destination.write_text(prefix + f"source {_tcl(preserved)}\nset ::level3_sdc::merge 1\n" +
+                           "\n".join(electrical) + suffix)
 
 
 def _orfs_inputs(owner, fixed: dict, install: Orfs, root: Path) -> tuple[Path, Path, list[Path]]:
@@ -333,7 +375,9 @@ def _orfs_inputs(owner, fixed: dict, install: Orfs, root: Path) -> tuple[Path, P
     if "DIE_AREA" in values:
         values["CORE_UTILIZATION"] = ""
     sdc = config.get("PNR_SDC_FILE")
-    if not sdc:
+    if sdc:
+        _orfs_sdc(Path(sdc), fixed, directory / "constraint.sdc")
+    else:
         from flow_chip_inputs import _ports, _sdc
         from librelane.state import DesignFormat, State
         from librelane.steps import Step
@@ -342,7 +386,7 @@ def _orfs_inputs(owner, fixed: dict, install: Orfs, root: Path) -> tuple[Path, P
         ports = _ports(_load(Path(state[DesignFormat.JSON_HEADER])), top)
         sdc = root / "document-constraints.sdc"
         sdc.write_text(_sdc(Path(config["DESIGN_DIR"]), config, ports))
-    shutil.copy2(sdc, directory / "constraint.sdc")
+        shutil.copy2(sdc, directory / "constraint.sdc")
     values["SDC_FILE"] = directory / "constraint.sdc"
     if any(key.startswith("PDN_") for key in fixed):
         raise _Unavailable("ORFS platform PDN cannot translate document-fixed native PDN settings")
@@ -355,6 +399,8 @@ def _orfs_inputs(owner, fixed: dict, install: Orfs, root: Path) -> tuple[Path, P
     for key, (target, _) in ORFS_SETTINGS.items():
         if key in fixed:
             space.pop(target, None)
+    if "MAX_FANOUT_CONSTRAINT" in fixed:
+        space.pop("MAX_FANOUT", None)
     if "CLOCK_PERIOD" in fixed:
         space.pop("_SDC_CLK_PERIOD", None)
     if "DIE_AREA" in values:

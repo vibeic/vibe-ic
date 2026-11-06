@@ -1,5 +1,8 @@
 import json
 from pathlib import Path
+import re
+import shutil
+import subprocess
 import sys
 from types import ModuleType, SimpleNamespace
 
@@ -186,6 +189,124 @@ def test_native_child_records_missing_dependency(tmp_path, monkeypatch):
     assert level3._native(job) == 2
     assert json.loads((tmp_path / "incomplete.json").read_text()) == {
         "status": "NOT_MEASURED", "reason": "native package absent"}
+
+
+@pytest.mark.parametrize("original_fanout,original_slew,original_cap", [
+    (None, None, None), (10, 2, .9), (.5, .00001, .01),
+])
+def test_supplied_sdc_enforces_declared_limits_without_weakening_original_rules(
+        tmp_path, monkeypatch, original_fanout, original_slew, original_cap):
+    sta = shutil.which("sta")
+    if sta is None:
+        pytest.skip("Native OpenSTA required for supplied-SDC electrical limits")
+    install = tmp_path / "installed"
+    write(install / "flow/platforms/process/config.mk", "")
+    write(install / "tools/AutoTuner/src/autotuner/__init__.py", "")
+    space = write(tmp_path / "space.json", "{}")
+    liberty = write(tmp_path / "cells.lib", '''library (cells) {
+      delay_model : table_lookup;
+      time_unit : "1ns";
+      voltage_unit : "1V";
+      current_unit : "1mA";
+      capacitive_load_unit (1,pf);
+      nom_voltage : 1; nom_temperature : 25; nom_process : 1;
+      default_fanout_load : 1; default_max_fanout : 10;
+      default_max_transition : 2;
+      cell (buffer) {
+        pin (A) { direction : input; capacitance : 0.2; }
+        pin (Z) { direction : output; function : "A"; max_capacitance : 0.9; }
+      }
+    }''')
+    netlist = write(tmp_path / "unit.v", '''module unit(input a, spare, output y, z);
+      wire n;
+      buffer u1(.A(a), .Z(n));
+      buffer u2(.A(n), .Z(y));
+      buffer u3(.A(n), .Z(z));
+    endmodule''')
+    original = ["set_max_fanout 0.25 [get_ports spare]",
+                "set_max_transition 0.000001 [get_ports spare]",
+                "set_max_capacitance 0.8 [get_pins u2/Z]"]
+    for value, command, objects in (
+        (original_fanout, "set_max_fanout", "[current_design]"),
+        (original_slew, "set_max_transition", "[current_design]"),
+        (original_cap, "set_max_capacitance", "[get_pins u1/Z]"),
+    ):
+        if value is not None:
+            original.append(f"{command} {value} {objects}")
+    sdc = write(tmp_path / "original.sdc", "\n".join(original) + "\n")
+    before = sdc.read_bytes()
+    config = Config(DESIGN_NAME="unit", VERILOG_FILES=[str(netlist)],
+                    CELL_LEFS=[str(write(tmp_path / "cells.lef"))], LIB={"typ": [str(liberty)]},
+                    TECH_LEFS={"typ": str(write(tmp_path / "tech.lef"))},
+                    PLACE_SITE="site", PNR_SDC_FILE=str(sdc))
+    class Toolbox:
+        def __init__(self, directory):
+            pass
+        def filter_views(self, config, mapping):
+            return level3._files(mapping)
+    native_modules(monkeypatch, toolbox=Toolbox)
+    native, _, _ = level3._orfs_inputs(SimpleNamespace(config=config), {
+        "MAX_FANOUT_CONSTRAINT": 1, "MAX_TRANSITION_CONSTRAINT": .001,
+        "MAX_CAPACITANCE_CONSTRAINT": .1}, level3.Orfs(install, "process", space), tmp_path / "arm")
+    translated = native / "flow/designs/process/unit/constraint.sdc"
+    script = write(tmp_path / "check.tcl", f'''read_liberty {{{liberty}}}
+read_verilog {{{netlist}}}
+link_design unit
+read_sdc {{{sdc}}}
+puts "ORIGINAL_CAP_VIOLATIONS [sta::max_capacitance_violation_count]"
+read_sdc {{{translated}}}
+puts "NATIVE_FANOUT_VIOLATIONS [sta::max_fanout_violation_count]"
+puts "NATIVE_CAP_VIOLATIONS [sta::max_capacitance_violation_count]"
+write_sdc -digits 9 {{{tmp_path / 'effective.sdc'}}}
+set sta_report_default_digits 6
+report_check_types -max_fanout -max_count 20 -verbose
+foreach command {{set_cell_fanout_limit set_slew_limit_cell set_pin_capacitance_limit}} {{
+  puts "REMAINING_TRACES [trace info execution ::sta::$command]"
+}}
+exit
+''')
+    process = subprocess.run([sta, "-no_init", "-no_splash", "-exit", str(script)],
+                             capture_output=True, text=True, check=True)
+    assert "Error" not in process.stdout + process.stderr, process.stdout + process.stderr
+    original_violations = int(re.search(r"ORIGINAL_CAP_VIOLATIONS (\d+)", process.stdout)[1])
+    assert original_violations == int(original_cap is not None and original_cap < .4)
+    assert int(re.search(r"NATIVE_FANOUT_VIOLATIONS (\d+)", process.stdout)[1]) > 0
+    assert int(re.search(r"NATIVE_CAP_VIOLATIONS (\d+)", process.stdout)[1]) > 0
+    assert re.findall(r"REMAINING_TRACES(.*)", process.stdout) == [" ", " ", " "]
+    effective = (tmp_path / "effective.sdc").read_text()
+    for command, expected, objects in (
+        ("set_max_fanout", min(original_fanout or 1, 1), r"\[current_design\]"),
+        ("set_max_transition", min(original_slew or .001, .001), r"\[current_design\]"),
+        ("set_max_capacitance", min(original_cap or .1, .1), r"\[get_pins \{u1/Z\}\]"),
+        ("set_max_transition", .000001, r"\[get_ports \{spare\}\]"),
+        ("set_max_capacitance", .8, r"\[get_pins \{u2/Z\}\]"),
+    ):
+        match = re.search(command + r" ([\d.eE+-]+) " + objects, effective)
+        assert match and float(match[1]) == pytest.approx(expected), effective
+    assert sdc.read_bytes() == before
+    assert (translated.parent / "constraint-original.sdc").read_bytes() == before
+
+
+def test_supplied_sdc_failure_removes_temporary_native_traces(tmp_path):
+    sta = shutil.which("sta")
+    if sta is None:
+        pytest.skip("Native OpenSTA required for supplied-SDC trace cleanup")
+    original = write(tmp_path / "original.sdc", "error {original deck failure}\n")
+    translated = tmp_path / "constraint.sdc"
+    level3._orfs_sdc(original, {"MAX_FANOUT_CONSTRAINT": 1}, translated)
+    script = write(tmp_path / "failure.tcl", f'''catch {{source {{{translated}}}}} message
+puts "ORIGINAL_ERROR $message"
+foreach command {{set_cell_fanout_limit set_slew_limit_cell set_pin_capacitance_limit}} {{
+  puts "REMAINING_TRACES [trace info execution ::sta::$command]"
+}}
+puts "REMAINING_NAMESPACE [namespace exists ::level3_sdc]"
+exit
+''')
+    process = subprocess.run([sta, "-no_init", "-no_splash", "-exit", str(script)],
+                             capture_output=True, text=True, check=True)
+    assert "ORIGINAL_ERROR original deck failure" in process.stdout
+    assert re.findall(r"REMAINING_TRACES(.*)", process.stdout) == [" ", " ", " "]
+    assert "REMAINING_NAMESPACE 0" in process.stdout
 
 
 @pytest.mark.parametrize("setting,metric", [

@@ -50,10 +50,14 @@ core utilization prevents Optimizing, which forcibly varies it.
 
 ORFS runs a stock reference, then unchanged AutoTuner with Hyperopt, PPAImprov,
 seed 42 and physical finish. Document-fixed dimensions are removed from its
-native JSON search space. The original SDC stays unchanged. Without a supplied
-SDC, the existing chip-input constraint translator uses native elaborated ports
-and document settings. SDC search mutations are unsupported. Exact trial IDs
-identify results. Native score orders candidates. Native KLayout DRC and LVS
+native JSON search space. A supplied SDC is copied unchanged and sourced by a
+native Tcl constraint deck that adds declared electrical limits. A temporary
+trace of OpenSTA's native setters preserves stricter original bounds on the
+same object. It is removed after constraint loading. The existing chip-input
+producer selects internal-net pins for the core capacitance limit, leaving
+bond-net limits intact. Without a supplied SDC, that producer uses native
+elaborated ports and document settings. SDC search mutations are unsupported.
+Exact trial IDs identify results. Native score orders candidates. Native KLayout DRC and LVS
 results, final timing and electrical reports, and original declared limits
 determine whether a physical result can be exported. The dashboard QoR checker
 is not used.
