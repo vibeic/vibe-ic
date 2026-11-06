@@ -27,6 +27,8 @@ sys.path.insert(0, str(_PROGRAMS))
 GATE = _PROGRAMS / "analog_adc_enob_corner_check.py"
 
 FS = 1e6
+TONE = 651.0416667
+OSR = 256
 
 
 # ---------------------------------------------------------------------------
