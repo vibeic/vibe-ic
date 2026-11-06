@@ -111,20 +111,29 @@ def execute(project, directory, tool, route, *, state=None, config=None):
                 "read_sdc " + _word(sdc[0]),
                 "read_vcd -scope " + _word(activity["scope"]) + " " + _word(activity["vcd"]),
                 "set core_activity {}",
-                "foreach port [concat [all_inputs] [all_outputs] [get_pins -hierarchical *]] {",
-                "  lassign [get_property $port activity] density duty origin",
-                '  if {$origin eq "vcd"} {dict set core_activity [get_full_name $port] [list $density $duty]}',
+                "foreach pin [get_pins -hierarchical *] {",
+                "  lassign [get_property $pin activity] density duty origin",
+                '  if {$origin eq "vcd"} {',
+                "    foreach net [get_nets -of_objects $pin] {",
+                "      dict set core_activity [get_full_name $net] [list $density $duty]",
+                "    }",
+                "  }",
                 "}"]
         lines += ["read_verilog " + _word(netlist[0]), "link_design " + _word(top),
                  "read_sdc " + _word(sdc[0]),
                  *("read_spef " + _word(path) for path in spef)]
         if core_scope:
             lines += ["set core_scope " + _word(core_scope),
+                "set chip_nets {}",
+                "foreach net [get_nets -hierarchical *] {dict set chip_nets [get_full_name $net] $net}",
                 "foreach name [dict keys $core_activity] {",
                 "  lassign [dict get $core_activity $name] density duty",
-                '  set targets [list "$core_scope/$name" "$core_scope.$name"]',
-                '  set pins [concat [get_pins -quiet $targets] [get_pins -of_objects [get_nets -quiet $targets]]]',
-                "  set_power_activity -pins $pins -density [expr {$density * [sta::time_ui_sta 1.0]}] -duty $duty",
+                '  foreach target [list "$core_scope/$name" "$core_scope.$name"] {',
+                "    if {[dict exists $chip_nets $target]} {",
+                '      set pins [get_pins -of_objects [dict get $chip_nets $target] -filter "direction==output"]',
+                "      set_power_activity -pins $pins -density [expr {$density * [sta::time_ui_sta 1.0]}] -duty $duty",
+                "    }",
+                "  }",
                 "}"]
         else:
             lines += ["read_vcd -scope " + _word(activity["scope"]) + " " + _word(activity["vcd"])]
@@ -141,8 +150,8 @@ def execute(project, directory, tool, route, *, state=None, config=None):
             return result("FAIL", "Native OpenSTA activity/power command failed.", reports=reports)
         parsed = parse_power_report(text)
         annotated = parsed["activity"]["annotated_pin_activities"]
-        if core_scope and annotated:
-            annotated = len(re.findall(r"^\s*user\s+" + re.escape(core_scope) + r"[/.]\S+", text, re.M))
+        if core_scope:
+            annotated = len(re.findall(r"^\s*user\s+\S+/\S+", text, re.M))
         total = parsed.get("total_row")
         if not annotated or total is None:
             return result("NOT_MEASURED", "OpenSTA left no annotated activity or power Total row.", reports=reports)
