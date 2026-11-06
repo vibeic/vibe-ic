@@ -611,7 +611,7 @@ module {name};
 {read_comment}
   always @(posedge clk) begin
     if (released) begin
-      if (we === 1'bx || we === 1'bz || ren === 1'bx || ren === 1'bz)
+      if ($isunknown({{we, ren}}))
         xctl = xctl + 1;
       if (ren === 1'b1) begin
         if (^raddr === 1'bx || raddr >= MEMSIZE) oob = oob + 1;

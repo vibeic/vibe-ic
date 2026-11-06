@@ -274,6 +274,18 @@ _Captured by benchmark-enhancement-capture 2026-10-21._
 
 _Captured by benchmark-enhancement-capture 2026-11-02._
 
+### Skill: Test eligible interrupt priority and distinct vectors
+
+**When to apply:** a reference model checks interrupt arbitration or vectored dispatch.
+
+**What to do:** derive the winning source from the input's stated priority policy. Assert competing requests together and enable every contender in both its individual mask and the global mask before claiming priority coverage. A priority test requires at least two simultaneously eligible sources. Exercise several source positions so one correctly handled pair cannot conceal a reversed encoder.
+
+Give unselected vector entries a distinct, observable wrong-handler result. An empty vector table can fall through no-op instructions into the intended handler and make its prologue appear correct. Check dispatch and reported cause separately. Compute expected winners and handler effects before running the DUT; never choose them from a trace. Preserve a source-derived failing case and its native corrected result, and keep any remaining coverage shortfall explicit.
+
+**Why this is general:** interrupt controllers and event routers differ in priority and masking policy. The input supplies that policy; the test must establish eligibility and distinguish the selected destination.
+
+_Captured by benchmark-enhancement-capture 2026-11-07._
+
 ### Skill: Complete the declared expert reference fallback
 
 **Pattern and application**: A skipped professional testbench can expose an unfilled expert reference hook without proving an RTL defect. When `professional_tb_gen.py` reports `NOT_MEASURED` with a `testbench-gen` fallback, inspect the actual skip cause and producer evidence. The IC expert resolves evaluation semantics from the visible contract instead of asking the human to supply the model.

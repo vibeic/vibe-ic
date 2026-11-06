@@ -418,7 +418,9 @@ def simulation(project, directory, tool, commands):
 
 
 def formal(project, directory, tool, commands):
-    from formal_property_run import _ensure_expert_observers_bound, _model_texts, frontend_aborted_the_read
+    from formal_property_run import (
+        _ensure_expert_observers_bound, _model_texts, frontend_aborted_the_read, resolve_include_headers,
+    )
     from formal_harness_gen import _resolve_top
 
     authored = {}
@@ -506,9 +508,16 @@ def formal(project, directory, tool, commands):
         return assertions
 
     for index, source in enumerate(paths):
+        model_text = _model_texts(source, source.parent, None)
         _ensure_expert_observers_bound(source, source.parent,
-                                      harness_text=_model_texts(source, source.parent, None))
-        listing = commands.run(["sby", "--dumptasks", source], cwd=source.parent)
+                                      harness_text=model_text)
+        native_source = source
+        body = source.read_text()
+        if "$global_clock" in model_text and not re.search(r"(?m)^(?:\w+:[ \t]*)?multiclock[ \t]+", body):
+            native_source = directory / f"native_input_{index + 1}.sby"
+            native_source.write_text(body.replace("[options]\n", "[options]\nmulticlock on\n", 1))
+            reports.append(native_source)
+        listing = commands.run(["sby", "--dumptasks", native_source], cwd=source.parent)
         if listing is None:
             return commands.result(reports=reports, detail="SymbiYosys is unavailable.")
         if listing.returncode:
@@ -521,16 +530,32 @@ def formal(project, directory, tool, commands):
             required.append(key)
             output = directory / f"proof_{index + 1}_{task_index + 1}"
             first_read = len(commands.records)
-            completed = commands.run(["sby", "-f", "-d", output, source, *([task] if task else [])], cwd=source.parent)
+            completed = commands.run(["sby", "-f", "-d", output, native_source, *([task] if task else [])], cwd=source.parent)
             if completed is None:
                 return commands.result(reports=reports, detail="SymbiYosys is unavailable.")
             config = output / "config.sby"
             if frontend_aborted_the_read(completed.stdout + completed.stderr) and config.is_file():
                 body = config.read_text()
+                original_body = body
                 reads = list(re.finditer(r"(?m)^read_verilog[ \t]+-formal[ \t]+-sv[ \t]+([^\n]+)", body))
-                converted = (commands.run(["sv2v", "--exclude=Assert", "--exclude=SeverityTask",
-                    "-DFORMAL", "-DYOSYS", "-I.", *shlex.split(reads[0][1])], cwd=output / "src")
-                    if len(reads) == 1 else None)
+                converted = None
+                read_error = ""
+                if len(reads) == 1:
+                    arguments = shlex.split(reads[0][1])
+                    sources = [output / "src" / path for path in arguments
+                               if (output / "src" / path).is_file()]
+                    supplied = staged_rtl_sources(project)
+                    for header in resolve_include_headers(sources, [output / "src", source.parent,
+                            *(path.parent for path in sources), *(path.parent for path in supplied)]):
+                        destination = output / "src" / header.name
+                        if not destination.exists():
+                            shutil.copyfile(header, destination)
+                            reports.append(destination)
+                    argv = ["sv2v", "--exclude=Assert", "--exclude=SeverityTask",
+                            "-DFORMAL", "-DYOSYS", "-I.", *arguments]
+                    converted = commands.run(argv, cwd=output / "src")
+                    if converted is not None and converted.returncode:
+                        read_error = next(iter((converted.stderr or converted.stdout).strip().splitlines()), "")
                 if converted is not None and converted.returncode == 0:
                     lowered = output / "sv_frontend.v"
                     lowered.write_text(converted.stdout)
@@ -544,6 +569,26 @@ def formal(project, directory, tool, commands):
                         frontend_failures.add(first_read)
                         reports.extend([lowered, retry, output / "status"])
                         output, completed = destination, alternate
+                missing_include = converted is not None and "Could not find file" in converted.stdout + converted.stderr
+                if len(reads) == 1 and not missing_include and not (output / "model/design.il").is_file():
+                    top_match = re.search(r"(?m)^(?:prep|hierarchy)\b[^\n]*[ \t]-top[ \t]+(\S+)", original_body)
+                    native_read = "read_slang --single-unit --no-synthesis-define -DFORMAL "
+                    if top_match:
+                        native_read += "--top " + top_match[1] + " "
+                    native_read += "-I " + _word(config.parent / "src") + " " + reads[0][1]
+                    retry = config.parent / "slang_frontend.sby"
+                    retry.write_text(original_body[:reads[0].start()] + native_read + original_body[reads[0].end():])
+                    destination = config.parent / "slang_frontend"
+                    retry_index = len(commands.records)
+                    alternate = commands.run(["sby", "-f", "-d", destination, retry], cwd=source.parent)
+                    if alternate is not None:
+                        frontend_failures.update(range(first_read, retry_index))
+                        reports.extend([retry, output / "status"])
+                        output, completed = destination, alternate
+                if not (output / "model/design.il").is_file():
+                    errors = [line for line in (completed.stdout + completed.stderr).splitlines()
+                              if "ERROR:" in line or "error:" in line or "Source line " in line]
+                    scope.append(" ".join(part for part in [read_error, *errors[:2]] if part))
             native = sorted(output.rglob("status"))
             config = output / "config.sby"
             word = (output / "status").read_text().strip().split() if (output / "status").is_file() else []

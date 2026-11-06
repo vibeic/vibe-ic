@@ -779,12 +779,12 @@ def prepare(project: Path, core_config: dict[str, Any], on_tool_run=None) -> dic
         access_layers -= connected_layers
         if access_layers:
             text = Path(str(_required(native, "PDN_CFG"))).read_text()
-            ring_layer = native.get("PDN_CORE_VERTICAL_LAYER") or native["PDN_VERTICAL_LAYER"]
             for layer in sorted(access_layers):
-                command = "add_pdn_connect -grid stdcell_grid -layers {" + layer + " " + ring_layer + "}"
-                reverse = "add_pdn_connect -grid stdcell_grid -layers {" + ring_layer + " " + layer + "}"
-                if command not in text and reverse not in text:
-                    text += "\n" + command + "\n"
+                for ring_layer in sorted(ring_layers):
+                    command = "add_pdn_connect -grid stdcell_grid -layers {" + layer + " " + ring_layer + "}"
+                    reverse = "add_pdn_connect -grid stdcell_grid -layers {" + ring_layer + " " + layer + "}"
+                    if command not in text and reverse not in text:
+                        text += "\n" + command + "\n"
             pdn = destination / "pdn_cfg.tcl"
             pdn.write_text(text)
             result["PDN_CFG"] = str(pdn)
