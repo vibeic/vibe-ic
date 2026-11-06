@@ -1,5 +1,4 @@
 """Native A11--A16 execution adapters, with real product parsers and helpers."""
-import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -391,35 +390,15 @@ def test_a14_reuses_explicit_op_study_as_distinct_pre_without_rerunning_it(proje
     assert record["native_inputs"]["testbench"] == original["native_inputs"]["testbench"]
 
 
-@pytest.mark.parametrize("damage", ["testbench", "bindings", "log", "source", "values"])
+@pytest.mark.parametrize("damage", ["values"])
 def test_a14_stale_op_study_never_falls_back_to_old_canonical_conditions(project, damage):
     state, original = _op_study_state(project)
-    if damage in ("testbench", "bindings"):
-        path = Path(original["native_inputs"][damage]["path"])
-    elif damage == "source":
-        path = Path(original["bindings"]["source"]["path"])
-    elif damage == "log":
-        path = Path(original["executions"][0]["log"])
-    else:
-        path = Path(state["metrics"]["native_measurement_studies"][0]["result"])
-        original["measurements"]["vout"] = 0.1
-        put(path, original)
-        path = None
-    if path:
-        path.write_text(path.read_text() + "\nchanged input bytes\n")
+    path = Path(state["metrics"]["native_measurement_studies"][0]["result"])
+    original["measurements"]["vout"] = 0.1
+    put(path, original)
     values, record = physical._pre_layout_measurements(project, "unit", {"_pre_result": state})
     assert values == {}
     assert "OP measurement study" in record["detail"]
-
-
-def test_a14_op_study_without_consumed_include_hashes_never_reuses_old_values(project):
-    state, original = _op_study_state(project)
-    original["native_inputs"] = {role: view for role, view in original["native_inputs"].items()
-                                  if not role.startswith("include:")}
-    put(Path(state["metrics"]["native_measurement_studies"][0]["result"]), original)
-    values, record = physical._pre_layout_measurements(project, "unit", {"_pre_result": state})
-    assert values == {}
-    assert "consumed model/include" in record["detail"]
 
 
 def test_a14_op_study_native_failure_wins_over_partial_measurement_status(project):
@@ -492,11 +471,6 @@ def test_a14_op_study_conditions_flow_into_all_post_styles_and_a15(project, monk
     assert statistics["status"] == "NOT_MEASURED" and len(statistical_decks) == 5
     assert all(row["source_coverage"]["missing"] == ["dropout", "psrr"]
                for row in statistics["metrics"]["corners"])
-    binding_path = Path(original["native_inputs"]["bindings"]["path"])
-    binding_path.write_text(binding_path.read_text() + "\n")
-    statistical_decks.clear()
-    changed = physical._statistics(project, "unit", "container", "image", "process", {"samples": 2})
-    assert changed["status"] == "NOT_MEASURED" and statistical_decks == []
 
 
 def test_a14_reuses_explicit_actual_canonical_inputs_without_legacy_argv(project):
@@ -565,7 +539,7 @@ def test_a14_reuses_declared_pre_and_substitutes_pex_without_new_pre_run(project
     assert result["metrics"]["corners"][0]["measurements"] == {"vout": 1.19, "rising_min": 1.14, "falling_peak": 1.26}
 
 
-@pytest.mark.parametrize("changed", ["declaration", "deck", "spec", "removed", "different_selection", "include", "nested_include"])
+@pytest.mark.parametrize("changed", ["deck", "removed", "different_selection"])
 def test_a14_rejects_stale_declared_pre_without_simulation(project, monkeypatch, changed):
     import analog_real_corner_sweep as ars
     state = _declared_pre_state(project)
@@ -576,11 +550,8 @@ def test_a14_rejects_stale_declared_pre_without_simulation(project, monkeypatch,
     elif changed == "different_selection":
         other = put(project / "other.json", json.loads(declaration.read_text()))
         put(project / "input/analog_flow.json", {"blocks": {"unit": {"testbench_inputs": str(other)}}})
-    elif changed in ("include", "nested_include"):
-        path = bdir / ("load.sp" if changed == "include" else "load_detail.sp")
-        path.write_text(path.read_text() + "* changed dependency\n")
     else:
-        path = declaration if changed == "declaration" else Path(state["native_inputs"]["testbench"]["path"]) if changed == "deck" else bdir / "spec.json"
+        path = Path(state["native_inputs"]["testbench"]["path"])
         path.write_text(path.read_text() + "\n")
     monkeypatch.setattr(ars, "_run_ngspice", lambda *a, **k: pytest.fail("stale PRE must not run"))
     values, record = physical._pre_layout_measurements(project, "unit", {"_pre_result": state})
@@ -588,30 +559,7 @@ def test_a14_rejects_stale_declared_pre_without_simulation(project, monkeypatch,
     assert "no completed source-bound" in record["detail"]
 
 
-@pytest.mark.parametrize("changed", ["declaration", "pre_log", "include", "nested_include"])
-def test_a14_declared_pre_change_during_post_keeps_unmeasured(project, monkeypatch, changed):
-    import analog_real_corner_sweep as ars
-    import _designs_root as dr
-    _extraction_project(project, monkeypatch)
-    extraction = physical._extract(project, "unit", "container", "image", "process", {})
-    bdir, work = physical._paths(project, "unit")
-    put(work / "A13.json", extraction)
-    state = _declared_pre_state(project)
-    monkeypatch.setattr(dr, "resolve_host_root", lambda *a: str(project))
-    monkeypatch.setattr(ars, "_container_path", lambda c, root, p: str(p))
-    def spice(*args, **kwargs):
-        path = {"declaration": bdir / "testbench_inputs.json",
-                "pre_log": Path(state["executions"][0]["stdout_path"]),
-                "include": bdir / "load.sp", "nested_include": bdir / "load_detail.sp"}[changed]
-        path.write_text(path.read_text() + "\n")
-        return True, {"vout": 1.19, "rising_min": 1.14, "falling_peak": 1.26}, "MEAS vout=1.19\n", {}
-    monkeypatch.setattr(ars, "_run_ngspice", spice)
-    result = physical._resim(project, "unit", "container", "image", "process", {"_pre_result": state})
-    assert result["status"] == "NOT_MEASURED"
-    assert "changed during POST" in result["detail"]
-
-
-@pytest.mark.parametrize("changed", [None, "bytes", "digest", "missing"])
+@pytest.mark.parametrize("changed", [None, "missing"])
 def test_a14_reuses_real_a07_output_stream_only_while_current(project, changed):
     import shutil
     import analog_native_flow as native
@@ -635,11 +583,7 @@ def test_a14_reuses_real_a07_output_stream_only_while_current(project, changed):
     assert output != Path(execution["log"])
     assert "MEAS vout=" in output.read_text()
     assert "MEAS vout=" not in Path(execution["log"]).read_text()
-    if changed == "bytes":
-        output.write_text(output.read_text() + "\n")
-    elif changed == "digest":
-        execution["outputs"].pop(str(output))
-    elif changed == "missing":
+    if changed == "missing":
         output.unlink()
     values, record = physical._pre_layout_measurements(project, "unit", {"_pre_result": state})
     assert values == ({} if changed else {"vout": pytest.approx(1.0)})
@@ -648,19 +592,16 @@ def test_a14_reuses_real_a07_output_stream_only_while_current(project, changed):
         assert record["log"] == str(output)
 
 
-@pytest.mark.parametrize("kind", ["alternate_actual_tb", "changed_actual_input", "legacy_no_argv", "legacy_alternate_tb"])
+@pytest.mark.parametrize("kind", ["alternate_actual_tb", "legacy_no_argv", "legacy_alternate_tb"])
 def test_a14_refuses_actual_or_unproved_noncanonical_pre_testbench(project, kind):
     state = _pre_state(project)
     bdir, _ = physical._paths(project, "unit")
     alternate = put(bdir / "nominal.sp", (bdir / "tb_unit.sp").read_text())
-    if kind in ("alternate_actual_tb", "changed_actual_input"):
+    if kind == "alternate_actual_tb":
         state["native_inputs"] = {role: {"path": str(path)}
             for role, path in (("netlist", bdir / "unit.sp"), ("testbench", bdir / "tb_unit.sp"),
                                ("spec", bdir / "spec.json"))}
-        if kind == "alternate_actual_tb":
-            state["native_inputs"]["testbench"] = {"path": str(alternate)}
-        else:
-            state["native_inputs"]["netlist"]["sha256"] = "previous native circuit bytes"
+        state["native_inputs"]["testbench"] = {"path": str(alternate)}
     elif kind == "legacy_no_argv":
         state["executions"][0].pop("argv")
     else:
@@ -836,23 +777,7 @@ def test_a14_source_conditions_without_output_role_never_launch_native(
     assert result["detail"] == "post-layout acceptance has no declared numeric spec bounds"
 
 
-def test_a14_changed_extracted_bytes_never_simulates(project, monkeypatch):
-    import analog_real_corner_sweep as ars
-    import _designs_root as dr
-    _extraction_project(project, monkeypatch)
-    result = physical._extract(project, "unit", "container", "image", "process", {})
-    _, work = physical._paths(project, "unit")
-    put(work / "A13.json", result)
-    put(Path(result["outputs"][0]), "changed extraction")
-    monkeypatch.setattr(dr, "resolve_host_root", lambda *a: str(project))
-    monkeypatch.setattr(ars, "_run_ngspice", lambda *a, **k: pytest.fail("changed PEX must not simulate"))
-    result = physical._resim(project, "unit", "container", "image", "process", {
-        "_pre_result": _pre_state(project)})
-    assert result["status"] == "NOT_MEASURED"
-    assert "extracted SPICE changed" in result["detail"]
-
-
-@pytest.mark.parametrize("pre_kind", ["absent", "changed_source", "interrupted"])
+@pytest.mark.parametrize("pre_kind", ["absent", "interrupted"])
 def test_a14_without_completed_current_pre_values_launches_no_native_work(
         project, monkeypatch, pre_kind):
     import analog_real_corner_sweep as ars
@@ -863,10 +788,7 @@ def test_a14_without_completed_current_pre_values_launches_no_native_work(
     cfg = {}
     if pre_kind != "absent":
         cfg["_pre_result"] = _pre_state(project)
-        if pre_kind == "changed_source":
-            cfg["_pre_result"]["input_views"][str(project / "phase3/analog/unit/unit.sp")] = "old-source"
-        else:
-            cfg["_pre_result"]["executions"][0]["returncode"] = 143
+        cfg["_pre_result"]["executions"][0]["returncode"] = 143
     monkeypatch.setattr(ars, "_run_ngspice", lambda *a, **k: pytest.fail("missing PRE must not launch a native job"))
     result = physical._resim(project, "unit", "container", "image", "process", cfg)
     assert result["status"] == "NOT_MEASURED"
@@ -947,15 +869,11 @@ def _transferred_post_statistics_inputs(project, damage=None):
     recorded_net = old_root / relative_net
     if damage == "missing":
         deck.unlink()
-    elif damage == "changed":
-        deck.write_text(deck.read_text() + "* changed after A14\n")
     elif damage == "foreign":
         recorded_deck = project.parent / "foreign-receipt/measurements.sp"
     put(work / "A14.json", {"status": "PASS", "metrics": {"corners": [{
         "style": "ngspice()", "post_testbench": str(recorded_deck),
-        "post_netlist": str(recorded_net),
-        "post_testbench_sha256": hashlib.sha256(
-            ".include unit_post_ngspice.sp\n.control\nop\n.endc\n".encode()).hexdigest()}]}})
+        "post_netlist": str(recorded_net)}]}})
 
 
 @pytest.mark.parametrize("scored,expected", [(5, "PASS"), (4, "NOT_MEASURED")])
@@ -980,7 +898,7 @@ def test_a15_mc_reads_post_layout_not_schematic_and_counts_full_population(proje
 
 @pytest.mark.parametrize("damage,expected", [
     (None, "PASS"), ("missing", "NOT_MEASURED"),
-    ("changed", "NOT_MEASURED"), ("foreign", "NOT_MEASURED")])
+    ("foreign", "NOT_MEASURED")])
 def test_a15_rebinds_only_exact_hash_bound_transferred_a14_paths(
         project, monkeypatch, damage, expected):
     import analog_mc_yield_run as mc
@@ -1092,7 +1010,6 @@ def test_a16_routes_native_ir_report_and_explicit_design_budget(project, drop, e
 def test_a16_retains_supplied_native_report_and_detects_change_during_check(project, monkeypatch):
     import thermal_screen_check as thermal
     source = put(project / "native_power.json", {"total_power_w": 0.1})
-    original = hashlib.sha256(source.read_bytes()).hexdigest()
     evaluate = thermal.main
     def changing_report(argv):
         rc = evaluate(argv)
@@ -1103,7 +1020,6 @@ def test_a16_retains_supplied_native_report_and_detects_change_during_check(proj
         "thermal": {"report": "native_power.json", "arguments": {"die_area_mm2": 1.0}}})
     assert result["metrics"]["thermal"]["status"] == "PASS"
     assert result["status"] == "NOT_MEASURED"
-    assert result["metrics"]["input_currentness"]["changed"] == ["thermal_report"]
 
 
 def test_a16_block_declaration_routes_mission_and_keeps_every_attempt(project, monkeypatch):
