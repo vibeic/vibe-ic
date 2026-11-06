@@ -23792,7 +23792,7 @@ def gen_l1_datasheet(project: Path,
         # so downstream Tier-2 / packaging gates can distinguish "no
         # package keyword in input" from "real package_info present".
         "no_package_in_input": _v1_6_340_no_package_in_input,
-        "pin_table": pins[:48],
+        "pin_table": pins,
         "no_pin_table_in_input": no_pin_table_in_input,
         "electrical_specs": e_specs[:64],
         "no_electrical_specs_in_input": no_electrical_specs_in_input,

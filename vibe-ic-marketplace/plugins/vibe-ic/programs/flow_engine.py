@@ -698,6 +698,8 @@ def finish_step(project, row, tool, native, config, features, *, elapsed,
         native.reports.extend(report.get("reports", []))
         native.detail += " " + report.get("detail", "")
         reader_observations.extend(report.get("observations", []))
+        native.tool_seconds += report.get("tool_seconds", 0)
+        native.native_steps.extend(report.get("native_steps", []))
     checks = [check for check in row["checks"] if check.get("when") != "otherwise"
               or tool.get("selected_profile", "otherwise") == "otherwise"]
     for reader in tool.get("check_readers", []):

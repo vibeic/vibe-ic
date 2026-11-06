@@ -296,7 +296,8 @@ def eqy(project, directory, tool, commands, *, state, config):
         netlist = state["pnl"]
     script = directory / "equivalence.eqy"
     source = eqy_script(top, rtl, Path(netlist), liberty[0], synthesis=config,
-        views=directory, liberty_files=list(map(Path, liberty)), model_verilog=models)
+        views=directory, liberty_files=list(map(Path, liberty)), model_verilog=models,
+        group_all=not pad_types)
     if physical:
         removal = "\n".join("delete */t:" + master for master in sorted(physical)) + "\n"
         source = source.replace("[gate]", removal + "[gate]", 1).replace("[script]", removal + "[script]", 1)
