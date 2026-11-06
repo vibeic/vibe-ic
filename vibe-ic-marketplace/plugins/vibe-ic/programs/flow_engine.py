@@ -383,6 +383,7 @@ class NativeChain:
         result = self.preparation_result()
         if error is not None:
             return result
+        state_in = self.state
         from librelane.steps import Step, StepError, StepException
         for module in tool.get("imports", []):
             importlib.import_module(module)
@@ -467,6 +468,11 @@ class NativeChain:
                                         "tool_seconds": elapsed, "detail": detail,
                                         "reports": str(destination)})
             result.detail += detail
+        if tool.get("restore_input_on_failure") and any(
+                (not call["ran"] or call.get("exit_code"))
+                and not (call.get("native_config_disabled") or call.get("native_no_change"))
+                for call in result.native_steps):
+            self.state = state_in
         result.reports = [str(path) for path in directory.rglob("*") if path.is_file()]
         (directory / "state_out.json").write_text(self.state.dumps())
         return result
