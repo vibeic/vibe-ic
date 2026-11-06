@@ -155,7 +155,6 @@ def _declared_checks(project: Path, config, metrics) -> None:
 
 
 def _native_violation_checks(metrics) -> None:
-    """Read native zero-threshold counts, including corners that only warn."""
     for name in ("design__max_slew_violation__count", "design__max_cap_violation__count",
                  "design__max_fanout_violation__count", "timing__setup_vio__count",
                  "timing__hold_vio__count"):

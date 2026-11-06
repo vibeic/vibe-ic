@@ -1,4 +1,3 @@
-"""Generated constraints keep their physical values in native library units."""
 import json
 import re
 import shutil
