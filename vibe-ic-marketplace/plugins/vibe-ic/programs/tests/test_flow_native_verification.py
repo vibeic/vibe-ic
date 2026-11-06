@@ -1012,6 +1012,40 @@ def test_chip_eqy_partitions_independent_matched_state_cones(tmp_path, different
     assert "u_core.left[0]" in matched and "u_core.right[0]" in matched
 
 
+@pytest.mark.parametrize("different", [False, True])
+def test_chip_eqy_keeps_packed_and_scalar_output_aliases_together(tmp_path, different):
+    if not shutil.which("eqy"):
+        pytest.skip("Native EQY is required")
+    gold, gate, cells, pads = [tmp_path/n for n in ("gold.v", "gate.v", "cells.lib", "pads.v")]
+    wrapper = ("module unit(input select,input [1:0] data,output [1:0] result); "
+               "wire sel;wire [1:0] din;\nINPAD ps(.PAD(select),.Y(sel));\n"
+               "INPAD pd0(.PAD(data[0]),.Y(din[0]));\n"
+               "INPAD pd1(.PAD(data[1]),.Y(din[1]));\n")
+    gold.write_text(wrapper + "wire [1:0] _bus; core u_core(sel,din,_bus);\n"
+        "OUTPAD po0(.A(_bus[0]),.PAD(result[0]));\n"
+        "OUTPAD po1(.A(_bus[1]),.PAD(result[1]));endmodule\n"
+        "module core(input sel,input [1:0] din,output [1:0] read_data);\n"
+        "assign read_data=sel?din:2'b00;endmodule\n")
+    gate.write_text(wrapper + "wire \\_bus[0] , \\_bus[1] ;\n"
+        f"assign \\_bus[0] =sel & {'~din[0]' if different else 'din[0]'};\n"
+        "assign \\_bus[1] =sel & din[1];\n"
+        "OUTPAD po0(.A(\\_bus[0] ),.PAD(result[0]));\n"
+        "OUTPAD po1(.A(\\_bus[1] ),.PAD(result[1]));endmodule\n")
+    cells.write_text("library(neutral) {}\n")
+    pads.write_text("(* blackbox *) module INPAD(inout PAD,output Y);endmodule\n"
+                   "(* blackbox *) module OUTPAD(input A,inout PAD);endmodule\n")
+    config = {"DESIGN_NAME":"unit", "VERILOG_FILES":[str(gold)], "DEFAULT_CORNER":"typical",
+              "LIB":{"typical":[str(cells)]}, "PAD_VERILOG_MODELS":[str(pads)]}
+    result = eqy(tmp_path, tmp_path, {}, Commands(tmp_path), state={"nl":str(gate)}, config=config)
+    rows = {row["name"]:row["status"] for row in result["native_steps"]}
+    assert rows["Yosys.Wrapper"] == "PASS", result
+    assert rows["Yosys.EQY.Core"] == ("FAIL" if different else "PASS"), result
+    for side in ("gold", "gate"):
+        module = json.loads((tmp_path/"core"/(side+".json")).read_text())["modules"]["unit"]
+        bus = module["netnames"].get("_bus[0]") or module["netnames"]["_bus"]
+        assert bus["bits"][0] == module["ports"]["po0.A"]["bits"][0]
+
+
 @pytest.mark.parametrize("direct_output", [False, True])
 def test_pad_boundary_removes_logical_package_outputs_and_keeps_core_outputs(tmp_path, direct_output):
     if not shutil.which("yosys"):
