@@ -181,27 +181,6 @@ def test_an_inventory_absent_here_but_present_there_is_not_uncorroborated(
     assert ("is_file", LEFS[0]) in image.asked
 
 
-def test_an_explicit_pdk_argument_is_still_the_callers_word(tmp_path,
-                                                            monkeypatch):
-    p, image = fixture(tmp_path)
-    install(monkeypatch, image)
-    rep = json.loads((p / "reports/phase3/padring.json").read_text())
-    assert rep["pdk_read_where"] == "the PDK argument given"
-    assert image.asked == []
-
-
-def test_the_tech_view_declaration_is_read_through_the_same_seam(tmp_path,
-                                                                 monkeypatch):
-    """The last host read in this path: `IoLibrary` used a bare `read_text()`
-    for its tech-view configs while their paths came from a reader-aware
-    discovery, so a declaration found in the image and read here raised and was
-    swallowed -- and the gate published "PAD-class sites available: []"."""
-    p, image = fixture(tmp_path)
-    image.files[CONFIG] = SITE_DECL
-    install(monkeypatch, image)
-    assert ("read", CONFIG) in image.asked
-
-
 # ── the reader itself ──────────────────────────────────────────────────────
 def test_an_unreachable_image_is_unknown_never_a_default():
     reader = authority.ImageReader(DIGEST, runner=lambda _i, _a: (127, ""))

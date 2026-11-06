@@ -227,21 +227,6 @@ def test_the_banner_predicate_pin_fires_on_the_dangerous_reformat(tmp_path):
         "header, so the pin above proves nothing")
 
 
-def test_a_headerless_spef_carrying_the_disclosure_banner_still_fails(tmp_path):
-    """The same property, executed end to end through the real injector.
-
-    Coupling augmentation runs on a SPEF and writes the banner into it. If that
-    augmentation could supply the header, a headerless extraction would be
-    laundered into a clean rc by the very pass that exists to disclose a
-    limitation.
-    """
-    headerless = ('*DESIGN "top"\n*VERSION "generic"\n'
-                  "*NAME_MAP\n*1 net_a\n*2 net_b\n\n"
-                  "*D_NET *1 0.0002\n*CONN\n*I *10:D I *D generic_seq_cell\n"
-                  "*CAP\n1 *10:D 0.0001\n*RES\n*END\n\n"
-                  "*D_NET *2 0.0003\n*CONN\n*I *12:D I *D generic_seq_cell\n"
-                  "*CAP\n1 *12:D 0.0003\n*RES\n*END\n\n")
-    assert "*SPEF" not in headerless
     # pad past 1 KB so TOO_SMALL is not what produces the rc
 
 

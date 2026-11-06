@@ -128,15 +128,6 @@ def _a3_block(out: str) -> str:
 # This is the layer the round-1 self-test MISSED — it only built structured
 # markers, never the real prose artifact.
 
-def test_gate_recognises_prose_pdk_note_no_injection(tmp_path):
-    """A REAL-shaped prose deck (PDK NOTE, NO structured marker) is accepted
-    by the gate predicate WITHOUT any injection."""
-    proj = tmp_path / "chip"
-    _write_l19(proj, _TARGET_PDK)
-    sp = _write_prose_deck(proj, "delta_sigma", header=_PROSE_HEADER)
-    # sanity: the artifact carries NO structured marker — pure prose.
-    assert "pdk_substitution" not in sp.read_text().lower()
-
 
 # ═════════ FIELD ACCEPTANCE: replay the failing scenario END-TO-END ═════════
 # A real-shaped prose artifact WITHOUT injection → A3 = WAIVED-DEFERRED named

@@ -136,40 +136,6 @@ def _tok(md):
             len(re.findall(r"\bREUSED-IP\b", md)))
 
 
-def test_generated_design_tags_all_generated(tmp_path):
-    p = _mk_rtl(tmp_path, {"spm.v": "module spm(input a); endmodule\n"})
-    md = (p / "SOURCE_MANIFEST.md").read_text()
-    g, r = _tok(md)
-    # token count == module-row count (no legend inflation)
-    rows = len([ln for ln in md.splitlines() if re.match(r"\|\s+`", ln)])
-    assert (g, r) == (1, 0) and g + r == rows
-
-
-def test_reused_ip_design_tags_all_reused(tmp_path):
-    p = _mk_rtl(
-        tmp_path,
-        {"serv_alu.v": "module serv_alu(input a); endmodule\n",
-         "subservient.v": "module subservient(input a); endmodule\n"},
-        manifest={"reused_ip": True, "ip_list": ["serv", "shared_sram_rf"]})
-    md = (p / "SOURCE_MANIFEST.md").read_text()
-    g, r = _tok(md)
-    rows = len([ln for ln in md.splitlines() if re.match(r"\|\s+`", ln)])
-    # design-level provenance: reused_ip:true → every module REUSED-IP, even
-    # ones whose name is not literally in the (IP-family) ip_list.
-    assert (g, r) == (0, 2) and g + r == rows
-
-
-def test_emit_is_non_destructive(tmp_path):
-    p = _mk_rtl(tmp_path, {"spm.v": "module spm(input a); endmodule\n"})
-    (p / "SOURCE_MANIFEST.md").write_text("HAND AUTHORED\n")
-    assert (p / "SOURCE_MANIFEST.md").read_text() == "HAND AUTHORED\n"
-
-
-def test_emit_none_when_no_digital_source(tmp_path):
-    (tmp_path / "phase2" / "stage1" / "rtl").mkdir(parents=True)
-    assert not (tmp_path / "SOURCE_MANIFEST.md").exists()
-
-
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-q"]))

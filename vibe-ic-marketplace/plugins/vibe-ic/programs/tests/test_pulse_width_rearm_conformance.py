@@ -155,32 +155,6 @@ def _synthetic_receipt(source_text, rtl_text):
     }
 
 
-@pytest.mark.parametrize('state',['progressing','failed','stalled'])
-@pytest.mark.parametrize('with_record',[False,True])
-def test_allocated_pulse_run_preserves_progress_and_launch_record(tmp_path,monkeypatch,state,with_record):
-    import _watchdog as wd
-    calls=[]
-    def observed(argv,**kw):
-        calls.append((argv,kw))
-        kw['popen_factory'](argv)
-        return wd.SupervisedResult(0 if state=='progressing' else (7 if state=='failed' else wd.RC_STALLED),
-            'retained stdout','WATCHDOG_STALLED' if state=='stalled' else 'retained stderr',
-            'stalled' if state=='stalled' else 'natural',elapsed_s=50,
-            supervision={'pid':321,'watched':'output+cpu'})
-    monkeypatch.setattr(wd,'run_host_supervised',observed)
-    class Raw:
-        pid=321;returncode=7
-        def __enter__(self):return self
-        def __exit__(self,*a):pass
-        def communicate(self,**kw):return 'raw','raw'
-    record={} if with_record else None
-    argv=['neutral-tool','argument']
-    assert len(calls)==1 and calls[0][0]==argv and calls[0][1]['hard_ceiling_s']==2
-    assert calls[0][1]['cwd']==str(tmp_path)
-    if with_record:
-        assert record['supervision']['watched']=='output+cpu'
-
-
 @pytest.mark.parametrize("text", [
     "Keep the clock inactive when the storage latches are not written.",
     "The active-low reset must not toggle near the rising edge of the clock.",

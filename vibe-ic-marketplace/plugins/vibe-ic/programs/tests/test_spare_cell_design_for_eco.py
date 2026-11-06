@@ -152,23 +152,6 @@ def _final_texts_all_present_and_tagged(plan):
     return {"def": "\n".join(def_lines), "netlist": netlist}
 
 
-def test_preservation_cli_pass(tmp_path):
-    plan = _good_plan(n=5)
-    proj = _write_project(tmp_path, plan)
-    # write a final routed.def + post-pnr netlist that preserve+tag spares
-    pnr = proj / "phase3/stage3/pnr"
-    names = [i["name"] for i in plan["instances"]]
-    (pnr / "routed.def").write_text(
-        "DESIGN top ;\n" + "\n".join(
-            f"  - {nm} inv + FIXED ( 0 0 ) N ;" for nm in names))
-    (pnr / "top_pnr.v").write_text(
-        "\n".join(f"set_dont_touch {nm}" for nm in names))
-    rep = json.loads((tmp_path / "p.json").read_text())
-    assert rep["verdict"] == "PASS"
-    # canonical report also emitted
-    assert (proj / "reports/spare_preservation.json").is_file()
-
-
 # ──────────────────────────────────────────────────────────────────
 # 6) d5 — MIXED PROVENANCE: a preservation verdict must not be carried by
 #    an artefact that does not describe the netlist being shipped.

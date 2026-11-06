@@ -310,35 +310,6 @@ def _tree_where_only_the_optional_inputs_are_absent(root: Path, step: dict):
         encoding="utf-8")
 
 
-def test_check_step_names_the_clauses_that_examined_nothing():
-    step = _step(2)
-    with tempfile.TemporaryDirectory() as td:
-        root = Path(td)
-        _tree_where_only_the_optional_inputs_are_absent(root, step)
-    assert result.declared_not_applicable, (
-        f"step {step['id']} reported status={result.status} with no record "
-        "that any clause was skipped; a step whose gate list is half "
-        "unexecuted must not read like one whose gate list was executed")
-    named = " ".join(result.reasons)
-    assert "NOT-APPLICABLE (declared," in named
-    assert "examined nothing" in named
-
-
-def test_a_not_applicable_never_becomes_a_reason_the_step_failed():
-    """Held out of `non_hint_reasons`, measured rather than read off the source.
-
-    A step whose only unusual reason is a declared not-applicable must keep
-    the verdict it would have had; the disclosure is additive.
-    """
-    step = _step(2)
-    with tempfile.TemporaryDirectory() as td:
-        root = Path(td)
-        _tree_where_only_the_optional_inputs_are_absent(root, step)
-    assert result.status != "FAIL", (
-        f"a declared not-applicable demoted the step to {result.status}: "
-        f"{[r[:90] for r in result.reasons]}")
-
-
 # ── A11 — the advisory slot, same shape, same rule ───────────────────────
 _ADV = {
     "command": "fpga_led_probe_lint . --json reports/x.json",

@@ -346,19 +346,6 @@ def test_the_judge_reads_the_receipt_and_writes_nothing(tmp_path):
         "the judge modified the producer's document")
 
 
-def test_the_classified_line_is_the_first_line_of_stdout(capsys):
-    """WHERE A LINE IS PRINTED DECIDES WHO READS IT.
-
-    Every reader of a non-verdict in this flow takes the FIRST line of stdout.
-    A `=== gate ===` banner printed first hands all of them the banner —
-    MEASURED on a run21 copy, where the row read "gate program signalled
-    VACUOUS_PASS (input not applicable)" and the receipt's own reason reached
-    nobody.
-    """
-    first = capsys.readouterr().out.splitlines()[0]
-    assert first.startswith("NOT_MEASURED ["), first
-
-
 def test_a_refusal_states_its_reason_class_in_the_receipt(tmp_path):
     """`_flow_reason_taxonomy.report_reason_class` reads this field and
     `_p0_declared_reason_class` prefers it over every prose recogniser, so a

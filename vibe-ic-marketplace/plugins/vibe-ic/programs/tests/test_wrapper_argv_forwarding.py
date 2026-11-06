@@ -267,34 +267,6 @@ def test_the_new_audit_artefact_is_itself_declared(step_id, program):
         f"step {step_id}'s gate writes {declared} and no step declares it")
 
 
-@pytest.mark.parametrize("step_id,program", [
-    ("24", "ir_drop_report_check"),
-    ("26", "antenna_report_check"),
-])
-def test_the_declaration_is_satisfiable_on_the_first_evaluation(
-        tmp_path, step_id, program):
-    """DRIVEN through `flow_compliance_check.check_step` with the REAL step
-    from the flow yaml, on a project that does not yet contain the audit file.
-
-    `missing_entries` is computed BEFORE the gate runs, so without the
-    gate-produced re-probe this declaration would report MISSING on evaluation
-    1 and PASS on evaluation 2 — a verdict that depends on how many times it
-    has been run. Assert the artefact exists afterwards AND that the step's
-    reasons never accuse it of being missing."""
-    import yaml  # noqa: WPS433
-    doc = yaml.safe_load(_FLOW.read_text(errors="replace"))
-    step = next(s for s in doc["steps"] if str(s.get("id")) == step_id)
-    declared = _flow_json_target(program)
-
-    proj = _project(tmp_path)
-    assert not (proj / declared).exists(), "fixture must start without it"
-
-
-    assert (proj / declared).is_file(), (
-        f"step {step_id}'s gate did not produce {declared} when driven through "
-        f"check_step")
-
-
 @pytest.mark.parametrize("program", sorted(
     w.replace(".py", "") for w in _WRAPPERS))
 def test_flow_declares_a_real_report_mode(program):

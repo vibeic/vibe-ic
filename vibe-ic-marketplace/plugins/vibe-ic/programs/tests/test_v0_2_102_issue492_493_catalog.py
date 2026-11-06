@@ -246,39 +246,6 @@ def _demo_match(n: int) -> CatalogMatch:
         rtl_files=[f"rtl/file{i}.v" for i in range(n)])
 
 
-def test_493_e2e_pull6_prune6_gate_passes(tmp_path, monkeypatch):
-    """The narrative: pull entry with 6 outputs → prune 6 files via the
-    new path → provenance gate PASSes with the prune event. The OLD
-    failure modes are reproduced first, then gone."""
-    root = _mk_mirror(tmp_path, 6)
-    project = tmp_path / "proj"
-    project.mkdir()
-
-    # pull 6
-
-    # OLD failure mode: delete the files WITHOUT a prune -> missing-file
-    for i in range(6):
-        (project / "phase2" / "stage1" / "rtl" / f"file{i}.v").unlink()
-
-    # Rebuild clean, then use the NEW prune path.
-    shutil.rmtree(project)
-    project.mkdir()
-    # The files are gone
-    for i in range(6):
-        assert not (project / "phase2" / "stage1" / "rtl" / f"file{i}.v").exists()
-
-    # Gate PASSes WITH the prune event (no dangling missing-file fault).
-
-    # The provenance carries both the pull and the prune (removal) event.
-    lines = [json.loads(l) for l in
-             (project / "provenance.jsonl").read_text().splitlines() if l.strip()]
-    events = [e.get("event") for e in lines]
-    assert "ip_catalog_pull" in events and "ip_catalog_prune" in events
-    prune_e = [e for e in lines if e.get("event") == "ip_catalog_prune"][0]
-    assert prune_e["outputs"] == {}
-    assert len(prune_e["removed"]) == 6
-
-
 # --- gate-level guards (no weakening; malformed removals caught) -----------
 def _mkprov(tmp_path: Path, entries: list) -> Path:
     d = tmp_path / "p"

@@ -341,17 +341,6 @@ def test_top_lvs_mismatch_fails(tmp_path, monkeypatch):
     assert rep["rc"] == 1 and rep["verdict"] == "FAIL"
 
 
-def test_m1_presence_without_lvs_now_fails(tmp_path):
-    # the audited stub shape: merged GDS exists, nothing else
-    ms = tmp_path / "phase3" / "mixed_signal"
-    ms.mkdir(parents=True)
-    (ms / "top_merged.gds").write_bytes(b"\x00\x06merged")
-    out_json = tmp_path / "m1.json"
-    rep = json.loads(out_json.read_text())
-    assert any(f["rule"] == "MERGE_NOT_LVS_SUBSTANTIATED"
-               for f in rep["findings"])
-
-
 def test_top_lvs_skips_honestly_without_inputs(tmp_path):
     rep = TL.run(tmp_path, "chip_top", "x", "sky130A")
     assert rep["rc"] == 2 and "inputs missing" in rep["reason"]

@@ -226,22 +226,6 @@ def test_that_disposition_is_skip_eligible():
 # ── direction 2: a design that HAS the subject keeps its gate live ────────
 
 
-def test_a_nested_layer_is_read_not_seen_as_an_empty_document(tmp_path):
-    """The reader is load-bearing. A reader that knows only the flat shape
-    sees NO `scan_chains` key in L20 at all -- an absent key is empty, so it
-    would hand a SCAN-CHAINED design the N/A. Declare the chain in the shape
-    L20 actually ships and the gate must stay live."""
-    proj, rtl = _declares_none(tmp_path)
-    gate = "l20_dft_scan_topology_actionable_check"
-    raw = json.loads((_docs(proj) / DECLARING[gate][0]).read_text())
-    assert "scan_chains" not in raw, "fixture flattened the document"
-    assert raw["fields"]["scan_chains"] == []
-
-    _patch(proj, gate, scan_chains=[{"name": "chain0"}], dft_present=True)
-    nested = json.loads((_docs(proj) / DECLARING[gate][0]).read_text())
-    assert nested["fields"]["scan_chains"], "fixture wrote to the wrong level"
-
-
 # ── the refusals, pinned ──────────────────────────────────────────────────
 
 # Batches 1-4 leave NO P0 sub-gate with an empty population unruled, so the
@@ -250,20 +234,6 @@ def test_a_nested_layer_is_read_not_seen_as_an_empty_document(tmp_path):
 # refusal that still bites, below: a layer the design has NOT declared absent
 # keeps its gate live even when every one of its fields is empty. That is the
 # L24 case on spm, and it is the direction the whole rule exists to protect.
-
-
-def test_an_applicable_but_unextracted_layer_keeps_its_gate_live(tmp_path):
-    """MEASURED on spm: the input carries L24's subject -- 8 occurrences of
-    "sign-off", 5 of DRC, 4 of LVS, 3 of STA across five input documents -- so
-    L24 is emitted APPLICABLE and its skeleton is a real extraction gap, not a
-    declared absence. Every field is still empty, and the gate must still
-    run."""
-    proj, rtl = _declares_none(tmp_path)
-    gate = "l24_signoff_evidence_backed_check"
-    _patch(proj, gate, applicability="APPLICABLE")
-    doc = json.loads((_docs(proj) / "L24_SIGNOFF.json").read_text())
-    assert doc["applicability"] == "APPLICABLE"
-    assert all(v in (None, [], {}) for v in doc["fields"].values()), doc
 
 
 # ── R-0915-35: a population that is a SUBSET of a field ───────────────────

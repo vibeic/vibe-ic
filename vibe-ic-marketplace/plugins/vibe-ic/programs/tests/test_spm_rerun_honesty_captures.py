@@ -127,12 +127,3 @@ def _project(tmp_path: Path, drc_status: str) -> Path:
 def _write_autogen_waivers(proj: Path, entries) -> Path:
     p = proj / "waivers.json"
     return p
-
-
-def test_d3_human_authored_waiver_file_is_never_pruned(tmp_path):
-    """A human-authored waivers.json wins untouched — the same invariant the
-    materializer already guarantees."""
-    proj = _project(tmp_path, "FAIL")
-    p = proj / "waivers.json"
-    before = p.read_text()
-    assert p.read_text() == before

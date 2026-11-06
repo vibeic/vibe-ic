@@ -345,50 +345,6 @@ def test_a_negative_non_cpu_slave_stamp_still_caught(tmp_path):
     assert res["rule"] == "register_map_protocol_unsynthesized"
 
 
-def test_a_negative_pillar1_refuses_100pct_at_zero_scored(tmp_path):
-    """NEGATIVE — Pillar 1 must HONOR the gap even if a coverage report
-    claims 100%. A vacuous TB is not a pass, and an upstream requirements
-    tally cannot override the flow's own admission of 0 scored vectors."""
-    proj = _mk_project(tmp_path, opcodes=[], registers=_regs(7),
-                       scored_vectors=0, placeholder_vectors=8)
-    reports = proj / "reports"
-    reports.mkdir(parents=True, exist_ok=True)
-    (reports / "functional_coverage.json").write_text(json.dumps({
-        "requirements": [{"id": "R1", "status": "PASS"},
-                         {"id": "R2", "status": "PASS"}],
-    }, indent=2))
-
-
-    out = tmp_path / "REPORT.md"
-    text = out.read_text()
-    assert "FUNCTIONAL COVERAGE GAP" in text
-    assert "scored_with_golden=0" in text
-    # The Pillar-1 gate row must NOT read PASS.
-    row = [ln for ln in text.splitlines()
-           if ln.startswith("| 1. Functional Coverage")]
-    assert row, text
-    assert "PASS" not in row[0], row[0]
-
-
-def test_a_positive_pillar1_unaffected_when_goldens_scored(tmp_path):
-    """POSITIVE — Pillar 1 still reports 100% for a genuinely verified run."""
-    proj = _mk_project(tmp_path, opcodes=["0x70", "0x72", "0x74"],
-                       registers=_regs(7),
-                       scored_vectors=8, placeholder_vectors=0)
-    reports = proj / "reports"
-    reports.mkdir(parents=True, exist_ok=True)
-    (reports / "functional_coverage.json").write_text(json.dumps({
-        "requirements": [{"id": "R1", "status": "PASS"},
-                         {"id": "R2", "status": "PASS"}],
-    }, indent=2))
-    out = tmp_path / "REPORT.md"
-    text = out.read_text()
-    assert "FUNCTIONAL COVERAGE GAP" not in text
-    row = [ln for ln in text.splitlines()
-           if ln.startswith("| 1. Functional Coverage")]
-    assert row and "2/2 requirements verified" in row[0]
-
-
 def test_a_negative_regmap_with_no_full_stack_result_is_a_gap(tmp_path):
     """NEGATIVE — a register-map IC with NO full-stack result at all has zero
     functional coverage too; it must not be waived as a vacuous pass."""

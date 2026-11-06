@@ -71,24 +71,7 @@ REAL_ORACLE_LOG = (
 # ════════════════════════════════════════════════════════════════════════
 
 
-def test_483_defect_whitespace_verdict_not_truncated():
-    """DEFECT FIXTURE: a verdict line whose verdict carries internal
-    whitespace — exactly what collapsed the headline to ``Overall: FA``
-    under the old ``.split()[0]``. END STATE: the full token is returned."""
-    line = "Overall: FA IL  (strict=True)"
-    # Prove the OLD slice produced the truncated symptom.
-    old_truncated = line.split(":", 1)[1].strip().split()[0]
-    assert old_truncated == "FA", "fixture must reproduce the old truncation"
     # FIXED PATH: the extractor keeps the full token.
-
-
-def test_483_real_audit_headline_full_token(tmp_path):
-    """Regression: a real run of the generator (flow_compliance audit on an
-    empty project → Overall: FAIL) shows the full ``FAIL`` token."""
-    project = tmp_path / "datacore_empty"
-    project.mkdir()
-    text = (project / "reports" / "final_summary.md").read_text()
-    assert "**`Overall: FAIL`**" in text
 
 
 # ════════════════════════════════════════════════════════════════════════

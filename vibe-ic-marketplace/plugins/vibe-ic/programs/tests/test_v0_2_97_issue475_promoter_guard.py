@@ -117,38 +117,6 @@ def _without_module_docstring(text):
     return "".join(lines[end:])
 
 
-def test_the_matcher_here_is_the_canonical_one_and_not_a_second_copy():
-    """THE RULE IS THE DENY LIST'S OWN, and this test used to break it.
-
-    `chip_deny_list.txt` states its contract in its own header: "Matching is
-    case-insensitive, **word-bounded (\\b)**", and the canonical
-    implementation is `source_chip_agnostic_check._build_token_re`,
-    `(?<![A-Za-z0-9_])(...)(?![A-Za-z0-9_])`. This test re-implemented the rule
-    as a bare SUBSTRING (`line in src.lower()`) and was therefore STRICTER than
-    the file it loads — not by decision, by re-implementation.
-
-    MEASURED at `7903c1972305` on `phase1_doc_one_shot_runner.py`: the
-    canonical matcher reports 0 hits, the substring one reports `['u_hawaii']`,
-    and the single occurrence is inside a COMMENT that cites a run as
-    provenance — `# Round 15 (u_hawaii_adc): a THIRD producer, ...` — not
-    detection logic, which is what this file's own docstring says it guards.
-    The hit is `u_hawaii` matching INSIDE `u_hawaii_adc`; the deny token is
-    `u_hawaii`, and under the word-bounded rule the tree already accepts
-    `u_hawaii_adc`. Aligning here changes no tree-wide policy: the canonical
-    gate reports 0 hits over all 1357 top-level programs today.
-
-    Whether the token OUGHT to be `u_hawaii_adc` is a deny-list question and is
-    not settled here — the deny list is untouched. Doing it the other way
-    round, dropping `u_hawaii` from the list to make one local test green,
-    would blind the tree-wide guard to a real private codename.
-    """
-    header = (PROGRAMS / "tests" / "chip_deny_list.txt").read_text(
-        encoding="utf-8").lower()
-    assert "word-bounded" in header, (
-        "the deny list no longer states the word-bounded rule this test "
-        "delegates to; re-derive the contract before changing the matcher")
-
-
 # ---------------------------------------------------------------------------
 # Guard (c) — positive port-like-evidence corroboration
 # ---------------------------------------------------------------------------

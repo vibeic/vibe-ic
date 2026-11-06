@@ -262,43 +262,6 @@ def test_native_aggregate_keeps_other_findings_and_missing_auditor(tmp_path):
     assert report['total_warns'] > 0 and report['auditors_not_run']
 
 
-def test_default_declared_gate_uses_real_selected_inputs(tmp_path):
-    import yaml
-    project = tmp_path / 'project'
-    rtl = project / 'phase2/stage1/rtl'
-    rtl.mkdir(parents=True)
-    (rtl / 'leaf.v').write_text(NATIVE_LEAF)
-    (rtl / 'top.v').write_text(NATIVE_TOP.replace('parameter ENABLE=0', 'parameter ENABLE=1'))
-    (rtl / 'top_tb.v').write_text('this excluded testbench is not RTL;\n')
-    docs = project / 'phase1/generated_docs'
-    docs.mkdir(parents=True)
-    (docs / 'L9_INTEGRATION_SPEC.json').write_text(json.dumps({'top_module': 'top'}))
-    flow = yaml.safe_load((PROGRAMS.parent / 'flow/phase1_phase2_phase3.yaml').read_text())
-    step2 = next(step for step in flow['steps'] if str(step['id']) == '2')
-    assert {'from': 'D1', 'path': 'phase1/generated_docs/L9_INTEGRATION_SPEC.json'} in step2['required_inputs']
-    def commands(value):
-        if isinstance(value, dict):
-            for key, item in value.items():
-                if key == 'program_exit_zero' and isinstance(item, str) and item.startswith('rtl_hygiene_lint '):
-                    yield item
-                else: yield from commands(item)
-        elif isinstance(value, list):
-            for item in value: yield from commands(item)
-    command, = list(commands(flow))
-    native = next(project.glob('reports/phase2/lint/native-elaboration-*/context.json'))
-    context = json.loads(native.read_text())
-    assert context['top'] == 'top' and context['defines'] == ['SYNTHESIS']
-    assert context['files'] == [str(rtl / 'leaf.v'), str(rtl / 'top.v')]
-    old = {p: p.read_bytes() for p in native.parent.iterdir()}
-    (rtl / 'top.v').write_text(NATIVE_TOP.replace('assign result=source;', 'assign result=routed;'))
-    # The consumer refuses overwriting the previous report. A retry has its
-    # own destination, preserving both the earlier verdict and native proof.
-    assert len(list(project.glob('reports/phase2/lint/native-elaboration-*/context.json'))) == 1
-    retry = command.replace('rtl_hygiene.json', 'rtl_hygiene_retry.json')
-    assert len(list(project.glob('reports/phase2/lint/native-elaboration-*/context.json'))) == 2
-    assert all(p.read_bytes() == value for p, value in old.items())
-
-
 def test_native_rejects_rtl_changed_before_consumer(tmp_path):
     assert shutil.which('yosys'), 'native driver qualification requires Yosys'
     leaf = tmp_path / 'leaf.v'

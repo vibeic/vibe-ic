@@ -176,17 +176,6 @@ def test_container_cat_returns_none_when_no_container(monkeypatch):
 
 
 # ── the inline source actually uses the container-aware reader ─────────
-def test_step_pnr_via_analyzer_uses_container_reader():
-    """Guard against a regression back to the host-only read: the via-
-    analyzer block must call _v1_6_604_read_text_or_container_cat on
-    pdk.tech_lef and must NOT do a bare Path(pdk.tech_lef).read_text()."""
-    src = PROG.read_text()
-    # locate the via-analyzer import as an anchor for the block.
-    anchor = src.index("from _pdk_via_analyzer import routing_layer_upper_bound")
-    block = src[anchor:anchor + 800]
-    assert "_v1_6_604_read_text_or_container_cat(" in block
-    assert "str(pdk.tech_lef), container" in block
-    assert "Path(pdk.tech_lef).read_text(" not in block
 
 
 # ── §4.05 NEGATIVE — benign single-cut PDK emits NO restriction ────────

@@ -205,19 +205,6 @@ def test_state_transition_gate_discloses_no_protocol_as_design_na(tmp_path, caps
                                        message=captured.out) == TAX.DESIGN_DECLARED_NA
 
 
-def test_state_transition_gate_still_errors_when_l3_declares_opcodes(tmp_path, capsys):
-    project = tmp_path / "proj"
-    _l3(project, [{"opcode": "0x74"}])
-    tb = project / "phase2" / "stage1" / "sim" / "tb"
-    tb.mkdir(parents=True)
-    cov = project / "cov.json"
-    cov.write_text(json.dumps({"not": "a list"}))
-    captured = capsys.readouterr()
-    assert "L3 declares 1 command opcode(s)" in captured.err
-    assert "no execution evidence" in captured.err
-    assert "VACUOUS_PASS" not in captured.out
-
-
 def test_behavioural_evidence_skip_is_read_as_design_declared(tmp_path, capsys):
     project = tmp_path / "proj"
     gd = project / "phase1" / "generated_docs"

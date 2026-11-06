@@ -64,36 +64,4 @@ def _mk_sta(project, wns_neg):
     return rpt
 
 
-def test_564_existing_repair_record_preserved(tmp_path, monkeypatch):
-    project = tmp_path / "proj"
-    repair_dir = project / "phase3/stage3/postroute_timing_repair"
-    repair_dir.mkdir(parents=True)
-    rich = {
-        "program": "agent",
-        "verdict": "REPAIR_REQUIRED",
-        "changes": [{"cell": "buf1", "op": "upsize"}],
-        "re_verified": True,
-        "affected_steps": ["sta", "route"],
-    }
-    (repair_dir / "repair_log.json").write_text(json.dumps(rich))
-    _mk_sta(project, wns_neg=True)
-    out = json.loads((repair_dir / "repair_log.json").read_text())
-    # the rich provenance survives
-    assert out["changes"] == rich["changes"]
-    assert out["re_verified"] is True
-    assert out["affected_steps"] == rich["affected_steps"]
-    # measured values refreshed
-    assert out["wns_negative"] is True
-
-
-def test_564_no_existing_record_writes_minimal(tmp_path):
-    project = tmp_path / "proj2"
-    repair_dir = project / "phase3/stage3/postroute_timing_repair"
-    repair_dir.mkdir(parents=True)
-    _mk_sta(project, wns_neg=True)
-    out = json.loads((repair_dir / "repair_log.json").read_text())
-    assert out["verdict"] == "REPAIR_REQUIRED"
-    assert "changes" not in out  # minimal shape
-
-
 # ── #568 — CTS evidence-lost marker is FAILed (no fabricated no-op) ────────

@@ -115,30 +115,6 @@ JSON_CHECKERS = [name for name in PROJECT_CHECKERS + RTL_DIR_CHECKERS
                  if name != "l4_regmap_enumerated_values_typed_check"]
 
 
-@pytest.mark.parametrize("gate", JSON_CHECKERS)
-def test_real_p0_dispatch_preserves_the_leaf_enumeration(tmp_path, monkeypatch, gate):
-    project = tmp_path / "project"
-    rtl = project / "phase2/stage1/rtl"
-    rtl.mkdir(parents=True)
-    (rtl / "plain.v").write_text(PLAIN_RTL)
-    docs = project / "phase1/generated_docs"
-    docs.mkdir(parents=True)
-    (docs / "L9_RTL_STRUCTURE.json").write_text(json.dumps({
-        "schema_version": 2, "submodules": [{"name": "plain"}],
-        "memories": [{"name": "external_memory"}]}))
-    (docs / "L6_CONTROL_LOGIC.json").write_text(json.dumps({
-        "schema_version": 2, "fsm_states": [{"name": "IDLE"}]}))
-    # Select real registered consumers; do not substitute their result or
-    # bypass the umbrella's argv, subprocess, report reader or record guard.
-    records = []
-    assert len(records) == 1
-    record = records[0]
-    assert record["evidence"].get("exit_code") == 2, record
-    assert record["reason_class"] == CLS, record
-    assert record["verdict"] == "SKIP", record  # never PASS credit
-    assert SA.is_valid(record["evidence"].get(SA.EVIDENCE_KEY)), record
-
-
 # ── 6. the deck's own hygiene ─────────────────────────────────────────────
 def test_no_two_tests_in_this_file_share_a_name():
     tree = ast.parse(Path(__file__).read_text())

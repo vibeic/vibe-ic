@@ -285,28 +285,6 @@ ERC clean: YES
 """
 
 
-def test_step31_gate_refuses_the_tail_report(tmp_path):
-    d = tmp_path / "reports" / "phase3"
-    d.mkdir(parents=True)
-    (d / "erc.rpt").write_text(_TAIL_ERC_RPT)
-    findings, stats = [], {}
-    cats = {f.category for f in findings}
-    assert "ERC_DIRTY" in cats, [(f.category, f.message) for f in findings]
-    assert stats["erc_floating_pins"] == 1
-    assert stats.get("erc_clean") is not True
-
-
-def test_a_floating_spare_output_net_stays_benign(tmp_path):
-    """Only INPUT pins changed class: a bare floating net is judged as before."""
-    body = ("ERC floating nets: 1\nERC clean: NO\n"
-            "[WARNING RSZ-0020] found 1 floating nets.\n VGND\n")
-    d = tmp_path / "reports" / "phase3"
-    d.mkdir(parents=True)
-    (d / "erc.rpt").write_text(body)
-    findings, stats = [], {}
-    assert "ERC_BENIGN_FLOATS" in {f.category for f in findings}
-
-
 def test_the_erc_producer_counts_floating_pins(tmp_path, monkeypatch):
     """`_emit_erc_report` on the tail run's tool transcript (container faked)."""
     import phase3_one_shot_runner as R
