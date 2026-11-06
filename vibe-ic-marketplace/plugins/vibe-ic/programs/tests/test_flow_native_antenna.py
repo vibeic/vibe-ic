@@ -95,12 +95,22 @@ def input_state(project, metal_length):
 
 @pytest.mark.parametrize("target", ["ip_hardmacro", "shippable_gds"])
 @pytest.mark.parametrize("case,expected", [("clear", "PASS"), ("violation", "FAIL"),
-                                           ("no_deck", "NOT_MEASURED")])
+                                           ("no_deck", "PASS"), ("missing_metric", "NOT_MEASURED"),
+                                           ("openroad_violation", "FAIL")])
 def test_public_row_keeps_native_gds_result(tmp_path, monkeypatch, native_inputs, target, case, expected):
     config = native_inputs
     state = input_state(tmp_path, 100000 if case == "violation" else 1000)
     if case == "no_deck":
-        config = config.copy(KLAYOUT_ANTENNA_RUNSET=None)
+        pdk_config = tmp_path / "pdks/neutral/libs.tech/librelane/config.tcl"
+        pdk_config.write_text("\n".join(line for line in pdk_config.read_text().splitlines()
+            if "KLAYOUT_ANTENNA_RUNSET" not in line) + "\n")
+    if case == "missing_metric":
+        monkeypatch.setattr(Step.factory.get("KLayout.Antenna"), "run", lambda *args, **kwargs: ({}, {}))
+    if case == "openroad_violation":
+        database = odb.dbDatabase.create()
+        odb.read_db(database, str(tmp_path / "unit.odb"))
+        database.getTech().findLayer("metal1").getDefaultAntennaRule().setPAR(1)
+        odb.write_db(database, str(tmp_path / "unit.odb"))
 
     def initialize(chain):
         if chain.owner is None:
@@ -116,19 +126,25 @@ def test_public_row_keeps_native_gds_result(tmp_path, monkeypatch, native_inputs
     assert row["status"] == expected, row
     steps = {step["name"]: step for step in row["native_steps"]}
     assert steps["OpenROAD.CheckAntennas"]["status"] == "PASS"
-    assert row["native_metrics"]["antenna__violating__nets"] == 0
-    assert row["native_metrics"]["antenna__violating__pins"] == 0
-    assert row["native_metrics"]["route__antenna_violation__count"] == 0
-    assert steps["Checker.KLayoutAntenna"]["status"] == expected
-    if case == "no_deck":
+    assert row["native_metrics"]["antenna__violating__nets"] == int(case == "openroad_violation")
+    assert row["native_metrics"]["antenna__violating__pins"] == int(case == "openroad_violation")
+    assert row["native_metrics"]["route__antenna_violation__count"] == int(case == "openroad_violation")
+    assert steps["Checker.KLayoutAntenna"]["status"] == ("PASS" if case == "openroad_violation" else expected)
+    if case in {"no_deck", "missing_metric"}:
         assert "klayout__antenna_error__count" not in row["native_metrics"]
-        assert "NOT_MEASURED" in steps["Checker.KLayoutAntenna"]["detail"]
+        if case == "no_deck":
+            assert not any(item["metric"] == "klayout__antenna_error__count" for item in row["metrics"])
+            assert engine.read_json(tmp_path / "steps/antenna_checks/klayout_antenna/config.json")["KLAYOUT_ANTENNA_RUNSET"] is None
+            assert engine.read_json(tmp_path / "steps/antenna_checks/checker_klayoutantenna/config.json")["ERROR_ON_MISSING_METRIC"] is False
+        else:
+            assert "NOT_MEASURED" in steps["Checker.KLayoutAntenna"]["detail"]
+            assert next(item for item in row["metrics"] if item["metric"] == "klayout__antenna_error__count")["status"] == "NOT_MEASURED"
     else:
         assert row["native_metrics"]["klayout__antenna_error__count"] == int(case == "violation")
         report = tmp_path / "steps/antenna_checks/klayout_antenna/reports/antenna.klayout.lyrdb"
         assert str(report) in row["reports"] and report.is_file()
         checked = next(item for item in row["metrics"] if item["metric"] == "klayout__antenna_error__count")
-        assert (checked["limit"], checked["status"]) == (0, expected)
+        assert (checked["limit"], checked["status"]) == (0, "FAIL" if case == "violation" else "PASS")
     assert (tmp_path / "steps/antenna_checks/checker_klayoutantenna/state_in.json").is_file()
     assert (tmp_path / "steps/antenna_checks/state_out.json").is_file()
 
