@@ -2002,7 +2002,8 @@ def _declared_spellings(project: Optional[Path]) -> set:
     return out
 
 
-def _selected_interface_ports(project: Path, ports: List[Port], top: str) -> List[Port]:
+def _selected_interface_ports(project: Path, ports: List[Port], top: str,
+                              *, port_sources: Optional[dict] = None) -> List[Port]:
     """Use declared names and document widths for delegated port roles.
 
     An incomplete or ambiguous choice leaves the document default intact.
@@ -2035,7 +2036,7 @@ def _selected_interface_ports(project: Path, ports: List[Port], top: str) -> Lis
                     any(role in selected for role in ("read_address", "write_address")))):
             continue
         pattern = re.compile(r"(?:^|_)" + re.escape(interface) + r"_(.+)$", re.I)
-        replacements, used = {}, set()
+        replacements, selected_sources, used = {}, {}, set()
         for port in ports:
             match = pattern.search(port.name)
             if not match or _l3_fixed_port_name(project, port.name):
@@ -2058,6 +2059,11 @@ def _selected_interface_ports(project: Path, ports: List[Port], top: str) -> Lis
                 continue
             replacements[port.name] = [Port(selected[role], port.direction, port.width,
                                              port.optional) for role in targets]
+            if port_sources is not None:
+                for role in targets:
+                    selected_sources[selected[role]] = [*port_sources.get(port.name, []),
+                        {"file": str(project / "plugin_output/declaration.json"),
+                         "field": f"{key}.{role}", "value": selected[role]}]
             used.update(targets)
         if used != set(roles):
             continue
@@ -2069,6 +2075,11 @@ def _selected_interface_ports(project: Path, ports: List[Port], top: str) -> Lis
             by_name[port.name] = port
         else:
             ports = list(by_name.values())
+            if port_sources is not None:
+                sources = {p.name: selected_sources.get(p.name, port_sources.get(p.name, []))
+                           for p in ports}
+                port_sources.clear()
+                port_sources.update(sources)
     return ports
 
 
