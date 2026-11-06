@@ -404,6 +404,31 @@ def test_prepare_writes_usable_chip_inputs_and_preserves_pdn(inputs):
     assert result["CORE_AREA"][0] == 22
 
 
+@pytest.mark.parametrize("wide_side", ["N", "E"])
+def test_unbalanced_pad_sides_size_each_die_dimension(inputs, monkeypatch, wide_side):
+    project, config, native, ports, doc = inputs
+    ports = [{**port, "width": 32, "msb": 33} if port["name"] == "data" else port
+             for port in ports]
+    other = "E" if wide_side == "N" else "N"
+    doc.write_text("# Physical Pad Placement\n| Side | Signal |\n|---|---|\n"
+        f"| {chip.SIDES[wide_side]} | `data[33:2]` |\n"
+        f"| {chip.SIDES[other]} | `clk` |\n| South | `reset` |\n| West | `result` |\n")
+    monkeypatch.setattr(chip, "_native_core", lambda *args: (native, ports, 40.0, []))
+
+    result = chip.prepare(project, config)
+
+    die, core = result["DIE_AREA"], result["CORE_AREA"]
+    dimensions = [die[2] - die[0], die[3] - die[1]]
+    wide_axis = 0 if wide_side == "N" else 1
+    assert dimensions[wide_axis] > 2 * dimensions[1 - wide_axis]
+    assert len(result["PAD_" + chip.SIDES[wide_side]]) >= 32
+    assert (core[2] - core[0]) * (core[3] - core[1]) >= 40 / .4
+    assert native["FP_CORE_UTIL"] == config["FP_CORE_UTIL"] == 40
+    (project / "aspect_observation.json").write_text(json.dumps({
+        "die": die, "core": core, "die_area_um2": dimensions[0] * dimensions[1],
+        "pad_sides": {side: result["PAD_" + side] for side in chip.SIDES.values()}}))
+
+
 def test_current_geometry_reaches_floorplan_and_reserves_both_ring_rails(inputs, monkeypatch):
     import flow_pdn_current
     project, config, native, _, _ = inputs

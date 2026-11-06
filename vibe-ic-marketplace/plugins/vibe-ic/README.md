@@ -1,4 +1,4 @@
-# vibe-ic — AI-Native IC Design plugin (**v1.39.49**)
+# vibe-ic — AI-Native IC Design plugin (**v1.39.50**)
 
 **Design rules: [CHARTER.md](CHARTER.md).** Fixed by the owner: use the tools, judge on their native results, add no self-imposed gates.
 

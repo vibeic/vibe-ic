@@ -410,8 +410,8 @@ def _floorplan(native: dict, chosen: dict, ordered: dict, library: dict, area: f
              for side, instances in ordered.items()}
     minimum_gap = placement.min_pad_distance_um if placement else None
     minimum_gap = float(minimum_gap or 0)
-    minimum = max(spans[side] + max(len(ordered[side]) - 1, 0) * minimum_gap
-                  + 2 * (corner + edge) for side in SIDES)
+    minimum = {side: spans[side] + max(len(ordered[side]) - 1, 0) * minimum_gap
+               + 2 * (corner + edge) for side in SIDES}
     required_width, required_height = math.sqrt(area / util / aspect), math.sqrt(area / util * aspect)
     minimum_core = {}
     for axis in ("V", "H"):
@@ -422,8 +422,8 @@ def _floorplan(native: dict, chosen: dict, ordered: dict, library: dict, area: f
     required_width = max(required_width, minimum_core.get("V", 0), minimum_core.get("H", 0) / aspect)
     required_height = required_width * aspect
     explicit_die, explicit_core = native.get("DIE_AREA"), native.get("CORE_AREA")
-    width = max(minimum, required_width + 2 * inset)
-    height = max(minimum, required_height + 2 * inset)
+    width = max(minimum["N"], minimum["S"], required_width + 2 * inset)
+    height = max(minimum["E"], minimum["W"], required_height + 2 * inset)
     if explicit_core:
         width = max(width, float(explicit_core[2]) + inset)
         height = max(height, float(explicit_core[3]) + inset)
