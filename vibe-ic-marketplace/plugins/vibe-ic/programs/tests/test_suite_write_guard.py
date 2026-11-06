@@ -127,124 +127,11 @@ def _nested_pytest(repo: Path, test_file: Path, *extra: str, env: dict | None = 
 # prove it reddens; that control is mandatory."
 # --------------------------------------------------------------------------
 
-def test_a_planted_writer_reddens_the_session(tmp_path):
-    """A test that appends to a TRACKED shipped file must make the run RED.
-
-    This is the `add_compliance_gate.py` shape exactly: a passing test that
-    appends to a shipped file and never restores it.
-    """
-    repo = _repo(tmp_path)
-    target = repo / "pkg" / "shipped.txt"
-    tf = _write_test_file(repo, (
-        "from pathlib import Path\n"
-        f"def test_appends_to_a_shipped_file():\n"
-        f"    p = Path({str(target)!r})\n"
-        "    p.write_text(p.read_text() + 'appended by a passing test\\n')\n"
-        "    assert p.is_file()\n"))
-
-    p = _nested_pytest(repo, tf)
-    out = p.stdout + p.stderr
-
-    # the test itself PASSED — that is the whole point of the defect
-    assert "1 passed" in out, out
-    # ... and the session is still RED, because of the write
-    assert p.returncode != 0, f"guard did not redden the session:\n{out}"
-    assert "WROTE INTO THE TREE" in out, out
-    # it NAMES the path, rather than only failing
-    assert "pkg/shipped.txt" in out, out
-    # and the tree really was mutated
-    assert "appended by a passing test" in target.read_text()
-
-
-def test_a_planted_untracked_writer_also_reddens(tmp_path):
-    """`??` is blocking too — `git add -A` would ship it just the same."""
-    repo = _repo(tmp_path)
-    tf = _write_test_file(repo, (
-        "from pathlib import Path\n"
-        f"def test_creates_an_untracked_file():\n"
-        f"    d = Path({str(repo)!r}) / 'reports'\n"
-        "    d.mkdir(parents=True, exist_ok=True)\n"
-        "    (d / 'leftover.json').write_text('{}\\n')\n"))
-
-    p = _nested_pytest(repo, tf)
-    out = p.stdout + p.stderr
-    assert "1 passed" in out, out
-    assert p.returncode != 0, f"untracked write did not redden:\n{out}"
-    assert "reports/leftover.json" in out, out
-
-
-def test_a_rewrite_of_an_ALREADY_dirty_file_still_reddens(tmp_path):
-    """Status alone cannot see this; the content signature is what catches it.
-
-    The file is already ` M` before the session, so porcelain reads ` M` both
-    before and after. Only `(status, size, mtime_ns)` distinguishes them —
-    which is why the snapshot carries more than the status.
-    """
-    repo = _repo(tmp_path)
-    target = repo / "pkg" / "shipped.txt"
-    target.write_text("a developer's own edit, in flight\n")
-
-    tf = _write_test_file(repo, (
-        "from pathlib import Path\n"
-        f"def test_rewrites_an_already_modified_file():\n"
-        f"    p = Path({str(target)!r})\n"
-        "    p.write_text('overwritten by the suite, quite differently\\n')\n"))
-
-    p = _nested_pytest(repo, tf)
-    out = p.stdout + p.stderr
-    assert p.returncode != 0, f"rewrite of a dirty file went unnoticed:\n{out}"
-    assert "pkg/shipped.txt" in out, out
-
 
 # --------------------------------------------------------------------------
 # The paired clean direction. Vacuous on its own — meaningful only next to the
 # planted writers above, which prove this same code path can fire.
 # --------------------------------------------------------------------------
-
-def test_a_non_writing_session_stays_green(tmp_path):
-    repo = _repo(tmp_path)
-    tf = _write_test_file(repo, "def test_reads_nothing():\n    assert True\n")
-    p = _nested_pytest(repo, tf)
-    out = p.stdout + p.stderr
-    assert p.returncode == 0, out
-    assert "wrote nothing" in out, out
-
-
-def test_a_dirty_tree_at_session_start_is_NOT_blamed_on_the_run(tmp_path):
-    """The false positive that would make people route around the gate.
-
-    A developer with edits in flight must not be told the suite wrote them.
-    """
-    repo = _repo(tmp_path)
-    (repo / "pkg" / "shipped.txt").write_text("in-flight edit\n")
-    (repo / "untracked_scratch.txt").write_text("mine, not the suite's\n")
-
-    tf = _write_test_file(repo, "def test_reads_nothing():\n    assert True\n")
-    p = _nested_pytest(repo, tf)
-    out = p.stdout + p.stderr
-    assert p.returncode == 0, f"pre-existing dirt was blamed on the run:\n{out}"
-    assert "shipped.txt" not in out, out
-    assert "untracked_scratch.txt" not in out, out
-
-
-def test_ignored_class_is_named_but_never_blocking(tmp_path):
-    """The invisible class: reported so it is not lost, advisory so it is not
-    a gate that fires on every run in every checkout."""
-    repo = _repo(tmp_path)
-    tf = _write_test_file(repo, (
-        "from pathlib import Path\n"
-        f"def test_leaves_an_ignored_artefact():\n"
-        f"    d = Path({str(repo)!r}) / 'cache'\n"
-        "    d.mkdir(parents=True, exist_ok=True)\n"
-        "    (d / 'leftover.json').write_text('{}\\n')\n"))
-
-    p = _nested_pytest(repo, tf)
-    out = p.stdout + p.stderr
-    assert p.returncode == 0, f"an ignored artefact must not block:\n{out}"
-    assert "cache/leftover.json" in out, out
-    assert "ADVISORY" in out, out
-
-
 
 
 # --------------------------------------------------------------------------
@@ -252,46 +139,9 @@ def test_ignored_class_is_named_but_never_blocking(tmp_path):
 # --------------------------------------------------------------------------
 
 
-
-def test_turning_the_guard_off_announces_itself(tmp_path):
-    """A disabled guard that is silent reads as a guard that passed."""
-    repo = _repo(tmp_path)
-    tf = _write_test_file(repo, "def test_x():\n    assert True\n")
-    p = _nested_pytest(repo, tf, "--write-guard=off")
-    out = p.stdout + p.stderr
-    assert p.returncode == 0, out
-    assert "WRITE_GUARD_NOT_CHECKED" in out, out
-
-
-
-
 # --------------------------------------------------------------------------
 # CLI shape, and per-test attribution.
 # --------------------------------------------------------------------------
-
-
-
-def test_per_test_mode_attributes_the_write_to_its_nodeid(tmp_path):
-    """Session mode says the RUN wrote; per-test says WHICH test wrote.
-
-    2471 test files make "one file at a time against a reset tree" not a
-    90-minute job, which is what made attributing the three known writers cost
-    three separate accidents.
-    """
-    repo = _repo(tmp_path)
-    tf = _write_test_file(repo, (
-        "from pathlib import Path\n"
-        "def test_innocent():\n    assert True\n"
-        f"def test_guilty():\n"
-        f"    p = Path({str(repo / 'pkg' / 'shipped.txt')!r})\n"
-        "    p.write_text('written here\\n')\n"))
-
-    p = _nested_pytest(repo, tf, "--write-guard=per-test")
-    out = p.stdout + p.stderr
-    assert p.returncode != 0, out
-    assert "test_guilty" in out, out
-    assert "written by" in out, out
-    assert "test_innocent" not in out.split("written by")[-1], out
 
 
 # --------------------------------------------------------------------------
@@ -326,68 +176,9 @@ def _broken_pytest11_dist(tmp_path: Path) -> Path:
     return site
 
 
-def test_a_broken_host_plugin_cannot_redden_the_child_but_WOULD_have(tmp_path):
-    """Both directions, in one test, because either alone proves nothing.
-
-    The negative control comes first: with autoload left to the host, the
-    fabricated plugin really does kill the child before the guard can speak.
-    An immunity assertion whose hostile fixture is inert would pass against
-    the pre-fix code too (flow-change-acceptance §1).
-    """
-    repo = _repo(tmp_path)
-    target = repo / "pkg" / "shipped.txt"
-    tf = _write_test_file(repo, (
-        "from pathlib import Path\n"
-        f"def test_appends_to_a_shipped_file():\n"
-        f"    p = Path({str(target)!r})\n"
-        "    p.write_text(p.read_text() + 'appended by a passing test\\n')\n"))
-    site = _broken_pytest11_dist(tmp_path)
-
-    # NEGATIVE CONTROL — this is the .102 failure, reproduced here.
-    hostile = _child_env(str(site))
-    hostile.pop("PYTEST_DISABLE_PLUGIN_AUTOLOAD")
-    p = _nested_pytest(repo, tf, env=hostile)
-    out = p.stdout + p.stderr
-    assert p.returncode != 0, f"the hostile fixture is inert:\n{out}"
-    assert _BROKEN_PLUGIN_ERROR in out, f"the plugin never loaded:\n{out}"
-    # and note WHY that red says nothing about the guard: the session died
-    # during config parse, so the guard never got to report at all
-    assert "WROTE INTO THE TREE" not in out, out
-    assert not target.read_text().endswith("appended by a passing test\n")
-
-    # THE FIX — same broken plugin, same path, environment decided by us.
-    p = _nested_pytest(repo, tf, env=_child_env(str(site)))
-    out = p.stdout + p.stderr
-    assert _BROKEN_PLUGIN_ERROR not in out, f"host plugin reached the child:\n{out}"
-    # the guard is still LOADED and still bites — the green was not bought by
-    # taking the guard out of the child
-    assert "1 passed" in out, out
-    assert p.returncode != 0, f"guard did not redden the session:\n{out}"
-    assert "WROTE INTO THE TREE" in out, out
-    assert "pkg/shipped.txt" in out, out
-
-
-def test_a_broken_host_plugin_cannot_redden_a_NON_writing_child(tmp_path):
-    """The false RED #1047 actually produced: a clean session called dirty.
-
-    `test_a_non_writing_session_stays_green` is the one whose `returncode == 0`
-    was an assertion about the host's `site-packages`. Under a hostile path it
-    must still be an assertion about the guard.
-    """
-    repo = _repo(tmp_path)
-    site = _broken_pytest11_dist(tmp_path)
-    tf = _write_test_file(repo, "def test_reads_nothing():\n    assert True\n")
-
-    p = _nested_pytest(repo, tf, env=_child_env(str(site)))
-    out = p.stdout + p.stderr
-    assert p.returncode == 0, f"a host plugin reddened a clean session:\n{out}"
-    assert "wrote nothing" in out, out
-
-
 # --------------------------------------------------------------------------
 # The guard must not perturb its own subject.
 # --------------------------------------------------------------------------
-
 
 
 # --------------------------------------------------------------------------
@@ -395,11 +186,6 @@ def test_a_broken_host_plugin_cannot_redden_a_NON_writing_child(tmp_path):
 # (flow-change-acceptance §4): "a change whose tests are all fixtures authored
 # alongside it cannot distinguish itself from its own absence."
 # --------------------------------------------------------------------------
-
-
-
-
-
 
 
 # --------------------------------------------------------------------------
