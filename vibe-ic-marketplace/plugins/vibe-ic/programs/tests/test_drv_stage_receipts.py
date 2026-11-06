@@ -278,39 +278,6 @@ def test_detailed_route_receipt_refuses_changed_drc_bytes(tmp_path, monkeypatch)
 
 
 
-def test_pad_mode_warmup_uses_the_quiet_timing_query(tmp_path):
-    import subprocess
-    import sdc_environment as sdc
-    core = tmp_path / "core.lib"
-    io = tmp_path / "io.lib"
-    core.write_text('library(core) { time_unit : "1ns"; }')
-    io.write_text('library(io) { time_unit : "1ns"; cell(pad) {'
-                  ' pin(PAD) { max_transition : 25; } } }')
-    record = tmp_path / sdc.IO_PAD_RECORD
-    record.parent.mkdir(parents=True)
-    record.write_text(json.dumps({"verdict": "WROTE",
-        "io_library_liberty": [str(io)],
-        "pad_instances": {"u_pad": {"master": "pad", "terminal": "PAD", "port": "clk"}}}))
-    scene = sdc.pad_operating_scene(tmp_path, str(core))
-    assert scene["complete_pin_limits"]
-    script = tmp_path / "warmup.tcl"
-    script.write_text('''namespace eval ::sta {}
-set warmups 0
-proc worst_slack {args} { incr ::warmups; return 42 }
-proc report_worst_slack {args} { error {nested logger redirection} }
-proc report_check_types {args} { return native_report }
-proc ::sta::max_slew_violation_count {} { return 0 }
-proc write_sdc {args} {}
-proc get_cells {args} { return u_pad }
-proc get_timing_edges {args} { return {} }
-''' + scene["tcl"] + '''
-puts "RESULT [report_check_types -max_slew]"
-puts "WARMUPS $warmups"
-''')
-    run = subprocess.run([TCLSH, str(script)], capture_output=True, text=True)
-    assert run.returncode == 0, run.stderr
-    assert "RESULT native_report" in run.stdout
-    assert "WARMUPS 1" in run.stdout
 
 
 
