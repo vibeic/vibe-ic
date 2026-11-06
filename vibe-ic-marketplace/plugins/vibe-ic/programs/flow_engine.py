@@ -763,16 +763,7 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
                           from_name=from_name, to_name=to_name, pdk=pdk)
         finally:
             if work.publish() is not None:
-                paths = [path for folder in ("steps", "reports", "phase1", "phase2", "phase3")
-                         for path in (project / folder).glob("**/*.json")]
-                for path in paths:
-                    try:
-                        before = read_json(path)
-                    except (ValueError, OSError):
-                        continue
-                    after = vibeic_temp.relocate(before, work.mapping)
-                    if after != before:
-                        write_json(path, after)
+                vibeic_temp.relocate_project(project, work.mapping)
         return vibeic_temp.relocate(result, work.mapping)
 
 

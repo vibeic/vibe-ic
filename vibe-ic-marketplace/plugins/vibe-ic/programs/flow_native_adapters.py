@@ -243,21 +243,25 @@ def simulation_sources(project, files, top, benches):
             list(dict.fromkeys(path.parent for path in [*benches, *selected])))
 
 
-def cocotb_run(directory, tb, files, top, commands, simulator, include_dirs):
+def cocotb_run(directory, tb, files, top, commands, simulator, include_dirs, *, waves=False):
     import verilator_coverage_measure as coverage
     directory.mkdir()
     makefile = directory / "simulation.mk"
-    flags = " ".join(coverage.COVERAGE_INSTRUMENTATION_FLAGS)
+    flags = "" if waves else " ".join(coverage.COVERAGE_INSTRUMENTATION_FLAGS)
     includes = " ".join(str(path.resolve()) for path in include_dirs)
     makefile.write_text(
         f"SIM = {simulator}\nTOPLEVEL_LANG = verilog\n"
         f"VERILOG_SOURCES = {' '.join(str(f.resolve()) for f in files)}\n"
         f"TOPLEVEL = {top}\nMODULE = {tb.stem}\nVERILOG_INCLUDE_DIRS = {includes}\n"
         + (f"COMPILE_ARGS += --timing {flags} -Wno-fatal -Wno-lint\n" if simulator == "verilator" else "")
+        + ("COMPILE_ARGS += --assert\nVERILATOR_TRACE = 1\nSIM_ARGS += --trace-file "
+           + shlex.quote(str(directory.resolve() / "activity.vcd")) + "\n"
+           if waves and simulator == "verilator" else "")
         + "SIM_BUILD = build\nCOCOTB_RESULTS_FILE = results.xml\n"
         f"export PYTHONPATH := {tb.parent.resolve()}:$(PYTHONPATH)\n"
         "include $(shell cocotb-config --makefiles)/Makefile.sim\n")
-    return commands.run(["make", "-f", makefile, "-j8"], cwd=directory)
+    return commands.run(["make", "-f", makefile, "-j8",
+                         *(["WAVES=1", "FST=-vcd"] if waves and simulator == "icarus" else [])], cwd=directory)
 
 
 def simulation(project, directory, tool, commands):

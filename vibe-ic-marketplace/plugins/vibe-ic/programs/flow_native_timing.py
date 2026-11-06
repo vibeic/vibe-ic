@@ -179,6 +179,15 @@ def read_sta_reports(directory: Path, config: dict, *, project: Path | None = No
                     declarations[port["name"]] = {"direction": next(iter(values.values())), "sources": [
                         {"file": str(path), "field": f"{location}[{index}].{key}", "value": port[key]}
                         for key in values]}
+            from _specrtl_common import Port
+            from spec_conformance_check import _selected_interface_ports
+            sources = {name: record["sources"] for name, record in declarations.items()}
+            selected = _selected_interface_ports(Path(project),
+                [Port(port["name"], declarations[port["name"]]["direction"], port.get("width"))
+                 for port in rows if port["name"] in declarations],
+                body.get("top_module") or hierarchy.get("top_module"), port_sources=sources)
+            declarations = {port.name: {"direction": port.direction, "sources": sources[port.name]}
+                            for port in selected}
     resolved = dict(config)
     state = {}
     output = {}
