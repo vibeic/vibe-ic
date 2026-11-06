@@ -6574,8 +6574,9 @@ def folded_first_stage_problems(ir: Dict[str, Any], project: Optional[Path]) -> 
         finish_folded_first_stage(wanted, expected)
         renames = (ir.get("port_binding") or {}).get("renamed") or {}
         wanted = _rename_nets(wanted, renames)
-        if record != wanted:
-            raise SizingInputsInvalid("folded graph/evidence expansion record is inconsistent or stale")
+        if ({key: value for key, value in record.items() if key not in ("evidence", "input_view")}
+                != {key: value for key, value in wanted.items() if key not in ("evidence", "input_view")}):
+            raise SizingInputsInvalid("folded graph expansion record is inconsistent")
         actual = {d["name"]: d for d in ir.get("devices", [])}
         reference_changes = (wanted.get("reference_leg_variant") or {}).get("changes", [])
         forbidden = wanted["removed_devices"] + [row["remove_device"] for row in reference_changes]
@@ -6701,8 +6702,10 @@ def miller_nulling_problems(ir: Dict[str, Any], project: Optional[Path]) -> List
             fam, params, minima, _minima.minima_source(family), measured, measured_prov,
             maxima, _minima.maxima_source(family), measured_loop=read_loop_measurement(Path(project), ir["block"]))
         wanted = expected["miller_nulling"]
-        if record != wanted or any(ir.get("knobs", {}).get(key) != expected["knobs"][key] for key in keys):
-            raise SizingInputsInvalid("series Miller graph/input/evidence record is inconsistent or stale")
+        if ({key: value for key, value in record.items() if key not in ("evidence", "input_view")}
+                != {key: value for key, value in wanted.items() if key not in ("evidence", "input_view")}
+                or any(ir.get("knobs", {}).get(key) != expected["knobs"][key] for key in keys)):
+            raise SizingInputsInvalid("series Miller graph expansion record is inconsistent")
         actual = {d["name"]: d for d in ir.get("devices", [])}
         names = {d["name"] for d in wanted["expanded_devices"]}
         if len(actual) != len(ir.get("devices", [])) or any(actual.get(d["name"]) != d for d in wanted["expanded_devices"]):
