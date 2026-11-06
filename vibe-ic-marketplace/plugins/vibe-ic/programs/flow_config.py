@@ -385,7 +385,11 @@ def build_config(project: Path | str, *, route: str | None = None, pdk: str | No
                    if implementation_setting(key)})
     config.update(_settings(fields, pdk))
     config.update({key: value for key, value in implementation.items() if key.startswith("PDN_")})
-    sdc = project / "phase3/stage3/pnr/constraint.sdc"
+    from sdc_constraints import collect_sdc_files
+
+    sdcs = collect_sdc_files(project)
+    sdc = (Path(config["PNR_SDC_FILE"]) if config.get("PNR_SDC_FILE") else
+           sdcs[0] if sdcs else project / "phase3/stage3/pnr/constraint.sdc")
     if sdc.is_file():
         from sdc_constraints import create_clocks_in_text
 
