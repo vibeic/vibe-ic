@@ -46,15 +46,7 @@ from typing import Optional
 
 import pytest
 
-# Read the pointer name off the program that defines it rather than retyping
-# it; `benchmark_evidence_structure_check` is where the corpus pointer's
-# precedence contract lives.
-try:  # pragma: no cover - import shape differs between callers
-    from benchmark_evidence_structure_check import CORPUS_ENV
-except ImportError:  # pragma: no cover
-    import sys
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from benchmark_evidence_structure_check import CORPUS_ENV
+CORPUS_ENV = "VIBE_IC_BENCHMARK_DATA"
 
 REQUIRE_ENV = "VIBEIC_REQUIRE_CORPUS"
 
