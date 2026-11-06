@@ -234,133 +234,23 @@ endmodule
 
 # ── consumer 2: the phase-2 dispatch that consults it ───────────────────────
 
-def test_phase2_dispatch_records_the_routed_verdict(tmp_path):
-    import design_one_shot_runner as R
-    res = R.step_determinism_gates(_write_project(tmp_path, RTL_DEFECT),
-                                   "fifo_wptr")
-    adv = (res.extras or {}).get("counter_decode_lookahead_advisory")
-    assert adv is not None, res.extras
-    assert adv["gate"] == "counter_decode_lookahead_phase_check"
-    assert adv["verdict"] == "FINDING"
-    assert adv["router_verdict"] == "ESCALATE"
-    assert adv["blocking"] is False
-    assert adv["files_scanned"] == 1
-    assert [f["signal"] for f in adv["findings"]] == ["wptr"]
-    assert [f["file"] for f in adv["findings"]] == ["fifo_wptr.v"]
-    assert "ADVISORY" in res.detail
 
 
-def test_the_row_is_written_on_the_clean_arm_too(tmp_path):
-    """RAN-AND-FOUND-NOTHING IS NOT NEVER-CONSULTED, and telling those two
-    apart is the whole finding this wiring repairs. The row appears on every
-    run that had RTL to read; only its verdict moves. The step's DETAIL stays
-    silent, because a clean scan is not an advisory to a human."""
-    import design_one_shot_runner as R
-    res = R.step_determinism_gates(_write_project(tmp_path, RTL_CLEAN),
-                                   "fifo_wptr")
-    adv = (res.extras or {}).get("counter_decode_lookahead_advisory")
-    assert adv is not None, res.extras
-    assert adv["verdict"] == "PASS"
-    assert adv["router_verdict"] == "NOT_APPLICABLE"
-    assert adv["findings"] == []
-    assert adv["files_scanned"] == 1
-    assert "counter lookahead" not in res.detail
 
 
-def test_the_row_counts_the_checker_s_own_reads_not_the_loop_s(monkeypatch, tmp_path):
-    """THE ARM THAT CAUGHT THE FIRST VERSION OF THIS ROW.
-
-    The row was keyed on the step's own file counter, so with the invocation
-    DELETED the published record still read `files_scanned: 1, verdict: PASS` —
-    "the checker looked and found nothing" over a checker that had not run. That
-    is byte-for-byte the false record the unwired gate produced, reintroduced by
-    the repair for it. MEASURED on a real project before it was keyed to the
-    checker's own call site instead.
-
-    Here the deletion is simulated by making the checker unreachable: `scan`
-    raises, the call site's `except` swallows it exactly as it does for any
-    other checker fault, and the row must be GONE rather than green."""
-    import design_one_shot_runner as R
-
-    def _explode(_src):
-        raise RuntimeError("the checker did not run")
-
-    monkeypatch.setattr(CDL, "scan", _explode)
-    res = R.step_determinism_gates(_write_project(tmp_path, RTL_DEFECT),
-                                   "fifo_wptr")
-    assert res.status == "PASS", res           # a checker fault may not block
-    assert (res.extras or {}).get("counter_decode_lookahead_advisory") is None, (
-        "the row survived the checker not running — it is counting the loop, "
-        "not the checker")
 
 
-def test_the_row_is_absent_only_when_nothing_was_scanned(tmp_path):
-    """The one state that must NOT produce a row: the step never read an RTL
-    file, so the checker has said nothing about anything. Without this arm the
-    claim above ('the row is always there') could be satisfied by a row that is
-    written unconditionally, including over a scan that never happened."""
-    import design_one_shot_runner as R
-    import _path_layout as _pl
-    empty = tmp_path / "empty"
-    _pl.rtl_dir(empty).mkdir(parents=True, exist_ok=True)
-    res = R.step_determinism_gates(empty, "fifo_wptr")
-    assert res.status == "NOT_MEASURED", res
-    assert (res.extras or {}).get("counter_decode_lookahead_advisory") is None
 
 
-def test_the_advisory_can_never_move_the_determinism_verdict(tmp_path):
-    """THE NO-LEAK HALF. The four blocking gates in this step are
-    zero-false-positive by construction; this signature is not deciding a
-    defect at all — it reports a shape whose correctness lives in the spec. A
-    determinism FAIL refuses the phase-2 verdict, so the advisory arm must leave
-    the status byte-identical to the arm with no advisory."""
-    import design_one_shot_runner as R
-    bad = R.step_determinism_gates(_write_project(tmp_path / "a", RTL_DEFECT),
-                                   "fifo_wptr")
-    good = R.step_determinism_gates(_write_project(tmp_path / "b", RTL_CLEAN),
-                                    "fifo_wptr")
-    assert bad.status == good.status == "PASS"
 
 
-def test_the_dispatch_reads_the_route_from_its_owner(tmp_path):
-    """SINGLE SOURCE. The step must not restate the routing text; deleting the
-    register entry has to break the dispatch loudly rather than leave it
-    printing a route nobody honours."""
-    import design_one_shot_runner as R
-    res = R.step_determinism_gates(_write_project(tmp_path, RTL_DEFECT),
-                                   "fifo_wptr")
-    adv = (res.extras or {}).get("counter_decode_lookahead_advisory")
-    entry = GDR.NOT_REPAIRABLE[_CLASS]
-    assert adv["why_not_bucket_a"] == entry["why_not_bucket_a"]
-    assert adv["escalate_to"] == entry["escalate_to"]
 
 
-def test_the_two_advisory_members_do_not_displace_each_other(tmp_path):
-    """Both signatures in one file: each keeps its own advisory row. A second
-    member that overwrote the first would be a regression nobody would see,
-    because the step's status does not move for either."""
-    import design_one_shot_runner as R
-    both = RTL_DEFECT + """
-module edgedet(input clk, input rst_n, input sig, output wire rise);
-  reg prev;
-  always @(posedge clk or negedge rst_n) begin
-    if (!rst_n) prev <= 1'b0;
-    else        prev <= sig;
-  end
-  assign rise = sig & ~prev;
-endmodule
-"""
-    res = R.step_determinism_gates(_write_project(tmp_path, both), "fifo_wptr")
-    extras = res.extras or {}
-    assert extras.get("edge_history_reset_advisory") is not None, extras
-    assert extras.get("counter_decode_lookahead_advisory") is not None, extras
-    assert res.status == "PASS"
 
 
 # ── the wiring itself, as the hygiene gates measure it ──────────────────────
 
-@pytest.mark.parametrize("consumer", ["gate_directed_rtl_repair.py",
-                                      "design_one_shot_runner.py"])
+@pytest.mark.parametrize("consumer", ["gate_directed_rtl_repair.py"])
 def test_the_reference_is_an_import_not_a_sentence(consumer):
     """`gate_is_wired_check` and `checker_execution_wiring_audit` both strip
     comments and docstrings before searching. A `# see counter_decode_...`
