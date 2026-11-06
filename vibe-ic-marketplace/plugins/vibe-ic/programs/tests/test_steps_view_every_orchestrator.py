@@ -51,7 +51,6 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 
 import _path_layout as _pl   # noqa: E402
-from _ai_judgement_fixture import sign as _sign_ai_fixture  # noqa: E402
 
 #: WHERE PASS 1's RECORD LIVES, asked of the router. R-0915-151 moved
 #: `phase1_one_shot.json` onto `_path_layout`'s router, because the flat
@@ -291,8 +290,6 @@ def test_real_orchestrator_run_leaves_the_tree(tmp_path):
     _stage_one_input(project)
     argv = [sys.executable, str(PROGRAMS / "phase1_one_shot_runner.py"),
             str(project), "--route", "ic", "--mode", "prompt", "--ic-name", "TST"]
-    _supervised(argv)
-    _sign_ai_fixture(project, "D1")
     cp = _supervised(argv)
     assert cp.returncode == 0, cp.stderr
 
@@ -377,8 +374,6 @@ def test_run_survives_a_view_that_cannot_be_built(tmp_path):
 
     argv = [sys.executable, str(PROGRAMS / "phase1_one_shot_runner.py"),
             str(project), "--route", "ic", "--mode", "prompt", "--ic-name", "TST"]
-    _supervised(argv)
-    _sign_ai_fixture(project, "D1")
     import time
     started = time.time()
     cp = _supervised(argv)
