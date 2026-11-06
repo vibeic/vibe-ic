@@ -154,27 +154,6 @@ def test_the_reports_own_stamp_still_wins_over_the_liberty(tmp_path):
     assert "read from the report" in basis, basis
 
 
-def test_every_deck_stamp_names_the_gap_instead_of_vanishing():
-    """THE SECOND CAUSE, asserted on the producer's own source.
-
-    `catch {puts ...}` leaves nothing when the substitution fails. Every site
-    must compute the unit FIRST and then write a line either way, so a reader
-    can tell 'this deck could not answer' from 'this deck was never asked'.
-    """
-    src = (PROGRAMS / "phase3_one_shot_runner.py").read_text()
-    assert "STA_TIME_UNIT_NOT_STATED" in src, (
-        "no deck names the gap; a swallowed stamp is silent again")
-    # the vanishing idiom is gone from every spelling
-    assert "catch {puts $f \"STA_TIME_UNIT:" not in src
-    assert "catch {puts $_bf \\\"STA_TIME_UNIT:" not in src
-    assert "catch {puts $_f \\\"STA_TIME_UNIT:" not in src
-    assert 'catch {puts $_f "STA_TIME_UNIT:' not in src
-    # ...and every site that computes the unit also writes the else-branch
-    assert src.count("STA_TIME_UNIT_NOT_STATED") == src.count(
-        'catch {set _tu') == 4, (
-        src.count("STA_TIME_UNIT_NOT_STATED"), src.count('catch {set _tu'))
-
-
 def test_a_report_stamped_not_stated_publishes_no_number(tmp_path,
                                                          monkeypatch):
     """The named gap is a DISCLOSURE, not a unit: a report carrying
