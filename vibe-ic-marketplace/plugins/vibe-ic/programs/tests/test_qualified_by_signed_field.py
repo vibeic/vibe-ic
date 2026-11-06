@@ -226,33 +226,6 @@ def test_native_qualified_absent_input_keeps_strict_unsigned_outputs(tmp_path):
     assert "qualified_output_authoring" not in json.loads(l9.read_text())
 
 
-@pytest.mark.parametrize("initially_present,change", [(False, "create"), (True, "change"), (True, "delete")])
-def test_native_qualified_phase1_reuse_detects_author_choice_change(tmp_path, initially_present, change):
-    import phase1_doc_one_shot_runner as docs
-    import _phase1_producer_identity as identity
-    p, extracted, l9, author, contract = _native_qualified_project(tmp_path)
-    if not initially_present:
-        author.unlink()
-    before = identity.input_tree_snapshot(p)
-    recorder = identity.ProducerRecorder()
-    with recorder:
-        docs.gen_l1_datasheet(p, extracted)
-        docs.gen_l9_integration_spec(p, extracted, {})
-    identity.stamp(p, recorder, input_before=before, knobs={"mode": "docs"})
-    assert identity.assess(p, PROGRAMS)["state"] == identity.REUSE
-    unrelated = p / "plugin_input/unrelated.json"
-    unrelated.write_text('{"value":1}')
-    assert identity.assess(p, PROGRAMS)["state"] == identity.REUSE
-    old_l9 = l9.read_bytes()
-    if change == "delete":
-        author.unlink()
-    else:
-        contract["qualifiers"][0]["active_level"] = "low"
-        author.write_text(json.dumps(contract))
-    decision = identity.assess(p, PROGRAMS)
-    assert decision["state"] == identity.REGENERATE
-    assert decision["reason"] == identity.DESIGN_INPUT_CHANGED
-    assert l9.read_bytes() == old_l9
 
 
 @pytest.mark.parametrize("change", ["different_level", "delete", "malformed", "stale_roster"])

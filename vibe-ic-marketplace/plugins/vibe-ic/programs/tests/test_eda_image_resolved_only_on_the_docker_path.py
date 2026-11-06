@@ -440,27 +440,8 @@ def test_the_rtl_content_check_resolves_nothing_itself(monkeypatch, tmp_path):
 
 # ── landing preflight: the remedy names the image when it is read ───────────
 
-def test_the_runner_image_is_resolved_when_read(monkeypatch):
-    import landing_pytest_runtime_preflight as L
-    answers = iter(["sha256:" + "4" * 64, "sha256:" + "5" * 64])
-    monkeypatch.delenv(_eda_pin.IMAGE_REPO_ENV, raising=False)
-    monkeypatch.setattr(_eda_pin, "resolved_image_digest",
-                        lambda env=None, *, allow_pull=False: next(answers))
-    monkeypatch.setattr(_eda_pin, "local_references_for_digest",
-                        lambda d: ((f"{_eda_pin.IMAGE_REPO_DEFAULT}@{d}",), ""))
-    assert L.RUNNER_IMAGE.endswith("4" * 64)
-    assert L.RUNNER_IMAGE.endswith("5" * 64), "the runner image was remembered"
-    assert "RUNNER_IMAGE" not in vars(L)
 
 
-def test_the_remedy_names_an_unresolvable_runner_image_instead_of_crashing(monkeypatch):
-    import landing_pytest_runtime_preflight as L
-
-    def _none(env=None, *, allow_pull=False):
-        raise _eda_pin.ImageNotResolvable(["this host: docker unusable"])
-    monkeypatch.setattr(_eda_pin, "resolved_image_digest", _none)
-    text = L._runner_image_or_refusal()
-    assert "not resolvable" in text and "IMAGE_NOT_RESOLVABLE" in text
 
 
 # ── fmeda: the injection backend asks for an image only as its first choice ──

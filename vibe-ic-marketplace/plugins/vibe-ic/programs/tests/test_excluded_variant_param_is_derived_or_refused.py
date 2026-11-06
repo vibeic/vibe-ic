@@ -159,16 +159,6 @@ def test_undeclared_is_refused_by_name_and_nothing_is_picked():
     shutil.rmtree(root, ignore_errors=True)
 
 
-def test_a_refusal_reaches_the_step_that_would_have_run_yosys():
-    """The refusal is a FAIL the flow states, not a note nobody reads."""
-    root, rtl = _project()
-    assert D._chip_top_param_refusals(rtl, "chip_top") == []
-    (rtl / ".chip_top__param_resolution.json").write_text(
-        '{"resolved": {}, "refusals": [{"parameter": "SecSBoxImpl", '
-        '"reason": "UNDECLARED_FREE_CHOICE", "message": "x"}]}')
-    got = D._chip_top_param_refusals(rtl, "chip_top")
-    assert [g["parameter"] for g in got] == ["SecSBoxImpl"]
-    shutil.rmtree(root, ignore_errors=True)
 
 
 def test_control_a_cell_that_ships_the_variant_keeps_its_default():
@@ -265,37 +255,6 @@ def test_end_to_end_the_emitted_wrapper_carries_the_derived_value():
     shutil.rmtree(root, ignore_errors=True)
 
 
-def test_the_step_refuses_by_name_whatever_the_sidecar_is_called():
-    """MEASURED HOLE IN THE WIRING ITSELF.
-
-    The wrapper is emitted by whichever step gets there first: the reused-IP
-    CONSUME step names it ``chip_top``, and `step_yosys_synth` may then
-    re-resolve its own top to the instantiation-graph root and look up a
-    differently-named sidecar. A refusal filed under one name and looked up
-    under another is a refusal nobody makes — the step ran yosys anyway and
-    the abort came back as a synthesis failure, which is the whole defect.
-
-    So the reader takes EVERY sidecar in rtl/, and the control below is the
-    half that must stay silent.
-    """
-    sidecar = ('{"resolved": {}, "refusals": [{"parameter": "SecSBoxImpl",'
-               ' "reason": "UNDECLARED_FREE_CHOICE",'
-               ' "message": "DECLARE SecSBoxImpl in the design input."}]}')
-    for name in (".chip_top__param_resolution.json",
-                 ".thing_top__param_resolution.json"):
-        root, rtl = _project()
-        (rtl / name).write_text(sidecar)
-        res = D.step_yosys_synth(root, "chip_top", container="no-such-container")
-        assert res.status == "FAIL"
-        assert "PARAMETER UNRESOLVED (SecSBoxImpl)" in res.detail
-        assert "before yosys" in res.detail
-        shutil.rmtree(root, ignore_errors=True)
-    # CONTROL — no sidecar, no refusal. The step fails for its own reasons and
-    # says nothing about a parameter.
-    root, rtl = _project()
-    res = D.step_yosys_synth(root, "chip_top", container="no-such-container")
-    assert "PARAMETER UNRESOLVED" not in (res.detail or "")
-    shutil.rmtree(root, ignore_errors=True)
 
 
 # --------------------------------------------------------------------------

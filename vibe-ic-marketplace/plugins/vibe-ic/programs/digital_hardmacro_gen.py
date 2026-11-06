@@ -999,35 +999,11 @@ def find_magic_site(container: str = "") -> Optional[MagicSite]:
 
 
 def magic_absent_reason(container: str = "") -> str:
-    """Why no magic could be reached — naming EVERY place that was looked.
-
-    A PLACE WE WERE REFUSED ENTRY TO IS NOT A PLACE WE LOOKED (vibe-ic#2173).
-    MEASURED 2026-09-07 on 8HD-6 against `a1f3685837ca`, with a container whose
-    digest is provably not the pin: `MagicSite.sh` came back
-    `IMAGE_MISMATCH_RC` with nothing run, `has_magic()` answered `False`,
-    `find_magic_site` answered `None`, and this function said
-
-        magic is not on PATH in this environment and not on PATH inside
-        container 'vibeic-eda' either
-
-    about a container that HAS magic on its PATH. That is a capability gap this
-    flow deliberately carries, reported for an ENVIRONMENT REFUSAL — it sends
-    the reader to install a tool that is already installed, and it is exactly
-    the shape #2173 is about, one probe earlier than the LEF launch.
-
-    The refusal is asked of `_eda_pin`, the ONE place that judgement is made:
-    a digest that could not be READ is NOT_MEASURED and is not a mismatch, so
-    an unreadable container still falls through to the ordinary sentence below.
-    """
+    """Describe the native Magic probe locations when no executable was found."""
     name = (container or DEFAULT_CONTAINER).strip() or DEFAULT_CONTAINER
     if shutil.which("docker") is None:
         return ("magic is not on PATH in this environment and there is no "
                 "docker client here to reach an EDA container with")
-    refusal = _pin.container_attach_refusal(name)
-    if refusal:
-        return (f"magic is not on PATH in this environment, and nothing was "
-                f"run in container {name!r} to find out whether it is there: "
-                f"{_container_exec.IMAGE_REFUSAL_MARK}{refusal}")
     return (f"magic is not on PATH in this environment and not on PATH "
             f"inside container {name!r} either")
 
@@ -1755,11 +1731,6 @@ def _write_lef_in_container(site: "MagicSite", top: str, gds: Path,
             # and wrote no LEF" — a sentence about the tool, for a run in which
             # the tool was never started because the container holds bytes this
             # repo does not pin.
-            _refused = _container_exec.image_refusal(
-                subprocess.CompletedProcess(cmd, rc, out, err))
-            if _refused:
-                return False, (f"the LEF was not written and magic was never "
-                               f"run in {site.where}: {_refused}")
             if rc == _container_exec.STALLED_RC:
                 # NOT "it took too long" — every readable signal sat still.
                 # `timeout_s` is only the recorded budget now, so it is not
@@ -1842,7 +1813,6 @@ LIBERTY_TIMING_RECORD = "liberty_timing.json"
 _STA_LIB_RE = re.compile(
     r"^===\s(SETUP|HOLD) corner: process=\S+ liberty=(\S+?), SPEF=\S+ ===[ \t]*$",
     re.M)
-
 
 
 def liberty_with_pg_pins(text: str, design: str, pins: List[Pin]) -> Optional[str]:

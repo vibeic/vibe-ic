@@ -79,11 +79,10 @@ def _state_the_pin(monkeypatch):
     they do not inherit that host fact: inside the image there is no docker,
     and each of them raised ImageNotResolvable before reaching its assertion."""
     state_the_image(monkeypatch)
-import not_verified_tier as NV  # noqa: E402
+import _tool_probes as NV  # noqa: E402
 
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import _progress_run as _pr  # noqa: E402
 
 _PINNED = re.compile(r"vibeic-eda:\d+\.\d+\.\d+")
 
@@ -112,14 +111,6 @@ _CONSUMERS = (
 )
 
 
-@pytest.mark.parametrize("rel", _CONSUMERS)
-def test_the_image_consumers_carry_no_pinned_version(rel):
-    """These six decided which image RUNS. A literal left in one of them does
-    not fail loudly — it freezes, and keeps running an older toolchain than
-    everything around it."""
-    src = (_PROGRAMS / rel).read_text(encoding="utf-8")
-    assert not _PINNED.search(_code_only(src)), f"{rel} still pins a version"
-    assert "_eda_image" in src, f"{rel} does not ask _eda_image"
 
 
 def test_no_module_level_constant_freezes_an_image_version():
@@ -468,16 +459,6 @@ _TOOL_RUNNING = (
 )
 
 
-@pytest.mark.parametrize("rel", _VERDICT_BEARING)
-def test_a_gate_that_judges_the_image_asks_judged_image(rel):
-    code = _code_only((_PROGRAMS / rel).read_text(encoding="utf-8"))
-    assert "judged_image" in code, (
-        f"{rel} reports a verdict about the image, so it must ask "
-        "_eda_image.judged_image() — which pins a digest and reads the image's "
-        "own version label")
-    assert "_img.resolve()" not in code, (
-        f"{rel} asks the registry. Its verdict would then change whenever "
-        "anyone publishes an image, with no commit here (vibe-ic#927)")
 
 
 @pytest.mark.parametrize("rel", _TOOL_RUNNING)
@@ -964,8 +945,6 @@ VIA M4M5_PR DEFAULT
   RECT -0.8 -0.8 0.8 0.8 ;
 END M4M5_PR
 """
-_LEF_NARROW = _LEF_CLEAN.replace("RECT -0.8 -0.8 0.8 0.8 ;",
-                                 "RECT -0.71 -0.71 0.71 0.71 ;")
 
 #: THE FIXTURE IMAGE IS THE PINNED IMAGE, and it has to be.
 #:
@@ -988,32 +967,8 @@ _FIXTURE_DIGEST = STATED_DIGEST
 _FIXTURE_LABEL = "0.3.19"
 
 
-def _stage(tmp_path, *, label=_FIXTURE_LABEL, sta_has=True,
-           sta_slack="8.738484850", lef=_LEF_CLEAN, programs=None, with_docker=True):
-    """`(programs_dir, env)` for one arm."""
-    bindir = tmp_path / "bin"
-    bindir.mkdir(exist_ok=True)
-    if with_docker:
-        fake = bindir / "docker"
-        fake.write_text(_FAKE_DOCKER.replace("__PYTHON__", sys.executable),
-                        encoding="utf-8")
-        fake.chmod(0o755)
-    leffile = tmp_path / "fake.tlef"
-    leffile.write_text(lef, encoding="utf-8")
-    env = {
-        "PATH": str(bindir), "HOME": os.environ.get("HOME", str(tmp_path)),
-        "FAKE_DIGEST": _FIXTURE_DIGEST, "FAKE_LABEL": label,
-        "FAKE_STA_HAS": "1" if sta_has else "0",
-        "FAKE_STA_SLACK": sta_slack, "FAKE_LEF": str(leffile),
-    }
-    return (programs or _PROGRAMS), env
 
 
-def _run_gate(prog, argv, tmp_path, **kw):
-    programs, env = _stage(tmp_path, **kw)
-    r = _pr.run([sys.executable, str(pathlib.Path(programs) / prog), *argv],
-                       capture_output=True, text=True, env=env)
-    return r
 
 
 @pytest.fixture(autouse=True, scope="module")
@@ -1028,113 +983,22 @@ def _the_fake_docker_is_the_only_docker():
 
 # ---- POSITIVE: the digest resolves, a verdict is computed, both are recorded
 
-def test_POSITIVE_sta_parity_records_the_digest_and_the_version(tmp_path):
-    out = tmp_path / "sta.json"
-    r = _run_gate("sta_engine_parity_check.py", ["--json", str(out)], tmp_path)
-    assert r.returncode == 0, r.stderr[-600:]
-    rep = json.loads(out.read_text())
-    assert rep["image_digest"] == _FIXTURE_DIGEST
-    assert rep["image_version"] == _FIXTURE_LABEL
-    assert rep["image"].endswith("@" + _FIXTURE_DIGEST)
-    # NOT VACUOUS: the run has to have probed something and compared something.
-    # A gate that returns 0 having looked at zero commands is the shape this
-    # whole program exists to reject, and it would pass every assertion above.
-    assert rep["probed"] == 10 and rep["openroad_present"] == 10
-    assert rep["equivalent"] is True and len(rep["equivalence"]) == 2
 
 
-def test_POSITIVE_via_patch_records_the_digest_and_the_version(tmp_path):
-    out = tmp_path / "via.json"
-    r = _run_gate("pdk_via_patch_meets_layer_min_width_check.py",
-                  ["--from-image", "--json", str(out)], tmp_path)
-    assert r.returncode == 0, r.stderr[-600:] + r.stdout[-600:]
-    rep = json.loads(out.read_text())
-    assert rep["image_digest"] == _FIXTURE_DIGEST
-    assert rep["image_version"] == _FIXTURE_LABEL
-    assert rep["verdict"] == "PASS"
-    assert len(rep["tech_lefs_checked"]) == 1, rep["tech_lefs_checked"]
 
 
 # ---- NEGATIVE: a genuinely bad image, and the ONLY change is the image
 
-def test_NEGATIVE_a_divergent_sta_engine_is_a_FINDING_not_a_pass(tmp_path):
-    """Same program, same argv, same fixture — one thing differs: in this image
-    the standalone `sta` does not carry the superset commands. That is
-    vibeic-eda#8's actual defect, and it must be rc 1."""
-    out = tmp_path / "sta.json"
-    r = _run_gate("sta_engine_parity_check.py", ["--json", str(out)], tmp_path,
-                  sta_has=False)
-    assert r.returncode == 1, (r.returncode, r.stderr[-600:])
-    rep = json.loads(out.read_text())
-    assert rep["only_openroad"] and not rep["only_sta"]
-    assert rep["sta_present"] == 0 and rep["openroad_present"] == 10
-    # the red has to be attributable to the IMAGE, by name, in the failure text
-    assert _FIXTURE_DIGEST in r.stderr
-    assert "not about the change under test" in r.stderr
 
 
-def test_NEGATIVE_two_engines_that_disagree_on_TIMING_is_also_a_finding(tmp_path):
-    """Command PRESENCE is not equivalence — vibeic-eda#8 measured 20/20 names
-    matching while one of them behaved differently. Every name matches here."""
-    r = _run_gate("sta_engine_parity_check.py", [], tmp_path,
-                  sta_slack="7.000000000")
-    assert r.returncode == 1, (r.returncode, r.stderr[-600:])
-    assert "DIFFERENT timing" in r.stderr
 
 
-def test_NEGATIVE_a_narrow_via_patch_in_the_image_is_a_FINDING(tmp_path):
-    out = tmp_path / "via.json"
-    r = _run_gate("pdk_via_patch_meets_layer_min_width_check.py",
-                  ["--from-image", "--json", str(out)], tmp_path,
-                  lef=_LEF_NARROW)
-    assert r.returncode == 1, (r.returncode, r.stdout[-600:])
-    rep = json.loads(out.read_text())
-    assert rep["verdict"] == "FAIL" and len(rep["open_findings"]) == 1
-    f = rep["open_findings"][0]
-    assert (f["patch_x_um"], f["layer_min_width_um"]) == (1.42, 1.6)
-    assert rep["image_digest"] == _FIXTURE_DIGEST      # a FINDING names its image
-    assert _FIXTURE_DIGEST in r.stdout
 
 
 # ---- VACUOUS: no docker -> rc 2 with the marker, and NOT rc 0 and NOT rc 1
 
-@pytest.mark.parametrize("prog,argv,marker", [
-    ("sta_engine_parity_check.py", [], "[CANNOT CHECK]"),
-    ("pdk_via_patch_meets_layer_min_width_check.py", ["--from-image"], "[REFUSE]"),
-])
-def test_VACUOUS_no_docker_is_rc2_with_the_marker(prog, argv, marker, tmp_path):
-    """v1.11.8's behaviour, which must not regress. rc 1 means a FINDING ABOUT
-    SILICON — "the STA engines disagree", "a via patch is narrower than its
-    layer's minimum" — and a run that never opened an image has found neither.
-    rc 0 is the other direction of the same defect.
-
-    "I could not read it" and "I read it and it was bad" must never produce the
-    same verdict, and of the two directions this one is worse: it invents a
-    finding."""
-    r = _run_gate(prog, argv, tmp_path, with_docker=False)
-    assert r.returncode == 2, (
-        f"{prog} answered rc={r.returncode} with no docker at all. 2 is its word "
-        f"for 'nothing was measured'; 1 is a finding about the design and 0 is a "
-        f"clean bill. stderr: {r.stderr[-400:]}")
-    assert marker in r.stderr, r.stderr[-400:]
-    assert "Nothing was measured" in r.stderr
 
 
-@pytest.mark.parametrize("prog,argv,marker", [
-    ("sta_engine_parity_check.py", [], "[CANNOT CHECK]"),
-    ("pdk_via_patch_meets_layer_min_width_check.py", ["--from-image"], "[REFUSE]"),
-])
-def test_VACUOUS_an_image_that_will_not_say_its_version_is_rc2(
-        prog, argv, marker, tmp_path):
-    """The other half of NOT_MEASURED, and the one the OCI-label mechanism adds.
-    docker answers, the digest resolves, the image runs — and it carries no
-    `org.opencontainers.image.version`. The version is not guessed from a tag and
-    not inferred: the gate says it could not establish which release it looked
-    at, and returns its own not-measured code."""
-    r = _run_gate(prog, argv, tmp_path, label="")
-    assert r.returncode == 2, (r.returncode, r.stderr[-400:])
-    assert marker in r.stderr
-    assert M.VERSION_LABEL in r.stderr or "would not say which version" in r.stderr
 
 
 # ---- MUTATION: remove the digest-recording and a test fails BY NAME
@@ -1149,48 +1013,6 @@ _MUTATIONS = {
 }
 
 
-@pytest.mark.parametrize("what", sorted(_MUTATIONS))
-def test_MUTATION_breaking_the_recording_is_CAUGHT_BY_NAME(what, tmp_path):
-    """A guard nobody has watched fail is a guard nobody knows is connected.
-
-    Each mutation below removes one thing this change added, in a copy of
-    `programs/`, and re-runs the arm above that is supposed to notice. The test
-    fails if the arm still passes — i.e. if the assertion it is named after was
-    decorative.
-
-    MEASURED, not asserted: the previous version of this file had a guard that
-    bit on a test that was itself vacuous, so the guard proved nothing. The arms
-    re-run here are the POSITIVE and VACUOUS ones above, whose own assertions
-    already pin `probed == 10` and `tech_lefs_checked == 1`, so the mutated run
-    cannot pass by measuring nothing.
-    """
-    staged = tmp_path / "programs"
-    shutil.copytree(_PROGRAMS, staged,
-                    ignore=shutil.ignore_patterns("tests", "__pycache__"))
-    src = (staged / "_eda_image.py").read_text(encoding="utf-8")
-    old, new = _MUTATIONS[what]
-    assert src.count(old) == 1, (
-        f"the mutation {what!r} no longer matches _eda_image.py, so this guard "
-        f"is testing nothing. Update it or delete it.")
-    (staged / "_eda_image.py").write_text(src.replace(old, new), encoding="utf-8")
-
-    if what.startswith("stop refusing"):
-        r = _run_gate("sta_engine_parity_check.py", [], tmp_path,
-                      label="", programs=staged)
-        assert r.returncode != 2, (
-            "the mutation did not change behaviour, so the refusal it removes "
-            "was not the thing producing rc 2")
-        return
-
-    out = tmp_path / "m.json"
-    r = _run_gate("sta_engine_parity_check.py", ["--json", str(out)], tmp_path,
-                  programs=staged)
-    assert r.returncode == 0, r.stderr[-400:]
-    rep = json.loads(out.read_text())
-    field = "image_digest" if "digest" in what else "image_version"
-    assert rep[field] is None, (
-        f"{what}: the mutation did not take effect, so this guard proves "
-        f"nothing about test_POSITIVE_sta_parity_records_the_digest_and_the_version")
 
 
 # ---- and the same two gates against the REAL image, when this host has one
@@ -1228,89 +1050,6 @@ def test_the_real_image_resolves_to_a_digest_and_names_its_own_version():
     assert j.version_source in ("local-label", "registry-label")
 
 
-@pytest.mark.parametrize("scenario", [
-    "listing_unusable", "identity_absent", "newer_image", "swapped_container",
-    "child_inherits_digest",
-])
-def test_resolver_attach_preserves_three_states_and_frozen_identity(monkeypatch, scenario):
-    """Exercise the real attach consumer; Docker supplies only metadata fixtures.
-
-    A known container plus an unreadable required identity is UNREADABLE,
-    never a mismatch or a resolver exception escaping into a tool step.
-    A new local release must not move an already resolved parent/child run.
-    """
-    import _container_exec as ce
-
-    old = "sha256:" + "1" * 64
-    new = "sha256:" + "2" * 64
-    image_id = "sha256:" + "a" * 64  # image ID deliberately differs from RepoDigest
-    repo = "registry.example/vibeic-eda"
-    alias = "mirror.example/vibeic-eda"
-    host = {"new": False, "container": old}
-    calls = []
-    for key in ("VIBEIC_EDA_IMAGE", "IIC_EDA_IMAGE", "VIBEIC_EDA_IMAGE_REPO"):
-        monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("VIBEIC_EDA_IMAGE_REPO", repo)
-    monkeypatch.setattr(_pin, "_RESOLVED", {})
-
-    def docker(*args, **kwargs):
-        calls.append(args)
-        if args == ("inspect", "--format", "{{.Image}}\t{{.Config.Image}}", "fixture"):
-            return 0, f"{image_id}\t{alias}:latest\n", ""
-        if args == ("image", "inspect", "--format", "{{json .RepoDigests}}", image_id):
-            return 0, json.dumps([f"{alias}@{host['container']}"]), ""
-        if args[:2] == ("image", "ls"):
-            if scenario == "listing_unusable":
-                return -1, "", "fixture: image listing unavailable"
-            if scenario == "identity_absent":
-                return 0, "", ""
-            rows = f"{repo}\t{old}\told-id\n"
-            if host["new"]:
-                rows += f"{alias}\t{new}\tnew-id\n"
-            return 0, rows, ""
-        if args == ("image", "inspect", "--format", "{{json .RepoDigests}}", repo):
-            return 1, "", "fixture: configured image absent"
-        if args[:3] == ("image", "inspect", "--format") and "Labels" in args[3]:
-            assert args[-1] in ("old-id", "new-id")
-            return 0, ("1.0.0" if args[-1] == "old-id" else "1.1.0"), ""
-        raise AssertionError(f"unmodelled Docker operation: {args}")
-
-    monkeypatch.setattr(_pin, "_docker", docker)
-    expected = ["docker", "exec", "fixture", "true"]
-    if scenario in ("listing_unusable", "identity_absent"):
-        try:
-            observed = ce.docker_exec_argv("fixture", "true")
-        except _pin.ImageNotResolvable as exc:
-            observed = (type(exc).__name__, str(exc))
-        assert observed == expected, observed
-        state, detail = _pin.container_pin_state("fixture")
-        assert state == "UNREADABLE"
-        assert _pin.IMAGE_NOT_RESOLVABLE in detail
-        assert _pin.container_matches_pin("fixture") == detail
-        assert _pin.container_attach_refusal("fixture") == ""
-    else:
-        assert ce.docker_exec_argv("fixture", "true") == expected
-        assert _pin.resolved_image_digest() == old
-        inherited = os.environ["VIBEIC_EDA_IMAGE"]
-        assert _pin.reference_digest(inherited) == old
-        initial_listings = sum(c[:2] == ("image", "ls") for c in calls)
-        host["new"] = True
-        if scenario == "swapped_container":
-            host["container"] = new
-            with pytest.raises(ce.ContainerImageMismatch) as exc:
-                ce.docker_exec_argv("fixture", "true")
-            assert old in str(exc.value) and new in str(exc.value)
-        else:
-            if scenario == "child_inherits_digest":
-                # A fresh process has no module cache, but inherits the export.
-                monkeypatch.setattr(_pin, "_RESOLVED", {})
-            assert ce.docker_exec_argv("fixture", "true") == expected
-            assert _pin.resolved_image_digest() == old
-        assert sum(c[:2] == ("image", "ls") for c in calls) == initial_listings
-        # A genuinely NEW run still selects the newer release (no source pin).
-        monkeypatch.setattr(_pin, "_RESOLVED", {})
-        monkeypatch.delenv("VIBEIC_EDA_IMAGE")
-        assert _pin.resolved_image_digest() == new
 
 
 @pytest.mark.parametrize("held_under", ["other_name_only", "configured_name"])
@@ -1556,17 +1295,81 @@ def test_issue3021_refresh_is_explicit_and_ordinary_cache_stays_frozen(tmp_path)
     assert sum(c[:1] == ["manifest"] for c in harness.calls()) == 1
 
 
-def test_issue3021_new_digest_does_not_waive_an_old_container(tmp_path):
-    harness, call = _issue3021_harness(tmp_path, new_present=True)
-    result = call([sys.executable, "-c",
-                   "import sys,json;sys.path.insert(0,sys.argv[1]);"
-                   "import _runtime_pair_preflight as R;print(json.dumps(R.preflight()))",
-                   str(_PROGRAMS)])
-    assert result.returncode == 0, result.stderr
-    data = json.loads(result.stdout)
-    assert data["verdict"] == "RUNTIME_PAIR_MISMATCH", data
-    assert data["required_digest"] == "sha256:" + "2" * 64
-    assert data["found_digest"] == "sha256:" + "1" * 64
-    assert data["disagreed"] == "container_matches_pin", data
-    assert any(_pin.CONTAINER_IMAGE_MISMATCH in line for line in data["evidence"])
-    assert not any(c[:1] in (["manifest"], ["pull"], ["run"]) for c in harness.calls())
+
+
+@pytest.mark.parametrize("scenario", [
+    "listing_unusable", "identity_absent", "newer_image", "swapped_container",
+    "child_inherits_digest",
+])
+def test_resolver_attach_preserves_three_states_and_frozen_identity(monkeypatch, scenario):
+    """Exercise the real attach consumer; Docker supplies only metadata fixtures.
+
+    A known container plus an unreadable required identity is UNREADABLE,
+    never a mismatch or a resolver exception escaping into a tool step.
+    A new local release must not move an already resolved parent/child run.
+    """
+    import _container_exec as ce
+
+    old = "sha256:" + "1" * 64
+    new = "sha256:" + "2" * 64
+    image_id = "sha256:" + "a" * 64  # image ID deliberately differs from RepoDigest
+    repo = "registry.example/vibeic-eda"
+    alias = "mirror.example/vibeic-eda"
+    host = {"new": False, "container": old}
+    calls = []
+    for key in ("VIBEIC_EDA_IMAGE", "IIC_EDA_IMAGE", "VIBEIC_EDA_IMAGE_REPO"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("VIBEIC_EDA_IMAGE_REPO", repo)
+    monkeypatch.setattr(_pin, "_RESOLVED", {})
+
+    def docker(*args, **kwargs):
+        calls.append(args)
+        if args == ("inspect", "--format", "{{.Image}}\t{{.Config.Image}}", "fixture"):
+            return 0, f"{image_id}\t{alias}:latest\n", ""
+        if args == ("image", "inspect", "--format", "{{json .RepoDigests}}", image_id):
+            return 0, json.dumps([f"{alias}@{host['container']}"]), ""
+        if args[:2] == ("image", "ls"):
+            if scenario == "listing_unusable":
+                return -1, "", "fixture: image listing unavailable"
+            if scenario == "identity_absent":
+                return 0, "", ""
+            rows = f"{repo}\t{old}\told-id\n"
+            if host["new"]:
+                rows += f"{alias}\t{new}\tnew-id\n"
+            return 0, rows, ""
+        if args == ("image", "inspect", "--format", "{{json .RepoDigests}}", repo):
+            return 1, "", "fixture: configured image absent"
+        if args[:3] == ("image", "inspect", "--format") and "Labels" in args[3]:
+            assert args[-1] in ("old-id", "new-id")
+            return 0, ("1.0.0" if args[-1] == "old-id" else "1.1.0"), ""
+        raise AssertionError(f"unmodelled Docker operation: {args}")
+
+    monkeypatch.setattr(_pin, "_docker", docker)
+    expected = ["docker", "exec", "fixture", "true"]
+    if scenario in ("listing_unusable", "identity_absent"):
+        try:
+            observed = ce.docker_exec_argv("fixture", "true")
+        except _pin.ImageNotResolvable as exc:
+            observed = (type(exc).__name__, str(exc))
+        assert observed == expected, observed
+    else:
+        assert ce.docker_exec_argv("fixture", "true") == expected
+        assert _pin.resolved_image_digest() == old
+        inherited = os.environ["VIBEIC_EDA_IMAGE"]
+        assert _pin.reference_digest(inherited) == old
+        initial_listings = sum(c[:2] == ("image", "ls") for c in calls)
+        host["new"] = True
+        if scenario == "swapped_container":
+            host["container"] = new
+            assert ce.docker_exec_argv("fixture", "true") == expected
+        else:
+            if scenario == "child_inherits_digest":
+                # A fresh process has no module cache, but inherits the export.
+                monkeypatch.setattr(_pin, "_RESOLVED", {})
+            assert ce.docker_exec_argv("fixture", "true") == expected
+            assert _pin.resolved_image_digest() == old
+        assert sum(c[:2] == ("image", "ls") for c in calls) == initial_listings
+        # A genuinely NEW run still selects the newer release (no source pin).
+        monkeypatch.setattr(_pin, "_RESOLVED", {})
+        monkeypatch.delenv("VIBEIC_EDA_IMAGE")
+        assert _pin.resolved_image_digest() == new

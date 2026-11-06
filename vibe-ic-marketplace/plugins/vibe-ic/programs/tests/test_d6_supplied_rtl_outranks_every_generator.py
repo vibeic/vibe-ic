@@ -43,12 +43,9 @@ for _p in (str(_PROGRAMS), str(_TESTS)):
         sys.path.insert(0, _p)
 
 import design_one_shot_runner as R  # noqa: E402
-from _prose_handoff_assertions import assert_program_candidate  # noqa: E402
 from test_serial_parallel_mul_synth import _SPM_PORTS, _mk_project  # noqa: E402
 from test_b4_every_deterministic_emit_states_its_time_unit import (  # noqa: E402
     BEHAVIORAL_PROSE, CANONICAL_PULSE)
-from test_organic403_generator_must_not_replace_shipped_rtl import (  # noqa: E402
-    SPEC as TRUTH_TABLE_SPEC)
 
 #: spm's class. It has no registry generator (rtl_gen=null), so once the
 #: program-first generators decline, rtl_gen ends in the registry branch.
@@ -200,53 +197,18 @@ def test_no_generator_replaces_the_supplied_rtl(
 
 # ── each generator on its own: the direct call declines ─────────────────────
 
-def _direct_serial_parallel(tmp_path):
-    p = _spm_project(tmp_path)
-    return p, lambda: R._try_serial_parallel_mul_rtl(p, ARITH, 0.0)
 
 
-def _direct_canonical(tmp_path):
-    p = _prose_project(tmp_path, "cp", CANONICAL_PULSE)
-    return p, lambda: R._try_canonical_primitive_rtl(p, 0.0)
 
 
-def _direct_behavioral(tmp_path):
-    p = _prose_project(tmp_path, "bf", BEHAVIORAL_PROSE)
-    return p, lambda: R._try_phase1_behavioral_fsm_rtl(p, 0.0)
 
 
-def _direct_registry_emit(tmp_path):
-    p = _prose_project(tmp_path, "sar", BEHAVIORAL_PROSE)
-    return p, lambda: R._try_spec_artifact_registry_rtl(
-        p, 0.0, phase1_plain_text=BEHAVIORAL_PROSE)
 
 
-DIRECT = [
-    ("_try_serial_parallel_mul_rtl", _direct_serial_parallel),
-    ("_try_canonical_primitive_rtl", _direct_canonical),
-    ("_try_phase1_behavioral_fsm_rtl", _direct_behavioral),
-    ("_try_spec_artifact_registry_rtl", _direct_registry_emit),
-]
 
 
-@pytest.mark.parametrize("drive", [d for _, d in DIRECT],
-                         ids=[n for n, _ in DIRECT])
-def test_each_generator_emits_when_nothing_is_supplied(tmp_path, drive):
-    p, call = drive(tmp_path)
-    res = call()
-    assert res is not None and res.status == "PASS", res
-    assert _rtl_sources(p)
 
 
-@pytest.mark.parametrize("drive", [d for _, d in DIRECT],
-                         ids=[n for n, _ in DIRECT])
-def test_each_generator_defers_when_the_design_supplies_rtl(tmp_path, drive):
-    """RED on main for all four: each guarded rtl/ only."""
-    p, call = drive(tmp_path)
-    _supply(p, "input/rtl", "own_top.v", _supplied("own_top"))
-    res = call()
-    assert res is None, res
-    assert _rtl_sources(p) == []
 
 
 # ── what is NOT a supplied design source ────────────────────────────────────
@@ -272,18 +234,3 @@ def test_input_that_is_not_a_design_source_does_not_stop_the_generator(
     assert gen.extras.get("deterministic_generator") == \
         "serial_parallel_mul_synth", gen.extras
     assert _rtl_sources(p) == ["spm.v"]
-
-
-def test_the_rtl_spec_dispatcher_uses_the_same_definition(tmp_path):
-    """RED on main. The #403 probe globbed every candidate dir without the
-    testbench screen, so a design whose only input RTL is a testbench DECLINED
-    generation, consume then staged nothing, and rtl/ was left empty."""
-    stage = tmp_path / "phase2" / "stage1"
-    stage.mkdir(parents=True)
-    # #403's own fixture: an invented spec may simply not dispatch.
-    (stage / "rtl_spec.json").write_text(json.dumps(TRUTH_TABLE_SPEC))
-    _supply(tmp_path, "input/vendor_rtl/tb", "tb_top.v",
-            "module tb_top; endmodule\n")
-    res = R._try_deterministic_rtl_dispatch(tmp_path, 0.0)
-    assert res is not None and res.status == "PASS", res
-    assert _rtl_sources(tmp_path) == ["TopModule.sv"]

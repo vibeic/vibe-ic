@@ -4,11 +4,8 @@ Native mapping/LEC measurements live in the separate neutral EDA campaign;
 receipt-shaped software fixtures here make no native qualification claim.
 """
 import json
-from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
-import _plugin_tree  # noqa: F401
 import librelane_contract as LC
 import synth_handoff_netlist_check as H
 import phase3_one_shot_runner as R
@@ -135,14 +132,3 @@ def test_raw_receipt_does_not_excuse_wrong_effective_native_value(tmp_path, wron
     p, _ = project_fixture(tmp_path)
     with pytest.raises(ValueError, match='strategy differs'):
         admit(p, {'SYNTH_STRATEGY': 'DELAY 2'}, wrong_strategy)
-
-
-@pytest.mark.parametrize('mode', ['direct', 'dual'])
-def test_present_declaration_cannot_be_silently_ignored_by_other_route(tmp_path, monkeypatch, mode):
-    import execution_production
-    monkeypatch.setattr(execution_production, 'dispatch_site', lambda *a, **k: None)
-    put(tmp_path / 'phase3/librelane_switch.json', {
-        'steps': {'9': mode}, 'synthesis_levers': {'SYNTH_STRATEGY': 'DELAY 2'}})
-    row = R.step_synth(tmp_path, 'core', SimpleNamespace(name='neutral'), 'container')
-    assert row.status == 'FAIL'
-    assert 'LL_SYNTH_LEVER_ROUTE_UNSUPPORTED' in row.detail

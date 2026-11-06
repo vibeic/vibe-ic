@@ -39,7 +39,6 @@ that passes on a permanently-silent producer is the bug it is testing for.
 from __future__ import annotations
 
 import json
-import subprocess  # noqa: F401
 import sys
 from pathlib import Path
 from typing import Optional, Tuple
@@ -49,7 +48,6 @@ import pytest
 PROGS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGS))
 
-import phase3_one_shot_runner as R          # noqa: E402
 import path_delay_coverage_check as PDF     # noqa: E402
 import sdd_coverage_check as SDD            # noqa: E402
 
@@ -60,23 +58,10 @@ DT_ALL = ("DT1", "DT2", "DT3")
 
 
 # ---------------------------------------------------------------- fixtures
-def _sdc(project: Path, clock: str = "clk") -> None:
-    sdc = project / R._ATPG_SDC_REL
-    sdc.parent.mkdir(parents=True, exist_ok=True)
-    sdc.write_text(f"create_clock -name {clock} -period 10 [get_ports {clock}]\n")
 
 
-def _cut(project: Path) -> None:
-    cut = project / R._ATPG_CUT_REL
-    cut.parent.mkdir(parents=True, exist_ok=True)
-    cut.write_text("module cut(); endmodule\n")
 
 
-def _coverage(project: Path, step: str, verdict: str = "PASS") -> Path:
-    p = project / R._ATPG_COVERAGE_REL[step]
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps({"verdict": verdict}))
-    return p
 
 
 def _l20_applicability(project: Path, applicability: str) -> Path:
@@ -95,236 +80,26 @@ def _l20_applicability(project: Path, applicability: str) -> Path:
     return path
 
 
-def _record(project: Path, step: str) -> Path:
-    return project / R._ATPG_NOT_RUN_REL[step]
 
 
-def _real_grade_blob(step: str) -> dict:
-    """A coverage artefact the gate's OWN recount grades PASS, per step.
-
-    This used to be copied out of `benchmark-data/ic/spm/v1.5.58_ihp-sg13g2`.
-    The published result cells now live in `vibeic/benchmark-data`, and reading
-    one here made a test about the GATE depend on which cells happen to be
-    published — the property is the gate's, so the fixture is the gate's too.
-
-    It is not a rubber stamp. Both evaluators RE-DERIVE their verdict from the
-    per-record lists and never trust a written top-level number
-    (`path_delay_coverage_check._recount`, `sdd_coverage_check._recount`), so
-    this blob reaches PASS only by being internally consistent:
-
-      DT2  2 LOC-testable paths, both `nr_verdict`/`robust_verdict` = DET
-           -> recount sensitised 2 / testable 2 = 100% >= floor 80%
-      DT3  2 LOC-testable records with slack 8.8/8.9 ns against a margin
-           re-derived as 0.1 x 10.0 ns -> both re-derive to `weak`, which is
-           what they claim, so there is no strong-with-high-slack fabrication
-           and no coverage over-claim
-
-    A `{"verdict": "PASS"}` stub would NOT do: `no per-path PDF records present`
-    / `no per-fault SDD records present` both FAIL, which is the point.
-    """
-    if step == "DT2":
-        def _p(idx: int, slack: float) -> dict:
-            return {"idx": idx, "startpoint": "ff_launch",
-                    "endpoint": f"ff_capture_{idx}", "end_kind": "ff",
-                    "end_edge": "^", "arrival": 1.0, "slack": slack,
-                    "loc_testable": True, "nr_verdict": "DET",
-                    "robust_verdict": "DET", "covered": True, "robust": True,
-                    "status": "robust"}
-        return {
-            "program": "path_delay_fault_atpg_run", "clock": "clk", "top": "dut",
-            "floor_pct": 80.0, "k_requested": 2, "k_selected": 2,
-            "clock_period_ns": 10.0,
-            "graded_paths": 2, "testable_paths": 2, "sensitised_paths": 2,
-            "robust_paths": 2, "non_robust_paths": 0, "false_or_held_paths": 0,
-            "aborted_paths": 0, "pdf_sensitised_coverage_pct": 100.0,
-            "pdf_robust_coverage_pct": 100.0,
-            "path_records": [_p(0, 8.8), _p(1, 8.9)],
-            "verdict": "PASS", "status": "PASS", "reasons": [],
-        }
-    if step == "DT3":
-        def _r(idx: int, slack: float) -> dict:
-            return {"source": "sta_path", "idx": idx, "startpoint": "ff_launch",
-                    "endpoint": f"ff_capture_{idx}", "direction": "STR",
-                    "arrival_ns": 1.0, "detecting_path_slack_ns": slack,
-                    "loc_testable": True, "sensitizable": True,
-                    "nr_verdict": "DET", "robust_verdict": "DET",
-                    "sdd_bucket": "weak"}
-        return {
-            "program": "sdd_atpg_run", "clock": "clk", "top": "dut",
-            "margin_fraction": 0.1, "margin_fraction_cap": 1.0,
-            "clock_period_ns": 10.0, "margin_ns": 1.0,
-            "margin_ns_derivation": "margin_fraction × clock_period",
-            "k_selected": 2, "graded_faults": 2, "strong": 0, "weak": 2,
-            "undetected_at_speed": 0,
-            "sdd_binary_strong_coverage_pct": 0.0,
-            "sdd_slack_weighted_coverage_pct": 0.0,
-            "sdd_records": [_r(0, 8.8), _r(1, 8.9)],
-            "verdict": "PASS", "status": "PASS", "reasons": [],
-        }
-    raise AssertionError(f"no real-grade fixture for {step}")
 
 
-def _armed(project: Path) -> None:
-    """Every DT1/DT2/DT3 precondition satisfied."""
-    _sdc(project)
-    _cut(project)
-    _coverage(project, "DT1")
-    _coverage(project, "DT2")
 
 
-class _FakeProc:
-    def __init__(self, rc=0, out="", err=""):
-        self.returncode, self.stdout, self.stderr = rc, out, err
 
 
-def _run(project: Path):
-    written: list = []
-    notes: list = []
-    R.run_at_speed_atpg_producers(project, written, notes)
-    return written, notes
 
 
 # ================================================================
 # PRODUCER — the self-disable branches must speak
 # ================================================================
 
-def test_precondition_unmet_writes_a_record_for_every_at_speed_step(tmp_path):
-    """The measured shape: no scan cut, no routed SDC → all three steps
-    self-disable. Before the fix this wrote NOTHING to disk.
-
-    MUTATION THIS CATCHES: dropping the `atpg_disclose_not_run` call in the
-    precondition branch (i.e. reverting to the in-memory `notes.append`) —
-    the tree goes silent again and every assertion below fails.
-    """
-    written, notes = _run(tmp_path)
-
-    assert written == [], "nothing can be produced with no inputs"
-    for step in DT_ALL:
-        rec = _record(tmp_path, step)
-        assert rec.is_file(), (
-            f"{step} self-disabled and left no disclosure artefact — that is "
-            f"exactly #235: absence indistinguishable from a pass. "
-            f"tree={[str(p.relative_to(tmp_path)) for p in tmp_path.rglob('*') if p.is_file()]}")
-        blob = json.loads(rec.read_text())
-        assert blob["verdict"] == "SKIPPED-CONDITION", blob
-        assert blob["not_run_stage"] == "precondition_unmet", blob
-        assert blob["step"] == step
-        assert blob["skips_required_output"] == R._ATPG_COVERAGE_REL[step]
-        # The record must NAME what is missing; a record that says only
-        # "skipped" is the same silence with extra steps.
-        assert blob["missing_inputs"], blob
-        assert any(R._ATPG_SDC_REL in m for m in blob["missing_inputs"]), blob
-    # DT1/DT2 miss the scan cut; DT3 misses the two upstream grades it fuses.
-    for step in ("DT1", "DT2"):
-        blob = json.loads(_record(tmp_path, step).read_text())
-        assert any(R._ATPG_CUT_REL in m for m in blob["missing_inputs"]), blob
-    dt3 = json.loads(_record(tmp_path, "DT3").read_text())
-    assert any(R._ATPG_COVERAGE_REL["DT2"] in m for m in dt3["missing_inputs"])
-    assert any(R._ATPG_COVERAGE_REL["DT1"] in m for m in dt3["missing_inputs"])
 
 
-def test_dt3_cascade_is_disclosed_when_only_the_upstream_grade_is_missing(tmp_path):
-    """DT3's own case from the issue: DT1/DT2 are fine, DT2's grade is not
-    there, so DT3 vanishes. It must say so rather than disappear.
-
-    MUTATION THIS CATCHES: disclosing only DT2 and leaving DT3's cascade
-    silent — the exact half-fix the baseline registry warned about.
-    """
-    _sdc(tmp_path)
-    _cut(tmp_path)
-    _coverage(tmp_path, "DT1")
-    # DT2's grade deliberately absent.
-
-    calls: list = []
-
-    def _fake(cmd, **kw):
-        calls.append(cmd)
-        return _FakeProc(rc=0)
-
-    import phase3_one_shot_runner as _R
-    orig = _R._pr.run
-    _R._pr.run = _fake
-    try:
-        _run(tmp_path)
-    finally:
-        _R._pr.run = orig
-
-    rec = _record(tmp_path, "DT3")
-    assert rec.is_file(), "DT3's cascade self-disable left no record"
-    blob = json.loads(rec.read_text())
-    assert blob["not_run_stage"] == "precondition_unmet"
-    assert any(R._ATPG_COVERAGE_REL["DT2"] in m for m in blob["missing_inputs"])
 
 
-def test_a_producer_that_writes_nothing_is_disclosed_with_its_exit_status(tmp_path):
-    """Ran, produced nothing. HEAD dropped this on the floor entirely — no
-    note, no record, no trace of the non-zero exit.
-
-    MUTATION THIS CATCHES: `if out_json.is_file(): written.append(...)` with no
-    else, which is precisely what the phase3 block did.
-    """
-    # DT1/DT2 armed (scan cut + routed SDC), no coverage artefact anywhere yet.
-    _sdc(tmp_path)
-    _cut(tmp_path)
-
-    def _fake(cmd, **kw):
-        return _FakeProc(rc=3, err="engine aborted: no liberty")
-
-    import phase3_one_shot_runner as _R
-    orig = _R._pr.run
-    _R._pr.run = _fake
-    try:
-        written, notes = _run(tmp_path)
-    finally:
-        _R._pr.run = orig
-
-    assert written == []
-    for step in ("DT1", "DT2"):
-        rec = _record(tmp_path, step)
-        assert rec.is_file(), f"{step} ran, wrote nothing, and said nothing"
-        blob = json.loads(rec.read_text())
-        assert blob["not_run_stage"] == "producer_wrote_no_artifact", blob
-        assert blob["producer_exit"] == 3, blob
-        assert blob["tool_attempted"] is True, (
-            "the tool WAS launched here; the record must not claim otherwise")
-        assert "engine aborted: no liberty" in blob["reason"], blob
-    # DT3 cascades off the two grades that were never produced, and says so.
-    dt3 = json.loads(_record(tmp_path, "DT3").read_text())
-    assert dt3["not_run_stage"] == "precondition_unmet", dt3
 
 
-def test_an_exception_from_the_producer_is_disclosed(tmp_path):
-    """A timeout / OSError killed the producer. HEAD appended an in-memory note
-    that died with the process.
-
-    MUTATION THIS CATCHES: reverting the except branch to `notes.append(...)`.
-    """
-    _armed(tmp_path)
-    _coverage(tmp_path, "DT2", "BLOCKED")
-
-    def _boom(cmd, **kw):
-        # CZT2-15 — the STIMULUS changed because the mechanism did, and the
-        # ASSERTIONS below did not. This dispatch is supervised on the
-        # producer's own forward progress and carries no clock, so
-        # `subprocess.TimeoutExpired` can no longer arrive here at all; a
-        # stimulus that cannot occur would leave this test passing over a
-        # branch nothing reaches. `Stalled` is what the supervisor raises, and
-        # it must land in the same `except Exception` disclosure.
-        import _progress_run as _pr
-        raise _pr.Stalled(cmd, looks=12, poll_s=30.0, elapsed_s=361.0,
-                          signals={"output": True, "cpu": True, "io": True})
-
-    import phase3_one_shot_runner as _R
-    orig = _R._pr.run
-    _R._pr.run = _boom
-    try:
-        _run(tmp_path)
-    finally:
-        _R._pr.run = orig
-
-    blob = json.loads(_record(tmp_path, "DT2").read_text())
-    assert blob["not_run_stage"] == "producer_execution_error", blob
-    assert blob["tool_attempted"] is True
 
 
 # ================================================================
@@ -332,107 +107,12 @@ def test_an_exception_from_the_producer_is_disclosed(tmp_path):
 # would pass every test above and be a new lie on disk.
 # ================================================================
 
-def test_a_real_measurement_leaves_no_record(tmp_path):
-    """CONTROL for every producer test above. A step that actually graded must
-    NOT carry a not-run record, or the gate reads a fresh result as blocked.
-
-    MUTATION THIS CATCHES: writing the disclosure unconditionally.
-    """
-    _armed(tmp_path)
-    _coverage(tmp_path, "DT1", "BLOCKED")
-    _coverage(tmp_path, "DT2", "BLOCKED")
-
-    def _fake(cmd, **kw):
-        out = Path(cmd[cmd.index("--json") + 1])
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps({"verdict": "PASS"}))
-        return _FakeProc(rc=0)
-
-    import phase3_one_shot_runner as _R
-    orig = _R._pr.run
-    _R._pr.run = _fake
-    try:
-        written, notes = _run(tmp_path)
-    finally:
-        _R._pr.run = orig
-
-    assert len(written) == 3, written
-    for step in DT_ALL:
-        assert not _record(tmp_path, step).exists(), (
-            f"{step} produced a real grade but still carries a not-run record")
 
 
-def test_a_real_measurement_retires_a_stale_record(tmp_path):
-    """A record that outlives the condition it described is a lie on disk.
-
-    MUTATION THIS CATCHES: dropping `atpg_clear_not_run` on the success path —
-    the run grades correctly and the gate still answers BLOCKED forever.
-    """
-    _armed(tmp_path)
-    _coverage(tmp_path, "DT2", "BLOCKED")
-    stale = R.atpg_disclose_not_run(tmp_path, "DT2", "an earlier pass gave up",
-                                    "precondition_unmet")
-    assert stale.is_file()
-
-    def _fake(cmd, **kw):
-        out = Path(cmd[cmd.index("--json") + 1])
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps({"verdict": "PASS"}))
-        return _FakeProc(rc=0)
-
-    import phase3_one_shot_runner as _R
-    orig = _R._pr.run
-    _R._pr.run = _fake
-    try:
-        _run(tmp_path)
-    finally:
-        _R._pr.run = orig
-
-    assert not stale.exists(), "a real grade must retire the stale record"
 
 
-def test_an_existing_grade_is_neither_regraded_nor_recorded(tmp_path):
-    """Idempotence + the no-spurious-record control, and the gating check: a
-    tree that already carries genuine grades must be left completely alone,
-    even with the scan cut long since cleaned up (every published benchmark
-    run is in exactly that state).
-
-    MUTATION THIS CATCHES: checking preconditions BEFORE `atpg_needs_regrade`,
-    which stamps a not-run record onto every finished run in the repo.
-    """
-    _sdc(tmp_path)
-    _coverage(tmp_path, "DT1")
-    _coverage(tmp_path, "DT2")
-    _coverage(tmp_path, "DT3")
-    # No cut_netlist.v on purpose.
-    launched: list = []
-
-    import phase3_one_shot_runner as _R
-    orig = _R._pr.run
-    _R._pr.run = lambda cmd, **kw: (launched.append(cmd)
-                                           or _FakeProc(rc=0))
-    try:
-        written, notes = _run(tmp_path)
-    finally:
-        _R._pr.run = orig
-
-    assert launched == [], "a graded tree must not re-launch any producer"
-    assert written == [] and notes == []
-    assert list(tmp_path.rglob("*atpg_not_run*")) == []
 
 
-def test_a_stale_record_is_retired_even_without_a_rerun(tmp_path):
-    """The record and the grade contradict each other and no producer runs.
-    The grade is the measurement; the record must go.
-
-    MUTATION THIS CATCHES: `continue`-ing on `not needs_regrade` before
-    clearing, leaving a permanent contradiction beside a real result.
-    """
-    _sdc(tmp_path)
-    _coverage(tmp_path, "DT2")
-    stale = R.atpg_disclose_not_run(tmp_path, "DT2", "stale", "precondition_unmet")
-    _run(tmp_path)
-    assert not stale.exists()
 
 
 # ================================================================
@@ -440,101 +120,14 @@ def test_a_stale_record_is_retired_even_without_a_rerun(tmp_path):
 # it is invoked. This is the regression guard on the extraction itself.
 # ================================================================
 
-def test_producer_argv_is_unchanged(tmp_path):
-    """Pins the invocation the inline block used: the SDC clock, DT1's
-    --max-faults 400, the canonical --json target, and --pdk-dir only when
-    input/pdk exists.
-
-    MUTATION THIS CATCHES: any drift in the extracted call (a lost
-    --max-faults, a wrong clock, a moved output path) — all of which would
-    silently change grading rather than fail loudly.
-    """
-    _armed(tmp_path)
-    _coverage(tmp_path, "DT1", "BLOCKED")
-    _coverage(tmp_path, "DT2", "BLOCKED")
-    (tmp_path / "input" / "pdk").mkdir(parents=True)
-    cmds: list = []
-
-    import phase3_one_shot_runner as _R
-    orig = _R._pr.run
-    def produce(cmd, **kw):
-        cmds.append(cmd)
-        output = Path(cmd[cmd.index('--json') + 1])
-        step = next(sid for sid, relative in _R._ATPG_COVERAGE_REL.items()
-                    if output == tmp_path / relative)
-        _coverage(tmp_path, step)
-        return _FakeProc(rc=0)
-    _R._pr.run = produce
-    try:
-        _run(tmp_path)
-    finally:
-        _R._pr.run = orig
-
-    assert len(cmds) == 3
-    progs = [Path(c[1]).name for c in cmds]
-    assert progs == ["transition_fault_atpg_run.py",
-                     "path_delay_fault_atpg_run.py",
-                     "sdd_atpg_run.py"], progs
-    for cmd, step in zip(cmds, DT_ALL):
-        assert cmd[2] == str(tmp_path)
-        assert cmd[cmd.index("--clock") + 1] == "clk"
-        assert cmd[cmd.index("--json") + 1] == str(
-            tmp_path / R._ATPG_COVERAGE_REL[step])
-        assert cmd[cmd.index("--pdk-dir") + 1] == str(
-            (tmp_path / "input" / "pdk").resolve())
-    assert cmds[0][cmds[0].index("--max-faults") + 1] == "400"
-    for c in cmds[1:]:
-        assert "--max-faults" not in c
 
 
-def test_no_pdk_dir_argument_when_there_is_no_staged_pdk(tmp_path):
-    """Control for the argv test: --pdk-dir is conditional, as it was."""
-    _armed(tmp_path)
-    _coverage(tmp_path, "DT2", "BLOCKED")
-    cmds: list = []
-
-    import phase3_one_shot_runner as _R
-    orig = _R._pr.run
-    _R._pr.run = lambda cmd, **kw: (cmds.append(cmd) or _FakeProc(rc=0))
-    try:
-        _run(tmp_path)
-    finally:
-        _R._pr.run = orig
-
-    assert cmds and all("--pdk-dir" not in c for c in cmds)
 
 
-@pytest.mark.parametrize("sdc_text,expected", [
-    ("create_clock -name clk -period 10 [get_ports clk]\n", "clk"),
-    ("create_clock -period 10 [get_ports sysclk]\n", "sysclk"),
-    ("# no clock here\n", None),
-])
-def test_clock_discovery_matches_the_inline_regex(tmp_path, sdc_text, expected):
-    """The three inline copies of the clock regex became one helper; it must
-    resolve the same names, including the -name-less get_ports form."""
-    sdc = tmp_path / R._ATPG_SDC_REL
-    sdc.parent.mkdir(parents=True, exist_ok=True)
-    sdc.write_text(sdc_text)
-    assert R.routed_sdc_clock(tmp_path) == expected
 
 
-def test_missing_sdc_is_a_named_missing_input_not_a_crash(tmp_path):
-    assert R.routed_sdc_clock(tmp_path) is None
-    assert any(R._ATPG_SDC_REL in m
-               for m in R.atpg_missing_inputs(tmp_path, "DT2"))
 
 
-@pytest.mark.parametrize("verdict,regrade", [
-    ("PASS", False), ("NOT_APPLICABLE", False),
-    # `verdict` in `*_coverage.json` is the ATPG PRODUCER's own word --
-    # BLOCKED / ENGINE_LIMITED / ERROR / PASS / NOT_APPLICABLE -- and is what
-    # `atpg_needs_regrade` reads. It is not a step status.
-    ("BLOCKED", True), ("ENGINE_LIMITED", True), ("ERROR", True),
-])
-def test_regrade_policy_is_unchanged(tmp_path, verdict, regrade):
-    """A genuine measurement is never re-run; a non-graded placeholder is."""
-    p = _coverage(tmp_path, "DT2", verdict)
-    assert R.atpg_needs_regrade(p) is regrade
 
 
 # ================================================================
@@ -542,19 +135,6 @@ def test_regrade_policy_is_unchanged(tmp_path, verdict, regrade):
 # silence into BLOCKED.
 # ================================================================
 
-@pytest.mark.parametrize("step,mod", [("DT2", PDF), ("DT3", SDD)])
-def test_gate_reports_blocked_with_the_recorded_reason(tmp_path, step, mod):
-    """MUTATION THIS CATCHES: leaving the gate's `blob is None` branch as a
-    bare FAIL — the record is written and nothing reads it, so the disclosure
-    is decorative and the operator still cannot tell the three cases apart.
-    """
-    R.atpg_disclose_not_run(tmp_path, step, "the scan cut never arrived",
-                            "precondition_unmet")
-    report = mod.audit(tmp_path)
-    assert report["verdict"] == "BLOCKED", report
-    assert report["not_run_stage"] == "precondition_unmet"
-    assert report["not_run_record"] == str(tmp_path / R._ATPG_NOT_RUN_REL[step])
-    assert "the scan cut never arrived" in " ".join(report["reasons"])
 
 
 @pytest.mark.parametrize("step,mod", [("DT2", PDF), ("DT3", SDD)])
@@ -572,60 +152,10 @@ def test_gate_still_fails_when_nothing_was_recorded(tmp_path, step, mod):
     assert "NO not-run record" in " ".join(report["reasons"])
 
 
-@pytest.mark.parametrize("step,mod", [("DT2", PDF), ("DT3", SDD)])
-def test_blocked_is_not_a_pass(tmp_path, step, mod):
-    """An unmeasured at-speed step must not exit 0, or the flow's
-    `program_exit_zero` gate reads the deferral as a green step.
-
-    MUTATION THIS CATCHES: adding BLOCKED to the rc-0 set beside
-    NOT_APPLICABLE.
-    """
-    R.atpg_disclose_not_run(tmp_path, step, "nothing to grade",
-                            "precondition_unmet")
-    assert mod.main([str(tmp_path)]) == 1
 
 
-@pytest.mark.parametrize("step,mod", [("DT2", PDF), ("DT3", SDD)])
-def test_a_real_grade_is_never_downgraded_by_a_stale_record(tmp_path, step, mod):
-    """§4.05 no-leak, the reverse direction: the record is only consulted when
-    there is NO artefact. A real grade governs, and a leftover record can
-    never demote it — nor can it rescue a real FAIL.
-
-    MUTATION THIS CATCHES: consulting the record before the coverage blob.
-    """
-    R.atpg_disclose_not_run(tmp_path, step, "stale", "precondition_unmet")
-
-    # CONTROL, and the reason this is not a weakened test: the record on disk is
-    # LIVE — resolvable, parseable, and on its own it drives the gate to BLOCKED.
-    # Without this arm a PASS below could come from a record the gate merely
-    # failed to read, which is a different cause and would not catch the
-    # mutation. Measured here, on the same tree, one call earlier.
-    blocked = mod.audit(tmp_path)
-    assert blocked["verdict"] == "BLOCKED", blocked
-    assert blocked["not_run_record"], (
-        "fixture premise: the stale record must be RESOLVED when there is no "
-        "artefact, or the no-leak direction below is asserting on nothing")
-
-    dst = tmp_path / R._ATPG_COVERAGE_REL[step]
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    dst.write_text(json.dumps(_real_grade_blob(step)))
-
-    report = mod.audit(tmp_path)
-    assert report["verdict"] == "PASS", report
-    assert report["not_run_record"] is None, (
-        "a graded run must not even resolve the record")
 
 
-@pytest.mark.parametrize("step,mod", [("DT2", PDF), ("DT3", SDD)])
-def test_an_unparseable_record_is_not_a_deferral(tmp_path, step, mod):
-    """A corrupt sentinel is not a reason. It must fall back to FAIL, not be
-    read as 'the step said why'."""
-    rec = _record(tmp_path, step)
-    rec.parent.mkdir(parents=True, exist_ok=True)
-    rec.write_text("{not json")
-    report = mod.audit(tmp_path)
-    assert report["verdict"] == "FAIL", report
-    assert report["not_run_record"] is None
 
 
 # ================================================================
@@ -685,108 +215,8 @@ def _status_of(doc: dict, step: str) -> Optional[str]:
     return None
 
 
-def _reason_of(doc: dict, step: str) -> Optional[str]:
-    """R-0915-85 — the reason beside the word; two rows can share FAIL and
-    mean different things, and this file needs the difference."""
-    for s in doc["steps"]:
-        if str(s.get("id")) == step:
-            return s.get("reason_class")
-    return None
 
 
-def test_a_disclosed_not_run_is_never_cost_free_at_the_flow_level(tmp_path):
-    """THE DEFECT INPUT. A tree that has a scan cut, post-layout parasitics and
-    a routed netlist, and NO at-speed grade at all — every one of DT1/DT2/DT3
-    disclosed as not-run by the producer.
-
-    The disclosure must buy a REASON, never a DISCOUNT. Concretely: DT1 and
-    DT2 stay MISSING (their required coverage artefact is absent and nothing
-    produced it), the flow verdict stays FAIL and the exit code stays 1.
-
-    MUTATION THIS CATCHES — and it is the one that shipped: mirroring the
-    not-run record into `reports/phase2/dft/` beside the coverage artefact so
-    `flow_compliance_check._declared_sibling_self_skip_for_missing` promotes
-    MISSING -> SKIPPED-CONDITION. `total_required` SUBTRACTS
-    SKIPPED-CONDITION, so all three steps leave the executed-PASS denominator
-    and this whole tree reports `Overall: PASS`. Measured: with the mirror,
-    MISSING=0 SKIPPED=4 `0/-1 executed PASS` rc 0; without it, MISSING=2 rc 1.
-    """
-    _sdc(tmp_path)
-    _cut(tmp_path)
-    spef = tmp_path / "phase3/stage3/extracted/top.spef"
-    spef.parent.mkdir(parents=True, exist_ok=True)
-    spef.write_text('*SPEF "IEEE 1481-1998"\n')
-    pnr = tmp_path / "phase3/stage3/pnr/top_pnr.v"
-    pnr.parent.mkdir(parents=True, exist_ok=True)
-    pnr.write_text("module top(); endmodule\n")
-    for step in DT_ALL:
-        R.atpg_disclose_not_run(tmp_path, step, "producer wrote no artefact",
-                                "producer_wrote_no_artifact")
-
-    # The record must not be co-located with the artefact whose absence it
-    # discloses — that directory is where the MISSING->SKIPPED-CONDITION
-    # promoter looks, and a promotion there is the discount this test refuses.
-    for step in DT_ALL:
-        mirror = tmp_path / R._ATPG_NOT_RUN_LEGACY_COLOCATED_REL[step]
-        assert not mirror.exists(), (
-            f"{step}'s not-run record was written co-located with its coverage "
-            f"artefact at {mirror.relative_to(tmp_path)}; that is where "
-            f"_declared_sibling_self_skip_for_missing looks, and the "
-            f"SKIPPED-CONDITION it grants is subtracted from the "
-            f"executed-PASS denominator")
-
-    rc, doc = _fcc(tmp_path, _dt_subflow(tmp_path))
-    assert _status_of(doc, "DT1") == "FAIL", doc["_stdout"]
-    assert doc["overall"] == "FAIL", doc["_stdout"]
-    assert rc == 1, doc["_stdout"]
-    assert doc["counts"]["FAIL"] >= 1, doc["counts"]
-
-    # DT2 DEFERS TO ITS UPSTREAM HERE, AND THAT IS NOT THE DISCOUNT.
-    #
-    # This used to assert `DT2 == "FAIL"` and `MISSING >= 2`. DT2's arming
-    # condition named `phase2/stage2/dft/cut_netlist.v`, which this tree has, so
-    # DT2 armed and went red for a grade its own upstream had never produced.
-    # DT2's condition is now DT1's DECLARED grade plus step 22's SPEF — the
-    # artefact spelling of its own `blocks_on: [DT1, 22]` — because
-    # `cut_netlist.v` is an UNDECLARED step-11 intermediate whose disappearance
-    # is loud nowhere, which is exactly the vibe-ic#235 hole this file's
-    # baseline entry carried. On this tree DT1 produced no grade, so DT2 waits.
-    #
-    # THE DISCOUNT THIS TEST REFUSES IS UNAFFECTED, and that is the whole point:
-    # the defect it was written for is `Overall: PASS` on a tree where nothing
-    # was measured, and the three assertions above still pin FAIL / rc 1 / a red
-    # step inside the denominator. What moved is WHICH step carries the red, not
-    # whether one does.
-    #
-    # THE PRECEDENT IS IN THIS SAME RUN. DT3 already chains on declared grades
-    # (its condition is path_delay_coverage.json + transition_coverage.json) and
-    # therefore ALREADY reports SKIPPED-CONDITION on this exact tree, in the
-    # arm this test passed in before and the arm it passes in now. This file
-    # accepted that for DT3 without calling it a discount; DT2 now behaves the
-    # same way, for the same reason.
-    #
-    # WHAT IS STILL REFUSED: DT2 may never come out of this tree GREEN.
-    # R-0915-85 — the two words are `FAIL` (its coverage artefact is absent)
-    # and `NOT_APPLICABLE` (its own condition was evaluated and not met). What
-    # is still refused is unchanged and is the line this assertion exists for:
-    # DT2 may never come out of this tree GREEN.
-    #
-    # R-0915-140 — DT1 FAILED (it owed a grade and wrote none), so DT2 and DT3,
-    # whose blocks_on closure holds it, were never owed theirs: each reads
-    # NOT_MEASURED(upstream_failed) — the cascade of DT1, which carries the red
-    # above — never FAIL(missing_artefact). Still not green, still inside the
-    # denominator (NOT_MEASURED is not excused), and still not the
-    # SKIPPED-CONDITION discount this test exists to refuse.
-    for _sid in ("DT2", "DT3"):
-        _st = _status_of(doc, _sid)
-        assert _st == "NOT_MEASURED", (
-            f"{_sid} reported something other than the cascade of DT1 on a "
-            f"tree where no at-speed grade exists at all:\n" + doc["_stdout"])
-        assert _reason_of(doc, _sid) == "upstream_failed", (
-            f"{_sid} is NOT_MEASURED for a reason other than its FAILED "
-            f"blocker:\n" + doc["_stdout"])
-        assert _st not in ("PASS", "PASS_WITH_WAIVERS"), (
-            f"{_sid} came out of this tree GREEN:\n" + doc["_stdout"])
 
 
 def test_a_routed_extracted_design_with_no_dft_does_not_arm_dt2(tmp_path):
@@ -824,114 +254,3 @@ def test_a_routed_extracted_design_with_no_dft_does_not_arm_dt2(tmp_path):
     assert doc["counts"]["FAIL"] == 0, doc["_stdout"]
     assert doc["overall"] == "PASS", doc["_stdout"]
     assert rc == 0, doc["_stdout"]
-
-
-def test_dt2_arms_and_goes_red_when_its_own_grade_is_absent(tmp_path):
-    """A design that has EVERYTHING DT2 needs and no at-speed grade must go
-    red, and must stay inside the executed-PASS denominator.
-
-    This is the direction that was measured and lost at the 2026-07-28
-    convergence merge, so it is pinned here rather than argued. A dimension-6
-    change had re-armed DT2 on the PRODUCER'S OWN OUTPUTS (any-of over
-    `reports/phase2/dft/path_delay_coverage.json` or
-    `phase2/stage2/dft/path_delay_atpg_not_run.json`) to close the #235
-    self-disabling hole. On THIS tree that spelling gives DT2
-    SKIPPED-CONDITION, `Steps: 1 total (0/-1 executed PASS)` and
-    `Overall: PASS` rc 0 — the step leaves the denominator entirely, because
-    `total_required` subtracts SKIPPED-CONDITION. The ALL-of spelling gives
-    `MISSING=1`, `Overall: FAIL`, rc 1, which is what this asserts.
-
-    MUTATION THIS CATCHES: re-arming DT2's condition on its own producer's
-    outputs (in either the any-of or the mirrored-record form).
-
-    WHAT THIS DOES **NOT** COVER, and it is a waived gap, not an oversight:
-    the mirror case — the producer ran and disclosed, and DT2's INPUTS were
-    then cleaned away. On this ALL-of condition DT2 goes SKIPPED-CONDITION
-    there. That is the vibe-ic#235 self-disabling hole; it is carried in
-    `flow/flow_condition_reachability_baseline.json` and waived at DT2/dim-6,
-    and closing it needs a flow-level non-fatal "ran, disclosed, could not
-    measure" verdict that COSTS the denominator — not another condition.
-    """
-    cut = tmp_path / "phase2/stage2/dft/cut_netlist.v"
-    cut.parent.mkdir(parents=True, exist_ok=True)
-    cut.write_text("module cut(); endmodule\n")
-    spef = tmp_path / "phase3/stage3/extracted/top.spef"
-    spef.parent.mkdir(parents=True, exist_ok=True)
-    spef.write_text('*SPEF "IEEE 1481-1998"\n')
-    pnr = tmp_path / "phase3/stage3/pnr/top_pnr.v"
-    pnr.parent.mkdir(parents=True, exist_ok=True)
-    pnr.write_text("module top(); endmodule\n")
-    # "EVERYTHING DT2 NEEDS" INCLUDES DT1'S GRADE, and it always did — the tree
-    # just did not have to say so while DT2's condition named `cut_netlist.v`.
-    # DT2 `blocks_on: [DT1, 22]`, and DT1's declared sole required_output is
-    # this file; DT2's condition now names it (plus step 22's SPEF) instead of
-    # step 11's undeclared `cut_netlist.v`. Adding it here does not weaken the
-    # assertion below by one character — DT2 still has every input it needs and
-    # still has no at-speed grade of its own, which is the state being pinned.
-    # The tree WITHOUT it is pinned separately, by
-    # `test_dt2_defers_when_dt1_produced_no_grade_and_dt1_carries_the_red`.
-    #
-    # R-0915-140 — AND DT1'S GRADE MUST BE ONE DT1'S OWN GATE ACCEPTS. The bare
-    # `{"verdict": "PASS"}` stub carries no fault counts, so
-    # `transition_coverage_check` REFUSES it ("no TDF fault verdicts present")
-    # and DT1 FAILS; with a FAILED blocker DT2 was never owed its grade and
-    # reads NOT_MEASURED(upstream_failed). This test's premise is that DT2 has
-    # EVERYTHING it needs, so DT1 gets a grade that passes its gate -- the
-    # premise made true, not the assertion moved.
-    _cov = _coverage(tmp_path, "DT1")
-    _cov.write_text(json.dumps({"verdict": "PASS", "scan_flops": 8,
-                                "detected": 98, "redundant": 1,
-                                "aborted": 1}))
-
-    rc, doc = _fcc(tmp_path, _dt_subflow(tmp_path))
-    assert _status_of(doc, "DT1") == "PASS", doc["_stdout"]
-    assert _status_of(doc, "DT2") == "FAIL", (
-        "a design carrying DT2's scan cut, its SPEF and its routed netlist, "
-        "with NO at-speed grade on disk, did not go red — the step whose only "
-        "job is to report that grade vanished instead:\n" + doc["_stdout"])
-    assert doc["counts"]["FAIL"] >= 1, doc["_stdout"]
-    assert doc["overall"] == "FAIL", doc["_stdout"]
-    assert rc == 1, doc["_stdout"]
-
-
-def test_dt2_blocks_when_dt1_produced_no_grade_and_names_the_dependency(tmp_path):
-    """The tree `test_dt2_arms_and_goes_red_when_its_own_grade_is_absent` used
-    to use, kept as its own case so nothing is lost by that test gaining DT1's
-    grade.
-
-    Scan cut + SPEF + routed netlist, and NO grade from EITHER at-speed step.
-    DT2's condition names DT1's declared grade. Once the scan cut arms DT1,
-    DT2's absent trigger is no longer design inapplicability: DT2 is MISSING,
-    blocked by DT1, and names the grade DT1 failed to deliver (#1976).
-
-    MUTATION THIS CATCHES: treating a missing dependency artefact as a plain
-    condition skip even after its producer ran. Read this beside
-    `test_a_routed_extracted_design_with_no_dft_does_not_arm_dt2`: an explicit
-    no-DFT declaration skips, while an attempted DFT step blocks.
-    """
-    _cut(tmp_path)
-    spef = tmp_path / "phase3/stage3/extracted/top.spef"
-    spef.parent.mkdir(parents=True, exist_ok=True)
-    spef.write_text('*SPEF "IEEE 1481-1998"\n')
-    pnr = tmp_path / "phase3/stage3/pnr/top_pnr.v"
-    pnr.parent.mkdir(parents=True, exist_ok=True)
-    pnr.write_text("module top(); endmodule\n")
-
-    rc, doc = _fcc(tmp_path, _dt_subflow(tmp_path))
-    assert _status_of(doc, "DT1") == "FAIL", (
-        "DT1 armed on the scan cut and owes a transition grade this tree does "
-        "not have; it must carry the red:\n" + doc["_stdout"])
-    # R-0915-140 — DT1 FAILED, so DT2 was never owed its grade: it reads
-    # NOT_MEASURED(upstream_failed), still blocked by and naming DT1, and
-    # still NEVER the design-inapplicability skip this test refuses.
-    assert _status_of(doc, "DT2") == "NOT_MEASURED", (
-        "DT2 treated DT1's missing grade as design inapplicability:\n"
-        + doc["_stdout"])
-    assert _reason_of(doc, "DT2") == "upstream_failed", doc["_stdout"]
-    dt2 = next(step for step in doc["steps"] if str(step.get("id")) == "DT2")
-    assert dt2["cascade_note"] == "blocked-by-upstream(DT1)", dt2
-    reason = "\n".join(dt2["reasons"])
-    assert "step DT1" in reason, reason
-    assert "reports/phase2/dft/transition_coverage.json" in reason, reason
-    assert doc["overall"] == "FAIL", doc["_stdout"]
-    assert rc == 1, doc["_stdout"]

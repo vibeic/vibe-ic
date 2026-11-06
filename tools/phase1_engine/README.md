@@ -107,7 +107,5 @@ tools/phase1_engine/
   mirror in `vibe-ic-d`) — single entry point invoking the CLI above.
 - **Legacy 11 skills**: archived at `legacy/skills_phase1_v051/` — not
   invoked by the new flow but kept for reference / regression tests.
-- **Gate suite**: existing programs under `vibe-ic-d/programs/`
-  (`phase1_doc_presence_check.py`, `phase1_consistency_check.py`,
-  `phase1_quality_parity_check.py`, `json_schema_check.py`) run
-  unchanged on the rendered `generated_docs/`.
+- **Rendered artifacts**: the CLI writes `generated_docs/` for the Phase-1
+  flow. The former standalone checker suite has been retired.

@@ -30,7 +30,6 @@ from pathlib import Path
 
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
-import vibe_ic_one_shot_runner as ORCH  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
@@ -40,81 +39,20 @@ ENGINE_PARENT = PROG.parent / "tools"
 
 # ── (a) mode decision priority ──────────────────────────────────────────────
 
-def _stage(tmp_path, *, prompt=False, docs=False, struct=False,
-           input_doc=False):
-    inp = tmp_path / "input"
-    inp.mkdir(parents=True, exist_ok=True)
-    if prompt:
-        (inp / "phase1_prompt.md").write_text("# my chip\nA crypto block.\n")
-    if struct:
-        (inp / "phase1_structured.yaml").write_text("ic_name: x\n")
-    if docs:
-        d = inp / "docs"
-        d.mkdir(exist_ok=True)
-        (d / "datasheet.md").write_text("# Vendor datasheet\n47 ports.\n")
-    if input_doc:
-        d = tmp_path / "phase1" / "input_doc"
-        d.mkdir(parents=True, exist_ok=True)
-        (d / "corpus.txt").write_text("vendor corpus\n")
-    return tmp_path
 
 
-def test_docs_outrank_prompt(tmp_path):
-    """The issue's exact shape: BOTH phase1_prompt.md and a populated
-    docs/ tree staged → docs mode must win."""
-    proj = _stage(tmp_path, prompt=True, docs=True)
-    run, mode = ORCH._phase1_decision(proj, force_skip=False)
-    assert run is True
-    assert mode == "docs"
 
 
-def test_input_doc_corpus_outranks_prompt(tmp_path):
-    proj = _stage(tmp_path, prompt=True, input_doc=True)
-    run, mode = ORCH._phase1_decision(proj, force_skip=False)
-    assert (run, mode) == (True, "docs")
 
 
-def test_prompt_only_now_docs_mode_unified(tmp_path):
-    """UNIFIED backend (2026-06-20): a free-text prompt is itself a document
-    and now resolves to docs mode (was 'prompt'); the render-bridge copies it
-    into input/docs/ before the doc-extraction track ingests it."""
-    proj = _stage(tmp_path, prompt=True)
-    run, mode = ORCH._phase1_decision(proj, force_skip=False)
-    assert (run, mode) == (True, "docs")
 
 
-def test_structured_yaml_now_docs_mode_unified(tmp_path):
-    """UNIFIED backend: a dialogue convergence fact-graph also flows through
-    the doc track (rendered to a freestyle document), so it resolves to docs —
-    no separate engine 'prompt' priority anymore."""
-    proj = _stage(tmp_path, struct=True, docs=True)
-    run, mode = ORCH._phase1_decision(proj, force_skip=False)
-    assert (run, mode) == (True, "docs")
 
 
-def test_docs_only_still_docs_mode(tmp_path):
-    proj = _stage(tmp_path, docs=True)
-    run, mode = ORCH._phase1_decision(proj, force_skip=False)
-    assert (run, mode) == (True, "docs")
 
 
-def test_no_inputs_no_run(tmp_path):
-    run, mode = ORCH._phase1_decision(tmp_path, force_skip=False)
-    assert (run, mode) == (False, "")
 
 
-def test_gitkeep_only_docs_keeps_prompt_content_via_docs_bridge(tmp_path):
-    """The surviving #583 invariant under the unified backend: an empty docs/
-    holding only a .gitkeep must NOT cause the real prompt content to be lost.
-    A .gitkeep is not extractable, so the prompt still drives the run — now as
-    docs mode (the render-bridge carries phase1_prompt.md into input/docs/),
-    never a SKIP/no-run that would drop the prompt."""
-    proj = _stage(tmp_path, prompt=True)
-    d = proj / "input" / "docs"
-    d.mkdir()
-    (d / ".gitkeep").write_text("")
-    run, mode = ORCH._phase1_decision(proj, force_skip=False)
-    assert (run, mode) == (True, "docs")
 
 
 # ── (b) run-all honors --ic-name (the NL/prompt-bridged path) ───────────────

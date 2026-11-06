@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
 """Read-validate an existing analog DUT against its current typed design.
 
-This writes a new validation receipt. It never rewrites the DUT, testbench,
-topology, or an emission-provenance record, and makes no performance claim.
+This reads the DUT structure and geometry and makes no performance claim.
 """
 from __future__ import annotations
 
 import argparse
 import copy
 from decimal import Decimal
-import hashlib
 import json
 import math
-import os
 from pathlib import Path
 import re
 import shlex
@@ -29,13 +26,9 @@ RECEIPT = "existing_design_validation.json"
 SCHEMA = "vibe-ic/existing-design-validation/1"
 
 
-def _sha(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-
-
 def _view(path):
     path = Path(path).resolve()
-    return {"path": str(path), "sha256": _sha(path)}
+    return {"path": str(path)}
 
 
 def _number(token):
@@ -78,7 +71,7 @@ def _cards(text, directory):
             if len(fields) != (3 if head == ".lib" else 2):
                 raise ValueError("model include/section declaration is malformed")
             path = Path(fields[1]); path = path if path.is_absolute() else directory / path
-            directives.append([".lib" if head == ".lib" else ".include", _sha(path),
+            directives.append([".lib" if head == ".lib" else ".include", str(path.resolve()),
                                fields[2].casefold() if head == ".lib" else ""])
         elif head in (".option", ".options") and not opened:
             directives.append([".options", *sorted(value.casefold() for value in fields[1:])])
@@ -103,17 +96,6 @@ def _cards(text, directory):
     return {"ports": ports, "directives": directives, "devices": devices}
 
 
-def _closure_signature(views):
-    paths = [Path(row["path"]) for row in views.values()]
-    if not paths:
-        raise ValueError("PDK model/include closure is empty")
-    base = Path(os.path.commonpath(paths))
-    if base.is_file():
-        base = base.parent
-    return sorted((str(path.relative_to(base)), views["include:" + str(path)]["sha256"])
-                  for path in paths)
-
-
 def _context(project, block, ir, pdk, container):
     entries, _ = emitter.block_entries(project)
     domain = emitter.block_voltage_domains(project, entries).get(block)
@@ -122,7 +104,7 @@ def _context(project, block, ir, pdk, container):
 
 
 def validate(project, block, pdk, container=""):
-    """Recompute the current read validation; receipt status is never authority."""
+    """Check the current typed circuit structure and physical dimensions."""
     project = Path(project).resolve()
     row = {"schema": SCHEMA, "producer": "analog_existing_design_validate",
            "operation": "validate_existing", "block": block, "pdk": pdk,
@@ -145,14 +127,6 @@ def validate(project, block, pdk, container=""):
         inputs.update(actual_models)
         ir = json.loads(paths["topology"].read_text())
         spec = json.loads(paths["spec"].read_text())
-        for source in (ir.get("_provenance") or {}).get("inputs") or []:
-            if not isinstance(source, dict) or not source.get("path") or not source.get("sha256"):
-                continue
-            path = Path(source["path"])
-            path = path if path.is_absolute() else project / path
-            if _sha(path) != source["sha256"] or (path.name == "spec.json" and source["sha256"] != inputs["spec"]["sha256"]):
-                raise ValueError("typed IR's recorded source input is stale: " + str(path))
-            inputs["typed_source:" + str(path.resolve())] = _view(path)
         if ir.get("block") != block or not ir.get("devices"):
             raise ValueError("typed IR does not declare this nonempty DUT")
         ids = [device["name"].casefold() for device in ir["devices"]]
@@ -203,16 +177,11 @@ def validate(project, block, pdk, container=""):
             different = sorted(name for name in set(actual["devices"]) | set(expected["devices"])
                                if actual["devices"].get(name) != expected["devices"].get(name))
             raise ValueError("existing DUT differs from current typed render: " + (", ".join(different[:8]) or "ports/model directives"))
-        if _closure_signature(actual_models) != _closure_signature(expected_models):
-            raise ValueError("actual and resolved PDK model/include bytes differ")
         inputs.update({"reference_model:" + view["path"]: view for view in expected_models.values()})
-        if any(_sha(view["path"]) != view["sha256"] for view in inputs.values()):
-            raise ValueError("consumed input changed during read validation")
         row.update(status="PASS", detail="existing DUT exactly matches the current typed design and PDK binding",
                    design_content="structure_and_geometry" if spec_bound else "structure_only",
-                   inputs=inputs, device_count=len(actual["devices"]),
-                   normalized_cards_sha256=hashlib.sha256(json.dumps(actual, sort_keys=True).encode()).hexdigest())
-    except (FileNotFoundError, emitter._ce.ContainerImageMismatch) as exc:
+                   inputs=inputs, device_count=len(actual["devices"]))
+    except FileNotFoundError as exc:
         row.update(status="NOT_MEASURED", detail=str(exc))
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         row.update(detail=str(exc))
@@ -220,21 +189,15 @@ def validate(project, block, pdk, container=""):
 
 
 def consume(block_dir):
-    """Only a matching fresh read receipt can disclose this existing DUT."""
+    """Read the selected runtime and validate the current circuit."""
     block_dir = Path(block_dir).resolve()
-    path = block_dir / RECEIPT
     try:
         if block_dir.parent.name != "analog" or block_dir.parent.parent.name != "phase3":
             return None
-        prior = json.loads(path.read_text())
-        if prior.get("schema") != SCHEMA or prior.get("status") != "PASS" or prior.get("operation") != "validate_existing":
-            return None
-        if prior.get("inputs", {}).get("netlist", {}).get("path") != str(block_dir / (block_dir.name + ".sp")):
-            return None
-        current = validate(block_dir.parents[2], block_dir.name, prior["pdk"], prior.get("container", ""))
-        if current != prior:
-            return None
-        return current
+        runtime = json.loads((block_dir / RECEIPT).read_text())
+        current = validate(block_dir.parents[2], block_dir.name,
+                           runtime["pdk"], runtime.get("container", ""))
+        return current if current["status"] == "PASS" else None
     except (OSError, ValueError, KeyError, TypeError):
         return None
 

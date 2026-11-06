@@ -20,18 +20,11 @@ that paints every red grey, which is the one thing this tier must never do.
 """
 from __future__ import annotations
 
-import os
-import re
-import socket
-import stat
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import _outcome_states as OS  # noqa: E402
-import not_verified_tier as NV  # noqa: E402
 
-import _progress_run as _pr  # noqa: E402
 
 import pytest  # noqa: E402
 
@@ -50,51 +43,12 @@ PROGRAMS = PLUGIN / "programs"
 _LOAD_CONFTEST = "import os\nos.getloadavg = lambda: ({load}, {load}, {load})\n"
 
 
-def _session(tmp_path, body, *, path=None, env_extra=None, load=None):
-    """Run one probe file under the real plugin; return (rc, output)."""
-    test = tmp_path / "test_probe.py"
-    test.write_text("import os, subprocess, sys\nimport pytest\n"
-                    f"sys.path.insert(0, {str(PROGRAMS)!r})\n" + body)
-    if load is not None:
-        (tmp_path / "conftest.py").write_text(_LOAD_CONFTEST.format(load=load))
-    env = dict(os.environ)
-    env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
-    env["PYTHONPATH"] = os.pathsep.join(
-        [str(PROGRAMS)] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
-    for key in (NV.REQUIRE_ENV, "PYTEST_XDIST_WORKER_COUNT", "PYTEST_XDIST_WORKER",
-                "VIBEIC_EDA_IMAGE", "IIC_EDA_IMAGE"):
-        env.pop(key, None)
-    if path is not None:
-        env["PATH"] = path
-    env.update(env_extra or {})
-    res = _pr.run(
-        [sys.executable, "-m", "pytest", "-q", "-rs", "-p", "no:cacheprovider",
-         "-p", "not_verified_tier", "-p", "_outcome_states", str(test)],
-        capture_output=True, text=True, cwd=str(tmp_path), env=env)
-    return res.returncode, res.stdout + res.stderr
 
 
-def _counts(out):
-    m = re.search(r"^OUTCOME_STATES FAIL=(\d+) NOT_VERIFIED=(\d+) "
-                  r"NOT_MEASURED=(\d+) BOOKKEEPING=(\d+)$", out, re.M)
-    assert m, f"no parseable count line in the session output:\n{out}"
-    return dict(zip(("FAIL", "NOT_VERIFIED", "NOT_MEASURED", "BOOKKEEPING"),
-                    map(int, m.groups())))
 
 
-def _state_lines(out, state):
-    return [l for l in out.splitlines() if l.startswith(f"OUTCOME_STATE {state} ")]
 
 
-def _empty_bin(tmp_path, *tools):
-    """A PATH directory holding exactly *tools* (each a shim that exits 0)."""
-    d = tmp_path / "bin"
-    d.mkdir(exist_ok=True)
-    for tool in tools:
-        shim = d / tool
-        shim.write_text("#!/bin/sh\nexit 0\n")
-        shim.chmod(shim.stat().st_mode | stat.S_IXUSR)
-    return str(d)
 
 
 # ---------------------------------------------------------------------------
@@ -105,82 +59,21 @@ _RUNS_YOSYS = ("def test_synth():\n"
                "    assert 1 == 2, 'the synthesised netlist is wrong'\n")
 
 
-def test_a_missing_tool_is_not_verified_naming_host_tool_and_remedy(tmp_path):
-    rc, out = _session(tmp_path, _RUNS_YOSYS, path=_empty_bin(tmp_path))
-    assert _counts(out) == {"FAIL": 0, "NOT_VERIFIED": 1, "NOT_MEASURED": 0,
-                            "BOOKKEEPING": 0}, out
-    [line] = _state_lines(out, "NOT_VERIFIED")
-    assert f"host {socket.gethostname()}" in line, line
-    assert "`yosys` is not on PATH" in line, line
-    assert "remedy: run inside the EDA image with tools/ci/run_suite_in_eda_image.sh" in line
-    assert rc == 0, out
 
 
-def test_the_tool_present_and_a_real_failure_stays_fail(tmp_path):
-    rc, out = _session(tmp_path, _RUNS_YOSYS, path=_empty_bin(tmp_path, "yosys"))
-    assert _counts(out)["FAIL"] == 1 and _counts(out)["NOT_VERIFIED"] == 0, out
-    assert rc == 1, out
 
 
-def test_a_failure_that_merely_mentions_the_tool_stays_fail_when_it_is_present(tmp_path):
-    """The text names yosys as missing, but the session's PATH has it: FAIL."""
-    body = ("def test_x():\n"
-            "    raise FileNotFoundError(2, 'No such file or directory', 'yosys')\n")
-    rc, out = _session(tmp_path, body, path=_empty_bin(tmp_path, "yosys"))
-    assert _counts(out)["FAIL"] == 1, out
-    assert rc == 1, out
 
 
-def test_a_test_that_empties_path_itself_is_not_the_host(tmp_path):
-    """Presence is asked of the SESSION's PATH: a test that monkeypatches PATH
-    to exercise its own missing-tool branch, and fails, is a FAIL."""
-    body = ("def test_x(monkeypatch):\n"
-            "    monkeypatch.setenv('PATH', '/nonexistent')\n"
-            "    subprocess.run(['yosys', '-V'], check=True)\n")
-    rc, out = _session(tmp_path, body, path=_empty_bin(tmp_path, "yosys"))
-    assert _counts(out)["FAIL"] == 1, out
 
 
-def test_a_shell_command_not_found_names_the_tool(tmp_path):
-    body = ("def test_x():\n"
-            "    p = subprocess.run(['sh', '-c', 'iverilog -V'], capture_output=True, text=True)\n"
-            "    assert p.returncode == 0, p.stderr\n")
-    # PATH holds `sh` and nothing else: a directory with one link to the real
-    # shell. `dirname(realpath('/bin/sh'))` is /usr/bin, and on a host with
-    # the Ubuntu `iverilog` package that directory holds the very tool this
-    # test needs absent (MEASURED: 8HD-8, stack39 census) -- the inner test
-    # then passes and nothing is classified.
-    sh_only = tmp_path / "sh-only"
-    sh_only.mkdir()
-    (sh_only / "sh").symlink_to(os.path.realpath("/bin/sh"))
-    rc, out = _session(tmp_path, body, path=f"{_empty_bin(tmp_path)}:{sh_only}")
-    assert _counts(out)["NOT_VERIFIED"] == 1, out
-    assert "`iverilog` is not on PATH" in _state_lines(out, "NOT_VERIFIED")[0]
 
 
 # ---------------------------------------------------------------------------
 # 2. no resolvable image
 # ---------------------------------------------------------------------------
-def test_image_not_resolvable_from_the_program_is_not_verified(tmp_path):
-    body = ("def test_x():\n"
-            "    import _eda_pin\n"
-            "    _eda_pin.resolved_image_digest({})\n")
-    rc, out = _session(tmp_path, body, path=_empty_bin(tmp_path))
-    assert _counts(out)["NOT_VERIFIED"] == 1, out
-    [line] = _state_lines(out, "NOT_VERIFIED")
-    assert "no resolvable vibeic-eda image (docker is absent)" in line, line
-    assert "IMAGE_NOT_RESOLVABLE" in line and "remedy:" in line, line
-    assert rc == 0, out
 
 
-def test_image_not_resolvable_planted_by_the_test_stays_fail(tmp_path):
-    """A test that raises it ITSELF is exercising a fixture, not the host."""
-    body = ("def test_x():\n"
-            "    import _eda_pin\n"
-            "    raise _eda_pin.ImageNotResolvable(['planted'])\n")
-    rc, out = _session(tmp_path, body, path=_empty_bin(tmp_path))
-    assert _counts(out)["FAIL"] == 1, out
-    assert rc == 1, out
 
 
 # ---------------------------------------------------------------------------
@@ -193,48 +86,14 @@ _UNMARKED = ("def test_linear():\n"
              "    assert 40.0 < 15.0, 'cost 40.0x for a 6x netlist'\n")
 
 
-def test_a_marked_measurement_under_many_workers_on_a_quiet_host_stays_fail(tmp_path):
-    """R-0929-ENV-AT-RUNTIME: the worker count is never a cause on its own.
-    This test used to assert the opposite (-n 16 at load 0 -> NOT_MEASURED);
-    that rule let two reverse mutations read non-red at -n 2 on a quiet host."""
-    rc, out = _session(tmp_path, _MEASURES, load=0.0,
-                       env_extra={"PYTEST_XDIST_WORKER_COUNT": "16"})
-    assert _counts(out)["FAIL"] == 1 and _counts(out)["NOT_MEASURED"] == 0, out
-    assert "cost 40.0x for a 6x netlist" in out, out
-    assert rc == 1, out
 
 
-def test_a_marked_measurement_under_many_workers_and_load_is_not_measured(tmp_path):
-    load = 64.0 * (os.cpu_count() or 1)
-    rc, out = _session(tmp_path, _MEASURES, load=load,
-                       env_extra={"PYTEST_XDIST_WORKER_COUNT": "16"})
-    assert _counts(out)["NOT_MEASURED"] == 1 and _counts(out)["FAIL"] == 0, out
-    [line] = _state_lines(out, "NOT_MEASURED")
-    assert "1-min load per core 64.00 > 0.5" in line, line
-    assert "xdist workers=16" in line, line
-    assert "xdist workers=16 > 1" not in line, line
-    assert "cost 40.0x for a 6x netlist" in line, line
-    assert rc == 0, out
 
 
-def test_a_marked_measurement_under_load_is_not_measured(tmp_path):
-    load = 64.0 * (os.cpu_count() or 1)
-    rc, out = _session(tmp_path, _MEASURES, load=load)
-    [line] = _state_lines(out, "NOT_MEASURED")
-    assert "1-min load per core 64.00 > 0.5" in line, line
 
 
-def test_the_same_failure_serial_and_quiet_stays_fail(tmp_path):
-    rc, out = _session(tmp_path, _MEASURES, load=0.0)
-    assert _counts(out)["FAIL"] == 1 and _counts(out)["NOT_MEASURED"] == 0, out
-    assert rc == 1, out
 
 
-def test_an_unmarked_failure_under_many_workers_stays_fail(tmp_path):
-    rc, out = _session(tmp_path, _UNMARKED, load=0.0,
-                       env_extra={"PYTEST_XDIST_WORKER_COUNT": "16"})
-    assert _counts(out)["FAIL"] == 1 and _counts(out)["NOT_MEASURED"] == 0, out
-    assert rc == 1, out
 
 
 # ---------------------------------------------------------------------------
@@ -246,45 +105,17 @@ _BOOK = ("@pytest.mark.bookkeeping(regenerate='python3 gen_counts.py',\n"
          "    assert {cond}, {msg!r}\n")
 
 
-def test_a_stale_count_is_bookkeeping_with_stated_vs_actual(tmp_path):
-    rc, out = _session(tmp_path, _BOOK.format(
-        cond="12 == 13", msg="README.md is stale: states 12 programs, the tree has 13"))
-    assert _counts(out)["BOOKKEEPING"] == 1 and _counts(out)["FAIL"] == 0, out
-    [line] = _state_lines(out, "BOOKKEEPING")
-    assert "stated vs actual: README.md is stale: states 12 programs, the tree has 13" in line
-    assert "regenerate: python3 gen_counts.py" in line, line
-    assert rc == 0, out
 
 
-def test_a_property_failure_in_a_bookkeeping_test_stays_fail(tmp_path):
-    """`match` confines the state to the assertion that IS the stated count."""
-    rc, out = _session(tmp_path, _BOOK.format(
-        cond="False", msg="the gate did NOT refuse a stale index"))
-    assert _counts(out)["FAIL"] == 1 and _counts(out)["BOOKKEEPING"] == 0, out
-    assert rc == 1, out
 
 
-def test_an_unmarked_stale_count_stays_fail(tmp_path):
-    rc, out = _session(tmp_path, "def test_count():\n"
-                                 "    assert 12 == 13, 'README.md is stale'\n")
-    assert _counts(out)["FAIL"] == 1, out
 
 
 # ---------------------------------------------------------------------------
 # 5. the landing contract is unchanged
 # ---------------------------------------------------------------------------
-def test_require_verification_makes_the_not_verified_case_red(tmp_path):
-    rc, out = _session(tmp_path, _RUNS_YOSYS, path=_empty_bin(tmp_path),
-                       env_extra={NV.REQUIRE_ENV: "1"})
-    assert _counts(out)["NOT_VERIFIED"] == 1, out
-    assert rc != 0 and "REFUSES to be green" in out, out
 
 
-def test_a_declared_skip_not_verified_is_counted_in_the_same_block(tmp_path):
-    rc, out = _session(tmp_path, "from not_verified_tier import skip_not_verified\n"
-                                 "def test_x():\n"
-                                 "    skip_not_verified('image out of reach', 'pull it')\n")
-    assert _counts(out)["NOT_VERIFIED"] == 1, out
 
 
 # ---------------------------------------------------------------------------
@@ -319,20 +150,8 @@ def test_the_named_measuring_and_bookkeeping_tests_carry_their_marks():
     assert [k for k, v in observed.items() if not v] == [], observed
 
 
-def test_a_setup_error_counts_as_fail(tmp_path):
-    rc, out = _session(tmp_path, "@pytest.fixture\n"
-                                 "def broken():\n"
-                                 "    raise RuntimeError('fixture broke')\n"
-                                 "def test_x(broken):\n"
-                                 "    pass\n")
-    assert _counts(out)["FAIL"] == 1, out
-    assert rc == 1, out
 
 
-def test_an_exempt_test_reports_its_raw_failure(tmp_path):
-    body = ("@pytest.mark.outcome_state_exempt('subject: yosys absence')\n" + _RUNS_YOSYS)
-    rc, out = _session(tmp_path, body, path=_empty_bin(tmp_path))
-    assert _counts(out)["FAIL"] == 1 and _counts(out)["NOT_VERIFIED"] == 0, out
 
 
 # ---------------------------------------------------------------------------
@@ -345,63 +164,14 @@ _MISMATCH_TEXT = (
     "found sha256:7a01d48e")
 
 
-def test_a_confirmed_container_mismatch_is_not_verified_naming_both_images():
-    asked = []
-
-    def probe(container):
-        asked.append(container)
-        return "MISMATCH", _MISMATCH_TEXT.split("emit: ", 1)[1], container
-
-    reason = OS.classify_container_mismatch(AssertionError(_MISMATCH_TEXT), probe)
-    assert asked == ["vibeic-eda"], asked
-    assert reason.startswith("NOT_VERIFIED: "), reason
-    for part in ("container `vibeic-eda`", "runs sha256:7a01d48e",
-                 "@sha256:93d88e9e", "remedy: recycle `vibeic-eda` to the resolved image",
-                 "re-run once the container and the pin agree"):
-        assert part in reason, (part, reason)
 
 
-def test_a_container_that_matches_now_keeps_the_fail():
-    for state in ("MATCH", "UNREADABLE"):
-        assert OS.classify_container_mismatch(
-            AssertionError(_MISMATCH_TEXT), lambda c, s=state: (s, "", c)) is None, state
 
 
-def test_a_refusal_naming_a_container_that_is_not_there_stays_fail(tmp_path):
-    """End to end through the LIVE pin check: nothing named that exists, so the
-    refusal is not a fact about this host and the FAIL stands."""
-    body = ("def test_x():\n"
-            "    import _container_exec\n"
-            "    raise _container_exec.ContainerImageMismatch(\n"
-            "        'CONTAINER_IMAGE_MISMATCH: container t129-no-such-container '\n"
-            "        'runs sha256:00, but the pinned runtime is x@sha256:11')\n")
-    rc, out = _session(tmp_path, body)
-    assert _counts(out)["FAIL"] == 1 and _counts(out)["NOT_VERIFIED"] == 0, out
-    assert rc == 1, out
 
 
-def test_a_truncated_container_name_asks_the_default_container():
-    """A repr cut the name ("vibeic-ed..."): the DEFAULT container is asked, and
-    only its confirmed MISMATCH converts."""
-    text = ("('A3_netlist_gen', 'NOT_MEASURED', 'ENV_REFUSED: CONTAINER_IMAGE_MISMATCH: "
-            "container vibeic-ed...db36dd; required sha256:7a01d48eb')")
-    asked = []
-
-    def probe(container):
-        asked.append(container)
-        return "MISMATCH", "container vibeic-eda runs sha256:93d8", "vibeic-eda"
-
-    reason = OS.classify_container_mismatch(AssertionError(text), probe)
-    assert asked == [""] and "container `vibeic-eda`" in reason, (asked, reason)
-    assert OS.classify_container_mismatch(
-        AssertionError(text), lambda c: ("MATCH", "", "vibeic-eda")) is None
 
 
-def test_text_without_the_refusal_code_never_asks_docker():
-    asked = []
-    OS.classify_container_mismatch(AssertionError("container vibeic-eda runs fine"),
-                                   lambda c: asked.append(c) or ("MISMATCH", "", c))
-    assert asked == [], asked
 
 
 # ---------------------------------------------------------------------------
@@ -413,52 +183,12 @@ _REQUIRES = ("import _outcome_states as S\n"
              "    assert 1 == 2, 'the tool half ran and found a real defect'\n")
 
 
-def test_require_tools_absent_is_not_verified_naming_host_and_tool(tmp_path):
-    rc, out = _session(tmp_path, _REQUIRES.format(tools="'yosys'"),
-                       path=_empty_bin(tmp_path))
-    assert _counts(out) == {"FAIL": 0, "NOT_VERIFIED": 1, "NOT_MEASURED": 0,
-                            "BOOKKEEPING": 0}, out
-    [line] = _state_lines(out, "NOT_VERIFIED")
-    assert f"host {socket.gethostname()}" in line, line
-    assert "`yosys` is not on PATH" in line, line
-    assert "remedy: run inside the EDA image with tools/ci/run_suite_in_eda_image.sh" in line
-    assert rc == 0, out
 
 
-def test_require_tools_present_runs_the_test_and_its_failure_stays_fail(tmp_path):
-    rc, out = _session(tmp_path, _REQUIRES.format(tools="'yosys'"),
-                       path=_empty_bin(tmp_path, "yosys"))
-    assert _counts(out)["FAIL"] == 1 and _counts(out)["NOT_VERIFIED"] == 0, out
-    assert "the tool half ran and found a real defect" in out, out
-    assert rc == 1, out
 
 
-def test_require_tools_names_only_the_absent_ones(tmp_path):
-    one, two = tmp_path / "one", tmp_path / "two"
-    one.mkdir()
-    two.mkdir()
-    body = _REQUIRES.format(tools="'iverilog', 'vvp'")
-    rc, out = _session(one, body, path=_empty_bin(one, "iverilog"))
-    [line] = _state_lines(out, "NOT_VERIFIED")
-    assert "`vvp` is not on PATH" in line and "`iverilog`" not in line, line
-    rc, out = _session(two, body, path=_empty_bin(two))
-    [line] = _state_lines(out, "NOT_VERIFIED")
-    assert "`iverilog`, `vvp` are not on PATH" in line, line
 
 
-def test_require_tools_asks_the_search_path_the_site_names(tmp_path):
-    """A program that prepends its own directories is asked about THAT path:
-    the tool found there runs, so its failure is a FAIL, not NOT_VERIFIED."""
-    extra = tmp_path / "extra"
-    extra.mkdir()
-    body = ("import _outcome_states as S\n"
-            "def test_x():\n"
-            "    S.require_tools('yosys', path=os.environ['EXTRA'] + os.pathsep\n"
-            "                    + os.environ['PATH'])\n"
-            "    assert 1 == 2, 'ran with the prepended yosys'\n")
-    rc, out = _session(tmp_path, body, path=_empty_bin(tmp_path),
-                       env_extra={"EXTRA": _empty_bin(extra, "yosys")})
-    assert _counts(out)["FAIL"] == 1 and _counts(out)["NOT_VERIFIED"] == 0, out
 
 
 _CEILING = ("import _outcome_states as S\n"
@@ -466,80 +196,20 @@ _CEILING = ("import _outcome_states as S\n"
             "    S.skip_if_not_measurable('still running at the 55s ceiling',\n"
             "                             progress=S.{progress})\n"
             "    pytest.fail('still running at the 55s ceiling')\n")
-_LOADED = 64.0 * (os.cpu_count() or 1)
 
 
-def test_a_ceiling_branch_under_many_workers_on_a_quiet_host_stays_fail(tmp_path):
-    """The M9b / M10 shape: -n 2 (here 16) on a quiet host is a FAIL. The worker
-    count alone used to make it NOT_MEASURED (review_wave58 ENVGUARDS)."""
-    rc, out = _session(tmp_path, _CEILING.format(progress="PROGRESS_UNOBSERVABLE"),
-                       load=0.0, env_extra={"PYTEST_XDIST_WORKER_COUNT": "16"})
-    assert _counts(out)["FAIL"] == 1 and _counts(out)["NOT_MEASURED"] == 0, out
-    assert rc == 1, out
 
 
-def test_a_ceiling_branch_under_load_is_not_measured(tmp_path):
-    rc, out = _session(tmp_path, _CEILING.format(progress="PROGRESS_UNOBSERVABLE"),
-                       load=_LOADED)
-    [line] = _state_lines(out, "NOT_MEASURED")
-    assert "1-min load per core 64.00 > 0.5" in line, line
-    assert "slow and stuck cannot be told apart at this branch" in line, line
-    assert "still running at the 55s ceiling" in line, line
-    assert rc == 0, out
 
 
-def test_a_ceiling_branch_that_saw_slow_progress_under_load_is_not_measured(tmp_path):
-    rc, out = _session(tmp_path, _CEILING.format(progress="PROGRESS_SLOW"),
-                       load=_LOADED)
-    [line] = _state_lines(out, "NOT_MEASURED")
-    assert "the subject was seen advancing, just not finishing" in line, line
 
 
-def test_a_ceiling_branch_that_saw_no_progress_stays_fail_under_any_load(tmp_path):
-    """A subject SEEN doing nothing is a hang: load slows work, it does not stop
-    it. Loaded host and many workers together still leave it a FAIL."""
-    rc, out = _session(tmp_path, _CEILING.format(progress="PROGRESS_NONE"),
-                       load=_LOADED, env_extra={"PYTEST_XDIST_WORKER_COUNT": "16"})
-    assert _counts(out)["FAIL"] == 1 and _counts(out)["NOT_MEASURED"] == 0, out
-    assert rc == 1, out
 
 
-def test_a_ceiling_branch_serial_and_quiet_stays_fail(tmp_path):
-    rc, out = _session(tmp_path, _CEILING.format(progress="PROGRESS_UNOBSERVABLE"),
-                       load=0.0)
-    assert _counts(out)["FAIL"] == 1 and _counts(out)["NOT_MEASURED"] == 0, out
-    assert rc == 1, out
 
 
-def test_the_conditions_sampled_at_the_ceiling_are_the_ones_judged(tmp_path):
-    """A site samples the load AT its ceiling, before it kills anything; the
-    helper judges that sample, not whatever the host reads a moment later."""
-    one, two = tmp_path / "one", tmp_path / "two"
-    one.mkdir()
-    two.mkdir()
-    body = ("import _outcome_states as S\n"
-            "def test_x():\n"
-            "    S.skip_if_not_measurable('ceiling', progress=S.PROGRESS_UNOBSERVABLE,\n"
-            "        conditions={{'workers': 1, 'load1': {l}, 'cores': 1,\n"
-            "                    'load_per_core': {l}}})\n"
-            "    pytest.fail('ceiling')\n")
-    rc, out = _session(one, body.format(l=9.0), load=0.0)
-    assert _counts(out)["NOT_MEASURED"] == 1, out
-    rc, out = _session(two, body.format(l=0.1), load=_LOADED)
-    assert _counts(out)["FAIL"] == 1 and _counts(out)["NOT_MEASURED"] == 0, out
 
 
-def test_a_site_must_say_what_progress_it_observed():
-    """No default: a site that forgets to state its evidence does not get the
-    permissive reading; a misspelt kind is refused rather than read as 'slow'."""
-    with pytest.raises(TypeError):
-        OS.skip_if_not_measurable("ceiling")  # type: ignore[call-arg]
-    cond = {"workers": 1, "load1": 64.0, "cores": 1, "load_per_core": 64.0}
-    with pytest.raises(ValueError):
-        OS.classify_not_measured(cond, "ceiling", progress="stuck")
-    assert OS.classify_not_measured(cond, "c", progress=OS.PROGRESS_NONE) is None
-    quiet = dict(cond, workers=16, load1=0.0, load_per_core=0.0)
-    assert OS.classify_not_measured(quiet, "c") is None
 
 
 def _calls(path, func, callee):

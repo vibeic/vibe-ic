@@ -43,8 +43,6 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 
 import phase1_doc_one_shot_runner as p1  # noqa: E402
-import design_one_shot_runner as p2  # noqa: E402
-import cross_design_identity_check as cdi  # noqa: E402
 import _path_layout as _pl  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -62,12 +60,6 @@ _L3_COV_REL = "reports/audit/phase1/l3_opcode_name_coverage.json"
 # ──────────────────────────────────────────────────────────────────────────
 # helpers
 # ──────────────────────────────────────────────────────────────────────────
-def _run_cdi(projects, allow_honest_na=False):
-    args = [sys.executable, str(CDI_PROG)] + [str(p) for p in projects]
-    if allow_honest_na:
-        args.append("--allow-honest-na")
-    r = subprocess.run(args, capture_output=True, text=True)
-    return json.loads(r.stdout), r.returncode
 
 
 def _mk_l_docs(project: Path, ic_name: str, top: str | None = None) -> None:
@@ -110,16 +102,6 @@ def _build_phase1_reports(project: Path, ic_name: str) -> None:
     disp.write_text(json.dumps(sig, indent=2, ensure_ascii=False) + "\n")
 
 
-def _build_phase2_reports(project: Path) -> None:
-    """Drive the REAL phase2 per-gate writers that the central w() helper does
-    NOT cover: the complexity-advisory writer (bypasses w())."""
-    rtl = _pl.rtl_dir(project)
-    rtl.mkdir(parents=True, exist_ok=True)
-    # identical minimal RTL → complexity features would be byte-identical
-    # across designs absent the per-design stamp.
-    (rtl / "top.v").write_text(
-        "module top(input a, output b); assign b=a; endmodule\n")
-    p2.step_complexity_advisory(project)
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -204,116 +186,18 @@ def test_497_l3_coverage_report_differs_per_design(tmp_path):
     assert fa.read_bytes() != fb.read_bytes()
 
 
-def test_497_complexity_advisory_differs_per_design(tmp_path):
-    a, b = tmp_path / "datacore_alpha", tmp_path / "datacore_beta"
-    _build_phase2_reports(a)
-    _build_phase2_reports(b)
-    rel = "reports/phase2/complexity_advisory.json"
-    fa, fb = (a / rel), (b / rel)
-    assert json.loads(fa.read_text())["design_identity"]["design"] == \
-        "datacore_alpha"
-    # identical RTL → features identical, but the stamp makes the bytes differ.
-    assert fa.read_bytes() != fb.read_bytes()
 
 
 # ──────────────────────────────────────────────────────────────────────────
 # ACCEPTANCE (verbatim): two synthetic dirs via REAL writers → findings == 0
 # ──────────────────────────────────────────────────────────────────────────
-def test_497_acceptance_real_writers_findings_zero(tmp_path):
-    """ACCEPTANCE: build TWO synthetic project dirs entirely via the REAL
-    phase1 + phase2 writers (different project identities), run
-    cross_design_identity_check across them. END STATE: findings == 0 for the
-    #497 artifact families WITHOUT the honest-N/A exemption flag — the
-    per-design identity stamp alone differentiates the honest shapes."""
-    a, b = tmp_path / "datacore_alpha", tmp_path / "datacore_beta"
-    _build_phase1_reports(a, "core_alpha")
-    _build_phase1_reports(b, "core_beta")
-    _build_phase2_reports(a)
-    _build_phase2_reports(b)
-
-    rep, rc = _run_cdi([a, b])
-    assert rep["verdict"] == "PASS", rep["findings"]
-    assert rep["identical_artifacts"] == 0
-    assert rc == 0
-    # honest_na_exempt is empty — nothing needed the exemption crutch.
-    assert rep["honest_na_exempt"] == []
 
 
-def test_497_control_without_stamp_would_collide(tmp_path):
-    """Control: prove the identity stamp is what does the work. Strip
-    design_identity from BOTH designs' phase1 + phase2 reports → they become
-    byte-identical → the gate MUST flag every #497 family."""
-    a, b = tmp_path / "datacore_alpha", tmp_path / "datacore_beta"
-    _build_phase1_reports(a, "core_alpha")
-    _build_phase1_reports(b, "core_beta")
-    _build_phase2_reports(a)
-    _build_phase2_reports(b)
-
-    families = (
-        "reports/phase1/extraction_skipped.json",
-        _L3_COV_REL,
-        "reports/phase1/protocol_dispatch_skipped.json",
-        "reports/phase2/complexity_advisory.json",
-    )
-    for proj in (a, b):
-        for rel in families:
-            fp = proj / rel
-            d = json.loads(fp.read_text())
-            d.pop("design_identity", None)
-            # also drop ic_name-bearing content so the two designs collide on
-            # the non-stamp fields too (the l3/complexity reports carry no
-            # other per-design field once the stamp is removed for these
-            # trivial fixtures).
-            fp.write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
-
-    rep, rc = _run_cdi([a, b])
-    assert rep["verdict"] == "FAIL"
-    msgs = " ".join(f["message"] for f in rep["findings"])
-    for rel in families:
-        assert Path(rel).name in msgs, f"{rel} must collide without the stamp"
 
 
 # ──────────────────────────────────────────────────────────────────────────
 # ADVERSARIAL guard (verbatim): a byte-identical canned PASS pair STILL flags
 # ──────────────────────────────────────────────────────────────────────────
-def test_497_adversarial_canned_pass_pair_still_flagged(tmp_path):
-    """ADVERSARIAL (the core requirement): the fix MUST NOT become a blanket
-    exemption. Build the two designs with the honest #497 reports (stamped, so
-    clean) AND plant a byte-identical canned PASS report shared across both.
-    END STATE: the canned PASS pair is STILL flagged — even with
-    --allow-honest-na — while the honest #497 families stay clean."""
-    a, b = tmp_path / "datacore_alpha", tmp_path / "datacore_beta"
-    _build_phase1_reports(a, "core_alpha")
-    _build_phase1_reports(b, "core_beta")
-    _build_phase2_reports(a)
-    _build_phase2_reports(b)
-
-    canned_pass = {
-        "verdict": "PASS",
-        "evidence": "reports/some_log.txt",
-        "scenarios_covered": ["get_id", "get_state"],
-        "note": "canned cross-design coverage (the #436 violation class)",
-    }
-    for proj in (a, b):
-        fp = proj / "reports" / "phase2" / "coverage" / "coverage_actual.json"
-        fp.parent.mkdir(parents=True, exist_ok=True)
-        fp.write_text(json.dumps(canned_pass, indent=2) + "\n")
-
-    for flag in (False, True):
-        rep, rc = _run_cdi([a, b], allow_honest_na=flag)
-        assert rep["verdict"] == "FAIL", f"canned PASS must FAIL (flag={flag})"
-        assert rc == 1
-        assert any("coverage_actual.json" in f["message"]
-                   for f in rep["findings"]), flag
-        # the canned PASS is NEVER silently exempted.
-        assert not any("coverage_actual.json" in e["path"]
-                       for e in rep.get("honest_na_exempt", [])), flag
-        # the honest #497 families are NOT among the findings.
-        for rel in ("extraction_skipped.json",
-                    "l3_opcode_name_coverage.json",
-                    "complexity_advisory.json"):
-            assert not any(rel in f["message"] for f in rep["findings"]), \
-                (rel, flag)
 
 
 if __name__ == "__main__":

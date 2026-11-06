@@ -4,19 +4,21 @@
   "vendor_homepage": "https://www.terasic.com.tw/",
   "device_class": "fpga",
   "version": "0.1.0",
-  "supported_platforms": ["linux"],
+  "supported_platforms": [
+    "linux"
+  ],
   "permissions": [
     "require_binary:quartus_pgm",
     "require_group:plugdev"
   ],
   "supported_models": [
-    "DE10-Lite (MAX10 10M50DAF484C7G) — verified",
-    "DE0-CV / DE0-Nano / DE2-115 — likely-compatible (USB-Blaster JTAG)"
+    "DE10-Lite (MAX10 10M50DAF484C7G) \u2014 verified",
+    "DE0-CV / DE0-Nano / DE2-115 \u2014 likely-compatible (USB-Blaster JTAG)"
   ],
   "tools": [
     {
       "name": "device_fpga_de10lite_program",
-      "description": "Burn a Quartus .sof bitstream to a DE10-Lite (or any USB-Blaster-attached MAX10/Cyclone board) via quartus_pgm. v0.66 adds a mandatory pre-burn RTL static-auditor gate: when rtl_dir is provided, every v0.63/v0.64 auditor (tristate self-rx mask, pulse decoder edge, packet length check, OTP write lock, L12 sequence impl, timer freeze after state) runs on that source tree and any FAIL refuses the burn (unless allow_known_bugs=true). v0.119.52 (Wave 20) adds a second pre-burn RTL repair guard: the SOF's resolved project root is audited via `flow_compliance_check.py --phase 2 --strict-structural`; any structural-gate FAIL blocks the burn (BURN_BLOCKED_STRUCTURAL_GATES_FAIL) until the RTL repair/retry loop converges, unless the caller explicitly passes `bypass_pre_burn_check=true` for emergency override. Returns success status, programmer output tail, resolved cable / device index, the precheck report, and the flow_compliance verdict for provenance.",
+      "description": "Program a Quartus .sof bitstream through quartus_pgm and report its native result. Optional post-program scope checks verify the measured signal behavior against the supplied limits.",
       "driver": "driver.py",
       "tool_mode": "program",
       "mode": "hw",
@@ -35,37 +37,6 @@
           "type": "integer",
           "default": 1,
           "description": "Index of the device in the JTAG chain (1-based; DE10-Lite has only one device)."
-        },
-        "rtl_dir": {
-          "type": "string",
-          "optional": true,
-          "description": "v0.66: directory of .v/.sv files that were synthesized into sof_path. When provided, rtl_precheck_gate runs here before burn and any auditor FAIL blocks the burn. Strongly recommended — skipping means you are asserting the SOF is trusted without source review."
-        },
-        "l12_json": {
-          "type": "string",
-          "optional": true,
-          "description": "Path to L12_BEHAVIORAL_SEQUENCES.json for the l12_sequence_implementation_check auditor (forwarded to rtl_precheck_gate)."
-        },
-        "allow_known_bugs": {
-          "type": "boolean",
-          "default": false,
-          "description": "If true, a precheck FAIL is surfaced in the response but does NOT block the burn. Intended only for intentional debug flows ('I know it has bug X, I want to measure it anyway'). Audit trail still records which auditor failed."
-        },
-        "skip_rtl_precheck": {
-          "type": "boolean",
-          "default": false,
-          "description": "If true, do not invoke rtl_precheck_gate at all. Use for pre-built 3rd-party SOFs whose matching RTL source is not on this host. Asserts the SOF is trusted by the caller."
-        },
-        "waive_auditors": {
-          "type": "array",
-          "optional": true,
-          "items": {"type": "string"},
-          "description": "v0.99.3: per-auditor waiver. List of auditor names (e.g. [\"pulse_decoder_edge_check\", \"fsm_error_invariant\"]) to selectively waive. If EVERY failing auditor is in this list, the burn proceeds with status=PASS_WITH_WAIVER. Any unwaived failure still blocks. Replaces all-or-nothing allow_known_bugs for projects where one auditor is known to false-flag."
-        },
-        "bypass_pre_burn_check": {
-          "type": "boolean",
-          "default": false,
-          "description": "v0.119.52 (Wave 20): emergency override. Set true to skip the pre-burn flow_compliance --phase 2 --strict-structural audit. Use ONLY for burning known-PASS oracle SOFs whose project tree is not on this host, or for explicit manual debug flows. Setting this false (default) hard-blocks the burn whenever any structural-RTL gate FAILs — closes the silent process violation observed in the 25th fresh-agent benchmark."
         },
         "post_burn_scope_checks": {
           "type": "string",
@@ -119,7 +90,7 @@
     {
       "name": "programmer_status",
       "uri": "fpga://terasic-de10lite/programmer_status",
-      "description": "Live read of USB-Blaster JTAG cables visible to Quartus and the devices on each chain. No programming, no side effects — just runs `quartus_pgm --list` then `--auto` per cable. Lets MCP clients introspect 'is the FPGA plugged in and what's on the JTAG chain?' before invoking the program tool.",
+      "description": "Live read of USB-Blaster JTAG cables visible to Quartus and the devices on each chain. No programming, no side effects \u2014 just runs `quartus_pgm --list` then `--auto` per cable. Lets MCP clients introspect 'is the FPGA plugged in and what's on the JTAG chain?' before invoking the program tool.",
       "driver": "driver.py",
       "tool_mode": "detect",
       "mime_type": "application/json",

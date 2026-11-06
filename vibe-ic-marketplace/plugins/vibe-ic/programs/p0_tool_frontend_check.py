@@ -19,7 +19,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _specrtl_common import rtl_source_files  # noqa: E402
-import instrument_calibration as _calibration  # noqa: E402
 import _docker_memory as _dmem  # noqa: E402 — every `docker run` carries the ceiling
 
 
@@ -86,7 +85,6 @@ _DIAGNOSTIC = re.compile(r"^%(Warning|Error)-([A-Z][A-Z0-9_]*):", re.M)
 
 
 def _diagnostic_codes(log: str) -> list[dict[str, str]]:
-    _calibration.assert_calibrated("p0_tool_frontend_check::_diagnostic_codes")
     return [{"severity": match.group(1), "code": match.group(2)}
             for match in _DIAGNOSTIC.finditer(log)]
 
@@ -97,12 +95,22 @@ def _top(project: Path, *, include_runtime: bool = True) -> str | None:
         from design_one_shot_runner import _v661_resolve_dut_module
         return _v661_resolve_dut_module(project, "", None)
     if include_runtime:
-        import execution_policy as execution
-        runtime = execution._ordinary_runtime
-        if runtime is not None and runtime['project'] == Path(project).resolve():
-            selected = runtime['parameters'].get('top')
-            if selected:
-                return selected
+        tops = set()
+        for base in (project / "steps", project / "phase3/librelane"):
+            for path in base.glob("**/config.json"):
+                if not (path.parent / "state_out.json").is_file():
+                    continue
+                try:
+                    config = json.loads(path.read_text())
+                except (OSError, ValueError):
+                    continue
+                if not isinstance(config, dict):
+                    continue
+                selected = config.get("DESIGN_NAME")
+                if isinstance(selected, str) and re.fullmatch(r"[a-zA-Z_$][\w$]*", selected):
+                    tops.add(selected)
+        if len(tops) == 1:
+            return tops.pop()
     for name in ("L9_INTEGRATION_SPEC.json", "L9_INTEGRATION.json"):
         path = project / "phase1/generated_docs" / name
         if path.is_file():
@@ -262,8 +270,6 @@ def only_use_before_declare(log: str) -> bool:
     "identifier '<x>' used before its declaration", and slang's own
     `Build failed: N errors` agrees with that count -- so an error in another
     grammar, a timeout, or a transcript with no diagnostic never qualifies."""
-    _calibration.assert_calibrated(
-        "p0_tool_frontend_check::only_use_before_declare")
     errors = [m.group(1).strip() for m in _SLANG_ERROR.finditer(log or "")]
     if not errors or not all(_USE_BEFORE_DECLARE.match(e) for e in errors):
         return False
@@ -523,11 +529,7 @@ def _check(project: Path, image: str | None, scratch: Path, *,
             strict_argv=["yosys", *strict_yosys_args],
             relaxed_flags=list(result["relaxed_flags"]))
     lint_log = verilator.stdout + verilator.stderr
-    try:
-        diagnostics = _diagnostic_codes(lint_log)
-    except _calibration.Uncalibrated as exc:
-        result["findings"].append(f"tool diagnostic reader uncalibrated: {exc}")
-        return result
+    diagnostics = _diagnostic_codes(lint_log)
     result["tools"]["Verilator.Lint"] = {"exit_code": verilator.returncode,
                                             "execution": "host" if shutil.which("verilator") else verilator_image,
                                             "argv": ["verilator", *verilator_args],

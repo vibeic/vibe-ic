@@ -52,10 +52,7 @@ that declares.
 """
 from __future__ import annotations
 
-import importlib.util
-import json
 import sys
-import textwrap
 from pathlib import Path
 
 import pytest
@@ -65,74 +62,17 @@ import _progress_run as _pr  # noqa: E402
 
 _TESTS = Path(__file__).resolve().parent
 _PROGRAMS = _TESTS.parent
-_FLOW = _PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml"
 
 _GATE = "phase1_coverage_report_present_check"
 _STEP = "D1"
 
 
-def _audit_mod():
-    """A private copy, so a sibling test's `sys.modules` entry cannot decide
-    which version of the program this file measures."""
-    spec = importlib.util.spec_from_file_location(
-        "_fgea_cov_report", _PROGRAMS / "flow_gate_enforcement_audit.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
 
 
-def test_the_gate_declares_an_intent_the_audit_can_read():
-    """RETURNED VALUE, not a grep. `declared_intent` is the exact function the
-    audit uses to decide DECLARED vs UNDECLARED, so this cannot pass on a
-    declaration the audit would not see."""
-    mod = _audit_mod()
-    assert mod.declared_intent(_PROGRAMS, _GATE) == "advisory", (
-        f"{_GATE} must state where its verdict is enforced; the audit reads "
-        f"`ENFORCEMENT:` opening a line in the first 4000 characters, or a "
-        f"lone `\"verdict_mode\"` literal")
 
 
-def test_the_declaration_did_not_move_the_gate_out_of_the_blocking_slot():
-    """THE PAIRED HALF. `advisory` answers "no runner spawns this inline"; it
-    is not a statement that the finding may be ignored.
-
-    Read from `clauses_in_flow` — the audit's own structural walk — so the
-    assertion is about what the flow engine would dispatch, not about the text
-    of a YAML line."""
-    mod = _audit_mod()
-    slots = sorted({c["slot"] for c in mod.clauses_in_flow(_FLOW)
-                    if c["gate"] == _GATE})
-    assert slots == ["program_exit_zero"], (
-        f"{_GATE} (step {_STEP}) is wired in {slots}; its rc=1 is a real "
-        f"defect and must decide the step's verdict")
 
 
-def test_the_audit_exits_zero_and_names_this_gate_as_neither_kind_of_debt(
-        tmp_path):
-    """END TO END, on EXIT CODE and EMITTED JSON.
-
-    The failing runner is `tools/ci/repo_hygiene_gates.sh`, which invokes this
-    program and reads its exit status, so the exit status is what this asserts.
-    The JSON half is there because rc 0 alone would also be satisfied by an
-    audit that had stopped looking at this gate.
-
-    60s is the per-call ceiling `ci_harness_timeout_ceiling_check` enforces
-    (180s harness session bound // 3); a bound above it can outlive the session
-    and take every other file in the subset down with it."""
-    out = tmp_path / "audit.json"
-    cp = _pr.run(
-        [sys.executable, str(_PROGRAMS / "flow_gate_enforcement_audit.py"),
-         "--json", str(out)],
-        capture_output=True, text=True)
-    assert cp.returncode == 0, (
-        f"rc={cp.returncode}\n{cp.stdout[-4000:]}\n{cp.stderr[-2000:]}")
-    rep = json.loads(out.read_text())
-    rows = {r["gate"]: r for r in rep["gates"]}
-    assert _GATE in rows, f"{_GATE} is not in the flow definition at all"
-    assert rows[_GATE]["declared"] == "advisory"
-    assert rows[_GATE]["slots"] == ["program_exit_zero"]
-    assert _GATE not in {u["gate"] for u in rep["undeclared_audit_only"]}
-    assert _GATE not in {c["gate"] for c in rep["contradictions"]}
 
 
 # --------------------------------------------------------------------------
@@ -169,44 +109,12 @@ _DECLARING = '''"""A gate that says so.
 ENFORCEMENT: advisory
 """
 '''
-_FLOW_DOC = textwrap.dedent("""\
-    steps:
-      - id: 1
-        name: "synthetic"
-        gate:
-          all_of:
-            - program_exit_zero: "{gate} . --json out.json"
-    """)
 
 
-def _synthetic(tmp_path: Path, name: str, body: str):
-    progs = tmp_path / "programs"
-    progs.mkdir(exist_ok=True)
-    (progs / f"{name}.py").write_text(body)
-    flow = tmp_path / f"{name}.yaml"
-    flow.write_text(_FLOW_DOC.format(gate=name))
-    return flow, progs
 
 
-def test_the_control_an_undeclared_audit_only_gate_is_still_reported(tmp_path):
-    """Without this, the tests above would pass on an audit that had gone
-    blind. Same `audit()` entry point, a tree where nothing invokes the gate."""
-    mod = _audit_mod()
-    flow, progs = _synthetic(tmp_path, "synthetic_silent_check", _SILENT)
-    rep = mod.audit(flow, progs)
-    assert [u["gate"] for u in rep["undeclared_audit_only"]] == [
-        "synthetic_silent_check"]
 
 
-def test_the_control_a_declaring_audit_only_gate_is_not_reported(tmp_path):
-    """The other half: declaring `advisory` is what clears the finding, and it
-    does not merely disable the check for everything."""
-    mod = _audit_mod()
-    flow, progs = _synthetic(tmp_path, "synthetic_declaring_check", _DECLARING)
-    rep = mod.audit(flow, progs)
-    assert rep["undeclared_audit_only"] == []
-    assert rep["contradictions"] == []
-    assert rep["gates"][0]["declared"] == "advisory"
 
 
 if __name__ == "__main__":

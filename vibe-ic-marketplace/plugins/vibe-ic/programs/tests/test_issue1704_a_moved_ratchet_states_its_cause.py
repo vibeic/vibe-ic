@@ -56,7 +56,6 @@ from pathlib import Path
 
 import pytest
 
-from _published_corpus import needs_corpus
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 BASELINE = PROGRAMS / "step_internal_fail_bubble_up_baseline.json"
@@ -259,43 +258,8 @@ def test_a_departed_run_that_carried_debt_is_on_the_withdrawal_ledger():
 
 # ------------------------------------------------ falsifiable against the tree
 
-@pytest.mark.consistency
-@needs_corpus
-def test_no_run_recorded_as_departed_is_still_in_the_corpus():
-    """The self-consistency above is worth nothing if the block is fiction.
-
-    Everything before this compares the record against itself. This one asks
-    the corpus, and it is the arm that turns "the record balances" into "the
-    record is true": a run named as having left must not be sitting there with
-    a reports/ tree.
-    """
-    import step_internal_fail_bubble_up_check as SIFBU     # noqa: PLC0415
-    from test_issue1015_ratchet_does_not_claim_paid_debt import CORPUS  # noqa: PLC0415
-
-    live = set(SIFBU.check_corpus(CORPUS)["examined_runs"])
-    still = sorted(set(_block()["runs_that_left"]) & live)
-    assert not still, (
-        f"{still} are recorded as having left the published population and the "
-        f"sweep of {CORPUS} finds them. The reason recorded against them "
-        f"describes something that did not happen.")
 
 
-@pytest.mark.consistency
-@needs_corpus
-def test_the_transition_ends_where_the_live_sweep_stands():
-    """`to` against the corpus, not against the register.
-
-    `test_the_transition_ends_where_the_record_actually_stands` proves the
-    block and the register agree; both could be stale together. This measures.
-    """
-    import step_internal_fail_bubble_up_check as SIFBU     # noqa: PLC0415
-    from test_issue1015_ratchet_does_not_claim_paid_debt import CORPUS  # noqa: PLC0415
-
-    rep = SIFBU.check_corpus(CORPUS)
-    assert _block()["to"] == {n: rep[n] for n in _NUMBERS}, (
-        f"`_population_shrink.to` is {_block()['to']} and the corpus at "
-        f"{CORPUS} measures {{{', '.join(f'{n}: {rep[n]}' for n in _NUMBERS)}}}. "
-        f"The population moved again and the account of it did not follow.")
 
 
 if __name__ == "__main__":                                  # pragma: no cover

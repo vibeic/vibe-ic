@@ -355,15 +355,6 @@ def explicit_non_scan_decision(project: Path) -> Optional[Dict[str, Any]]:
                 or _placeholder_reason(intent['reason']) is not None
                 or any(k in intent for k in ('scan_test', 'length', 'chain_length', 'scan_chains'))):
             return None
-        selection = project / 'input/flow109-manifest.json'
-        if selection.exists():
-            if selection.is_symlink() or not selection.resolve().is_relative_to(project):
-                return None
-            manifest = json.loads(selection.read_text())
-            if not isinstance(manifest, dict) or not isinstance(manifest.get('features'), dict):
-                return None
-            if manifest['features'].get('requires_scan') is True:
-                return None
         return intent
     except (OSError, ValueError, TypeError):
         return None

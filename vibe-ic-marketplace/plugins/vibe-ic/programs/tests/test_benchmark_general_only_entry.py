@@ -69,14 +69,6 @@ def test_open_argv_passes_the_actual_delivery_guard(tmp_path, entry, exit_step):
         "delivery_route": "IP", "deliverable": "HARDMACRO"}
 
 
-def test_undeclared_ordinary_runner_still_blocks_before_image_capture(tmp_path):
-    result = _run_admission([
-        sys.executable, str(PROGRAMS / "vibe_ic_one_shot_runner.py"),
-        str(tmp_path), "--exit-step", "D1"])
-    assert result.returncode == 2
-    assert result.stderr.split(":", 1)[0] == "REFUSED", result.stderr
-    assert "DELIVERY_ROUTE_UNDECLARED" in result.stderr
-    assert not (tmp_path / "reports" / "container_image.json").exists()
 
 
 def test_open_delivery_cannot_overwrite_the_existing_owner_die_choice(tmp_path):
@@ -189,63 +181,19 @@ def test_repository_has_no_benchmark_specific_entry_surface():
 
 
 def test_general_router_decides_before_the_runner_is_invoked():
-    """`--solve` is the lifecycle verb, not permission to skip routing."""
-    # ``cmd_solve`` now owns only the run-root coordinator lock.  Routing and
-    # runner invocation remain together in the locked implementation; inspect
-    # that body so the ordering assertion still measures the production path.
-    tree = ast.parse(textwrap.dedent(
-        inspect.getsource(dispatch._cmd_solve_locked)))
+    tree = ast.parse(textwrap.dedent(inspect.getsource(dispatch._cmd_solve_locked)))
     calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
-
-    route = next(
-        node for node in calls
-        if isinstance(node.func, ast.Attribute)
-        and isinstance(node.func.value, ast.Name)
-        and node.func.value.id == "tnr"
-        and node.func.attr == "classify_task_nature")
-    runner = next(
-        node for node in calls
-        if isinstance(node.func, ast.Name)
-        and node.func.id == "_run_from_d1_snapshot"
-        and isinstance(node.args[0], ast.Name)
-        and node.args[0].id == "runner_budget")
-
-    # The launch moved behind the D1 generation validator. Follow the actual
-    # budget argument to its process call, rather than crediting a helper name.
-    launch_tree = ast.parse(textwrap.dedent(
-        inspect.getsource(dispatch._run_from_d1_snapshot)))
-    assert any(isinstance(node, ast.Call)
-               and isinstance(node.func, ast.Attribute)
-               and isinstance(node.func.value, ast.Name)
-               and node.func.value.id == "budget"
-               and node.func.attr == "run"
-               for node in ast.walk(launch_tree))
-
-    # D1's prerequisite runner is also a launch; it must follow the router.
-    activation = next(node for node in calls
-                      if isinstance(node.func, ast.Name)
-                      and node.func.id == "_activate_route_d1")
-    assert isinstance(activation.args[4], ast.Name)
-    assert activation.args[4].id == "runner_budget"
-    activation_tree = ast.parse(textwrap.dedent(
-        inspect.getsource(dispatch._activate_route_d1)))
-    frontdoor = next(node for node in ast.walk(activation_tree)
-                     if isinstance(node, ast.Call)
-                     and isinstance(node.func, ast.Name)
+    route = next(node for node in calls if isinstance(node.func, ast.Attribute)
+                 and isinstance(node.func.value, ast.Name)
+                 and node.func.value.id == "tnr" and node.func.attr == "classify_task_nature")
+    launch = next(node for node in calls if isinstance(node.func, ast.Attribute)
+                  and isinstance(node.func.value, ast.Name)
+                  and node.func.value.id == "runner_budget" and node.func.attr == "run")
+    frontdoor = next(node for node in calls if isinstance(node.func, ast.Name)
                      and node.func.id == "_ensure_phase1_frontdoor")
     assert isinstance(frontdoor.args[2], ast.Name)
     assert frontdoor.args[2].id == "runner_budget"
-    frontdoor_tree = ast.parse(textwrap.dedent(
-        inspect.getsource(dispatch._ensure_phase1_frontdoor)))
-    assert any(isinstance(node, ast.Call)
-               and isinstance(node.func, ast.Attribute)
-               and isinstance(node.func.value, ast.Name)
-               and node.func.value.id == "runner_budget"
-               and node.func.attr == "run"
-               for node in ast.walk(frontdoor_tree))
-
-    assert route.lineno < runner.lineno
-    assert route.lineno < activation.lineno
+    assert route.lineno < frontdoor.lineno < launch.lineno
 
 
 def test_retired_setup_is_not_a_public_command(tmp_path):

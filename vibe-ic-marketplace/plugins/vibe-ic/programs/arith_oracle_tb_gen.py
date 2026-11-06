@@ -1673,51 +1673,6 @@ def arithmetic_observation(project: Path, spec: dict, *, top: Optional[str] = No
             'settle_ns': settle, 'binding': binding}, ''
 
 
-def _required_reset_observation(project: Path, case: dict, spec: dict) -> Tuple[Optional[dict], List[Path], str]:
-    """Read the existing D13 source decision; never derive reset values from RTL."""
-    import hashlib
-    authority = project / 'input/flow109/D13/source.json'
-    if not authority.is_file():
-        return None, [], ''
-    source = _read_json(authority)
-    requirements = source.get('scenario_requirements') if isinstance(source, dict) else None
-    row = requirements.get(case.get('name') or case.get('id')) if isinstance(requirements, dict) else None
-    observation = row.get('reset_observation') if isinstance(row, dict) else None
-    if not isinstance(observation, dict):
-        return None, [], 'required reset observation is missing'
-    if (observation.get('clock') != spec['clk'] or observation.get('edge') != 'rising'
-            or observation.get('reset') != spec['rst']
-            or type(observation.get('active_level')) is not int
-            or observation['active_level'] != int(not spec['reset_active_low'])
-            or not isinstance(observation.get('observation'), str) or not observation['observation'].strip()):
-        return None, [], 'reset observation clock, polarity or sampling scope is unsupported'
-    files = [authority]
-    for key in ('source_reference', 'original_requirement_reference'):
-        reference = observation.get(key)
-        if (not isinstance(reference, dict) or not isinstance(reference.get('path'), str)
-                or not reference['path']):
-            return None, [], 'reset observation reference is missing'
-        path = project / reference['path']
-        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != reference.get('sha256'):
-            return None, [], 'reset observation reference is stale or unavailable'
-        files.append(path)
-    rtl = {p.resolve() for ext in ('*.v', '*.sv') for p in _pl.rtl_dir(project).rglob(ext)}
-    if files[1].resolve() not in rtl:
-        return None, [], 'reset observation source is outside the compiled RTL population'
-    required = observation.get('required_observations')
-    if not isinstance(required, list) or not required:
-        return None, [], 'required reset observation population is empty'
-    names = set()
-    for item in required:
-        if (not isinstance(item, dict) or set(item) != {'state', 'width', 'expected_value'}
-                or not isinstance(item.get('state'), str)
-                or re.fullmatch(r'[A-Za-z_][A-Za-z0-9_$]*', item['state']) is None
-                or item['state'] in names or type(item.get('width')) is not int or item['width'] < 1
-                or type(item.get('expected_value')) is not int or item['expected_value'] < 0
-                or item['expected_value'].bit_length() > item['width']):
-            return None, [], 'required reset observation population is malformed'
-        names.add(item['state'])
-    return observation, files, ''
 
 
 def arithmetic_scenario_plan(project: Path, ic_class: Optional[str], case: dict,
@@ -1842,14 +1797,7 @@ def arithmetic_scenario_plan(project: Path, ic_class: Optional[str], case: dict,
     if re.search(r'asynchronous|different\s+clock|power\s+(?:on|off)', text):
         defer('unmodeled asynchronous reset, clock or power scope')
         return None
-    reset_observation = None
-    reset_files = []
-    if intent['reset_situations']:
-        reset_observation, reset_files, reset_why = _required_reset_observation(project, case, spec)
-        if reset_why or (reset_observation and observation.get('postlayout_deadline')):
-            defer(reset_why or 'internal reset observation requires the declared RTL surface')
-            return None
-    files = [*reset_files, *_pl.generated_docs_dir(project).glob('L2*.json'),
+    files = [*_pl.generated_docs_dir(project).glob('L2*.json'),
              _pl.generated_docs_dir(project) / 'L9_INTEGRATION_SPEC.json',
              _pl.generated_docs_dir(project) / 'L10_TEST_CASES.json',
              project / 'plugin_output/declaration.json',
@@ -1878,8 +1826,6 @@ def arithmetic_scenario_plan(project: Path, ic_class: Optional[str], case: dict,
         plan['populations'] = phases
     if assumptions:
         plan['assumptions'] = assumptions
-    if reset_observation is not None:
-        plan['reset_observation'] = reset_observation
     return plan
 
 

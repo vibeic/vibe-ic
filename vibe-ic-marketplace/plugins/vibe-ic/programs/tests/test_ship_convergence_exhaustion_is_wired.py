@@ -149,29 +149,3 @@ def test_a_log_with_no_markers_is_error_not_pass(tmp_path):
     r = _run(tmp_path, "openroad finished\nnothing to see here\n")
     assert r["verdict"] == "ERROR"
     assert r["findings"] == []
-
-
-def test_a_failure_inside_the_checker_is_recorded_not_swallowed(tmp_path,
-                                                               monkeypatch):
-    """MUTATION-DRIVEN — the first version of this function ended in
-    `except Exception: pass`, so a checker that raised produced no file at all,
-    identical to a run nobody diagnosed."""
-    import ship_postroute_convergence_exhaustion_check as cvg
-
-    def boom(*a, **k):
-        raise RuntimeError("engineered")
-
-    monkeypatch.setattr(cvg, "audit", boom)
-    r = _run(tmp_path, _log([-1.0], [1]))
-    assert r is not None, "the failure produced no record at all"
-    assert r["verdict"] == "ERROR"
-    assert "engineered" in r["summary"]["error"]
-
-
-def test_it_never_raises_into_the_step(tmp_path, monkeypatch):
-    """A diagnostic that can fail the step it is diagnosing is worse than the
-    ambiguity it reports."""
-    import ship_postroute_convergence_exhaustion_check as cvg
-    monkeypatch.setattr(cvg, "audit",
-                        lambda *a, **k: (_ for _ in ()).throw(ValueError("x")))
-    P._ship_convergence_exhaustion_report(tmp_path, "anything")

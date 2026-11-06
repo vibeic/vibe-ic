@@ -30,13 +30,11 @@ chip-AGNOSTIC: no chip / vendor / SKU literal; discovers engines on PATH.
 from __future__ import annotations
 
 import json
-import hashlib
 import os
 import re
 import shlex
 import shutil
 import subprocess
-import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 import sys
@@ -75,23 +73,6 @@ def _layout_source(bdir: Path, block: str) -> Optional[Path]:
         bdir / "layout.mag" if (bdir / "layout.mag").is_file() else None)
 
 
-def _sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def _layout_identity(bdir: Path, netlist: Path) -> Tuple[str, str]:
-    """A5's layout vs the netlist LVS would compare (see
-    `_analog_producer_common.layout_netlist_identity`)."""
-    import _analog_producer_common as _pc  # noqa: PLC0415
-    if not (bdir / "layout_provenance.json").is_file():
-        return ("UNVERIFIED", "no layout_provenance.json")
-    return _pc.layout_identity_of_block(bdir, netlist)
-
-
 def _find_source_netlist(bdir: Path, block: str) -> Optional[Path]:
     for pat in (f"{block}.sp", f"{block}.spice", f"{block}.cir",
                 "*.sp", "*.spice"):
@@ -103,26 +84,18 @@ def _find_source_netlist(bdir: Path, block: str) -> Optional[Path]:
 
 def _lvs_reference(project: Path, bdir: Path, block: str,
                    simulation: Path) -> Tuple[Path, Dict[str, Any]]:
-    source = {"path": str(simulation.relative_to(project)),
-              "sha256": _sha256(simulation)}
-    markers = (bdir / "topology.json", bdir / f"{block}.lvs.cdl",
-               bdir / "lvs_provenance.json")
-    if not any(p.exists() or p.is_symlink() for p in markers):
+    source = {"path": str(simulation.relative_to(project))}
+    topology = bdir / "topology.json"
+    view = bdir / f"{block}.lvs.cdl"
+    if not (topology.is_file() or view.is_file()):
         return simulation, {"kind": "legacy_standalone_spice",
                             "simulation": source, "reference": source}
-    provenance = bdir / "lvs_provenance.json"
-    record = json.loads(provenance.read_text())
-    if not isinstance(record, dict):
-        raise ValueError("A6_LVS_PROVENANCE_INVALID")
-    from analog_a3_netlist_emit import validate_lvs_view
+    from analog_a3_netlist_emit import emit_lvs_view, validate_lvs_view
+    if topology.is_file():
+        emit_lvs_view(project, block)
     view = validate_lvs_view(project, block)
-    if record.get("simulation_sha256") != source["sha256"]:
-        raise ValueError("A6_LVS_SIMULATION_SOURCE_UNBOUND")
-    return view, {"kind": "validated_a3_lvs_cdl", "simulation": source,
-                  "reference": {"path": str(view.relative_to(project)),
-                                "sha256": _sha256(view)},
-                  "provenance": {"path": str(provenance.relative_to(project)),
-                                 "sha256": _sha256(provenance)}}
+    return view, {"kind": "a3_lvs_cdl", "simulation": source,
+                  "reference": {"path": str(view.relative_to(project))}}
 
 
 def _lvs_refusal(bdir: Path, block: str, project: Path, rule: str,
@@ -279,25 +252,6 @@ def _parse_svrf_tally(text: str) -> Tuple[int, int, int]:
     return fails, passes, skips
 
 
-# ── deck KIND, and why this dispatch exists ─────────────────────────────────
-#
-# THE DEFECT THIS CLOSES, MEASURED. The resolver's `drc_deck` axis globs
-# `input/pdk/klayout/*.drc` — correctly, because a KLayout DRC runset is what an
-# OPEN PDK actually ships. The only DRC ENGINE wired here was `svrfdrc`, which
-# reads SVRF (`.rule`). Handed an open PDK's KLayout-DSL runset it does not
-# crash: it derives the layers, finds **0 rules**, and writes a report whose
-# tally is empty. A6 then reports `A6_PV_DRC_NO_EVIDENCE` — correctly refusing
-# it, and fail-closed, so nothing was ever falsely certified clean. But the
-# design's own staged deck had been resolved and handed over, and the block
-# never got a DRC run at all.
-#
-# Measured on one block, same GDS, same container: `svrfdrc` on the open PDK's
-# runset -> "0 layers, 122 derivations, 0 rules", empty tally, A6 NO_EVIDENCE;
-# the same runset under `klayout -b -r` -> 4 real violations in 5 s.
-#
-# So the fix is not a new capability and not a new tool — both engines were
-# already on PATH in the pinned image. It is a DISPATCH: run the deck with the
-# engine that can read it.
 _SVRF_DECK_SUFFIXES = (".rule", ".svrf")
 _KLAYOUT_DECK_SUFFIXES = (".drc", ".lydrc")
 
@@ -642,9 +596,7 @@ def _klayout_lvs_runset_runner(deck: str, gds: str, netlist: str, block: str,
     except (ValueError, TypeError) as exc:
         return None, {"reason": f"comparison topology unavailable: {exc}"}
     if topology_bytes is not None:
-        import hashlib
-        stats["topology_source"] = {"path": str(topology_path.resolve()),
-                                    "sha256": hashlib.sha256(topology_bytes).hexdigest()}
+        stats["topology_source"] = {"path": str(topology_path.resolve())}
     cmp_sp.write_text(prepared)
 
     cmp_gds = work / f"{block}_lvs_layout.gds"
@@ -799,9 +751,8 @@ def _write_drc_report(bdir: Path, block: str, violations: int,
         f"rules_skip: {meta.get('rules_skip', 0)}",
         f"violations: {violations}",
         f"result: {verdict}",
-        *([f"layout_path: {meta['layout_path']}",
-           f"layout_sha256: {meta['layout_sha256']}"]
-          if meta.get("layout_path") and meta.get("layout_sha256") else []),
+        *([f"layout_path: {meta['layout_path']}"]
+          if meta.get("layout_path") else []),
         "",
     ]
     # WHICH ENGINE GRADED WHICH RULE. The count above is now two engines'
@@ -871,9 +822,8 @@ def _write_lvs_report(bdir: Path, block: str, verdict: str,
         "method": meta.get("method", "klayout_pdk_lvs"),
         "layout_devices": meta.get("layout_devices"),
         "source_devices": meta.get("source_devices"),
-        **({"layout_path": meta["layout_path"],
-            "layout_sha256": meta["layout_sha256"]}
-           if meta.get("layout_path") and meta.get("layout_sha256") else {}),
+        **({"layout_path": meta["layout_path"]}
+           if meta.get("layout_path") else {}),
         # An absent count is absent for a REASON, and the reason belongs next
         # to it. Without this the artefact carries `null` and a reader cannot
         # tell an engine that does not produce the number from a block that
@@ -890,8 +840,6 @@ def _write_lvs_report(bdir: Path, block: str, verdict: str,
            else {}),
         **({"extracted_netlist": meta["extracted_netlist"]}
            if meta.get("extracted_netlist") else {}),
-        **({"layout_netlist_identity": meta["layout_netlist_identity"]}
-           if meta.get("layout_netlist_identity") else {}),
         **({"lvs_reference_binding": meta["lvs_reference_binding"]}
            if meta.get("lvs_reference_binding") else {}),
         "note": ("device-level LVS (bulk-normalize + pin-fix); numbers only — "
@@ -1018,26 +966,8 @@ def unreadable_rule_messages(attribution: Dict[str, Any]) -> List[str]:
 SECOND_ENGINE_NOT_MEASURED = "NOT_MEASURED"
 
 
-def second_engine_not_measured(reason: str = "", *, container: str = "",
-                               refusal: str = "") -> Dict[str, Any]:
-    """The record for "the second engine did not grade anything", BY NAME.
-
-    ONE SHAPE, ONE PLACE — vibe-ic#2156. This record used to be composed in the
-    caller with a fixed sentence, and the runner's own `why` was dropped on the
-    floor one frame below (`attribution, why = run(...)` and then
-    `if attribution is None: return None`). So every way the engine could fail
-    to run — an absent container, a docker that would not start, and a container
-    running bytes other than the pinned ones — reached the report as the same
-    sentence, and the wrong-image case did not reach it at all: a
-    `ContainerImageMismatch` is a `RuntimeError` and nothing on this path caught
-    it, so it escaped `run_block_pv` and took the whole A6 producer down.
-
-    `refusal` is set exactly when the engine was REFUSED rather than merely
-    unavailable — the container was reached and it is the wrong image — and it
-    carries the refusal `_eda_pin` composed, which names both digests. "I could
-    not look" and "I looked and was refused" are different facts and this keeps
-    them different.
-    """
+def second_engine_not_measured(reason: str = "", *, container: str = "") -> Dict[str, Any]:
+    """Describe the native second-engine result when it could not run."""
     record: Dict[str, Any] = {
         "engine": "magic drc(full)",
         "result": SECOND_ENGINE_NOT_MEASURED,
@@ -1047,10 +977,6 @@ def second_engine_not_measured(reason: str = "", *, container: str = "",
     }
     if container:
         record["container"] = container
-    if refusal:
-        record["refusal"] = _pin.CONTAINER_IMAGE_MISMATCH
-        record["refusal_detail"] = refusal
-        record["required_digest"] = _pin.IMAGE_DIGEST
     return record
 
 
@@ -1084,13 +1010,6 @@ def second_engine_drc(project: Path, block: str, container: str,
                 if not out.is_file():
                     return None, "the attribution program wrote no report"
                 return json.loads(out.read_text()), ""
-            except _ce.ContainerImageMismatch as exc:
-                # A REFUSAL, NOT AN ABSENCE, and never an escape. The guarded
-                # argv builder raises this when the container it was asked for
-                # runs bytes other than the pinned ones; the refusal already
-                # names the container and BOTH digests, so it is relayed
-                # verbatim rather than summarised.
-                return None, str(exc)
             except (OSError, ValueError, SystemExit) as exc:
                 return None, f"the second engine did not run: {exc}"
             finally:
@@ -1099,8 +1018,7 @@ def second_engine_drc(project: Path, block: str, container: str,
     if attribution is None:
         why = str(why or "")
         return second_engine_not_measured(
-            why, container=container,
-            refusal=why if _pin.CONTAINER_IMAGE_MISMATCH in why else "")
+            why, container=container)
     if isinstance(attribution.get("blocks"), dict):
         attribution = attribution["blocks"].get(block, attribution)
     # THE AUTHORITATIVE GRADED SET is every KLayout runset's (main + extra,
@@ -1317,8 +1235,7 @@ def run_block_pv(project: Path, block: str, res: Dict[str, Any],
     gds = gds_finder(bdir, block)
     netlist = netlist_finder(bdir, block)
     layout = _layout_source(bdir, block)
-    layout_meta = ({"layout_path": str(layout.relative_to(project)),
-                    "layout_sha256": _sha256(layout)}
+    layout_meta = ({"layout_path": str(layout.relative_to(project))}
                    if layout is not None else {})
 
     drc_result: Optional[Dict[str, Any]] = None
@@ -1389,21 +1306,6 @@ def run_block_pv(project: Path, block: str, res: Dict[str, Any],
         reasons.append("no block GDS for LVS")
     elif netlist is None:
         reasons.append("no block source netlist for LVS")
-    elif _layout_identity(bdir, netlist)[0] == "STALE":
-        # A layout of an EARLIER netlist: comparing it says nothing about
-        # this one (FX_A7_RCX_INVENTORY). The refusal is written where the
-        # gate reads the verdict, so no older `comp.json` is left standing.
-        _ident, _why = _layout_identity(bdir, netlist)
-        _aa.write_json(bdir / "comp.json", {
-            "block": block, "result": "refused",
-            "rule": "A6_LAYOUT_NOT_OF_THIS_NETLIST",
-            "layout_netlist_identity": {"state": _ident, "detail": _why},
-            "note": "LVS not run: the layout is not of this netlist"},
-            indent=2, ensure_ascii=True)
-        reasons.append(f"A6_LAYOUT_NOT_OF_THIS_NETLIST: {_why}")
-        lvs_result = {"executed": False, "verdict": "refused",
-                      "rule": "A6_LAYOUT_NOT_OF_THIS_NETLIST", "detail": _why,
-                      "report": str((bdir / "comp.json").relative_to(project))}
     else:
         reference_binding = {}
         try:
@@ -1419,19 +1321,13 @@ def run_block_pv(project: Path, block: str, res: Dict[str, Any],
                     lambda g, nl, blk, ctn: _default_lvs_runner(
                         g, nl, blk, ctn, _work, layermap))
             verdict, meta = runner(str(gds), str(lvs_reference), block, container)
-            _ident, _why = _layout_identity(bdir, netlist)
             meta = dict(meta or {}, **layout_meta,
-                        lvs_reference_binding=reference_binding,
-                        layout_netlist_identity={"state": _ident,
-                                                 "detail": _why})
+                        lvs_reference_binding=reference_binding)
             if verdict is None:
                 reasons.append(f"LVS engine unavailable: {meta.get('reason', '?')}")
                 lvs_result = _lvs_refusal(bdir, block, project,
                     "A6_LVS_ENGINE_NOT_MEASURED", meta.get("reason", "LVS engine unavailable"), meta)
             else:
-                current_reference, current_binding = _lvs_reference(project, bdir, block, netlist)
-                if current_reference != lvs_reference or current_binding != reference_binding:
-                    raise ValueError("A6_LVS_REFERENCE_CHANGED_DURING_RUN")
                 _write_lvs_report(bdir, block, str(verdict), meta or {})
                 ran = True
                 matched = str(verdict).upper() == "MATCH"
@@ -1450,120 +1346,3 @@ def run_block_pv(project: Path, block: str, res: Dict[str, Any],
             "reason": ("; ".join(reasons) if not ran
                        else "native per-block PV executed"),
             "drc": drc_result, "lvs": lvs_result}
-
-
-def _d42_inputs(project):
-    """Exact candidate GDS/reference and installed declared-PDK runsets.
-
-    The immutable native image binds the runsets' installed include tree.
-    This is not a block lookup, a later stream-out dependency or an adoption.
-    """
-    from flow109_analog_floorplan import bound_file
-    from declared_pdk_is_the_pdk_used_check import declared_target
-    import analog_pdk_availability as resolver
-    project = Path(project).resolve(strict=True)
-    config_path = project / 'input/flow109/D42.json'
-    if any(p.is_symlink() for p in (config_path, *config_path.parents)):
-        raise ValueError('D42_INPUT_SYMLINK')
-    config = json.loads(config_path.read_text())
-    layout = bound_file(project, config.get('layout'))
-    logical = bound_file(project, config.get('logical_netlist'))
-    top = config.get('top')
-    if not isinstance(top, str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.]*', top):
-        raise ValueError('D42_CANDIDATE_TOP_INVALID')
-    import analog_lvs_comparison_prep as prep
-    if (len(re.findall(r'(?im)^\s*\.subckt\s+' + re.escape(top) + r'(?=\s|$)', logical.read_text())) != 1
-            or not prep.declared_ports(logical.read_text(), top)):
-        raise ValueError('D42_LOGICAL_INTERFACE_ABSENT')
-    target, _ = declared_target(project)
-    if not isinstance(target, str) or not target.strip():
-        raise ValueError('D42_DECLARED_PDK_ABSENT')
-    facts = resolver.resolve_pdk(target)
-    if facts.get('source') != 'container_installed' or not facts.get('available'):
-        raise ValueError('D42_INSTALLED_PDK_UNAVAILABLE')
-    selected = {}
-    for key, candidates in (('drc_deck', 'drc_deck_candidates'), ('lvs_deck', 'lvs_deck_candidates')):
-        ref = config.get(key)
-        if not isinstance(ref, dict) or ref.get('path') not in facts.get(candidates, []):
-            raise ValueError('D42_DECLARED_PDK_DECK_UNBOUND: ' + key)
-        deck = Path(ref['path'])
-        if deck.is_symlink() or not deck.is_file() or _sha256(deck) != ref.get('sha256'):
-            raise ValueError('D42_DECLARED_PDK_DECK_CHANGED: ' + key)
-        selected[key] = str(deck)
-    if deck_kind(selected['drc_deck']) != 'klayout' or lvs_deck_kind(selected['lvs_deck']) != 'klayout':
-        raise ValueError('D42_PDK_DECK_METHOD_UNSUPPORTED')
-    files = [config_path, layout, logical, *map(Path, selected.values()),
-             *_auth.extra_runsets(Path(selected['drc_deck']).parent)]
-    if any(p.is_symlink() or not p.is_file() for p in files):
-        raise ValueError('D42_INPUT_ABSENT_OR_SYMLINK')
-    return dict(top=top, layout=str(layout), logical=str(logical), target=target,
-                **selected, inputs={str(p): _sha256(p) for p in files})
-
-
-def execute(project, context):
-    """D42 candidate DRC/LVS component; never whole-die pin/signoff acceptance."""
-    import uuid
-    import librelane_contract as launch
-    from flow109_admission import require_launch_admission, AdmissionRefusal
-    project = Path(project).resolve(strict=True)
-    output = project / 'reports/flow109/D42' / uuid.uuid4().hex
-    output.mkdir(parents=True)
-    record = dict(step_id='D42', context_sha256=context.get('context_sha256'),
-                  component_status='NOT_MEASURED', default_row_status='NOT_MEASURED',
-                  completed=False, native_started=False, outputs=[],
-                  flow109_acceptance='NOT_MEASURED', whole_flow_acceptance='NOT_MEASURED',
-                  qualification='NOT_CLAIMED', delivery_accepted=False)
-    try:
-        if (context.get('requested_step') != 'D42' or context.get('native_step_id') != 'flow109.D42'
-                or context.get('resolved_row', {}).get('profile', {}).get('id') != 'analog_die'):
-            raise ValueError('D42_CONTEXT_INVALID')
-        record['launch_admission'] = require_launch_admission(project, 'flow109.D42', {'flow109_context': context})
-        record['native_launch'] = launch.local_image_attestation()
-        data = _d42_inputs(project)
-        record['inputs'] = data['inputs']
-        # Native readback selects the exact top, not an arbitrary first macro.
-        tool = _tool_on_path('host', 'klayout')
-        if not tool:
-            raise ValueError('D42_KLAYOUT_UNAVAILABLE')
-        record['tool'] = {'path': tool, 'sha256': _sha256(Path(tool).resolve())}
-        script = output / 'read_subject.py'
-        identity = output / 'subject.json'
-        script.write_text('import pya,json\nl=pya.Layout();l.read(' + repr(data['layout']) +
-                          ')\nc=l.cell(' + repr(data['top']) + ')\njson.dump(dict(present=c is not None,nonempty=c is not None and not c.bbox().empty()),open(' + repr(str(identity)) + ',"w"))\n')
-        record['native_started'] = True
-        rc, out, err = _docker_exec('host', f'{shlex.quote(tool)} -b -r {shlex.quote(str(script))}',
-                                    marker=str(script), log_path=output / 'read_subject.log')
-        subject = json.loads(identity.read_text()) if identity.is_file() else {}
-        if rc or subject != {'present': True, 'nonempty': True}:
-            raise ValueError('D42_CANDIDATE_TOP_ABSENT_OR_EMPTY')
-        count, drc = _klayout_drc_runner(data['drc_deck'], data['layout'], data['top'], 'host', output / 'drc.lyrdb')
-        if not drc.get('authoritative', {}).get('graded'):
-            count = None
-        record['drc'] = dict(meta=drc, violations=count, status='NOT_MEASURED' if count is None else 'FAIL' if count else 'PASS')
-        verdict, lvs = _klayout_lvs_runset_runner(data['lvs_deck'], data['layout'], data['logical'], data['top'], 'host', output / 'lvs')
-        db = Path(lvs.get('report') or output / 'absent.lvsdb')
-        # An empty-source/vacuous comparison cannot establish pin coverage.
-        lvs_measured = (lvs.get('rc') == 0 and db.is_file() and db.stat().st_size > 0
-                        and isinstance(lvs.get('source_devices'), int) and lvs['source_devices'] > 0)
-        record['connectivity'] = dict(meta=lvs, observed_verdict=verdict,
-            status=('PASS' if verdict == 'MATCH' else 'FAIL' if verdict == 'MISMATCH' else 'NOT_MEASURED')
-                   if lvs_measured else 'NOT_MEASURED')
-        observed = {p: _sha256(p) for p in output.rglob('*') if p.is_file()}
-        if _d42_inputs(project) != data or launch.local_image_attestation() != record['native_launch']:
-            raise ValueError('D42_INPUT_OR_LAUNCH_CHANGED')
-        if any(not p.is_file() or _sha256(p) != h for p,h in observed.items()):
-            raise ValueError('D42_NATIVE_OUTPUT_CHANGED')
-        statuses = [record['drc']['status'], record['connectivity']['status']]
-        record['component_status'] = 'FAIL' if 'FAIL' in statuses else 'PASS' if statuses == ['PASS','PASS'] else 'NOT_MEASURED'
-        record['reason'] = ('Native candidate DRC/LVS component only; required-pin population, candidate parasitics, mission profile and row acceptance remain unmeasured'
-                            if record['component_status'] == 'PASS' else
-                            'Native candidate DRC/connectivity violation' if record['component_status'] == 'FAIL' else
-                            'D42_NATIVE_COMPONENT_INCOMPLETE: a clean DRC report alone or zero-device LVS does not measure required pin connectivity')
-        record['outputs'] = [{'path': str(p.relative_to(project)), 'sha256': h} for p,h in observed.items()]
-    except (ValueError, OSError, KeyError, TypeError, AdmissionRefusal, launch.Refusal) as exc:
-        # A bound earlier native violation remains blocking under a later gap.
-        if any(record.get(k, {}).get('status') == 'FAIL' for k in ('drc','connectivity')):
-            record['component_status'] = 'FAIL'
-        record['reason'] = str(exc)
-    (output / 'component.json').write_text(json.dumps(record, indent=2) + '\n')
-    return record

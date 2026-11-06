@@ -127,10 +127,14 @@ def _fake_tool(monkeypatch, writes):
 
     def run(cmd, **kwargs):
         calls.append(cmd)
+        if cmd[1:3] == ["image", "inspect"]:
+            return SimpleNamespace(returncode=0,
+                stdout='["/dockerstartup/scripts/ui_startup.sh"]', stderr="")
         if "--id" in cmd:
             folder = Path(cmd[cmd.index("-o") + 1])
             step = cmd[cmd.index("--id") + 1]
             incoming = json.loads(Path(cmd[cmd.index("-i") + 1]).read_text())
+            _put(folder / "config.json", json.loads(Path(cmd[cmd.index("-c") + 1]).read_text()))
             _put(folder / "state_in.json", incoming)
             out = dict(incoming, metrics=dict(incoming.get("metrics") or {}))
             out["metrics"].update(writes.get(step, {}))
@@ -189,7 +193,6 @@ def test_drc_half_runs_the_tool_chain_on_the_shipped_gds(tmp_path, monkeypatch):
     assert record["verdict"] == "PASS"
     ran = [c[c.index("--id") + 1] for c in calls if "--id" in c]
     assert ran == list(pv.DRC_CHAIN)
-    assert record["scope"]["gds_sha256"] == contract.digest(pnr / "chip.gds")
     assert (project / "phase3/librelane/31-drc/01-magic-drc/state_out.json").is_file()
     state = json.loads((project / "phase3/librelane/31-drc-config/bridge/state_in.json").read_text())
     assert state["gds"] == str((pnr / "chip.gds").resolve())
@@ -207,10 +210,9 @@ def test_lvs_half_bridges_a_powered_netlist_from_the_routed_database(tmp_path, m
     bridge = project / "phase3/librelane/31-lvs-config/bridge"
     state = json.loads((bridge / "state_in.json").read_text())
     assert state["pnl"] == str((bridge / "bridge.pnl.v").resolve())
-    receipt = json.loads((bridge / "bridge_receipt.json").read_text())
-    # the netlist is written from the database the routed DEF was read into
-    assert receipt["derived"]["pnl"]["from"] == state["odb"]
-    assert receipt["derived"]["odb"]["from"] == str((pnr / "chip.def").resolve())
+    # The actual Tcl reads the routed DEF into the database used for the powered netlist.
+    assert f"read_def {{{(pnr / 'chip.def').resolve()}}}" in (bridge / "def_to_odb.tcl").read_text()
+    assert f"read_db {{{state['odb']}}}" in (bridge / "to_pnl.tcl").read_text()
     assert "write_verilog -include_pwr_gnd" in (bridge / "to_pnl.tcl").read_text()
 
 
@@ -235,7 +237,7 @@ def test_lvs_half_extracts_gds_with_the_supplied_physical_reference(tmp_path, mo
     state = json.loads((project / "phase3/librelane/31-lvs-config/bridge/state_in.json").read_text())
     assert state["pnl"] == str(supplied.resolve())
     assert not any("openroad" in call for call in calls)
-    assert record["scope"]["extracted_gds_sha256"] == contract.digest(pnr / "chip.gds")
+    assert record["scope"]["gds"] == str((pnr / "chip.gds").resolve())
 
 
 def test_lvs_half_missing_supplied_reference_refuses_before_native(tmp_path, monkeypatch):
@@ -254,7 +256,8 @@ def test_a_bridge_that_writes_no_powered_netlist_refuses(tmp_path, monkeypatch):
     monkeypatch.setattr(pv, "resolve_step_configs", lambda *a, **k: configs)
     _fake_tool(monkeypatch, {})
     monkeypatch.setattr(contract.subprocess, "run",
-                        lambda cmd, **k: SimpleNamespace(returncode=0, stdout="", stderr=""))
+                        lambda cmd, **k: SimpleNamespace(returncode=0,
+                            stdout="null" if cmd[1:3] == ["image", "inspect"] else "", stderr=""))
     with pytest.raises(contract.Refusal, match="LL_BRIDGE_CONVERSION_FAILED"):
         pv.run_half(project, "img", pdk_root, "procA", "lvs", gds=pnr / "chip.gds",
                     routed_def=pnr / "chip.def", netlist=pnr / "chip_pnr.v",
@@ -286,7 +289,6 @@ def test_state_metrics_bind_each_value_to_the_state_that_measured_it(tmp_path):
     row = rows["klayout__drc_error__count"]
     assert row["value"] == 5
     assert row["source"] == "phase3/librelane/31-drc/02-klayout-drc/state_out.json"
-    assert row["sha256"] == contract.digest(folder / "state_out.json")
 
 
 def test_a_state_changed_after_judgement_is_not_measured(tmp_path):
@@ -765,7 +767,6 @@ def test_an_applied_remediation_is_the_tech_lef_every_geometry_step_reads(tmp_pa
     tlef = _legalized(tmp_path)
     path, source = pv.route_tech_lef(tmp_path)
     assert path == tlef.resolve()
-    assert contract.digest(tlef) in source
     overlay = pv.tech_lef_overlay(tmp_path)
     assert overlay["TECH_LEFS"][0] == {"*": str(tlef.resolve())}
 

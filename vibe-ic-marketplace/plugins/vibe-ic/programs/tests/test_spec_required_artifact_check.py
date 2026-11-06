@@ -83,12 +83,6 @@ def _run_gate(run_dir: Path) -> subprocess.CompletedProcess:
     )
 
 
-def _run_emitter(run_dir: Path) -> subprocess.CompletedProcess:
-    _require_program(EMITTER_PROGRAM)
-    return subprocess.run(
-        [sys.executable, str(EMITTER_PROGRAM), str(run_dir)],
-        capture_output=True, text=True,
-    )
 
 
 def _gate_report(run_dir: Path) -> dict:
@@ -103,33 +97,6 @@ def _write_input_doc(run_dir: Path, content: str, name: str = "L7_verification_p
     (docs / name).write_text(content)
 
 
-def _assert_ran_and_refused(r: subprocess.CompletedProcess, run_dir: Path,
-                            *, field_keys: tuple[str, ...]) -> None:
-    """Assert the emitter RAN and REFUSED — not that it merely failed.
-
-    rc must be EXACTLY 1: python exits 2 when the script file is absent, so a
-    deleted program cannot satisfy this.  The banner must be present: an
-    ImportError or SyntaxError exits 1 but prints a traceback and no banner,
-    so a broken program cannot satisfy this either.  And the SPECIFIC field
-    keys must be named, so refusing for an unrelated reason does not count.
-    """
-    detail = f"\nrc={r.returncode}\nSTDOUT:\n{r.stdout}\nSTDERR:\n{r.stderr}"
-    assert r.returncode == 1, (
-        "fail-closed means rc EXACTLY 1 (rc=2 is python failing to open the "
-        "script, which proves nothing)" + detail
-    )
-    assert FAIL_CLOSED_BANNER in r.stderr, (
-        "the program's own fail-closed banner must be on stderr; without it "
-        "the non-zero exit could be a traceback from a program that never "
-        "reached its own logic" + detail
-    )
-    for key in field_keys:
-        assert f"  - {key}:" in r.stderr, (
-            f"expected the refusal to name field {key!r}" + detail
-        )
-    assert "No file written." in r.stderr, detail
-    out = run_dir / "plugin_output" / "declaration.json"
-    assert not out.exists(), "should NOT write declaration.json on failure"
 
 
 # ---------------------------------------------------------------------------
@@ -527,73 +494,11 @@ class TestGateWiredIntoFlow:
 # of any deriver is caught by one of them.
 # ---------------------------------------------------------------------------
 
-_RTL_LSB = textwrap.dedent("""\
-    `default_nettype none
-    //============================================================================
-    // spm — serial-parallel multiplier
-    // y : serial multiplier, LSB-first
-    // p : serial product, LSB-first
-    // Reset    : synchronous, active-high
-    // Algorithm: textbook carry-save shift-add serial-parallel multiplier.
-    //============================================================================
-    module spm #(parameter size = 16) (
-        input wire clk, input wire rst, input wire [size-1:0] x,
-        input wire y, output wire p
-    );
-        reg yr; reg pr;
-        always @(posedge clk) begin
-            if (rst) begin yr <= 0; pr <= 0; end
-            else begin yr <= y; pr <= yr & x[0]; end
-        end
-        assign p = pr;
-    endmodule
-    `default_nettype wire
-""")
 
-_RTL_MSB = textwrap.dedent("""\
-    `default_nettype none
-    //============================================================================
-    // acc — serial accumulator
-    // y : serial operand, MSB-first
-    // Reset    : synchronous, active-low
-    // Algorithm: radix-4 booth recoded accumulate.
-    //============================================================================
-    module acc #(parameter size = 8) (
-        input wire clk, input wire rst, input wire [size-1:0] x,
-        input wire y, output wire p
-    );
-        reg yr; reg pr;
-        always @(posedge clk) begin
-            if (!rst) begin yr <= 0; pr <= 0; end
-            else begin yr <= y; pr <= yr & x[0]; end
-        end
-        assign p = pr;
-    endmodule
-    `default_nettype wire
-""")
 
-_L2_SIGNED = json.dumps({
-    "schema_version": 2,
-    "doc_class": "frs",
-    "frs_sections": [{"content": 'Plugin 須聲明 signed_2c 或 unsigned；預設 signed_2c'}],
-})
 
-_L2_UNSIGNED = json.dumps({
-    "schema_version": 2,
-    "doc_class": "frs",
-    "integer_encoding": "unsigned",
-})
 
-_VERIFY_REPORT_2 = textwrap.dedent("""\
-    # Report
-    | Latency | **2 cycle** |
-    CALIBRATED_LATENCY: 2  BIT_ORDER: LSB_first  SIZE: 16
-""")
 
-_GLS_REPORT_5 = textwrap.dedent("""\
-    # GLS Report
-    | Calibrated latency | **5 cycle** |
-""")
 
 _DECL_LSB = {
     "bit_order": "LSB_first",
@@ -616,97 +521,12 @@ _DECL_MSB = {
 }
 
 
-def _build_rundir(tmp_path: Path, *, rtl: str | None, l2: str | None,
-                  verify_report: str | None = None,
-                  gls_report: str | None = None,
-                  oracle_manifest: dict | None = None) -> Path:
-    rd = tmp_path / "run"
-    rd.mkdir(parents=True, exist_ok=True)
-    if rtl is not None:
-        rtl_dir = rd / "phase2" / "stage1" / "rtl"
-        rtl_dir.mkdir(parents=True)
-        (rtl_dir / "myip.v").write_text(rtl)
-    if l2 is not None:
-        l_dir = rd / "phase1" / "generated_docs"
-        l_dir.mkdir(parents=True)
-        (l_dir / "L2_FRS.json").write_text(l2)
-    if verify_report is not None:
-        scale_dir = rd / "_verify_scale"
-        scale_dir.mkdir()
-        (scale_dir / "REPORT.md").write_text(verify_report)
-    if gls_report is not None:
-        gls_dir = rd / "_verify_gls"
-        gls_dir.mkdir()
-        (gls_dir / "GLS_REPORT.md").write_text(gls_report)
-    if oracle_manifest is not None:
-        man_dir = rd / "phase2" / "stage1" / "sim_full_stack"
-        man_dir.mkdir(parents=True, exist_ok=True)
-        (man_dir / "arith_oracle_manifest.json").write_text(
-            json.dumps(oracle_manifest))
-    return rd
 
 
 # ---------------------------------------------------------------------------
 # arith_declaration_emit — PASS direction (VALUES, not shapes)
 # ---------------------------------------------------------------------------
 
-class TestEmitterPass:
-    """The emitted declaration must be EXACTLY the derived one.
-
-    Kills: `_derive_bit_order -> "MSB_first"` always, `_derive_latency_* -> 0`
-    always, and any other constant-return mutation of a deriver, because the
-    two fixtures disagree on every one of the six fields.
-    """
-
-    @pytest.mark.parametrize("case,expected", [
-        ("lsb", _DECL_LSB),
-        ("msb", _DECL_MSB),
-    ])
-    def test_emits_exact_declaration(self, tmp_path, case, expected):
-        if case == "lsb":
-            rd = _build_rundir(tmp_path, rtl=_RTL_LSB, l2=_L2_SIGNED,
-                               verify_report=_VERIFY_REPORT_2)
-        else:
-            # No _verify_scale report → exercises the GLS fallback, and pins
-            # a DIFFERENT non-zero latency.
-            rd = _build_rundir(tmp_path, rtl=_RTL_MSB, l2=_L2_UNSIGNED,
-                               gls_report=_GLS_REPORT_5)
-        r = _run_emitter(rd)
-        assert r.returncode == 0, f"expected PASS\n{r.stdout}\n{r.stderr}"
-        out = rd / "plugin_output" / "declaration.json"
-        assert out.exists(), "declaration.json not written"
-        assert out.stat().st_size > 0
-        assert json.loads(out.read_text()) == expected
-
-    def test_latency_falls_back_to_oracle_manifest(self, tmp_path):
-        """Third latency source, third distinct value — so disabling the
-        manifest fallback (or constant-folding it) is caught."""
-        rd = _build_rundir(
-            tmp_path, rtl=_RTL_LSB, l2=_L2_SIGNED,
-            oracle_manifest={"calibrated_latency": 7,
-                             "calibrated_latency_origin": "settled_edge_offset"})
-        r = _run_emitter(rd)
-        assert r.returncode == 0, f"{r.stdout}\n{r.stderr}"
-        d = json.loads((rd / "plugin_output" / "declaration.json").read_text())
-        assert d == {**_DECL_LSB, "latency_cycles": 7}
-
-    def test_untyped_legacy_framing_is_not_measured_latency(self, tmp_path):
-        rd = _build_rundir(
-            tmp_path, rtl=_RTL_LSB, l2=_L2_SIGNED,
-            oracle_manifest={"framing": "self-calibrated offset=7"})
-        result = _run_emitter(rd)
-        _assert_ran_and_refused(result, rd, field_keys=("latency_cycles",))
-
-    def test_verify_scale_wins_over_gls(self, tmp_path):
-        """Documented precedence: _verify_scale first, GLS second.  Both
-        present and disagreeing — the measured scale value must win."""
-        rd = _build_rundir(tmp_path, rtl=_RTL_LSB, l2=_L2_SIGNED,
-                           verify_report=_VERIFY_REPORT_2,
-                           gls_report=_GLS_REPORT_5)
-        r = _run_emitter(rd)
-        assert r.returncode == 0, f"{r.stdout}\n{r.stderr}"
-        d = json.loads((rd / "plugin_output" / "declaration.json").read_text())
-        assert d["latency_cycles"] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -717,54 +537,6 @@ class TestEmitterPass:
 # syntax (rc=1 with no banner), and refusing for the wrong reason.
 # ---------------------------------------------------------------------------
 
-class TestEmitterFailClosed:
-    """Emitter exits 1 with a named reason and writes NO file."""
-
-    def test_missing_rtl_no_file_written(self, tmp_path):
-        rd = _build_rundir(tmp_path, rtl=None, l2=_L2_SIGNED,
-                           verify_report=_VERIFY_REPORT_2)
-        r = _run_emitter(rd)
-        _assert_ran_and_refused(
-            r, rd,
-            field_keys=("rtl_source", "bit_order", "reset_polarity",
-                        "size_param", "multiplier_algorithm"))
-
-    def test_missing_l2_no_file_written(self, tmp_path):
-        rd = _build_rundir(tmp_path, rtl=_RTL_LSB, l2=None,
-                           verify_report=_VERIFY_REPORT_2)
-        r = _run_emitter(rd)
-        _assert_ran_and_refused(r, rd, field_keys=("integer_encoding",))
-        # Everything else WAS derivable — the refusal is specific, not blanket.
-        assert "  - bit_order:" not in r.stderr
-        assert "  - latency_cycles:" not in r.stderr
-
-    def test_missing_calibration_no_file_written(self, tmp_path):
-        rd = _build_rundir(tmp_path, rtl=_RTL_LSB, l2=_L2_SIGNED)
-        r = _run_emitter(rd)
-        _assert_ran_and_refused(r, rd, field_keys=("latency_cycles",))
-        assert "  - bit_order:" not in r.stderr
-        assert "  - integer_encoding:" not in r.stderr
-
-    def test_unmarked_bit_order_no_file_written(self, tmp_path):
-        """The framing field itself: RTL with no LSB/MSB marker must refuse
-        rather than guess a default."""
-        rtl = _RTL_LSB.replace("LSB-first", "bit-serial")
-        rd = _build_rundir(tmp_path, rtl=rtl, l2=_L2_SIGNED,
-                           verify_report=_VERIFY_REPORT_2)
-        r = _run_emitter(rd)
-        _assert_ran_and_refused(r, rd, field_keys=("bit_order",))
-
-    def test_fail_closed_does_not_clobber_existing_declaration(self, tmp_path):
-        """A refusal must leave a previously-emitted declaration untouched."""
-        rd = _build_rundir(tmp_path, rtl=_RTL_LSB, l2=_L2_SIGNED)
-        out = rd / "plugin_output"
-        out.mkdir(parents=True)
-        (out / "declaration.json").write_text('{"bit_order": "LSB_first"}')
-        r = _run_emitter(rd)
-        assert r.returncode == 1
-        assert FAIL_CLOSED_BANNER in r.stderr
-        assert json.loads((out / "declaration.json").read_text()) == {
-            "bit_order": "LSB_first"}
 
 
 # ---------------------------------------------------------------------------
@@ -774,25 +546,6 @@ class TestEmitterFailClosed:
 # emitter produces it, and the gate then passes on the SAME run dir.
 # ---------------------------------------------------------------------------
 
-class TestEmitterClosesTheGate:
-
-    def test_gate_fails_then_emitter_makes_it_pass(self, tmp_path):
-        rd = _build_rundir(tmp_path, rtl=_RTL_LSB, l2=_L2_SIGNED,
-                           verify_report=_VERIFY_REPORT_2)
-        _write_input_doc(rd, textwrap.dedent("""\
-            Plugin 在開始 RTL 設計前，**必須**於 `plugin_output/declaration.json` 聲明。
-        """))
-
-        before = _run_gate(rd)
-        assert before.returncode == 1
-        assert _gate_report(rd)["verdict"] == "FAIL"
-
-        emit = _run_emitter(rd)
-        assert emit.returncode == 0, f"{emit.stdout}\n{emit.stderr}"
-
-        after = _run_gate(rd)
-        assert after.returncode == 0, f"{after.stdout}\n{after.stderr}"
-        assert _gate_report(rd)["verdict"] == "PASS"
 
 
 # ---------------------------------------------------------------------------

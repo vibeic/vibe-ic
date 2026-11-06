@@ -32,7 +32,7 @@ import re
 
 import pytest
 
-from not_verified_tier import (PROBE_ABSENT, PROBE_PRESENT, probe,
+from _tool_probes import (PROBE_ABSENT, PROBE_PRESENT, probe,
                                probe_skip_reason)
 import analog_a3_netlist_emit as A3_PRODUCER   # the ONE container default
 import _container_exec as _ce                  # the ONE guarded docker-exec argv
@@ -406,11 +406,7 @@ def _reachability_of(container: str):
     naming it is a fact a reader can act on — a mismatch that surfaced later, as
     an exception out of the producer, would reach the reader as a broken test.
     """
-    try:
-        argv = list(_ce.docker_exec_argv(container, "true"))
-    except _ce.ContainerImageMismatch as exc:
-        _PROBED_ARGV.append(["docker", "exec", container, "true"])
-        return PROBE_ABSENT, f"{container}: {exc}"
+    argv = list(_ce.docker_exec_argv(container, "true"))
     _PROBED_ARGV.append(argv)
     return probe(argv)
 

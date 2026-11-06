@@ -2,7 +2,7 @@
 testability: structured
 
 # Wave-on-fix v1.6.10 — strong AI completeness double-check.
-# Pairs with phase1_doc_input_completeness_check.py.
+# Review admitted source facts against the generated L-layer documents as described in SKILL.md.
 skill: phase1-completeness-deep-review
 
 requirements:

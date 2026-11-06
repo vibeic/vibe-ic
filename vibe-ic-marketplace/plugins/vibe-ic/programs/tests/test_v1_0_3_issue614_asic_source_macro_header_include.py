@@ -53,11 +53,6 @@ def _make_rtl(tmp_path):
     return rtl
 
 
-def test_sibling_declares_module_helper(tmp_path):
-    rtl = _make_rtl(tmp_path)
-    assert P._sibling_declares_module(rtl / "prim_assert.sv") is False
-    assert P._sibling_declares_module(rtl / "core_mod.sv") is True
-    assert P._sibling_declares_module(rtl / "does_not_exist.sv") is False  # fail-open
 
 
 def test_leaf_including_macro_header_not_wrapper(tmp_path):

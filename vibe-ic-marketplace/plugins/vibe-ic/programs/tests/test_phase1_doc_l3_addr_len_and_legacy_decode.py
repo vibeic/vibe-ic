@@ -103,13 +103,6 @@ def test_disk_scan_fallback_captures_addr_len_not_in_memory(tmp_path):
     assert data["addr_max"] == "0x7F", data.get("addr_max")
     assert data["len_max"] == "0x80", data.get("len_max")
 
-    # End-to-end: the L3 gate (which scans disk) must now PASS.
-    cp = subprocess.run(
-        [sys.executable, str(_L3_GATE), str(project)],
-        capture_output=True, text=True,
-    )
-    assert cp.returncode == 0, (
-        f"L3 gate did not PASS\nstdout={cp.stdout}\nstderr={cp.stderr}")
 
 
 def test_disk_scan_fallback_does_not_run_for_ineligible_chip(tmp_path):

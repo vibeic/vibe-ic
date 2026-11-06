@@ -72,10 +72,10 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Optional
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import _progress_run as _pr  # noqa: E402
 
 
 # ─── phase1 ──────────────────────────────────────────────────────────────
@@ -117,31 +117,6 @@ def original_input_sources(project: Path):
     return [prompt, *context]
 
 
-def _original_author_owner_closure(project: Path, entry_step, exit_step) -> bool:
-    """Recognize the current source-owned author closure, not a wider request."""
-    import json
-    import os
-    import flow109
-    raw = os.environ.get(flow109.CONTEXT_ENV)
-    if not raw:
-        return False
-    request = Path(raw)
-    try:
-        if (request.is_symlink() or request.resolve(strict=True).parent !=
-                (Path(project) / "reports/flow109/requests").resolve()):
-            return False
-        context = flow109.validate_execution_context(json.loads(request.read_text()))
-        rows = context.get("resolved_rows") or [context.get("resolved_row", {})]
-        dispatches = [row.get("profile", {}).get("dispatch", {}) for row in rows]
-        author = [d for d in dispatches if d.get("native_step_id") == "1"]
-        return bool(len(author) == 1
-                    and author[0].get("producer") == "design_one_shot_runner.py:step_rtl_gen"
-                    and str(entry_step) == author[0].get("owner_entry_step")
-                    and str(exit_step) == author[0].get("owner_exit_step")
-                    and all(d.get("native_step_id") in {"1", "P0", "2"}
-                            for d in dispatches))
-    except (OSError, ValueError, TypeError, KeyError):
-        return False
 
 
 def select_rtl_input(project: Path, kind: str, entry_step=None, exit_step=None) -> None:
@@ -150,9 +125,6 @@ def select_rtl_input(project: Path, kind: str, entry_step=None, exit_step=None) 
     if kind not in ("structured", "original"):
         raise ValueError("unknown RTL input contract")
     if kind == "original":
-        if (str(entry_step) not in ("1", "2") or str(exit_step) not in ("1", "2")):
-            if not _original_author_owner_closure(project, entry_step, exit_step):
-                raise ValueError("original RTL input requires a bounded Step 1/2 window")
         prompt = Path(project) / "input/phase1_prompt.md"
         if not prompt.is_file() or any(p.is_symlink() for p in
                                       (Path(project), Path(project) / "input", prompt)):
@@ -1281,12 +1253,6 @@ def gate_timeout_s() -> int:
     return GATE_TIMEOUT_DEFAULT_S
 
 
-# Single shared helper that every one-shot runner calls right before
-# its DONE banner. Generates the canonical `reports/final_summary.md`
-# (chip-AGNOSTIC) by invoking `final_report_generate.py` as a
-# subprocess. Best-effort: failure is logged but does NOT change the
-# runner's verdict (the runner's own step audit is the source of truth;
-# the summary is a derived view).
 # --------------------------------------------------------------------------- #
 # "DID THIS INVOCATION PUBLISH THIS FILE?" — ONE implementation, for every
 # reader that needs the answer.
@@ -1331,35 +1297,6 @@ def published_here(path, started_at, tolerance_s=None) -> bool:
         return False
 
 
-def emit_final_summary(project, programs_dir=None) -> bool:
-    """Run `final_report_generate.py` against `project` and return True
-    on success, False on any failure (exception, missing tool, non-zero
-    exit, stall). Caller logs the True/False; do NOT use the return
-    to gate the verdict — final report is a downstream artefact.
-
-    #525 sized an OUTER bound from the child's OWN size-adaptive audit
-    budget, because a fixed 240s cap was killing the child before #469's
-    900-3600s inner budget could even apply. Sizing a bound better is still
-    guessing at one: the child is now supervised by forward progress, so it
-    runs as long as it is working and no `timeout` parameter is left to get
-    the arithmetic wrong. No caller ever passed one."""
-    import sys
-    from pathlib import Path
-    if programs_dir is None:
-        programs_dir = Path(__file__).resolve().parent
-    final_gen = Path(programs_dir) / "final_report_generate.py"
-    if not final_gen.is_file():
-        return False
-    try:
-        from flow_artifact_paths import top_arguments
-        r = _pr.run(
-            [sys.executable, str(final_gen), str(project)] + top_arguments(project),
-            check=False,
-            capture_output=True, text=True,
-        )
-        return r.returncode == 0
-    except Exception:
-        return False
 
 
 # ---------------------------------------------------------------------------
@@ -1406,154 +1343,3 @@ STEPS_VIEW_TIMEOUT_S = 300
 def steps_view_report_path(project) -> Path:
     """Canonical location of the steps-view status record."""
     return report_path(Path(project), STEPS_VIEW_REPORT_NAME)
-
-
-def emit_steps_view(project, programs_dir=None, runner=None,
-                    timeout=None, only_steps=None) -> dict:
-    """Build `<project>/steps/` and record the outcome. NEVER raises.
-
-    Returns the status record (also written to
-    `reports/audit/steps_view.json`). `status` is one of:
-      OK                — tree present, index.json readable, >=1 step folder
-      BUILD_FAILED      — collector errored, or exited 0 with no usable tree
-      TIMEOUT           — collector exceeded `timeout`
-      COLLECTOR_MISSING — step_output_collector.py not next to this module
-    Callers log the record; they must NOT gate on it."""
-    import json
-    import subprocess          # local imports: helper runs once per run
-    import sys
-    import time
-    from pathlib import Path
-
-    project = Path(project)
-    rec: dict = {
-        "program": "steps_view",
-        "runner": runner or "unknown",
-        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-        "steps_root": str(project / "steps"),
-        "status": "BUILD_FAILED",
-        "tree_present": False,
-        "n_steps": 0,
-        "n_with_outputs": 0,
-        "nested_folders": 0,
-        "error": None,
-    }
-    try:
-        if programs_dir is None:
-            programs_dir = Path(__file__).resolve().parent
-        collector = Path(programs_dir) / "step_output_collector.py"
-        if not collector.is_file():
-            rec["status"] = "COLLECTOR_MISSING"
-            rec["error"] = f"not found: {collector}"
-        else:
-            if timeout is None:
-                timeout = STEPS_VIEW_TIMEOUT_S
-            proc = None
-            try:
-                from flow_artifact_paths import top_arguments
-                _cmd = [sys.executable, str(collector), str(project)] + top_arguments(project)
-                if only_steps:
-                    # A run that declared a window refreshes only its own
-                    # steps' folders; the collector CARRIES the rest of the
-                    # index rather than dropping it. See
-                    # step_output_collector.materialize's docstring.
-                    _cmd += ["--only-steps",
-                             ",".join(sorted(str(s) for s in only_steps))]
-                    rec["bounded_to"] = sorted(str(s) for s in only_steps)
-                proc = subprocess.run(
-                    _cmd, timeout=timeout, check=False,
-                    capture_output=True, text=True,
-                )
-            except subprocess.TimeoutExpired:
-                rec["status"] = "TIMEOUT"
-                rec["error"] = (f"step_output_collector exceeded {timeout}s "
-                                f"on {project}")
-            except Exception as exc:
-                rec["error"] = f"{type(exc).__name__}: {exc}"
-            if proc is not None:
-                if proc.returncode != 0:
-                    rec["error"] = (
-                        f"step_output_collector rc={proc.returncode}: "
-                        + (proc.stderr or "").strip()[-600:])
-                else:
-                    # Do not take the child's word for it — read the tree.
-                    idx = project / "steps" / "index.json"
-                    try:
-                        steps = json.loads(idx.read_text()).get("steps") or []
-                    except Exception as exc:
-                        rec["error"] = (
-                            "collector exited 0 but steps/index.json is "
-                            f"unreadable: {type(exc).__name__}: {exc}")
-                    else:
-                        rec["n_steps"] = len(steps)
-                        rec["n_with_outputs"] = sum(
-                            1 for s in steps if (s.get("n_outputs") or 0) > 0)
-                        rec["nested_folders"] = sum(
-                            1 for s in steps
-                            if str(s.get("folder") or "").count("/") == 2)
-                        rec["tree_present"] = (project / "steps").is_dir()
-                        if rec["tree_present"] and rec["n_steps"] > 0:
-                            rec["status"] = "OK"
-                        else:
-                            rec["error"] = ("collector exited 0 but left no "
-                                            "step folders")
-    except Exception as exc:      # the helper itself must never raise
-        rec["error"] = f"{type(exc).__name__}: {exc}"
-
-    try:
-        out = steps_view_report_path(project)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(rec, indent=2, ensure_ascii=False) + "\n")
-        rec["record_path"] = str(out)
-    except Exception as exc:
-        rec["record_error"] = f"{type(exc).__name__}: {exc}"
-
-    try:
-        if rec["status"] == "OK":
-            print(f"steps view: steps/ — {rec['n_steps']} steps, "
-                  f"{rec['n_with_outputs']} with outputs "
-                  f"({rec['nested_folders']} nested phase/stage/step)")
-        else:
-            print(f"  [WARN] steps view NOT built ({rec['status']}): "
-                  f"{rec.get('error')} — recorded in "
-                  f"reports/audit/{STEPS_VIEW_REPORT_NAME}", file=sys.stderr)
-    except Exception:
-        pass
-    return rec
-
-
-def publish_report_then_steps_view(project, programs_dir, runner, summary,
-                                   report_name, only_steps=None):
-    """Write `summary` to its report path, THEN build the steps view.
-
-    Returns (steps_view_record, report_path). The caller attaches the record to
-    `summary` and re-writes the report -- which is why the report is published
-    twice: once so the view can READ it, once so it CARRIES the view's outcome.
-
-    THE ORDER IS THE POINT. `steps/index.json` now takes a step's status from
-    the runner's own verdict when its plan attributes one (see
-    `flow_dashboard_data._runner_verdict_overrides`), and the collector is a
-    SUBPROCESS -- it can only read what is already on disk. Every orchestrator
-    used to call `emit_steps_view` BEFORE writing its report, so at view-build
-    time this run's verdicts did not exist yet and the view fell back to
-    file-existence inference. That is how a step whose runner returned FAIL --
-    after the FAIL's own artefacts had already been written -- was published as
-    "pass". Publishing first is what makes the two records read the same fact
-    instead of two independently-derived guesses about it.
-
-    Never raises: a report that cannot be written must not kill a run, and the
-    view is best-effort by construction."""
-    import json
-
-    out = report_path(project, report_name)
-    try:
-        if report_name in {"phase1_one_shot.json", "phase2_one_shot.json", "phase3_one_shot.json"}:
-            from benchmark_dispatch import _bind_runner_report
-            summary.update(_bind_runner_report(
-                summary, project, str(Path(programs_dir) / (runner + ".py")), report_name))
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
-    except Exception:                                     # noqa: BLE001
-        pass
-    return emit_steps_view(project, programs_dir, runner=runner,
-                           only_steps=only_steps), out

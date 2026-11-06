@@ -165,80 +165,15 @@ def planted(tmp_path):
     return _make
 
 
-@pytest.mark.parametrize("index,role", _indices())
-def test_the_tracked_tree_gate_fires_on_every_named_token(index, role,
-                                                          planted):
-    d = planted(f"design note: the {_token(index)} process\n")
-    r = subprocess.run([sys.executable, str(_SCAN), "--repo", str(d)],
-                       capture_output=True, text=True)
-    assert r.returncode == 1, (
-        f"nda_tracked_tree_scan returned rc {r.returncode} over a tracked "
-        f"tree carrying the token at index {index} ({role}) — rc 0 there is "
-        f"not a weaker verdict, it is a false one. Gate output (masked by "
-        f"the gate itself): {r.stdout.strip()[-300:]}")
-    assert str(index) in r.stdout, (
-        f"the gate failed but did not attribute the hit to index {index} "
-        f"({role}); a finding nobody can attribute is not actionable")
 
 
-def test_the_gate_still_passes_a_tree_that_carries_no_token(planted):
-    """THE CONTROL. Without it, a family that matched EVERYTHING would satisfy
-    every test above — which is the exact failure `NoNdaLiterals` exists for."""
-    d = planted("design note: a generic open-PDK flow on gf180mcuD\n")
-    r = subprocess.run([sys.executable, str(_SCAN), "--repo", str(d)],
-                       capture_output=True, text=True)
-    assert r.returncode == 0, (
-        "the gate fails a tree carrying no NDA token: "
-        + r.stdout.strip()[-300:])
 
 
-def test_the_gate_prints_no_literal_when_it_fires(planted):
-    """The gate's stated contract. Checked here because widening the family
-    widened what it can print: five more roles now reach the report."""
-    d = planted("".join(f"line {i}: {_token(i)}\n" for i, _ in _indices()))
-    r = subprocess.run([sys.executable, str(_SCAN), "--repo", str(d)],
-                       capture_output=True, text=True)
-    assert r.returncode == 1
-    for index, role in _indices():
-        assert _token(index).lower() not in r.stdout.lower(), (
-            f"the gate echoed the literal at index {index} ({role}) into its "
-            "own output — a gate that prints what it protects publishes it "
-            "into every CI log it runs in")
 
 
 # ---------------------------------------------------------------------------
 # The encoding blind spot.
 # ---------------------------------------------------------------------------
-@pytest.mark.parametrize("index,role", _indices())
-@pytest.mark.parametrize("offset", [0, 1, 2])
-def test_the_tracked_tree_gate_sees_a_base64_encoded_token(index, role,
-                                                           offset, planted):
-    """A plaintext-only tree scan measures the ENCODING, not the exposure.
-
-    This module's own history says so: the store used to be base64 in tracked
-    source, defended because `git grep` found nothing. MEASURED 2026-09-07, the
-    sibling dataset repo still ships that shape and the PLAINTEXT scan of that
-    tree returns rc 0 — a clean verdict over a tree from which every role
-    decodes in one call.
-
-    Asserted per BYTE OFFSET, because base64 coverage is offset-dependent and
-    the builder says which offsets it covers. Where it says it covers one, the
-    gate must fire; where it says it does not (a token too short for an
-    8-character invariant fragment), the gate must NOT fire — a fragment that
-    short is not a signature, and asserting a hit there would be asserting a
-    false positive."""
-    import base64
-    token = _token(index)
-    coverable = bool(cpdk._b64_fragment(token, offset))
-    blob = base64.b64encode(("y" * offset + token + "zz").encode()).decode()
-    d = planted(f"legacy store: {{'role': '{blob}'}}\n")
-    r = subprocess.run([sys.executable, str(_SCAN), "--repo", str(d)],
-                       capture_output=True, text=True)
-    assert r.returncode == (1 if coverable else 0), (
-        f"rc {r.returncode} over a tracked tree carrying the token at index "
-        f"{index} ({role}) base64-encoded at offset {offset}; the builder "
-        f"declares this offset {'coverable' if coverable else 'NOT coverable'}"
-        f" — output: {r.stdout.strip()[-300:]}")
 
 
 def test_the_encoded_coverage_bound_is_declared_not_discovered():

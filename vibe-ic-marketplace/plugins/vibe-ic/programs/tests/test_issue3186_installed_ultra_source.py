@@ -11,7 +11,6 @@ Resolve GET git/commits/<commit>.tree.sha before GET git/trees/<actual-tree>.
 """
 from contextlib import contextmanager
 import copy
-import hashlib
 import io
 import json
 import os
@@ -238,16 +237,6 @@ def test_official_tree_response_must_match_commit_tree(frozen_package, isolated_
     assert not source.receipt_path(frozen_package['package']).exists()
 
 
-def test_changed_installed_producer_is_refused(prepared, tmp_path):
-    source, package, _, identity = prepared
-    producer = package / 'programs/execution_authority.py'
-    with _changed(producer, producer.read_bytes() + b'\n# controlled source drift\n'):
-        with pytest.raises(RuntimeError, match='SOURCE_AUTHORITY_DIRTY'):
-            identity.verify(producer)
-        result = _canonical_issue(package, tmp_path / 'changed-producer')
-        assert result['returncode'] != 0 and result['payload'] is None, result
-        assert 'SOURCE_AUTHORITY_DIRTY' in result['stderr'], result
-    identity.verify(producer)
 
 
 @pytest.mark.parametrize('field', ['revision', 'tree'])

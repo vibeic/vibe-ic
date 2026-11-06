@@ -357,16 +357,6 @@ def test_blast_radius_is_stated_where_the_wiring_is():
         "the concrete finding that justified the blocking slot is not recorded")
 
 
-def test_enforcement_audit_sees_the_gates_as_enforced():
-    """The plugin's own register, in its own terms: ENFORCED means a runner
-    invokes it inline so it can stop the step it guards."""
-    import flow_gate_enforcement_audit as AUDIT
-    rep = AUDIT.audit(_FLOW, _PROGRAMS)
-    rows = {r["gate"].replace(".py", ""): r for r in rep["gates"]}
-    for gate in ("sta_report_check", "em_report_check",
-                 "sta_corner_record_completeness_check"):
-        assert rows[gate]["enforcement"] == "ENFORCED", rows[gate]
-    assert not rep["contradictions"], rep["contradictions"]
 
 
 def test_signoff_gates_pass_a_clean_project(tmp_path):

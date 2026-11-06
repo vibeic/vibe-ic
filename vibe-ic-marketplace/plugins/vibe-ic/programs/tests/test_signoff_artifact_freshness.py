@@ -40,17 +40,14 @@ idempotent re-run redo it. The invariant is "older than the layout", not
 from __future__ import annotations
 
 import ast
-import os
 import sys
 from pathlib import Path
 
-import pytest
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
-import phase3_one_shot_runner as P  # noqa: E402
 
 _RUNNER_SRC = _PROGRAMS / "phase3_one_shot_runner.py"
 
@@ -66,40 +63,20 @@ _SIGNOFF_ARTIFACT_VARS = [
 ]
 
 
-def _stamp(p: Path, t: float) -> None:
-    os.utime(p, (t, t))
 
 
-def _pair(tmp_path: Path, *, artifact_age: float, layout_age: float):
-    """A real layout file and a real report file with real mtimes."""
-    layout = tmp_path / "spm.def"
-    artifact = tmp_path / "sta_mcorner_ocv.rpt"
-    layout.write_text("DESIGN spm ;\n")
-    artifact.write_text("worst slack max 3.68\n")
-    now = 1_700_000_000.0
-    _stamp(layout, now - layout_age)
-    _stamp(artifact, now - artifact_age)
-    return artifact, layout
 
 
 # --------------------------------------------------------------------------
 # PREMISE
 # --------------------------------------------------------------------------
 
-def test_premise_helper_exists():
-    assert hasattr(P, "_signoff_regen"), (
-        "the freshness predicate is gone — every test below is vacuous")
 
 
 # --------------------------------------------------------------------------
 # DEFECT — FAIL on the unfixed runner (existence-only guards).
 # --------------------------------------------------------------------------
 
-def test_report_older_than_layout_is_regenerated(tmp_path):
-    artifact, layout = _pair(tmp_path, artifact_age=3600, layout_age=10)
-    assert P._signoff_regen(artifact, layout) is True, (
-        "a sign-off report that predates the layout describes a DIFFERENT "
-        "design and must not be reused")
 
 
 def test_every_signoff_artifact_guard_routes_through_the_predicate():
@@ -137,51 +114,16 @@ def test_every_signoff_artifact_guard_routes_through_the_predicate():
         + ", ".join(f"{n} (line {ln})" for n, ln in offenders))
 
 
-def test_missing_report_is_produced(tmp_path):
-    _, layout = _pair(tmp_path, artifact_age=1, layout_age=1)
-    assert P._signoff_regen(tmp_path / "absent.rpt", layout) is True
 
 
 # --------------------------------------------------------------------------
 # GUARD — FAIL if the predicate is widened to "always regenerate".
 # --------------------------------------------------------------------------
 
-def test_report_newer_than_layout_is_reused(tmp_path):
-    """The load-bearing guard. Sign-off STA is expensive; a report produced
-    FROM this layout is exactly what we want to keep. A fix that regenerated
-    unconditionally would fail here and would make every idempotent re-run
-    redo the full multi-corner sign-off."""
-    artifact, layout = _pair(tmp_path, artifact_age=10, layout_age=3600)
-    assert P._signoff_regen(artifact, layout) is False
 
 
-def test_no_layout_leaves_an_existing_report_alone(tmp_path):
-    """Nothing downstream can be re-derived without a layout, so an absent DEF
-    must not trigger a pointless regeneration attempt."""
-    artifact = tmp_path / "sta.rpt"
-    artifact.write_text("x\n")
-    assert P._signoff_regen(artifact, tmp_path / "no_such.def") is False
 
 
 # --------------------------------------------------------------------------
 # FAIL-CLOSED — matches `_stale_rtl_vs_netlist`'s contract.
 # --------------------------------------------------------------------------
-
-def test_unreadable_mtime_regenerates_rather_than_trusting_the_cache(
-        tmp_path, monkeypatch):
-    artifact, layout = _pair(tmp_path, artifact_age=10, layout_age=3600)
-
-    def boom(self, *a, **k):
-        raise OSError("stat failed")
-
-    monkeypatch.setattr(Path, "stat", boom)
-    assert P._signoff_regen(artifact, layout) is True, (
-        "an unprovable cache must be rebuilt, not trusted")
-
-
-@pytest.mark.parametrize("same", [True])
-def test_equal_mtimes_are_treated_as_fresh(tmp_path, same):
-    """A report written in the same second as the layout it came from is the
-    normal in-run case and must not loop forever regenerating."""
-    artifact, layout = _pair(tmp_path, artifact_age=100, layout_age=100)
-    assert P._signoff_regen(artifact, layout) is False

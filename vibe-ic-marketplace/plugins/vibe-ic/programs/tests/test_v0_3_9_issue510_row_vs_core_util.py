@@ -27,30 +27,17 @@ from _filled_gds_fixture import write_filled_gds
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
-import phase3_one_shot_runner as R  # noqa: E402
 import metal_fill_density_check as MFD  # noqa: E402
 
 
 # ── writer-side: odb ROW_UTILIZATION_PCT parse ───────────────────────
 
-def test_parse_row_util_value():
-    assert R._v0_3_9_parse_row_utilization(
-        "DESIGN AREA\nROW_UTILIZATION_PCT 99.998\n") == 99.998
 
 
-def test_parse_row_util_na_is_none():
-    assert R._v0_3_9_parse_row_utilization(
-        "ROW_UTILIZATION_PCT NA (no rows)\n") is None
 
 
-def test_parse_row_util_absent_is_none():
-    assert R._v0_3_9_parse_row_utilization("no measurement here\n") is None
 
 
-def test_parse_row_util_last_occurrence_wins():
-    # pre-fill + post-fill both print; the post-fill (last) value wins.
-    assert R._v0_3_9_parse_row_utilization(
-        "ROW_UTILIZATION_PCT 12.5\nfill\nROW_UTILIZATION_PCT 99.4\n") == 99.4
 
 
 # ── gate-side: rows-full PASS vs under-filled FAIL ───────────────────

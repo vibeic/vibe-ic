@@ -34,7 +34,7 @@ from pathlib import Path
 import pytest
 
 import _progress_run as _pr
-from not_verified_tier import skip_not_verified
+from _tool_probes import skip_not_verified
 
 M = importlib.import_module("magic_port_extract_emit")
 

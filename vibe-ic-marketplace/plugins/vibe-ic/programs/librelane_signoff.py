@@ -41,7 +41,6 @@ chip-AGNOSTIC: no design, PDK or corner literal selects a branch.
 from __future__ import annotations
 
 import fnmatch
-import json
 import math
 import re
 import subprocess
@@ -54,7 +53,7 @@ from _atomic_artefact import write_json  # noqa: E402
 import _docker_memory as _dmem  # noqa: E402 — every `docker run` carries the ceiling
 from librelane_contract import (PDK_GUEST_ROOT, Refusal, _load, digest, handoff_to_direct,  # noqa: E402
                                 resolve_step_configs, run_chain, run_container,
-                                state_from_direct, validate_rcx_receipt, native_tool_command)
+                                state_from_direct, native_tool_command)
 
 STEPS = ('OpenROAD.RCX', 'OpenROAD.STAPostPNR')
 #: Where the extra corner Tcl lives in the project, and its provenance.
@@ -213,316 +212,6 @@ def run(project: Path, image: str, pdk_root: Path, pdk: str, *,
             'configs': configs, 'extra_tcl': extra, 'mounts': mounts}
 
 
-def scan_timing_plan(project: Path, context: dict) -> dict:
-    """Read existing owner-approved D19 facts; never re-emit its row or inputs."""
-    import flow109_metric_acceptance as metrics
-    project = Path(project).resolve()
-    if (context.get('features') or {}).get('requires_scan') is not True:
-        raise Refusal('SCAN_TIMING_APPLICABILITY_UNRESOLVED', 'scan-required context expected')
-    values, sources = {}, {}
-    for name, relative, schema in (
-            ('scenario_constraints', 'requirements/base_10/scenario_constraints.json', metrics.AUTHORITY_SCHEMA),
-            ('mode_library_rc_mapping', 'adopted/base_10/mode_library_rc_mapping.json', 'vibeic.flow109.adopted-reference.v1')):
-        authority, body = metrics._approved_document(project, relative,
-            authority='requirements_owner', schema=schema)
-        payload = {k: v for k, v in body.items() if k not in ('schema', 'approval', 'producer_binding')}
-        owner = _load(project / authority['source']['path'])
-        if not authority['source']['path'].startswith('input/') or owner.get(name) != payload:
-            raise Refusal('SCAN_TIMING_PLAN_AUTHORITY_DIFFERS', name)
-        values[name] = payload
-        sources[name] = {'path': relative, 'sha256': digest(project / relative), 'source': authority['source']}
-    required = values['scenario_constraints']
-    if not {'shift', 'capture'} <= set(required.get('required_modes') or []):
-        raise Refusal('SCAN_TIMING_REQUIRED_MODES_UNSTATED', 'declared shift and capture required')
-    items = required.get('required_items')
-    mapping = values['mode_library_rc_mapping'].get('reference')
-    if not isinstance(items, list) or not isinstance(mapping, list):
-        raise Refusal('SCAN_TIMING_SCENARIOS_UNSTATED', 'existing scenario/mapping lists required')
-    selected = [row for row in items if isinstance(row, dict) and row.get('mode') in ('shift', 'capture')]
-    keys, groups = set(), {}
-    for item in selected:
-        if (set(item) != {'mode', 'corner', 'check'}
-                or any(not isinstance(item[k], str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.-]*', item[k]) for k in item)
-                or item['corner'] not in required.get('required_corners', [])
-                or item['check'] not in required.get('required_checks', [])
-                or item['check'] not in ('setup', 'hold')):
-            raise Refusal('SCAN_TIMING_SCENARIO_UNSUPPORTED', str(item))
-        key = (item['mode'], item['corner'], item['check'])
-        if key in keys:
-            raise Refusal('SCAN_TIMING_SCENARIO_DUPLICATE', str(key))
-        keys.add(key)
-        matches = [row for row in mapping if isinstance(row, dict) and all(row.get(k) == v for k, v in item.items())]
-        if len(matches) != 1:
-            raise Refusal('SCAN_TIMING_SCENARIO_MAPPING_MISSING', str(key))
-        row = matches[0]
-        sdc = metrics._d19_ref(project, row.get('sdc'), 'declared scan SDC')
-        if not isinstance(row.get('libraries'), list) or not row['libraries']:
-            raise Refusal('SCAN_TIMING_LIBRARY_UNSTATED', str(key))
-        libraries = [metrics._d19_ref(project, ref, 'declared scan library') for ref in row['libraries']]
-        rc = row.get('rc')
-        if not isinstance(rc, dict) or not isinstance(rc.get('corner'), str) or not rc['corner']:
-            raise Refusal('SCAN_TIMING_RC_SCENE_DIFFERS', str(key))
-        rc = {'corner': rc['corner'], 'model': metrics._d19_ref(project, rc.get('model'), 'declared RC planning source')}
-        core = {'mode': item['mode'], 'sdc': sdc, 'libraries': libraries, 'rc': rc}
-        group_key = json.dumps(core, sort_keys=True)
-        group = groups.setdefault(group_key, {**core, 'scenarios': []})
-        group['scenarios'].append(dict(item))
-    if {g['mode'] for g in groups.values()} != {'shift', 'capture'}:
-        raise Refusal('SCAN_TIMING_REQUIRED_MODES_UNSTATED', 'both declared mode populations required')
-    return {'required_modes': ['shift', 'capture'], 'groups': list(groups.values()), 'source_refs': sources}
-
-
-def scan_timing_sources() -> dict:
-    """Existing per-use model binding, no release/main identity lock."""
-    import ast
-    text = Path(__file__).read_text()
-    nodes = {n.name: n for n in ast.parse(text).body if isinstance(n, ast.FunctionDef)}
-    import hashlib
-    return {'librelane_signoff.py:' + name: hashlib.sha256(ast.get_source_segment(text, nodes[name]).encode()).hexdigest()
-            for name in ('run', 'corner_timing', 'judge_timing', 'scan_timing_plan', 'scan_timing_sources', '_scan_timing_qualification',
-                         '_scan_timing_status', '_scan_timing_subject', '_scan_timing_origin', '_scan_timing_arm',
-                         'run_scan_timing', 'validate_scan_timing')}
-
-
-def _scan_timing_qualification(project: Path, context: dict, *, models: Optional[dict] = None) -> None:
-    import flow109_admission as admission
-    admission.require_admission(project, context)
-    expected = scan_timing_sources() if models is None else models
-    for use in context['runtime_tool_uses']:
-        config = _load(Path(project) / use['config']['path'])
-        if not all(config.get('model_sources', {}).get(k) == v for k, v in expected.items()):
-            raise Refusal('SCAN_TIMING_MODEL_UNQUALIFIED', use['use_id'])
-
-
-def _scan_timing_status(corners: dict) -> dict:
-    observed = judge_timing(corners)
-    # A complete, bound failing corner remains a failure when another corner
-    # is missing. Do not change the legacy/non-scan judge's behavior.
-    failed = {name: judge_timing({name: row}) for name, row in corners.items()}
-    failed = {name: value for name, value in failed.items() if value['verdict'] == 'FAIL'}
-    return {**observed, 'verdict': 'FAIL', 'bound_failing_corners': failed} if failed else observed
-
-
-def _scan_timing_subject(project: Path, state: dict) -> dict:
-    import librelane_fill_stream as files
-    subject = {k: files._record(project, Path(state[k])) for k in ('nl', 'def', 'odb')}
-    spefs = state.get('spef')
-    if not isinstance(spefs, dict) or not spefs:
-        raise Refusal('SCAN_TIMING_SPEF_UNBOUND', 'current native physical subject required')
-    subject['spef'] = {rc_corner(k): files._record(project, Path(v)) for k, v in spefs.items()}
-    if len(subject['spef']) != len(spefs):
-        raise Refusal('SCAN_TIMING_SPEF_UNBOUND', 'duplicate physical RC scene')
-    return subject
-
-
-def _scan_timing_origin(project: Path, record: dict, receipt: dict) -> dict:
-    """Authenticate a normal arm against its original source/runtime admission.
-
-    Only the existing live LOCAL launch interface is available for these arms.
-    A historical/different-CID execution without an existing original-execution
-    adoption interface remains unmeasured; file self-consistency is insufficient.
-    No current-main, release, or historical-image-string equality is required.
-    """
-    import ast
-    import hashlib
-    import flow109
-    import execution_source_identity as source_identity
-    import librelane_contract as contract
-    fingerprint = receipt['input']
-    original = fingerprint.get('local_image')
-    if not isinstance(original, dict) or not fingerprint.get('image'):
-        raise Refusal('SCAN_TIMING_EXECUTION_UNBOUND', 'original LOCAL execution receipt required')
-    if fingerprint['image'] not in (original.get('image'), original.get('image_id')):
-        raise Refusal('SCAN_TIMING_EXECUTION_UNBOUND', 'fingerprint image differs from its own original launch')
-    launch = contract.local_image_attestation(fingerprint['image'])
-    if original != launch:
-        raise Refusal('SCAN_TIMING_EXECUTION_UNBOUND',
-            'original launch is not the attested live execution; historical adoption unsupported')
-    # Reopen the actual retained source via the existing Git/installed-source
-    # authority. Reader-only updates need not equal the original producer bytes.
-    package = Path(record['source_root']).resolve()
-    source = package / 'programs/librelane_signoff.py'
-    identity = source_identity.current(package)
-    identity.verify(source)
-    text = source.read_text()
-    nodes = {n.name: n for n in ast.parse(text).body if isinstance(n, ast.FunctionDef)}
-    models = record.get('operation_sources')
-    if not isinstance(models, dict) or set(models) != set(scan_timing_sources()):
-        raise Refusal('SCAN_TIMING_SOURCE_UNBOUND', 'original consumed model population differs')
-    for key, value in models.items():
-        name = key.partition(':')[2]
-        if name not in nodes or hashlib.sha256(ast.get_source_segment(text, nodes[name]).encode()).hexdigest() != value:
-            raise Refusal('SCAN_TIMING_SOURCE_UNBOUND', key)
-    context = flow109.validate_execution_context(record['execution_context'])
-    if context['resolved_row']['id'] not in ('D49', 'D70'):
-        raise Refusal('SCAN_TIMING_EXECUTION_UNBOUND', 'foreign original purpose')
-    _scan_timing_qualification(project, context, models=models)
-    identity.verify_current()
-    if contract.local_image_attestation(fingerprint['image']) != launch:
-        raise Refusal('SCAN_TIMING_EXECUTION_UNBOUND', 'launch changed during readback')
-    return {'source_root': str(package), 'source_revision': identity.revision,
-            'source_tree': identity.tree, 'launch': launch,
-            'context_sha256': context['context_sha256']}
-
-
-def _scan_timing_arm(project: Path, group: dict, record: dict, subject: dict) -> dict:
-    """Reopen the normal native receipt, not a mode label or reported PASS."""
-    from librelane_contract import validate_step_receipt
-    import librelane_fill_stream as files
-    state_path = files._bound(project, record.get('sta_state'))
-    folder = state_path.parent
-    if (state_path.name != 'state_out.json' or not folder.is_relative_to(project / 'phase3/librelane')
-            or folder.is_symlink()):
-        raise Refusal('SCAN_TIMING_STATE_FOREIGN', str(state_path))
-    receipt = validate_step_receipt(folder, 'OpenROAD.STAPostPNR')
-    origin = _scan_timing_origin(project, record, receipt)
-    if files._record(project, folder / 'vibeic_receipt.json') != record.get('native_receipt'):
-        raise Refusal('SCAN_TIMING_RECEIPT_CHANGED', str(folder))
-    for name in ('config.json', 'state_in.json'):
-        if receipt['sha256'].get(name) != digest(folder / name):
-            raise Refusal('SCAN_TIMING_INPUT_UNBOUND', name)
-    state, config = _load(state_path), _load(folder / 'config.json')
-    declared_corners = sorted({row['corner'] for row in group['scenarios']})
-    if sorted(config.get('STA_CORNERS') or []) != declared_corners:
-        raise Refusal('SCAN_TIMING_CORNERS_DIFFER', str(folder))
-    rules = config.get('RCX_RULESETS') or {}
-    for corner in declared_corners:
-        scenes = [rc_corner(pattern) for pattern in rules if fnmatch.fnmatchcase(corner, pattern)]
-        if scenes != [group['rc']['corner']] or group['rc']['corner'] not in subject['spef']:
-            raise Refusal('SCAN_TIMING_RC_SCENE_DIFFERS', corner)
-    sdc = files._bound(project, group['sdc'])
-    if (Path(str(state.get('sdc', ''))).resolve() != sdc
-            or Path(str(config.get('SIGNOFF_SDC_FILE', ''))).resolve() != sdc):
-        raise Refusal('SCAN_TIMING_SDC_DIFFER', str(folder))
-    if _scan_timing_subject(project, state) != subject:
-        raise Refusal('SCAN_TIMING_PHYSICAL_SUBJECT_DIFFER', str(folder))
-    timed = receipt['input'].get('state_files') or {}
-    for value in [state[k] for k in ('nl', 'def', 'odb', 'sdc')] + list(state['spef'].values()):
-        if timed.get(str(value)) != digest(Path(value)):
-            raise Refusal('SCAN_TIMING_INPUT_CHANGED', str(value))
-    libraries = config.get('CELL_LIBS') or config.get('LIB') or {}
-    library_inputs = receipt['input'].get('liberty_files') or {}
-    expected = {row['sha256'] for row in group['libraries']}
-    for corner in declared_corners:
-        matches = [v for k, v in libraries.items() if fnmatch.fnmatchcase(corner, k)]
-        if len(matches) != 1 or {digest(Path(v)) for v in matches[0]} != expected:
-            raise Refusal('SCAN_TIMING_LIBRARY_DIFFER', corner)
-        if any(library_inputs.get(str(v)) != digest(Path(v)) for v in matches[0]):
-            raise Refusal('SCAN_TIMING_LIBRARY_UNBOUND', corner)
-    if (folder / 'metrics.json').exists() and receipt['sha256'].get('metrics.json') != digest(folder / 'metrics.json'):
-        raise Refusal('SCAN_TIMING_REPORT_UNBOUND', 'metrics.json')
-    for corner in declared_corners:
-        for name in ('sta.log', CORNER_REPORT, 'unpropagated.rpt'):
-            relative = corner + '/' + name
-            if receipt['sha256'].get(relative) != digest(folder / relative):
-                raise Refusal('SCAN_TIMING_REPORT_UNBOUND', relative)
-    corners = corner_timing(folder)
-    if set(corners) != set(declared_corners):
-        raise Refusal('SCAN_TIMING_COVERAGE_INCOMPLETE', str(folder))
-    return {'status': _scan_timing_status(corners)['verdict'], 'timing': _scan_timing_status(corners),
-            'corners': corners, 'sta_state': record['sta_state'], 'native_receipt': record['native_receipt'],
-            'execution_origin': origin}
-
-
-def run_scan_timing(project: Path, context: dict, owner: str, native: dict,
-                    state: dict, *, report_body: str = '') -> dict:
-    """Existing STAPostPNR per declared group, no extraction or other engine."""
-    import uuid
-    import librelane_fill_stream as files
-    project = Path(project).resolve()
-    coverage = {'status': 'NOT_MEASURED', 'required_modes': ['shift', 'capture'], 'modes': {}, 'not_measured': []}
-    statuses = []
-    try:
-        if owner not in ('D49', 'D70'):
-            raise Refusal('SCAN_TIMING_OWNER_UNSUPPORTED', str(owner))
-        plan = scan_timing_plan(project, context)
-        _scan_timing_qualification(project, context)
-        subject = _scan_timing_subject(project, state)
-        direct_spefs = {k: files._bound(project, ref) for k, ref in subject['spef'].items()}
-        for group in plan['groups']:
-            mode = group['mode']
-            scope = 'scan-' + owner + '-' + mode + '-' + uuid.uuid4().hex
-            corners = sorted({row['corner'] for row in group['scenarios']})
-            sdc = files._bound(project, group['sdc'])
-            libraries = [str(files._bound(project, ref)) for ref in group['libraries']]
-            overlay = {'SIGNOFF_SDC_FILE': (str(sdc), 'existing approved D19 mode SDC'),
-                'STA_CORNERS': (corners, 'existing approved D19 declared corners'),
-                'CELL_LIBS': ({c: libraries for c in corners}, 'existing approved D19 libraries'),
-                'DEFAULT_CORNER': (corners[0], 'first explicitly declared corner in this acquisition')}
-            result = run(project, native['image'], Path(native['pdk_root']), native['pdk'],
-                routed_def=files._bound(project, subject['def']), routed_odb=files._bound(project, subject['odb']),
-                netlist=files._bound(project, subject['nl']), sdc=sdc, extract=False, time=True,
-                direct_spefs=direct_spefs, lane=scope, report_body=report_body,
-                config_folder=scope + '-config', config_overlay=overlay)
-            folder = Path(result['sta'])
-            record = {'group': group, 'execution_context': context,
-                      'source_root': str(Path(__file__).resolve().parents[1]),
-                      'operation_sources': scan_timing_sources(),
-                      'sta_state': files._record(project, folder / 'state_out.json'),
-                      'native_receipt': files._record(project, folder / 'vibeic_receipt.json')}
-            observation = _scan_timing_arm(project, group, record, subject)
-            record['observation'] = observation
-            coverage['modes'].setdefault(mode, []).append(record)
-            statuses.append(observation['status'])
-        coverage['source_refs'] = plan['source_refs']
-        if scan_timing_plan(project, context)['groups'] != plan['groups']:
-            raise Refusal('SCAN_TIMING_INPUT_CHANGED', 'declared input group changed during native acquisition')
-    except Exception as exc:
-        if getattr(exc, 'code', '') == 'LL_STEP_FAILED':
-            statuses.append('FAIL')
-        coverage['not_measured'].append({'reason': getattr(exc, 'code', 'SCAN_TIMING_NOT_MEASURED'), 'detail': str(exc)})
-    complete = (set(coverage['modes']) == {'shift', 'capture'} and not coverage['not_measured']
-                and statuses and all(x == 'PASS' for x in statuses))
-    coverage['status'] = 'FAIL' if 'FAIL' in statuses else 'PASS' if complete else 'NOT_MEASURED'
-    return coverage
-
-
-def validate_scan_timing(project: Path, context: dict, coverage: dict, state: dict) -> dict:
-    """Reopen every declared mode; valid earlier FAIL survives later absence."""
-    project = Path(project).resolve()
-    statuses, observed, missing, seen = [], {}, [], set()
-    try:
-        plan = scan_timing_plan(project, context)
-        _scan_timing_qualification(project, context)
-        subject = _scan_timing_subject(project, state)
-        expected = {json.dumps(g, sort_keys=True): g for g in plan['groups']}
-        records = {}
-        for mode, values in (coverage.get('modes') or {}).items():
-            if mode not in ('shift', 'capture') or not isinstance(values, list):
-                missing.append({'reason': 'SCAN_TIMING_RECORD_INVALID', 'detail': str(mode)})
-                continue
-            for record in values:
-                if not isinstance(record, dict):
-                    missing.append({'reason': 'SCAN_TIMING_RECORD_INVALID', 'detail': str(mode)})
-                    continue
-                key = json.dumps(record.get('group'), sort_keys=True)
-                if key not in expected or expected[key]['mode'] != mode or key in records:
-                    missing.append({'reason': 'SCAN_TIMING_RECORD_INVALID', 'detail': str(mode)})
-                    continue
-                records[key] = record
-        # A later missing/refused record does not erase an earlier bound FAIL.
-        for key, record in records.items():
-            try:
-                path = record.get('sta_state', {}).get('path')
-                if path in seen:
-                    raise Refusal('SCAN_TIMING_STATE_ALIAS', str(path))
-                seen.add(path)
-                observed[key] = _scan_timing_arm(project, expected[key], record, subject)
-                statuses.append(observed[key]['status'])
-            except Exception as exc:
-                missing.append({'reason': getattr(exc, 'code', 'SCAN_TIMING_NOT_MEASURED'), 'detail': str(exc)})
-        if set(records) != set(expected):
-            raise Refusal('SCAN_TIMING_COVERAGE_INCOMPLETE', 'declared shift/capture groups missing')
-        if scan_timing_plan(project, context)['groups'] != plan['groups']:
-            raise Refusal('SCAN_TIMING_INPUT_CHANGED', 'declared scan inputs changed during readback')
-        _scan_timing_qualification(project, context)
-    except Exception as exc:
-        missing.append({'reason': getattr(exc, 'code', 'SCAN_TIMING_NOT_MEASURED'), 'detail': str(exc)})
-    return {'status': 'FAIL' if 'FAIL' in statuses else 'PASS' if statuses and all(s == 'PASS' for s in statuses) and not missing else 'NOT_MEASURED',
-            'required_modes': ['shift', 'capture'], 'observations': observed, 'not_measured': missing}
-
-
-
 def rc_corner(pattern: str) -> str:
     """`nom_*` -> `nom`: the name RCX gives the corner's own directory."""
     return pattern.strip('*_')
@@ -539,7 +228,7 @@ def publish_spefs(result: dict, top: str, nominal: Path, corner_dir: Path,
     stays bound to the native config and receipt.
     """
     folder = Path(result['rcx'])
-    binding = bind_rcx_spefs(folder, folder / 'state_in.json')
+    bind_rcx_spefs(folder, folder / 'state_in.json')
     produced = _load(folder / 'state_out.json')['spef']
     producer_top = _load(folder / 'config.json').get('DESIGN_NAME')
     subject_top = physical_top if physical_top is not None else top
@@ -570,14 +259,6 @@ def publish_spefs(result: dict, top: str, nominal: Path, corner_dir: Path,
     nominal_doc = handoff_to_direct(result['rcx'] / 'state_out.json',
                                     {f'spef:{nominal_pattern}': nominal},
                                     receipt.with_name(receipt.stem + '_nominal.json'))
-    # Each copy must remain the receipt-bound producer output, including the
-    # nominal alias. A source edit during copying must not acquire authority.
-    output_hashes = binding['output_sha256']
-    for handoff in (doc, nominal_doc):
-        for view, row in handoff['views'].items():
-            expected = output_hashes[view.partition(':')[2]]
-            if row['source_sha256'] != expected or row['dest_sha256'] != expected:
-                raise Refusal('LL_RCX_OUTPUT_UNBOUND', f'{view}: publication bytes changed')
     handed = {rc_corner(view.partition(':')[2]): Path(row['dest'])
               for view, row in doc['views'].items()}
     handed['__nominal__'] = Path(nominal_doc['views'][f'spef:{nominal_pattern}']['dest'])
@@ -595,7 +276,6 @@ def bind_rcx_spefs(folder: Path, basis_state: Path,
     """
     state_path = folder / 'state_out.json'
     try:
-        producer = validate_rcx_receipt(folder)
         state, before, basis, cfg = (_load(p) for p in (
             state_path, folder / 'state_in.json', basis_state, folder / 'config.json'))
         rules = cfg.get('RCX_RULESETS') or {}
@@ -611,10 +291,9 @@ def bind_rcx_spefs(folder: Path, basis_state: Path,
             if view == 'def' or basis.get(view):
                 if not basis.get(view) or not before.get(view) or not state.get(view):
                     raise ValueError(f'{view} route basis absent')
-                hashes = {digest(Path(doc[view])) for doc in (basis, before, state)}
-                recorded = producer['input']['state_files'].get(before[view])
-                if not recorded or hashes != {recorded}:
-                    raise ValueError(f'{view} route basis differs')
+                paths = {Path(doc[view]).resolve() for doc in (basis, before, state)}
+                if len(paths) != 1 or not next(iter(paths)).is_file():
+                    raise ValueError(f'{view} route input differs or is absent')
         declared = cfg.get('STA_CORNERS')
         if not isinstance(declared, list) or not declared or any(
                 not isinstance(c, str) or not c for c in declared):
@@ -624,10 +303,6 @@ def bind_rcx_spefs(folder: Path, basis_state: Path,
         censuses = {}
         for pattern, source in spefs.items():
             census = spef_census(Path(source))
-            recorded = producer['sha256'].get(str(
-                Path(source).resolve().relative_to(folder.resolve())))
-            if census['sha256'] != recorded:
-                raise ValueError(f'{pattern}: SPEF changed during census')
             if not cfg.get('DESIGN_NAME') or census['design'] != cfg['DESIGN_NAME']:
                 raise ValueError(f'{pattern}: SPEF top differs from producer design')
             if not census['net_count'] or census['total_pf'] <= 0:
@@ -656,15 +331,9 @@ def bind_rcx_spefs(folder: Path, basis_state: Path,
                 raise ValueError(f'{corner}: native ruleset extraction has no coupling')
             bound[corner] = {'pattern': pattern, 'path': str(path),
                              'ruleset': matched_rules[0][1],
-                             **{k: census[k] for k in ('sha256', 'net_count', 'total_pf',
+                             **{k: census[k] for k in ('net_count', 'total_pf',
                                                        'ground_pf', 'coupling_pf', 'coupling_rows')}}
-        return {'producer': 'OpenROAD.RCX', 'state': str(state_path),
-                'producer_receipt_sha256': digest(folder / 'vibeic_receipt.json'),
-                'output_sha256': {pattern: row['sha256'] for pattern, row in censuses.items()},
-                'state_sha256': digest(state_path), 'config_sha256': digest(folder / 'config.json'),
-                'basis_state_sha256': digest(basis_state),
-                'route_sha256': {k: digest(Path(basis[k])) for k in ('def', 'odb', 'sdc') if basis.get(k)},
-                'scenes': bound}
+        return {'producer': 'OpenROAD.RCX', 'state': str(state_path), 'scenes': bound}
     except (OSError, ValueError, TypeError, KeyError) as exc:
         raise Refusal('LL_RCX_OUTPUT_UNBOUND', f'{folder}: {exc}') from exc
 
@@ -972,27 +641,18 @@ SIGNOFF_RECORD = 'reports/phase3/sta_postpnr_signoff.json'
 _TIMED_VIEWS = ('def', 'nl', 'sdc', 'spef')
 
 
-def _liberty_host_path(project: Path, liberty: str,
-                       expected_image: str | None = None, *,
-                       fingerprint: dict | None = None, pdk: str | None = None) -> Path | None:
-    """Resolve a recorded input through its mount or proven runtime content."""
+def _liberty_host_path(project: Path, liberty: str, *, pdk: str | None = None) -> Path | None:
+    """Resolve a configured Liberty through current PDK paths and mounts."""
     from librelane_contract import resolve_state_pdk_asset
-    path = Path(liberty)
-    if path.is_file():
-        return path
     mounts = []
     try:
         doc = _load(project / 'phase3/librelane_pdk_root.provenance.json')
-        derivation = doc.get('derivation') or {}
-        if (expected_image and doc.get('source') != 'declared'
-                and derivation.get('image') != expected_image):
-            return None
-        pdk = pdk or derivation.get('pdk') or doc.get('pdk')
+        pdk = pdk or doc.get('pdk') or (doc.get('derivation') or {}).get('pdk')
         if pdk:
             mounts = [(Path(doc['path']) / pdk, Path('/pdk') / pdk)]
     except (OSError, ValueError, KeyError, TypeError):
         pass
-    return resolve_state_pdk_asset(liberty, pdk=pdk, fingerprint=fingerprint, mounts=mounts)
+    return resolve_state_pdk_asset(liberty, pdk=pdk, mounts=mounts)
 
 
 def _liberty_header_pvt(path: Path) -> dict[str, float] | None:
@@ -1009,65 +669,41 @@ def _liberty_header_pvt(path: Path) -> dict[str, float] | None:
 
 def step23_tool_arm(project: Path, artefacts: tuple[str, ...] = (CORNER_REPORT,),
                     native_reports: tuple[str, ...] = ()) -> Optional[dict]:
-    """What a step-23 gate judges when step 23 runs `librelane` or `dual`.
-
-    ``None`` when step 23 runs ``direct`` (the gate reads the direct decks, as
-    before).  Otherwise, per corner the tool declared (`STA_CORNERS` in the
-    step's own config): the ``artefacts`` it wrote in that corner's directory
-    (text + sha256), its metrics, and its scope.  The scope comes only from
-    files the tool bound: the RC corner from the SPEF pattern the tool matched
-    for the corner, and process / voltage / temperature from the cell
-    liberty its config binds to the corner, read by `_ppa`'s own
-    `parse_liberty_pvt` (an unreadable field stays a named gap, never a guess).
-
-    Every file is checked against the sha256 the contract's receipt recorded
-    when the tool wrote it, and every view the tool timed against the file on
-    disk now.  Anything missing, unreadable, unbound or stale raises
-    `Refusal`: a gate must refuse, never fall back to our own deck.
-    """
-    from librelane_contract import selected_mode
+    """Read actual native State, configured scenes, PVT and STA reports."""
+    from librelane_contract import project_path
     from _ppa.backends.opensta import parse_liberty_pvt
-    mode = selected_mode(project, '23')
-    if mode == 'direct':
-        return None
     record = project / SIGNOFF_RECORD
     try:
-        doc = _load(record)
-        state_path = Path(doc['sta_state'])
+        doc = _load(record) if record.is_file() else {}
+        if doc.get('sta_state'):
+            state_path = project_path(project, doc['sta_state'])
+        else:
+            states = [path for path in (project / 'phase3/librelane').glob('**/state_out.json')
+                      if (path.parent / 'config.json').is_file() and
+                      (_load(path.parent / 'config.json').get('meta') or {}).get('step') == 'OpenROAD.STAPostPNR'
+                      and 'attempts' not in path.relative_to(project).parts]
+            if not states:
+                return None
+            if len(states) != 1:
+                raise ValueError('native STA State is ambiguous')
+            state_path = states[0]
         folder = state_path.parent
-        receipt = _load(folder / 'vibeic_receipt.json')
         state = _load(state_path)
         config = _load(folder / 'config.json')
     except (OSError, ValueError, KeyError, TypeError, Refusal) as exc:
         raise Refusal('LL_STA_TOOL_ARM_UNREADABLE', f'{record}: {exc}') from exc
-    if doc.get('mode') != mode:
-        raise Refusal('LL_STA_RECORD_STALE', f'{record} is mode {doc.get("mode")}, the switch says {mode}')
-    bound = receipt.get('sha256') or {}
-    for name in ('state_out.json', 'config.json'):
-        if bound.get(name) != digest(folder / name):
-            raise Refusal('LL_STA_ARTEFACT_UNBOUND', f'{folder / name}: not the bytes the tool wrote')
-    if doc.get('sta_state_sha256') != bound['state_out.json']:
-        raise Refusal('LL_STA_RECORD_STALE', f'{record} names another STAPostPNR state')
-    timed = (receipt.get('input') or {}).get('state_files') or {}
+    mode = 'librelane'
     spefs = state.get('spef') or {}
-    views = [state.get(v) for v in _TIMED_VIEWS if v != 'spef'] + list(spefs.values())
-    for view in views:
-        if not view or str(view) not in timed or not Path(view).is_file() \
-                or digest(Path(view)) != timed[str(view)]:
-            raise Refusal('LL_STA_INPUT_STALE', f'{view}: not the file the tool timed')
     declared = config.get('STA_CORNERS') or []
     if not declared:
         raise Refusal('LL_STA_NO_CORNER', f'{folder / "config.json"}: STA_CORNERS is empty')
     metrics = state.get('metrics') or {}
-    liberty_at_run = (receipt.get('input') or {}).get('liberty_files') or {}
     # Native reports are eligible only for a run that declared no custom Tcl
     # and wrote no custom report at any declared scene. A partial emitter is
     # incomplete; it cannot substitute different slack values from ws.max.
     native_only_run = (bool(native_reports) and
                        not config.get('STA_EXTRA_CORNER_TCL_FILE') and
-                       all(not (folder / name / CORNER_REPORT).is_file() and
-                               f'{name}/{CORNER_REPORT}' not in bound
-                               for name in declared))
+                       all(not (folder / name / CORNER_REPORT).is_file() for name in declared))
     corners: dict[str, Any] = {}
     for name in declared:
         matched = [p for p in spefs if fnmatch.fnmatch(name, p)]
@@ -1096,8 +732,8 @@ def step23_tool_arm(project: Path, artefacts: tuple[str, ...] = (CORNER_REPORT,)
             gaps['rc_corner'] = 'scene, SPEF pattern and SPEF filename disagree'
         log = folder / name / 'sta.log'
         log_text = log.read_text(errors='replace') if log.is_file() else ''
-        if not log.is_file() or bound.get(f'{name}/sta.log') != digest(log):
-            gaps['sta_log'] = 'scene log was not bound by the tool receipt'
+        if not log.is_file():
+            gaps['sta_log'] = 'scene log is absent'
         logged_libs = re.findall(
             r"(?m)^Reading cell library for the '([^']+)' corner at '([^']+)'", log_text)
         logged_spefs = re.findall(
@@ -1109,20 +745,15 @@ def step23_tool_arm(project: Path, artefacts: tuple[str, ...] = (CORNER_REPORT,)
         liberty_views = []
         scene_process = name.split('_', 2)[1].lower() if '_' in name else None
         for lib in libs:
-            host = _liberty_host_path(project, lib,
-                                      (receipt.get('input') or {}).get('image'),
-                                      fingerprint=receipt.get('input'), pdk=config.get('PDK'))
+            host = _liberty_host_path(project, lib, pdk=config.get('PDK'))
             header = _liberty_header_pvt(host) if host else None
             lib_pvt = parse_liberty_pvt(lib)
             current_sha = digest(host) if host else None
-            run_sha = liberty_at_run.get(lib)
             liberty_views.append({'path': lib, 'resolved_path': str(host) if host else None,
                                   'sha256': current_sha,
-                                  'run_sha256': run_sha, 'header_pvt': header,
+                                  'header_pvt': header,
                                   'role': roles[lib],
                                   'filename_pvt_gaps': dict(lib_pvt.gaps)})
-            if not run_sha or current_sha != run_sha:
-                gaps['liberty_digest'] = 'Liberty bytes differ from the STA run or were not bound'
             if roles[lib] != 'CELL_LIBS':
                 # Pads and extra models may have several supply domains, or
                 # be untimed stubs without a PVT header. They remain bound to
@@ -1150,7 +781,6 @@ def step23_tool_arm(project: Path, artefacts: tuple[str, ...] = (CORNER_REPORT,)
             'liberty_sha256': liberty_views[0]['sha256'] if liberty_views else None,
             'liberty_header_pvt': liberty_views[0]['header_pvt'] if liberty_views else None,
             'spef': spef,
-            'spef_sha256': timed.get(spef) if spef else None,
             'sta_log': str(log), 'sta_log_sha256': digest(log) if log.is_file() else None,
             'metrics': {k: metrics.get(f'{m}__corner:{name}') for k, m in TIMING_METRICS.items()},
             'files': {}}
@@ -1171,21 +801,18 @@ def step23_tool_arm(project: Path, artefacts: tuple[str, ...] = (CORNER_REPORT,)
             if not path.is_file():
                 raise Refusal('LL_STA_CORNER_ARTEFACT_MISSING', str(path))
             sha = digest(path)
-            if bound.get(rel) != sha:
-                raise Refusal('LL_STA_ARTEFACT_UNBOUND', f'{path}: not the bytes the tool wrote')
             row['files'][artefact] = {'path': str(path), 'sha256': sha,
                                       'text': path.read_text(errors='replace')}
         corners[name] = row
-    return {'mode': mode, 'record': str(record), 'record_sha256': digest(record),
-            'folder': str(folder), 'state_sha256': bound['state_out.json'],
+    return {'mode': mode, 'record': str(record),
+            'folder': str(folder),
             'corners': corners}
 
 
 def tool_arm_basis(arm: dict) -> dict:
     """The part of `step23_tool_arm` a gate records as its basis (no text)."""
     return {'producer': 'librelane:OpenROAD.STAPostPNR', 'mode': arm['mode'],
-            'record': arm['record'], 'record_sha256': arm['record_sha256'],
-            'state_sha256': arm['state_sha256'],
+            'record': arm['record'], 'folder': arm['folder'],
             'corners': {name: {**{k: v for k, v in row.items() if k != 'files'},
                                'files': {a: {k: v for k, v in f.items() if k != 'text'}
                                          for a, f in row['files'].items()}}

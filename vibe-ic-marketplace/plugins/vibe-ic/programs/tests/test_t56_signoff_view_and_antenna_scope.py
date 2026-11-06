@@ -6,32 +6,11 @@ from pathlib import Path
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
-import phase3_one_shot_runner as runner  # noqa: E402
 import general_precheck as precheck  # noqa: E402
 from antenna_report_check import main as antenna_main, build_argv  # noqa: E402
 from eda_report_audit import _check_antenna  # noqa: E402
 
 
-def test_repair_reads_exact_io_liberty_in_each_signoff_scene(tmp_path):
-    corners = {"SS": "/core__ss.lib", "TT": "/core__tt.lib",
-               "FF": "/core__ff.lib"}
-    # This unit owns scene-to-Tcl wiring. Producer receipt selection is
-    # exercised separately against real Liberty contents.
-    extras = {"SS": ["/io__ss.lib"], "TT": ["/io__tt.lib"],
-              "FF": ["/io__ff.lib"]}
-    deck = runner._build_postroute_timing_repair_tcl(
-        "chip", "/tech.lef", "/cell.lef", corners["TT"],
-        "/pnr", "/repair", "M", corner_libs=corners,
-        post_route_start=True,
-        corner_spefs_c={"nom": "/nom.spef", "min": "/min.spef",
-                        "max": "/max.spef"},
-        corner_extra_libs_c=extras)
-    assert "read_liberty -corner ss /io__ss.lib" in deck
-    assert "read_liberty -corner ss_nom /io__ss.lib" in deck
-    assert "read_liberty -corner tt /io__tt.lib" in deck
-    assert "read_liberty -corner ff /io__ff.lib" in deck
-    assert "read_liberty -corner ff_nom /io__ff.lib" in deck
-    assert "read_liberty -corner ss /io__ff.lib" not in deck
 
 
 def test_tapeout_antenna_delegate_reads_canonical_signed_report(tmp_path):

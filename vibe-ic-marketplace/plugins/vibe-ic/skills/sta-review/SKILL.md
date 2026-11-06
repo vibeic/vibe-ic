@@ -6,54 +6,29 @@ description: Read Static Timing Analysis reports, triage setup/hold/recovery/rem
 # STA Review
 
 > **Doctrine (v0.1.50):** 把修法寫進工具，而非寫進 prompt。
-> Mandatory program preflight first; AI is the backstop, not the lead.
+> Run the native timing tools first. AI reviews their results.
 
-STA signoff runs in a commercial tool (PrimeTime, Tempus, OpenSTA). The
-deterministic triage (constraint-boundary states plus 5 implementation
-categories → fix strategies) is now in
-`programs/sta_triage_classify.py`; this skill is the wrapper that runs
-it, narrates residual interpretation, and refuses to override the
-program's category counts.
+STA signoff uses the selected native OpenSTA, PrimeTime or Tempus reports.
+Read the launch and capture paths, SDC clocks and exceptions, Liberty corner,
+SPEF and electrical drive/load model before proposing an implementation fix.
 
-## Mandatory Deterministic Preflight
+## Read the native timing results
 
-Before any narrative:
-
-```bash
-# 1. STA report audit (presence, WNS/TNS extraction, basic structure):
-python3 plugins/vibe-ic/programs/sta_report_check.py \
-    --rpt <sta.rpt> --json /tmp/sta_check.json
-
-# 2. Endpoint categorisation. For an I/O path, include --boundary-json and
-#    boundary_role=input|output on the corresponding endpoint record.
-python3 plugins/vibe-ic/programs/sta_triage_classify.py \
-    --endpoints-json <endpoints.json> \
-    [--boundary-json <source_bound_io_boundary.json>] \
-    --wns <wns_ns> --tns <tns_ns> \
-    --out-md /tmp/sta_triage.md --out-json /tmp/sta_triage.json
-```
-
-The program first returns `constraint_boundary_limited` or
-`constraint_boundary_unresolved` when source/deck hashes and the electrical
-drive/load model do not establish a legal boundary. It does not recommend RTL
-or ECO changes in those states. Once the boundary is legal, it returns the
-implementation categories (cell_delay_limited /
-net_delay_limited / logic_depth_limited / clock_skew_limited /
-hold_violation) plus the fix strategy per category. **Do not author
-these counts by reading the report.**
+Read the selected rows in `<project>/reports/flow_engine.json` and open their
+native `reports`. `flow/steps.json` names each current tool and
+`flow/native_limits.json` retains its original limits. Review `tool_ran`,
+`native_steps`, `native_metrics`, and each metric's value, operator and limit.
+A missing native measurement is `NOT_MEASURED`. AI reviews the engineering
+meaning of every result and fixes problems in the design, tool or plugin.
 
 ```bash
-# 3. (when reviewing a PnR Tcl script) confirm the mandatory
-#    setup-timing-repair sequence is present, not hold-fix-only:
-python3 plugins/vibe-ic/programs/pnr_timing_repair_completeness_check.py \
-    <pnr.tcl> --json /tmp/pnr_repair.json
+python3 programs/flow_engine.py report --project <project>
 ```
 
-`pnr_timing_repair_completeness_check.py` FAILs any OpenROAD PnR script
-that runs only `repair_timing -hold` without `set_wire_rc` +
-`repair_design` + `repair_timing -setup` (the sha256 silicon-DOA
-anti-pattern). The phase3 runner already emits the full chain; this
-gate is the static backstop when reviewing a hand-authored script.
+Classify the reported failing paths as cell delay, net delay, logic depth,
+clock skew or hold problems. If the I/O constraints or drive/load model are
+unresolved, fix those constraints before attributing the failure to RTL.
+Use the actual path components to support each classification.
 
 ## When to use
 
@@ -100,27 +75,6 @@ Static timing analysis is governed by setup/hold relationships around launch/cap
 - RTL change → `/rtl-repair`
 - Metal-only fix → `/eco-plan`
 - Power impact of sizing → `/ir-drop-triage`
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/sta-review/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in the corresponding skill directory enumerates
-every required element of your output: section headers, metadata fields,
-handoff lines, tool invocations.
-
-**Your task is not complete until the audit returns PASS.** Missing
-elements are the single largest source of skill-execution non-determinism
-across different agents.
-
-
 ## Captured rule — PnR must run set_wire_rc + repair_design + repair_timing -setup (not hold-fix-only)
 
 **Enforced by two programs — no longer prose judgment:**
@@ -155,12 +109,12 @@ were LVS tooling artifacts" — true of the LVS part — was allowed to stand as
 whole explanation.
 
 ```bash
-# 4. timing RECORD completeness (runs unconditionally on a run dir):
-python3 plugins/vibe-ic/programs/sta_corner_record_completeness_check.py \
-    <run_dir> --json /tmp/sta_corner_record.json
+python3 programs/flow_engine.py report --project <run_dir>
 ```
 
-`sta_corner_record_completeness_check.py` FAILs when:
+Review the native STA results and their original limits for each reported corner.
+Open the referenced OpenSTA logs and resolved configuration. Check:
+
 - **R1** a reported corner is unnamed, or a corner carrying no sign-off role is
   characterised only half-way (setup without hold, or the reverse);
 - **R2** a corner the flow DECLARED it would analyse has no datapoint for the
@@ -212,159 +166,9 @@ met one, which is the same disease R2 names for unreported slack. The emitter
 attests the query with a `SIGNOFF_CHECK_TYPES_REPORTED` marker; its **absence**
 is what separates "queried and clean" from "never asked".
 
-It learns which corners are sign-off from the run's OWN declarations —
-`mcorner_ocv_stance.json` (`setup_process_corner` / `hold_process_corner`),
-`multi_corner_spef_stance.json` (`setup_corner` / `hold_corner`) and
-`pvt_matrix.json` (`primary_corner`) — so no corner name is hardcoded and a PDK
-with a different corner vocabulary is judged the same way. The corner→liberty
-resolution comes from the same stances' `corner_library_resolution` block, and
-from the `# corner_liberty:` header lines the STA reports now carry; a corner
-*name* is never taken as evidence of which file was read, because believing the
-name is how this defect survived. It always emits the full per-corner table
-(corner, axis, role, setup WNS, hold WNS, TNS, source log) **plus the per-axis
-library-resolution and DRV table**, on PASS as well as FAIL: the absence of that
-evidence is the defect itself.
-
-Distinct from `post_route_signoff_corner_check` (#147), which judges the slack
-inside the multicorner report and is wired `condition_files_exist` on that very
-report — so it self-skips when the report is absent. Do not read a
-NOT_APPLICABLE from it as "timing is fine".
-
-_Captured by benchmark-enhancement-capture 2026-07-21 (Bucket A, prose → program)._
-
-## Captured rule — a single-register iterative self-loop is loop-bound: retiming can't help, the fix is a multi-cycle round (never a relaxed clock)
-
-**Enforced by a program — no longer prose judgment.**
-
-```bash
-# 5. iterative-recurrence timing diagnosis (run when a setup violation
-#    persists at the sign-off corner on an ITERATIVE / FSM datapath):
-python3 plugins/vibe-ic/programs/iterative_recurrence_timing_diagnosis.py \
-    --sta-report <worst_setup_path.rpt> \
-    # a retiming dWNS decides nothing on its own (vibe-ic#2220): pair it with
-    # the thing that makes it readable, or the program answers NOT_MEASURED.
-    [--retiming-wns-delta <ns> \
-     (--retiming-wns-noise-floor-ns <control-vs-control dWNS, SAME flow and
-                                     SAME granularity>
-      | --retiming-netlist-byte-identical)] \
-    [--spec-microarch-free] [--spec-latency-unconstrained] \
-    [--target-period-ns <hard_period>] --json /tmp/iter_diag.json
-```
-
-**The diagnosis.** An iterative datapath computes one iteration per clock by
-feeding a state register back to itself: `X <= f(..., X, ...)`. The state→state
-cycle then contains **exactly one register**, and two facts hold for ANY such
-loop on ANY PDK:
-
-- **Loop-bound period.** Min period of a cyclic path = (Σ combinational delay on
-  the cycle) / (registers on the cycle). One register ⇒ the floor is the *whole*
-  cone delay. You cannot clock it below one full iteration.
-- **Retiming is powerless.** Retiming preserves the register count on every
-  cycle, so a one-register cycle stays one register and its bound is invariant.
-  It shows up as `abc` dretime returning a **byte-identical** netlist / ~0 ns WNS
-  improvement. Do not keep retrying it, and do not reach for pure logic
-  restructuring (`dch -f; dc2`) either — it can break the ripple but inflate
-  area/die so the routed slow-corner WNS gets **worse** from added wire delay.
-
-**The fix, when the spec authorises it.** If the design spec leaves the microarch
-as a free choice (iterative / unrolled / pipelined / multi-cycle) **and** does not
-fix the latency-cycle count, split the recurrence cone over **N≥2 clocked
-sub-stages** (a *multi-cycle round*). The loop now spans N registers; each cycle
-is a genuine single-cycle path at the **same HARD period**, with per-cycle depth
-~1/N. Latency in cycles grows ~N×; the period is what closes. The SDC stays the
-honest single-cycle SDC — a multi-cycle round is N real single-cycle stages, **not**
-a multicycle timing *exception*, so no `set_multicycle_path` masking is introduced.
-
-### A synth-level timing win is NOT a post-route win — measure the shipped corner
-
-**The only number that counts is post-route on the shipped SPEF.** A synthesis
-knob that clearly improves the pre-PnR critical path can *degrade* the routed
-slow corner, because area bought at synth becomes wire delay after placement —
-and modern PnR already resizes for you.
-
-**Measured, twice, in opposite tools, same disease:**
-
-| change | pre-PnR effect | post-route effect |
-|---|---|---|
-| `dch -f; dc2` restructuring | breaks the ripple | **+26% area, routed SS WORSE** |
-| delay-driven mapping + gate sizing | arrival 65.507 → 50.954 ns (**−22.2%**) | **SS WNS −2.519 → −4.386 ns (1.87 ns WORSE)**, +4.6% cells |
-
-The second was a controlled A/B: same RTL, same run-dir shape, both freshly
-synthesised, differing **only** in the mapper flags. A 22% pre-PnR improvement
-became a 1.87 ns post-route regression. Mechanism: OpenROAD's `repair_design` /
-`repair_timing` already resize **after** placement, so synth-time sizing is
-largely redundant with them — you keep its area cost and lose the wire delay.
-
-So: **never accept a pre-PnR delta as evidence.** Re-run the post-route A/B on
-the shipped SPEF before adopting any synth QoR knob, and be prepared for the
-sign to flip.
-
-### A related trap: a timing lever that was never actually engaged
-
-Separately worth knowing, because it invites exactly the "fix" above: a delay
-target can be passed and silently ignored. Measured — `abc -liberty <lib> -D
-<period>` produced a netlist **byte-identical** to no `-D` at all (identical
-worst-path arrival, cell count and area), because on the non-`-constr` path the
-default `&nf` mapper ignores `-D`; the fork's own help documents a `-sizing`
-flag that exists precisely to make `-D` bind.
-
-Two lessons, and the second matters more:
-
-1. **Verify a flag does something.** Byte-identical output with and without it
-   is proof it is inert — a cheap, conclusive diff worth running on any knob you
-   believe is protecting you.
-2. **Inert is not automatically wrong.** Here, engaging the ignored lever made
-   the shipped corner worse, so leaving it inert was the measured-better
-   configuration. Do not "repair" an unbound knob on the assumption that binding
-   it must help.
-
-Background worth having: yosys techmaps `$lcu` to a **Brent-Kung parallel-prefix
-adder** (`techmap.v`, `_90_lcu_brent_kung`), so a fast adder is present by
-default and a long carry chain in the report is the *mapper's* area-mode choice,
-not what techmap built. That makes "the arithmetic is the floor" a conclusion to
-reach last, not first — but as the table above shows, forcing delay-mode mapping
-is not the remedy either.
-
-Only once the flow's own knobs are measured out does an architectural change
-earn its keep. If a re-measured worst path is *still* one full-width carry-propagate
-add, then the per-cycle arithmetic cost is real and the remedies are: register
-the carry across sub-cycles (split the add into half-width slices — a register in
-the middle is the one split synthesis cannot merge back), or use a
-carry-select/carry-lookahead adder. Both are pure microarch choices, in-spec
-exactly when the multi-cycle split is. **Re-measure after every change**: the
-critical path moves, and the next binding constraint is often a different one.
-If the spec instead *forbids* the microarch change, that is an **honest floor**:
-report the violated corner as violated, never dress it as a pass, and **never
-relax the target clock** (the program FAILs hard on `--relax-clock-proposed`).
-
-The program reads the worst path's start/end **register bank** (instance path
-minus the bit-index) to spot the self-loop directly; when the netlist names are
-synthesis-anonymised (`_1234_`) it returns `INCONCLUSIVE_NAMES_ANONYMIZED` and
-asks for a name-preserving netlist or a retiming-experiment WNS delta rather than
-guessing. A *measured* retiming improvement overrides the name heuristic
-(`RETIMING_EFFECTIVE_APPLY`) — ground truth beats the heuristic.
-
-Worked example (context, not detection logic) — and an honest open case. A
-crypto hash accelerator on an open PDK at a HARD 25.907 ns period: the reference
-iterative single-cycle round is an `a_reg`→`a_reg` / `e_reg`→`e_reg` self-loop
-that misses the slow sign-off corner at **post-route WNS −2.519 ns**. Everything
-tried so far has failed, and each failure is informative:
-
-- `abc` dretime — **byte-identical netlist** (loop-bound, as predicted above).
-- logic restructuring (`dch -f; dc2`) — breaks the ripple, **+26% area, routed
-  SS worse**.
-- delay-driven mapping + gate sizing — **−22% pre-PnR, +4.6% cells, post-route
-  SS −4.386 ns (1.87 ns WORSE)**.
-- multi-cycle round (2-cycle, and a 16-bit carry-split variant) — functionally
-  verified only (NIST vectors 100%, 300/300 random blocks bit-identical to the
-  reference). **Its timing was never validly measured**: the runs that appeared
-  to measure it were reusing a cached netlist of the ORIGINAL design, so those
-  numbers were retracted. See the netlist-cache rule — an RTL edit that never
-  reaches synthesis produces confident numbers describing RTL nobody read.
-
-So this cell does **not** converge, and no fix is claimed for it. What the case
-does establish is the ordering: rule out flow defects and measure every knob
-post-route *before* re-architecting, and treat any number produced by a run
-whose RTL may not have been synthesised as void.
-
-_Captured by repo-gatekeeper 2026-07-25 (prose → program; diagnosis + remedy routing)._
+Use the native configuration's `STA_CORNERS`, resolved Liberty files and
+per-corner OpenSTA reports to identify the analysed corners. Compare their
+setup WNS, hold WNS, TNS and DRV values against the original limits. A corner
+name alone does not prove which library was read. Report absent corner or
+library measurements as `NOT_MEASURED`, and review every tool result before
+claiming signoff.

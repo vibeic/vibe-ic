@@ -75,7 +75,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import _path_layout as _pl  # noqa: E402
-import _gate_authorship as _ga  # noqa: E402
 
 # advisory threshold: fraction of signal-net via USES that are
 # single-cut. Industry DFM aims for dual-via where room allows; at
@@ -683,7 +682,6 @@ def main(argv=None) -> int:
     rep = audit(project)
     rc = rep.pop("rc")
     rep = {"program": "dfm_screen_check", "version": "1.0.0", **rep}
-    _ga.stamp(rep)
     out = json.dumps(rep, indent=2, ensure_ascii=False)
     # canonical step artifact (Step 35 required_outputs) — always written
     # when the screen actually ran (not on vacuous SKIP).

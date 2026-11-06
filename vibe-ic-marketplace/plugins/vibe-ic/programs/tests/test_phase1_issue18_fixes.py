@@ -25,16 +25,7 @@ for p in (str(PROGRAMS), str(PLUGIN_ROOT)):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from programs.phase1_one_shot_runner import (  # noqa: E402
-    _canon_port_name,
-    _force_inout_for_half_duplex,
-    _is_real_port_token,
-    _is_real_fsm_state,
-    gen_l1_datasheet,
-    gen_l2_frs,
-    gen_l9_integration_spec,
-    gen_l11_otp_content,
-)
+from programs.phase1_doc_one_shot_runner import _canon_port_name, _force_inout_for_half_duplex, _is_real_port_token, _is_real_fsm_state, gen_l1_datasheet, gen_l2_frs, gen_l9_integration_spec, gen_l11_otp_content
 from programs import aid_class_rtl_gen  # noqa: E402
 
 _GEN_DIR = Path("phase1") / "generated_docs"

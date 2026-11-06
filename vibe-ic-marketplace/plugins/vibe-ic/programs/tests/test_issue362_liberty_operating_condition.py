@@ -26,59 +26,20 @@ from pathlib import Path
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
-import phase3_one_shot_runner as p3  # noqa: E402
 
 _NO_CONTAINER = "no-such-container-for-tests"
 
 
-def _lib(tmp_path: Path, body: str) -> Path:
-    p = tmp_path / "x.lib"
-    p.write_text(body)
-    return p
 
 
-def test_362_the_block_name_is_extracted(tmp_path):
-    lib = _lib(tmp_path, "library (foo) {\n"
-                         "  nom_voltage : 5 ;\n"
-                         "  operating_conditions(gf180mcu__tt_025C_5v00) {\n"
-                         "    voltage : 5.0 ;\n  }\n}\n")
-    assert p3._liberty_operating_condition(lib, _NO_CONTAINER) == \
-        "gf180mcu__tt_025C_5v00"
 
 
-def test_362_no_block_means_no_emission(tmp_path):
-    """A liberty without the block gets nothing — the prior behaviour stays
-    byte-identical, so this cannot regress the PDKs that already work."""
-    lib = _lib(tmp_path, "library (bar) {\n  nom_voltage : 1.8 ;\n}\n")
-    assert p3._liberty_operating_condition(lib, _NO_CONTAINER) == ""
 
 
-def test_362_unreadable_liberty_is_not_guessed(tmp_path):
-    """No liberty, no name. Inventing one would assert a condition the design
-    never declared."""
-    assert p3._liberty_operating_condition(None, _NO_CONTAINER) == ""
-    assert p3._liberty_operating_condition(
-        tmp_path / "absent.lib", _NO_CONTAINER) == ""
 
 
-def test_362_the_name_comes_from_the_library_not_a_pdk_table():
-    """chip/PDK-AGNOSTIC: no known-PDK list may drive the choice, or a PDK
-    this plugin has never seen stays broken."""
-    import inspect
-    src = inspect.getsource(p3._liberty_operating_condition)
-    body = src.split('"""')[-1]        # code after the docstring
-    for token in ("gf180", "sky130", "asap7", "ihp", "sg13"):
-        assert token not in body.lower(), f"{token!r} drives the extraction"
 
 
-def test_362_first_block_wins_deterministically(tmp_path):
-    """A multi-corner liberty must yield ONE stable answer rather than an
-    order-dependent one."""
-    lib = _lib(tmp_path, "library (m) {\n"
-                         "  operating_conditions(first_tt) { voltage : 5.0 ; }\n"
-                         "  operating_conditions(second_ss) { voltage : 4.5 ; }\n"
-                         "}\n")
-    assert p3._liberty_operating_condition(lib, _NO_CONTAINER) == "first_tt"
 
 
 def test_362_the_emitter_selects_the_condition_and_asserts_no_voltage():

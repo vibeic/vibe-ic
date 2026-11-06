@@ -1,121 +1,161 @@
-"""Final native CVC electrical screen using this run's LibreLane views.
-
-CVC owns the electrical verdict. Device-physics ESD and substrate/latch-up
-coverage remains explicitly outside this open-source screen.
-"""
+"""Native CVC electrical screen over the selected netlist and extracted SPICE."""
 from __future__ import annotations
-import hashlib
+
 import json
 from pathlib import Path
-import sys
+import re
+import shlex
+import subprocess
+from typing import Any, Dict, Optional
 
-HERE = Path(__file__).resolve().parent
-if str(HERE) not in sys.path:
-    sys.path.insert(0, str(HERE))
-from _atomic_artefact import write_json, write_text
-from flow109_admission import AdmissionRefusal
+import _path_layout as _pl
+from _atomic_artefact import write_json
 import librelane_contract
-import librelane_postroute
-import phase3_one_shot_runner as phase3_runner
 
-SCHEMA = "vibeic.flow109.final-perc.v1"
-INPUT = "input/flow109/D66.json"
-OUTPUTS = ("reports/phase3/perc_equivalent.json", "reports/phase3/perc_equivalent.rpt",
-           "reports/phase3/PERC_SIGNOFF_MEMO.md")
 REQUIRED_MANUAL = {"ESD protection presence", "io_supply_pad_sufficiency",
                    "Latch-up / well-tap (spacing + device-physics)"}
 
-
-def _sha(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+_CVC_COUNT_RE = re.compile(r"^CVC:\s+([^:]+):\s+(\d+)\s*$", re.M)
 
 
-def _read(path, code="D66_REQUIRED_INPUT_INVALID"):
+def _parse_native_cvc_report(text: str) -> Dict[str, Any]:
+    """Grade the completed report; cvc_rv's process status is not a verdict."""
+    text = text or ""
+    population = re.search(
+        r"CVC:\s+(\d+)\(\d+\) instances,\s+(\d+)\(\d+\) nets,\s+"
+        r"(\d+)\(\d+\) devices\.", text)
+    counts = {name.strip(): int(value)
+              for name, value in _CVC_COUNT_RE.findall(text)}
+    parsed = {
+        "completed": "CVC: End:" in text,
+        "instances": int(population.group(1)) if population else None,
+        "nets": int(population.group(2)) if population else None,
+        "devices": int(population.group(3)) if population else None,
+        "counts": counts,
+    }
+    if not parsed["completed"]:
+        return {**parsed, "result": "INCOMPLETE",
+                "note": "cvc_rv did not emit CVC: End; rc is not completion"}
+    if not population or any(parsed[name] <= 0
+                             for name in ("instances", "nets", "devices")):
+        return {**parsed, "result": "INCOMPLETE",
+                "note": "completed CVC report has no non-empty design population"}
+    if counts.get("Total") is None:
+        return {**parsed, "result": "INCOMPLETE",
+                "note": "completed CVC report has no Total count"}
+    total = counts["Total"]
+    return {**parsed, "result": "PASS" if total == 0 else "FAIL",
+            "note": f"native cvc_rv completed with {total} electrical error(s)"}
+
+
+def _native_cvc_category(project: Path, top: str, pdk: Any,
+                         image: Optional[str], *, extracted_netlist: Optional[Path] = None,
+                         adopted_netlist: Optional[Path] = None, pdk_dir: Optional[str] = None,
+                         library: Optional[str] = None, power_nets=None,
+                         ground_nets=None) -> Dict[str, Any]:
+    """Run the selected PDK CVC recipe and read its native error counts."""
+    base = {"category": "Native CVC electrical rules", "status": "AUTOMATED",
+            "tool": "cvc_rv + PDK-declared libs.tech/librelane/cvc"}
+    if not image:
+        return {**base, "result": "INCOMPLETE",
+                "note": "selected native image absent"}
+    pdk_dir = pdk_dir or getattr(pdk, "pdk_path", None)
+    library = library or getattr(pdk, "std_cell_library", None)
+    if power_nets is None or ground_nets is None:
+        power_nets = getattr(pdk, "power_nets", [])
+        ground_nets = getattr(pdk, "ground_nets", [])
+    extracted_dir = _pl.extracted_dir(project)
+    extracted = extracted_netlist or next((path for pattern in ("*.spice", "*.cir", "*.sp", "*_pex.v")
+                      for path in sorted(extracted_dir.glob(pattern))
+                      if path.is_file()), None)
+    adopted = adopted_netlist or _pl.pnr_dir(project) / f"{top}_pnr.v"
+    if (not pdk_dir or not library or extracted is None or not adopted.is_file()
+            or len(power_nets) != 1 or len(ground_nets) != 1):
+        return {**base, "result": "INCOMPLETE",
+                "note": "PDK CVC recipe, final netlists, or unique supply pair absent"}
+    cvc_dir = f"{pdk_dir}/libs.tech/librelane/cvc"
+    cell_cdl = f"{pdk_dir}/libs.ref/{library}/cdl/{library}.cdl"
+    out = _pl.reports_phase3_dir(project) / "cvc_native"
+    out.mkdir(parents=True, exist_ok=True)
+    report = out / "report.rpt"
+    receipt_path = out / "result.json"
+    shell = f"""set -eu
+cvc={shlex.quote(cvc_dir)}
+out={shlex.quote(str(out))}
+test -r "$cvc/cvcrc" -a -r "$cvc/models" -a -r "$cvc/power.awk" -a -r "$cvc/cdl.awk"
+test -r {shlex.quote(cell_cdl)}
+awk -f "$cvc/cdl.awk" {shlex.quote(str(extracted))} > "$out/extracted-clean.cdl"
+awk '1' "$out/extracted-clean.cdl" {shlex.quote(cell_cdl)} > "$out/design.cdl"
+awk -v vdd={shlex.quote(next(iter(power_nets)))} -v gnd={shlex.quote(next(iter(ground_nets)))} \\
+  -f "$cvc/power.awk" {shlex.quote(str(adopted))} > "$out/top.power"
+sed -e "s|\\$CVC_SCRIPTS_DIR/models|$cvc/models|" \\
+    -e "s|\\$DESIGN_NAME|{shlex.quote(top)}|g" \\
+    -e "s|\\$signoff_tmpfiles/{shlex.quote(top)}.cdl|$out/design.cdl|" \\
+    -e "s|\\$signoff_tmpfiles/\\$CVC_TOP.power|$out/top.power|" \\
+    -e "s|\\$signoff_reports/\\$CVC_TOP.rpt|$out/report.rpt|" \\
+    "$cvc/cvcrc" > "$out/cvcrc"
+cd "$out"
+cvc_rv cvcrc > cvc.stdout 2> cvc.stderr
+"""
+    import _docker_memory as _dmem
+    import librelane_contract as _ll
+    network, command = _ll.native_tool_command(image, ["bash", "-lc", shell])
+    argv = ["docker", "run", *_dmem.docker_memory_flags(
+            {"VIBEIC_DOCKER_MEMORY": "16g"}), "--rm", "--network", network,
+            "--cpus", "4",
+            "-v", f"{Path(project).resolve()}:{Path(project).resolve()}",
+            "-v", f"{Path(pdk_dir).resolve()}:{Path(pdk_dir).resolve()}:ro",
+            image, "--skip", *command]
+    # A fixed output name is part of the Step-28 contract, so invalidate both
+    # prior authority files before this invocation.  cvc_rv can return without
+    # touching its report; existence after launch must therefore mean THIS
+    # launch wrote it, never that an older PASS survived.
+    report.unlink(missing_ok=True)
+    receipt_path.unlink(missing_ok=True)
     try:
-        return json.loads(Path(path).read_text())
-    except (OSError, ValueError) as exc:
-        raise AdmissionRefusal(code, str(path)) from exc
-
-
-def _record(project, path):
-    path = Path(path).resolve()
-    return {"path": str(path.relative_to(project)), "sha256": _sha(path)}
-
-
-def operation_sources():
-    return {"programs/" + name: _sha(HERE / name) for name in
-            ("flow109_final_perc.py", "phase3_one_shot_runner.py", "librelane_postroute.py")}
+        import _container_exec
+        if _container_exec.no_container_route():
+            proc = subprocess.run(['bash', '-lc', shell], capture_output=True, text=True)
+            (out / 'docker.log').write_text(proc.stdout + proc.stderr)
+        else:
+            proc = _ll.run_container(argv, supervised=True, log=out / "docker.log")
+    except Exception as exc:
+        return {**base, "result": "INCOMPLETE",
+                "note": f"native CVC launch failed: {exc}"}
+    if proc.returncode != 0:
+        return {**base, "result": "INCOMPLETE", "native_rc": proc.returncode,
+                "note": "native CVC invocation failed; report is not evidence"}
+    if not report.is_file():
+        return {**base, "result": "INCOMPLETE", "native_rc": proc.returncode,
+                "note": "cvc_rv wrote no report"}
+    parsed = _parse_native_cvc_report(report.read_text(errors="replace"))
+    result = {**base, **parsed, "native_rc": proc.returncode,
+              "evidence": str(report)}
+    write_json(receipt_path, result)
+    return result
 
 
 def execute(project, context):
     project = Path(project).resolve()
-    result = {"schema": SCHEMA, "step_id": "D66", "producer": "flow109_final_perc",
-              "component_status": "NOT_MEASURED", "default_row_status": "NOT_MEASURED",
-              "completed": False, "native_started": False,
-              "context_sha256": context.get("context_sha256")}
-    try:
-        folder, state = librelane_postroute.stapostpnr_state(project)
-        config = _read(folder / "config.json")
-        top, pdk = config["DESIGN_NAME"], config["PDK"]
-        image = librelane_contract.resolve_image(project)
-        root = librelane_contract.resolve_pdk_root(project, pdk, image=image)
-        netlist = Path(state["nl"])
-        report = _read(project / "reports/phase3/librelane_pv_lvs.json")
-        extraction = report["metrics"]["magic__illegal_overlap__count"]["folder"]
-        extracted_state = _read(librelane_contract.project_path(project, extraction) / "state_out.json")
-        if _sha(librelane_contract.project_path(project, extracted_state["nl"])) != _sha(netlist):
-            raise ValueError("Native extraction does not use the final netlist")
-        extracted = librelane_contract.project_path(project, extracted_state["spice"])
-        result["native_started"] = True
-        native = phase3_runner._native_cvc_category(project, top, None, image,
-            adopted_netlist=netlist, extracted_netlist=extracted, pdk_dir=str(Path(root) / pdk),
-            library=config["STD_CELL_LIBRARY"], power_nets=config.get("VDD_NETS", []),
-            ground_nets=config.get("GND_NETS", []))
-        native['native_result'] = native['result']
-        status = native["result"] if native["result"] in {"PASS", "FAIL"} else "NOT_MEASURED"
-        summary = {"verdict": "PERC_EQUIV_" + (status if status != "NOT_MEASURED" else "INCOMPLETE"),
-            "native_cvc": native, "categories": [native],
-            "automated_failed": [native["category"]] if status == "FAIL" else [],
-            "automated_incomplete": [native["category"]] if status == "NOT_MEASURED" else [],
-            "commercial_calibre_perc_run": False,
-            "manual_review_pending": sorted(REQUIRED_MANUAL),
-            "geometry_foundry_data_residual": "CVC does not measure ESD or substrate/latch-up device physics."}
-        write_json(project / OUTPUTS[0], summary)
-        write_text(project / OUTPUTS[1], "Native CVC electrical screen: " + status + "\n" + native.get("note", "") + "\n")
-        write_text(project / OUTPUTS[2], summary["geometry_foundry_data_residual"] + "\n")
-        result.update(component_status=status, automated_component_status=status,
-            default_row_status=status, completed=status == "PASS", native_cvc=native,
-            perc_summary=summary, reason="D66_NATIVE_CVC_" + status,
-            manual_review_pending=sorted(REQUIRED_MANUAL),
-            final_subjects={"netlist": str(netlist), "extracted_netlist": str(extracted)},
-            outputs=[_record(project, project / rel) for rel in OUTPUTS])
-    except Exception as exc:
-        result.update(reason="D66_NATIVE_CVC_UNAVAILABLE", detail=f"{type(exc).__name__}: {exc}")
-    path = project / "reports/flow109/components/D66.json"
-    write_json(path, result)
-    return result
-
-
-def validate_final_perc(project, receipt_ref):
-    project = Path(project).resolve()
-    path = librelane_contract.project_path(project, receipt_ref["path"])
-    record = _read(path)
-    report = project / "reports/phase3/cvc_native/report.rpt"
-    native = phase3_runner._parse_native_cvc_report(report.read_text())
+    state = context.get("state") or {}
+    config = context.get("config") or {}
+    netlist = state.get("nl") or context.get("netlist")
+    extracted = state.get("spice") or context.get("extracted_netlist")
+    pdk, library = config.get("PDK"), config.get("STD_CELL_LIBRARY")
+    root = config.get("PDK_ROOT")
+    top = config.get("DESIGN_NAME") or context.get("top")
+    if not all((netlist, extracted, pdk, library, root, top)):
+        return {"component_status": "NOT_MEASURED", "native_started": False,
+                "reason": "Native netlist, extracted SPICE, top or PDK configuration is absent.",
+                "manual_review_pending": sorted(REQUIRED_MANUAL)}
+    image = context.get("image") or librelane_contract.resolve_image(project)
+    native = _native_cvc_category(project, top, None, image,
+        adopted_netlist=Path(netlist), extracted_netlist=Path(extracted),
+        pdk_dir=str(Path(root) / pdk), library=library,
+        power_nets=config.get("VDD_NETS", []), ground_nets=config.get("GND_NETS", []))
     status = native["result"] if native["result"] in {"PASS", "FAIL"} else "NOT_MEASURED"
-    return {"component_status": status, "automated_component_status": status,
-            "manual_review_pending": record.get("manual_review_pending", []),
-            "final_subjects": record.get("final_subjects"), "perc_receipt": receipt_ref}
-
-
-def consume_default_row_completion(project, context, component):
-    status = component.get("component_status", "NOT_MEASURED")
-    return {"step_id": "D66", "context_sha256": context.get("context_sha256"),
-            "default_row_status": status, "completed": status == "PASS",
-            "reason": component.get("reason"), "flow109_acceptance": status}
-
-
-def metric_measurements(project, receipt_ref):
-    current = validate_final_perc(project, receipt_ref)
-    return {name: {"status": "NOT_MEASURED", "reason": "Native CVC is an electrical screen; device physics is outside its scope."}
-            for name in ("final_perc.final_esd_supply_topology", "final_perc.final_perc_latchup_errors")}
+    report = {"component_status": status, "native_cvc": native,
+              "manual_review_pending": sorted(REQUIRED_MANUAL),
+              "scope": "CVC electrical rules; ESD and substrate/latch-up device physics remain unmeasured."}
+    write_json(project / "reports/native_tools/final_perc.json", report)
+    return report

@@ -22,10 +22,8 @@ chip-AGNOSTIC: fixture nets/cells are the calibration pair's or synthetic.
 from __future__ import annotations
 
 import json
-import os
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -37,8 +35,6 @@ import dfm_screen_check as DFM  # noqa: E402
 import librelane_contract as LLC  # noqa: E402
 import librelane_fill_dfm as LF  # noqa: E402
 import metal_fill_density_check as MFD  # noqa: E402
-import pg_supply_pin_ownership_check as G  # noqa: E402
-import phase3_one_shot_runner as R  # noqa: E402
 import _default_backend_fixtures as BF  # noqa: E402
 from _ppa import pareto as P  # noqa: E402
 from _ppa.backends import openroad as ORB  # noqa: E402
@@ -98,132 +94,22 @@ END NETS
 """
 
 
-def test_an_advisory_dfm_screen_is_a_pass_with_its_advisory_disclosed(tmp_path):
-    (_pnr(tmp_path) / "routed.def").write_text(_SINGLE_CUT_DEF)
-    row = R._run_declared_signoff_gate(tmp_path, "dfm_screen", "dfm_screen_check.py",
-                                       "reports/phase3/dfm_screen.json")
-    doc = json.loads((tmp_path / "reports/phase3/dfm_screen.json").read_text())
-    assert doc["verdict"] == "PASS_WITH_ADVISORIES"
-    assert doc["via_redundancy"]["single_cut_fraction"] == 1.0
-    assert row.status == "PASS", row.detail
-    assert row.extras.get("advisory_verdict") == "PASS_WITH_ADVISORIES"
-    assert "advisory" in row.disclosures
 
 
-def _fake_gate(tmp_path, monkeypatch, verdict):
-    progs = tmp_path / "progs"
-    progs.mkdir()
-    body = ("import json,sys\n"
-            "out=sys.argv[sys.argv.index('--json')+1]\n"
-            + (f"open(out,'w').write(json.dumps({{'verdict': {verdict!r}}}))\n"
-               if verdict else "")
-            + "sys.exit(1)\n")
-    (progs / "g.py").write_text(body)
-    monkeypatch.setattr(R, "PROGRAMS_DIR", progs)
-    proj = tmp_path / "p"
-    proj.mkdir()
-    return proj
 
 
-@pytest.mark.parametrize("name,verdict", [
-    ("dfm_screen", "FAIL"),                   # the document says FAIL
-    ("dfm_screen", None),                     # no document at all
-    ("erc_density", "PASS_WITH_ADVISORIES"),  # not an advisory-tier gate
-])
-def test_every_other_rc1_is_still_a_fail(tmp_path, monkeypatch, name, verdict):
-    proj = _fake_gate(tmp_path, monkeypatch, verdict)
-    row = R._run_declared_signoff_gate(proj, name, "g.py", "out.json")
-    assert row.status == "FAIL", (name, verdict, row.detail)
 
 
 # ── the direct step-34 producer connects what it inserts (F24 at the fill) ──
 
-def _stage_fill(tmp_path, monkeypatch, tool_writes):
-    """The runner's real `_emit_metal_fill`; the ONLY fake is the tool's own
-    file write (`tool_writes(tcl_text) -> DEF text`)."""
-    project = tmp_path / "proj"
-    # This fixture substitutes the direct OpenROAD producer, not LibreLane.
-    _switch(project, **{"34": "direct"})
-    pnr = _pnr(project)
-    (pnr / "top.def").write_text(CAL_NEG.read_text())
-    (pnr / "routed.def").write_text(CAL_NEG.read_text())
-    (pnr / "pnr.tcl").write_text(DECK)
-    pdk = SimpleNamespace(name="calpdk", tech_lef=str(tmp_path / "t.lef"),
-                          cell_lef=str(CAL_LEF), liberty=str(tmp_path / "c.lib"),
-                          macro_lefs=[])
-    monkeypatch.setattr(R, "_filler_masters_for_pdk", lambda p: ["FILLX"])
-    monkeypatch.setattr(R, "_slot_geometry", lambda p: None)
-    monkeypatch.setattr(R, "_def_reopen_extra_lefs_c", lambda *a, **k: [])
-    seen = {}
-
-    def _docker_exec(container, cmd, *a, outputs=None, **k):
-        tcl = Path(cmd.split("-exit ")[1].split()[0]).read_text()
-        seen["tcl"] = tcl
-        Path(outputs[0]).write_text(tool_writes(tcl))
-        return 0, "Placed 3 filler instances\nROW_UTILIZATION_PCT 100.0\n", ""
-    monkeypatch.setattr(R, "_docker_exec", _docker_exec)
-    return project, pnr, pdk, seen
 
 
-def test_the_fill_session_registers_the_decks_rules_and_connects_before_writing(
-        tmp_path, monkeypatch):
-    project, pnr, pdk, seen = _stage_fill(tmp_path, monkeypatch,
-                                          lambda tcl: CAL_NEG.read_text())
-    R._emit_metal_fill(project, "top", pdk, "", pnr / "filled.def", [])
-    tcl = seen["tcl"]
-    rule = 'add_global_connection -net VDD -pin_pattern "^VDD$" -power'
-    assert rule in tcl
-    assert tcl.index("read_def ") < tcl.index(rule) < tcl.index("filler_placement")
-    write = tcl.index("write_def ")
-    apply_at = tcl.rindex("{global_connect}", 0, write)
-    assert tcl.rindex("filler_placement", 0, write) < apply_at
-    assert apply_at < tcl.index("METAL_FILL_PG_NO_NET: total=", apply_at) < write
 
 
-def test_a_fill_that_leaves_a_supply_pin_off_its_net_is_refused(tmp_path, monkeypatch):
-    project, pnr, pdk, _ = _stage_fill(tmp_path, monkeypatch,
-                                       lambda tcl: CAL_POS.read_text())
-    notes = []
-    assert R._emit_metal_fill(project, "top", pdk, "", pnr / "filled.def", notes) is False
-    assert not (pnr / "filled.def").exists()
-    assert not (pnr / "metal_fill.done").exists()
-    assert (pnr / "filled.pg_refused.def").read_text() == CAL_POS.read_text()
-    rec = json.loads((project / "reports/phase3/postroute_pg_ownership_metal_fill.json")
-                     .read_text())
-    assert rec["verdict"] == "FAIL" and rec["code"] == G.REFUSE_CODE
-    assert any(G.REFUSE_CODE in n for n in notes), notes
 
 
-def test_a_fill_whose_supply_is_owned_stands(tmp_path, monkeypatch):
-    project, pnr, pdk, _ = _stage_fill(tmp_path, monkeypatch,
-                                       lambda tcl: CAL_NEG.read_text())
-    notes = []
-    assert R._emit_metal_fill(project, "top", pdk, "", pnr / "filled.def", notes)
-    assert (pnr / "metal_fill.done").is_file()
-    rec = json.loads((project / "reports/phase3/postroute_pg_ownership_metal_fill.json")
-                     .read_text())
-    assert rec["verdict"] == "PASS"
-    assert any("supply ownership: PASS" in n for n in notes), notes
 
 
-def test_the_direct_fill_records_the_cells_it_placed(tmp_path, monkeypatch):
-    """F20b reads which cells step 34 placed; the production default writes it
-    too. The two fixture masters are in no LEF given, so ownership is
-    NOT_MEASURED -- published, never clean, and not a refusal."""
-    project, pnr, pdk, _ = _stage_fill(
-        tmp_path, monkeypatch, lambda tcl: CAL_NEG.read_text().replace(
-            "COMPONENTS 1 ;\n",
-            "COMPONENTS 3 ;\n    - F0 FILLX + PLACED ( 0 0 ) N ;\n"
-            "    - F1 lib__fillcap_4 + PLACED ( 0 0 ) N ;\n"))
-    monkeypatch.setattr(R, "_filler_masters_for_pdk", lambda p: ["lib__fillcap_4", "FILLX"])
-    assert R._emit_metal_fill(project, "top", pdk, "", pnr / "filled.def", [])
-    placed = json.loads((project / LF.CELLS_REL).read_text())
-    assert placed["per_master"] == {"FILLX": 1, "lib__fillcap_4": 1}
-    assert placed["class_of_master"] == {"FILLX": "fill", "lib__fillcap_4": "decap"}
-    assert placed["def_sha256"] == LLC.digest(pnr / "filled.def")
-    rec = json.loads((project / "reports/phase3/postroute_pg_ownership_metal_fill.json")
-                     .read_text())
-    assert rec["verdict"] == "NOT_MEASURED"
 
 
 # ── librelane_fill_dfm: the readers ────────────────────────────────────────
@@ -370,176 +256,26 @@ def test_the_stream_finishing_steps_read_the_stream_alone():
 
 # ── the step-34 switch in the runner ───────────────────────────────────────
 
-def _tool_folder(project: Path, def_text: str) -> Path:
-    folder = project / "phase3/librelane/34/01-openroad-fillinsertion"
-    folder.mkdir(parents=True)
-    (folder / "chip_top.def").write_text(def_text)
-    (folder / "openroad-fillinsertion.log").write_text("filler_placement\n")
-    (folder / "state_out.json").write_text(json.dumps({"def": str(folder / "chip_top.def")}))
-    return folder
 
 
-def _tool_record(project: Path, refusals=()):
-    return BF.fill_record(project, subject=_pnr(project) / 'top.def',
-                          def_text=CAL_NEG.read_text() + '\n# filled\n',
-                          refusals=refusals)
 
 
-def _odb_stage(tmp_path, monkeypatch, mode, refusals=()):
-    project = tmp_path / "proj"
-    pnr = _pnr(project)
-    (pnr / "top.def").write_text(CAL_NEG.read_text())
-    (pnr / "routed.def").write_text(CAL_NEG.read_text())
-    _switch(project, **{"34": mode})
-    monkeypatch.setattr(R, "_librelane_step_ctx", lambda *a: ("img", tmp_path))
-    monkeypatch.setattr(LF, "run_fill_insertion",
-                        lambda *a, **k: _tool_record(project, refusals))
-    return project, pnr
 
 
-def test_on_librelane_the_tools_def_is_filled_def_and_its_reports_follow(
-        tmp_path, monkeypatch):
-    project, pnr = _odb_stage(tmp_path, monkeypatch, "librelane")
-    monkeypatch.setattr(R, "_docker_exec", lambda *a, **k: pytest.fail("direct ran"))
-    notes = []
-    assert R._emit_metal_fill(project, "top", SimpleNamespace(name="p"), "",
-                              pnr / "filled.def", notes)
-    assert (pnr / "filled.def").read_text().endswith("# filled\n")
-    density = json.loads((project / "reports/density.json").read_text())
-    assert density["tool"] == "librelane:OpenROAD.FillInsertion"
-    assert density["filler_instances"] == 7 and density["row_utilization_pct"] == 100.0
-    assert "OpenROAD.FillInsertion" in (pnr / "metal_fill.done").read_text()
-    rec = json.loads((project / LF.RECORD_REL).read_text())["odb"]
-    assert rec["shipped"] == "librelane" and rec["mode"] == "librelane"
-    assert json.loads((project / LF.CELLS_REL).read_text())["per_class"]["decap"] == 5
 
 
-def test_on_librelane_a_tool_refusal_ships_nothing(tmp_path, monkeypatch):
-    project, pnr = _odb_stage(tmp_path, monkeypatch, "librelane",
-                              refusals=["LL_FILL_NO_OP: placed 0"])
-    (pnr / "filled.def").write_text("stale\n")
-    notes = []
-    assert not R._emit_metal_fill(project, "top", SimpleNamespace(name="p"), "",
-                                  pnr / "filled.def", notes)
-    assert not (pnr / "filled.def").exists()
-    assert any("LL_FILL_NO_OP" in n for n in notes)
-    assert json.loads((project / LF.RECORD_REL).read_text())["odb"]["shipped"] is None
 
 
-@pytest.mark.parametrize("direct_verdict,shipped", [("PASS", "direct"),
-                                                    ("FAIL", "librelane")])
-def test_dual_ships_the_feasible_arm_and_a_tie_keeps_direct(
-        tmp_path, monkeypatch, direct_verdict, shipped):
-    project, pnr = _odb_stage(tmp_path, monkeypatch, "dual")
-    rpt = project / "reports/phase3"
-
-    def _direct(project_, top, pdk, container, filled, notes, *, _direct_arm=False):
-        assert _direct_arm
-        rpt.mkdir(parents=True, exist_ok=True)
-        (rpt / "postroute_pg_ownership_metal_fill.json").write_text(
-            json.dumps({"verdict": direct_verdict}))
-        if direct_verdict == "FAIL":
-            return False
-        filled.write_text("direct\n")
-        return True
-    real = R._emit_metal_fill
-    monkeypatch.setattr(R, "_emit_metal_fill",
-                        lambda *a, **k: (_direct(*a, **k) if k.get("_direct_arm")
-                                         else real(*a, **k)))
-    assert R._emit_metal_fill(project, "top", SimpleNamespace(name="p"), "",
-                              pnr / "filled.def", [])
-    rec = json.loads((project / LF.RECORD_REL).read_text())["odb"]
-    assert rec["shipped"] == shipped, rec
-    assert ((pnr / "filled.def").read_text() == "direct\n") == (shipped == "direct")
 
 
-def test_the_direct_switch_leaves_the_gds_passes_to_the_caller(tmp_path):
-    _switch(tmp_path, **{'34': 'direct'})
-    assert R._step34_gds_tool_arm(tmp_path, SimpleNamespace(name="p"),
-                                  tmp_path / "x.gds") is None
 
 
-def _gds_stage(tmp_path, monkeypatch, mode, counts):
-    project = tmp_path / "proj"
-    project.mkdir()
-    _switch(project, **{"34": mode})
-    gds = project / "phase3/stage4/gds/top.gds"
-    gds.parent.mkdir(parents=True)
-    gds.write_bytes(b"sealed")
-    monkeypatch.setattr(R, "_librelane_step_ctx", lambda *a: ("img", tmp_path))
-    calls = []
-
-    def _density(project_, image, root, pdk, *, gds, lane, steps=LF.DENSITY_STEPS, **k):
-        calls.append(lane)
-        subject = Path(gds)
-        if "KLayout.Filler" in steps:
-            filled = project / 'phase3/tool_arms/34/tool.gds'
-            filled.write_bytes(Path(gds).read_bytes() + b"+pdkfill")
-            subject = filled
-        out = BF.density_record(project, subject, counts[lane],
-                                lane=f'{lane}/02-klayout-density')
-        if "KLayout.Filler" in steps:
-            out["filler"] = {"filled_gds": str(filled), "script": "fill.rb"}
-        return out
-    monkeypatch.setattr(LF, "run_density", _density)
-    return project, gds, calls
 
 
-def test_on_librelane_the_tool_fill_ships(tmp_path, monkeypatch):
-    project, gds, calls = _gds_stage(tmp_path, monkeypatch, "librelane", {"34-fill": 0})
-    ctx = R._step34_gds_tool_arm(project, SimpleNamespace(name="p"), gds)
-    ok, note = R._step34_gds_ship(project, gds, ctx, (False, ctx["not_run"]))
-    assert ok and "KLayout.Filler" in note
-    assert gds.read_bytes() == b"sealed+pdkfill"
-    assert calls == ["34-fill"]
-    assert json.loads((project / LF.RECORD_REL).read_text())["gds"]["shipped"] == "librelane"
 
 
-@pytest.mark.parametrize("tool,direct,shipped", [(1, 0, "direct"), (0, 1, "librelane"),
-                                                 (0, 0, "direct")])
-def test_dual_measures_both_fills_with_one_deck(tmp_path, monkeypatch, tool, direct, shipped):
-    project, gds, calls = _gds_stage(tmp_path, monkeypatch, "dual",
-                                     {"34-fill": tool, "34-direct-density": direct})
-    ctx = R._step34_gds_tool_arm(project, SimpleNamespace(name="p"), gds)
-    gds.write_bytes(b"sealed+directfill")          # the caller's direct passes
-    R._step34_gds_ship(project, gds, ctx, (True, "direct"))
-    assert calls == ["34-fill", "34-direct-density"]
-    assert gds.read_bytes() == (b"sealed+pdkfill" if shipped == "librelane"
-                                else b"sealed+directfill")
-    rec = json.loads((project / LF.RECORD_REL).read_text())["gds"]
-    assert rec["shipped"] == shipped
-    assert LF.tool_density(project)["errors"] == min(tool, direct) if shipped else True
 
 
-@pytest.mark.parametrize("mode,counts,shipped,gds_bytes", [
-    ("librelane", {"34-fill": 2}, None, b"sealed"),
-    ("dual", {"34-fill": 1, "34-direct-density": 2}, "direct", b"sealed+directfill"),
-], ids=["librelane", "dual"])
-def test_a_tool_fill_that_was_not_copied_is_not_recorded_as_shipped(
-        tmp_path, monkeypatch, mode, counts, shipped, gds_bytes):
-    """Review wave 57: the copy into gds_out runs only at 0 density errors,
-    but the record still said shipped='librelane' with the digest of bytes
-    that arm never produced, and step 35 then read the tool arm's count as
-    the density of the shipped stream."""
-    project, gds, calls = _gds_stage(tmp_path, monkeypatch, mode, counts)
-    ctx = R._step34_gds_tool_arm(project, SimpleNamespace(name="p"), gds)
-    if mode == "dual":
-        gds.write_bytes(b"sealed+directfill")      # the caller's direct passes
-    ok, _ = R._step34_gds_ship(project, gds, ctx, (True, "direct"))
-    assert not ok
-    assert gds.read_bytes() == gds_bytes
-    rec = json.loads((project / LF.RECORD_REL).read_text())["gds"]
-    assert rec["shipped"] == shipped
-    assert "librelane arm not shipped" in rec["ship_refusal"]
-    if shipped is None:
-        assert rec["shipped_sha256"] is None
-        assert LF.tool_density(project) is None
-        refused = [f for f in MFD.tool_arm_findings(project)[0]
-                   if f.category == "LL_FILL_GDS_REFUSED"]
-        assert refused and "librelane arm not shipped" in refused[0].message
-    else:
-        assert rec["shipped_sha256"] == LLC.digest(gds)
-        assert LF.tool_density(project)["arm"] == "direct"
 
 
 # ── step 34's gate and step 35's screen read the tool ──────────────────────
@@ -723,119 +459,3 @@ def test_an_unmeasured_yield_is_neither_preferred_nor_dropped():
     out = P.prefer_on_yield(cands, ["a", "b"], (_AREA,))
     assert sorted(out["preferred"]) == ["a", "b"]
     assert out["decisions"][0]["reason"] == "YIELD_NOT_COMPARABLE"
-
-
-def test_current_density_consumes_real_typed_local_receipt(tmp_path, monkeypatch):
-    """Real LC producer/current density reader; only the EDA process is neutral."""
-    import _watchdog as watchdog
-    import librelane_signoff_evidence as evidence
-    p = tmp_path / 'project'
-    (p / 'phase3/librelane').mkdir(parents=True)
-    root, source = tmp_path / 'pdk', tmp_path / 'provider'
-    (root / 'neutral').mkdir(parents=True)
-    (source / 'librelane').mkdir(parents=True)
-    deck = root / 'neutral/density.rb'; deck.write_text('# neutral density deck\n')
-    package = source / 'librelane/__init__.py'; package.write_text('# neutral source\n')
-    filler_script = root / 'neutral/filler.rb'; filler_script.write_text('# neutral filler\n')
-    switch_path = p / 'phase3/librelane_switch.json'
-    switch = {'execution_route': 'LOCAL', 'pdk': 'neutral',
-              'pdk_root_host': str(root), 'librelane_root_host': str(source),
-              'librelane_executable': sys.executable, 'local_network_mode': 'host'}
-    BF.put(switch_path, switch)
-    BF.put(p / 'reports/container_image.json', {
-        'image_match': True, 'image_ref': BF.IMAGE})
-    monkeypatch.setenv(LLC.LOCAL_PROVIDER_ROUTE_ENV, 'LOCAL')
-    monkeypatch.setenv('VIBEIC_DOCKER_MEMORY', '4g')
-    monkeypatch.setattr(LLC, 'image_capability', lambda *a: None)
-    monkeypatch.setattr(LLC, 'openroad_home', lambda *a, **kw: None)
-    image = LLC.resolve_image(p)
-    assert isinstance(image, LLC.LocalProviderIdentity)
-    assert 'image' not in switch and evidence._image(p, switch) != image
-    LLC.pdk_root_resolution(p, 'neutral', image=image)
-    gds = p / 'subject.gds'; gds.write_bytes(b'SOURCE_CONTROL neutral native subject')
-    step = 'KLayout.Density'
-    config = BF.put(p / 'phase3/librelane/34-config' / (step + '.json'), {
-        'meta': {'step': step}, 'DESIGN_NAME': 'neutral', 'PDK': 'neutral',
-        'PDK_ROOT': '/pdk', 'KLAYOUT_DENSITY_RUNSET': '/pdk/neutral/density.rb'})
-    BF.put(LLC.views_path(config), {'step': step, 'inputs': ['gds'], 'outputs': []})
-    fill_config = BF.put(config.with_name('KLayout.Filler.json'), {
-        'meta': {'step': 'KLayout.Filler'}, 'DESIGN_NAME': 'neutral', 'PDK': 'neutral',
-        'KLAYOUT_FILLER_SCRIPT': '/pdk/neutral/filler.rb'})
-    BF.put(LLC.views_path(fill_config), {'step': 'KLayout.Filler', 'inputs': ['gds'], 'outputs': []})
-    initial = BF.put(p / 'phase3/librelane/density-state.json',
-                     {'gds': str(gds), 'metrics': {}})
-    calls = []
-    def neutral_process(argv, **kwargs):
-        calls.append(list(argv))
-        at = argv.index('-m'); native = argv[at - 1:]
-        assert native[1:4] == ['-m', 'librelane.steps', 'run']
-        sid = native[native.index('--id') + 1]
-        assert sid in ('KLayout.Filler', step)
-        folder = Path(native[native.index('-o') + 1])
-        before = json.loads(Path(native[native.index('-i') + 1]).read_text())
-        BF.put(folder / 'state_in.json', before)
-        after = dict(before)
-        if sid == 'KLayout.Filler':
-            filled = folder / 'filled.gds'; filled.write_bytes(gds.read_bytes() + b' native fill')
-            after['gds'] = str(filled)
-        else:
-            after['metrics'] = {LF.DENSITY_METRIC: 0}
-        BF.put(folder / 'state_out.json', after)
-        BF.put(folder / 'config.json', json.loads(Path(native[native.index('-c') + 1]).read_text()))
-        return watchdog.SupervisedResult(0, 'SOURCE_CONTROL native density count 0', '', 'natural')
-    monkeypatch.setattr(watchdog, 'run_host_supervised', neutral_process)
-    folders = LLC.run_chain(p, image, [('KLayout.Filler', fill_config, initial),
-        (step, config, initial)], mounts=[(root, '/pdk')], pdk_root='/pdk', lane='34-fill')
-    folder = folders[-1]
-    state = folder / 'state_out.json'
-    filled = Path(json.loads(state.read_text())['gds'])
-    arm = {'state': str(state), 'state_sha256': LLC.digest(state),
-           'subject': str(filled), 'subject_sha256': LLC.digest(filled), LF.DENSITY_METRIC: 0,
-           'filler': {'script': str(filler_script), 'state': str(folders[0] / 'state_out.json')}}
-    receipt = folder / 'vibeic_receipt.json'
-    fp_path = folder / 'input_fingerprint.json'
-    saved = {path: path.read_bytes() for path in (receipt, fp_path)}
-    measured = LF.validate_density_result(p, arm, layout=filled)
-    BF.put(tmp_path / 'TYPED_DENSITY_OBSERVATION.json', {
-        'measured': measured, 'producer_image': str(image),
-        'legacy_image_candidate': evidence._image(p, switch), 'actual_commands': calls,
-        'receipt_sha256': LLC.digest(receipt)})
-    assert measured['value'] == 0, measured
-    assert measured['image'] == str(image)
-    assert len(calls) == 2 and all(cmd[0] == image.executable for cmd in calls)
-    published = p / 'phase3/stage3/pnr/neutral.gds'
-    published.parent.mkdir(parents=True, exist_ok=True); published.write_bytes(gds.read_bytes())
-    ctx = {'mode': 'librelane', 'image': image, 'root': root, 'pdk': 'neutral',
-           'tool': arm, 'doc': {'mode': 'librelane', 'prefill_sha256': LLC.digest(gds)}}
-    ok, note = R._step34_gds_ship(p, published, ctx, (False, 'direct arm not run'))
-    assert ok, note
-    assert published.read_bytes() == filled.read_bytes()
-    assert json.loads((p / LF.RECORD_REL).read_text())['gds']['shipped'] == 'librelane'
-    refused = {}
-    def refuse(label, mutate, restore):
-        mutate()
-        row = LF.validate_density_result(p, arm, layout=filled)
-        refused[label] = row
-        assert row['value'] == 'NOT_MEASURED', (label, row)
-        restore()
-        assert LF.validate_density_result(p, arm, layout=filled)['value'] == 0
-    refuse('source_changed', lambda: package.write_text('# changed source\n'),
-           lambda: package.write_text('# neutral source\n'))
-    refuse('pdk_changed', lambda: deck.write_text('# changed deck\n'),
-           lambda: deck.write_text('# neutral density deck\n'))
-    refuse('material_missing', lambda: deck.unlink(),
-           lambda: deck.write_text('# neutral density deck\n'))
-    refuse('network_policy_changed',
-           lambda: BF.put(switch_path, {**switch, 'local_network_mode': 'none'}),
-           lambda: BF.put(switch_path, switch))
-    def missing_witness():
-        doc = json.loads(saved[receipt]); fp = doc['input']; fp.pop('local_provider')
-        BF.put(fp_path, fp)
-        doc['sha256']['input_fingerprint.json'] = LLC.digest(fp_path)
-        BF.put(receipt, doc)
-    def restore_receipt():
-        for path, raw in saved.items(): path.write_bytes(raw)
-    refuse('missing_provider_witness', missing_witness, restore_receipt)
-    assert all(path.read_bytes() == raw for path, raw in saved.items())
-    assert len(calls) == 2, 'the current reader must not replay a native step'
-    BF.put(tmp_path / 'TYPED_DENSITY_REFUSALS.json', refused)

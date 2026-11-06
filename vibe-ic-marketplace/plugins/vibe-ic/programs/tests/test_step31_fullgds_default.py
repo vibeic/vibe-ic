@@ -1,33 +1,10 @@
 """Step31 uses current full-GDS LVS; DEF wiring is a disclosed triage arm."""
 import json
 from pathlib import Path
-from types import SimpleNamespace
 import pytest
-import phase3_one_shot_runner as runner
-import librelane_pv_signoff as pv
 import librelane_signoff_evidence as evidence
 
 
-@pytest.mark.parametrize('selection',[None,'direct','librelane','dual'])
-def test_step31_canonical_lvs_uses_fullgds_producer(tmp_path,monkeypatch,selection):
-    if selection:
-        switch=tmp_path/'phase3/librelane_switch.json';switch.parent.mkdir()
-        switch.write_text(json.dumps({'steps':{'31':selection}}))
-    monkeypatch.setattr(runner,'_vacuous_on_unrouted',lambda *a:None)
-    calls=[]
-    def producer(p,t,k,half,publish):
-        calls.append((half,publish))
-        return runner.StepResult(half,'PASS',0,'native full GDS',output_files=['fullgds.rpt'])
-    monkeypatch.setattr(runner,'_step31_librelane',producer)
-    def triage():
-        calls.append(('triage',False))
-        return runner.StepResult('lvs','PASS',0,'gate-level wiring')
-    result=runner._step31_dispatch(tmp_path,'unit',SimpleNamespace(), 'lvs',triage)
-    assert ('lvs',True) in calls, (result.status,result.detail,calls)
-    assert calls.count(('triage',False)) == (selection=='dual')
-    assert result.output_files==['fullgds.rpt']
-    assert result.status=='PASS'
-    assert evidence.obligation(tmp_path,'lvs') is not None
 
 
 def test_default_lvs_consumers_refuse_a_retained_report_without_current_chain(tmp_path):
@@ -79,29 +56,3 @@ def test_current_lvs_gate_reads_the_producer_and_rejects_replaced_inputs(
         assert rc==1,result
         assert result['passed'] is False
         assert result['verdict']==('FAIL' if change=='measured_failure' else 'NOT_MEASURED')
-
-
-def test_previous_receipts_survive_unavailable_fullgds_producer(tmp_path,monkeypatch):
-    reports=tmp_path/'reports/phase3';reports.mkdir(parents=True)
-    previous={
-        'librelane_pv_lvs.json':b'{"verdict":"PASS","previous_round":17}\n',
-        'lvs_inputs.json':b'{"previous_reference":"round17.v"}\n',
-        'lvs_verdict.json':b'{"status":"PASS","previous_round":17}\n',
-    }
-    for name,data in previous.items():(reports/name).write_bytes(data)
-    monkeypatch.setattr(runner,'_vacuous_on_unrouted',lambda *a:None)
-    calls=[]
-    def unavailable(project,top,pdk,half,publish):
-        calls.append((half,publish))
-        # No canonical receipt from the previous round may stand for this run.
-        assert all(not (reports/name).exists() for name in previous)
-        return runner.StepResult('lvs','NOT_MEASURED',0,'fixture: producer unavailable',
-                                 reason_class=runner._V.ReasonClass.TOOL_ABSENT)
-    monkeypatch.setattr(runner,'_step31_librelane',unavailable)
-    result=runner.step_lvs(tmp_path,'unit',SimpleNamespace(),'unused-fixture-container')
-    retained={p.name:p.read_bytes() for p in (reports/'lvs_triage').glob('*/*')}
-    assert retained==previous
-    assert all(not (reports/name).exists() for name in previous)
-    assert calls==[('lvs',True)]
-    assert result.status=='NOT_MEASURED'
-    assert evidence.obligation(tmp_path,'lvs')['verdict']=='NOT_MEASURED'

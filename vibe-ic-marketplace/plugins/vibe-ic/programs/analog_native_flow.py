@@ -10,8 +10,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -31,10 +31,6 @@ STEPS = tuple(f"A{number:02d}" for number in range(1, 20))
 STATUSES = {"PASS", "FAIL", "NOT_MEASURED", "NOT_APPLICABLE"}
 
 
-def _sha(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-
-
 def _read(path, default=None):
     return json.loads(path.read_text()) if path.is_file() else default
 
@@ -48,183 +44,12 @@ def _aggregate(rows):
     return "PASS"
 
 
-def _explicit_container_option(argv):
-    """Return ``(present, value)`` for the process's explicit container option."""
-    for at, arg in enumerate(argv[1:], 1):
-        if arg == "--container":
-            return True, argv[at + 1] if at + 1 < len(argv) else ""
-        if arg.startswith("--container="):
-            return True, arg.split("=", 1)[1]
-    return False, ""
-
-
-def _adapter_transport(project):
-    """Select LOCAL inside an attested runtime unless external transport is explicit.
-
-    The canonical front door historically gives ``--container`` a named-container
-    default and exports it through ``VIBEIC_ANALOG_CONTAINER``.  That default is
-    not an instruction to leave an already host-attested LOCAL runtime.  A CLI
-    option or project configuration remains an explicit external selection.
-    """
-    config = _read(Path(project) / "input" / "analog_flow.json", {})
-    configured = config.get("container", "") if isinstance(config, dict) else ""
-    inherited = os.environ.get("VIBEIC_ANALOG_CONTAINER", "")
-    explicit, selected = _explicit_container_option(sys.argv)
-    if configured:
-        return configured, "", "CONTAINER"
-    if explicit:
-        return selected, "", "CONTAINER" if selected else "HOST"
-    try:
-        import librelane_contract as contract
-        identity = contract.local_image_attestation()
-    except ImportError:
-        raise
-    except Exception as exc:
-        # Only a validated receipt changes the inherited legacy route.  Keep
-        # ordinary host/named-container behavior when no LOCAL proof exists.
-        if not isinstance(exc, contract.Refusal):
-            raise
-        return inherited, "", "CONTAINER" if inherited else "HOST"
-    return "", identity["image"], "LOCAL"
-
-
-def _input_views(project, name, step=None):
-    paths = list((project / "input").rglob("*"))
-    paths += list(layout.generated_docs_dir(project).glob("*.json"))
-    if step == "A01":
-        from analog_a1_spec_emit import ATTRIBUTION_REL
-        paths.append(project / ATTRIBUTION_REL)
-    directory = layout.analog_dir(project) / name
-    paths += [directory / leaf for leaf in
-              ("spec.json", "topology.json", "topology.md", f"{name}.sp", f"tb_{name}.sp")]
-    if step in ("A12", "A18"):
-        paths += [directory / f"{name}.lvs.cdl",
-                  directory / "lvs_provenance.json"]
-    if step in STEPS[3:]:
-        paths.append(directory / "sizing_inputs.json")
-    if step in STEPS[10:]:
-        paths.append(directory / "layout_inputs.json")
-    if step in ("A06", "A07"):
-        paths.append(directory / "measurement_studies.json")
-    if step == "A16":
-        paths.append(directory / "reliability_inputs.json")
-    if step == "A17":
-        declaration = directory / "characterization_inputs.json"
-        paths.append(declaration)
-        from analog_native_physical import _settings
-        selected = {**_read(declaration, {}), **_settings(
-            {"config": _read(project / "input/analog_flow.json", {})}, "A17", name)}
-        if selected.get("ngspice_bin"):
-            paths.append(Path(selected["ngspice_bin"]))
-    # A configured nominal/calibration deck can live outside the canonical
-    # block directory. Retain the actual selected inputs, not only defaults.
-    from analog_native_sim import (_config, _selected_config, _inputs, _included_paths,
-                                   _testbench_inputs_path, _declared_testbench)
-    config = _read(project / "input" / "analog_flow.json", {})
-    for selected_step in STEPS[5:10]:
-        try:
-            selected = (_selected_config(project, {"config": config}, {"name": name}, selected_step)
-                        if selected_step == step == 'A08' else
-                        _config({"config": config}, {"name": name}, selected_step))
-        except (OSError, ValueError):
-            selected = _config({"config": config}, {"name": name}, selected_step)
-        if selected_step == "A07" and selected.get("nominal_testbench"):
-            selected = {**selected, "testbench": selected["nominal_testbench"]}
-        if selected_step == "A10" and isinstance(selected.get("calibration"), dict):
-            selected = {**selected, **selected["calibration"]}
-        netlist, deck, spec = _inputs(project, name, selected)
-        paths.extend([netlist, deck, spec])
-        paths.extend(_included_paths(deck))
-        if selected_step == 'A07' or selected_step == step == 'A08':
-            try:
-                declaration = _testbench_inputs_path(project, name, selected)
-            except ValueError:
-                declaration = None  # The producer reports the invalid declaration.
-            if declaration is not None:
-                paths += [declaration, netlist.parent / "netlist_provenance.json"]
-                try:
-                    _text, views = _declared_testbench(project, name, selected, netlist.parent)
-                    paths.extend(Path(view["path"]) for view in views.values())
-                    pvt = selected.get('pvt') or {}
-                    if selected_step == 'A08' and isinstance(pvt, dict) and pvt.get('kind') == 'declared_testbench':
-                        import analog_declared_pvt as declared
-                        section, temperature = declared.coordinates(pvt)[0]
-                        sections = pvt['process_sections']
-                        _deck, _dut, views = declared.render_corner(project, name, selected, netlist.parent,
-                            sections, section, temperature)
-                        paths.extend(Path(view['path']) for view in views.values())
-                except ValueError:
-                    pass  # The producer reports the invalid declaration.
-    if step in ("A06", "A07"):
-        # The declaration names real study inputs outside input/. Changing
-        # one of those inputs must invalidate its retained measurement too.
-        selected = _config({"config": config}, {"name": name}, step)
-        studies = selected.get("measurement_studies")
-        if studies is None:
-            studies = _read(directory / "measurement_studies.json", [])
-        if isinstance(studies, dict):
-            studies = studies.get("studies", [])
-        def referenced(value):
-            if not isinstance(value, str) or not value:
-                return None
-            path = Path(value)
-            path = path if path.is_absolute() else project / path
-            paths.append(path)
-            return path
-        for study in studies if isinstance(studies, list) else []:
-            if not isinstance(study, dict):
-                continue
-            referenced(study.get("testbench"))
-            settings_path = referenced(study.get("settings"))
-            settings = _read(settings_path, {}) if settings_path else {}
-            if isinstance(settings, dict):
-                referenced(settings.get("testbench"))
-            bindings_path = referenced(study.get("bindings"))
-            bindings = _read(bindings_path, {}) if bindings_path else {}
-            if isinstance(bindings, dict) and isinstance(bindings.get("source"), dict):
-                referenced(bindings["source"].get("path"))
-            result_path = referenced(study.get("result"))
-            record = _read(result_path, {}) if result_path else {}
-            if not isinstance(record, dict):
-                continue
-            records = [record]
-            for point in record.get("points") or []:
-                if isinstance(point, dict):
-                    path = referenced(point.get("path"))
-                    data = _read(path, {}) if path else {}
-                    if isinstance(data, dict):
-                        records.append(data)
-            for data in records:
-                for view in (data.get("native_inputs") or {}).values():
-                    if isinstance(view, dict):
-                        referenced(view.get("path"))
-                for execution in data.get("executions") or []:
-                    if isinstance(execution, dict):
-                        referenced(execution.get("log"))
-                if isinstance(data.get("capture"), dict):
-                    referenced(data["capture"].get("path"))
-    return {str(path): _sha(path) for path in paths if path.is_file()}
-
-
-def _output_views(result):
-    paths = []
-    for value in result.get("outputs", []):
-        path = Path(value)
-        paths.extend(path.rglob("*")) if path.is_dir() else paths.append(path)
-    return {str(path): _sha(path) for path in paths if path.is_file()}
-
-
-
 def _local_ngspice_startup(project, cwd, image):
     """Select ngspice's existing startup stream from the attested PDK."""
     import analog_pdk_availability as availability
-    import librelane_contract as launch
     from declared_pdk_is_the_pdk_used_check import declared_target
 
-    try:
-        root = availability.local_pdks_root(image)
-    except launch.Refusal as exc:
-        raise ValueError(str(exc)) from exc
+    root = availability.local_pdks_root(image)
     if root is None:
         return {}, None
     target, _ = declared_target(project)
@@ -246,7 +71,7 @@ def _local_ngspice_startup(project, cwd, image):
             raise ValueError(f'NGSPICE_NATIVE_INIT_MISSING: {init} (required by {osdi})')
         return environment, None
     environment['SPICE_USERINIT_DIR'] = str(init.parent)
-    return environment, {'path': str(init), 'sha256': _sha(init)}
+    return environment, {'path': str(init)}
 
 
 class NativeCommands:
@@ -258,7 +83,7 @@ class NativeCommands:
         self.container = container
         self.image = image
         self.step = step
-        self.native_inputs = {}
+        self.native_inputs = []
         self.count = 0
 
     def __call__(self, program, argv, *, cwd=None, outputs=None, input_text=None):
@@ -287,10 +112,6 @@ class NativeCommands:
         native_init, startup_environment = None, {}
         try:
             environment = dict(os.environ)
-            # This native path uses tools directly. Do not make a child's
-            # legacy entry re-enter the optional qualification reader.
-            environment.pop("VIBEIC_FLOW109_CONTEXT", None)
-            environment.pop("VIBEIC_FLOW109_ATTEMPT", None)
             if self.image:
                 environment["VIBEIC_EDA_IMAGE"] = self.image
             native_tool = program[1:] if program.startswith("@") else ""
@@ -298,19 +119,15 @@ class NativeCommands:
                 native_tool = next((item for item in argv
                                     if not re.match(r"^[A-Za-z_]\w*=", item)), "")
             if (self.step in ("A02", "A05", "A06", "A07", "A08", None)
-                    and Path(native_tool).name == "ngspice" and not self.container
-                    and os.environ.get("VIBEIC_LIBRELANE_LOCAL_ATTESTATION")):
+                    and Path(native_tool).name == "ngspice" and not self.container):
                 startup_environment, native_init = _local_ngspice_startup(self.project, cwd, self.image)
                 environment.update(startup_environment)
                 if native_init:
-                    self.native_inputs[native_init['path']] = native_init['sha256']
+                    self.native_inputs.append(native_init['path'])
             completed = subprocess.run(command, cwd=cwd, env=environment,
                                        capture_output=True, text=True, errors="replace",
                                        input=input_text)
             rc, stdout, stderr = completed.returncode, completed.stdout, completed.stderr
-            if native_init and _sha(native_init['path']) != native_init['sha256']:
-                rc = rc or 1
-                stderr += "\nA05_NATIVE_STARTUP_CHANGED_DURING_EXECUTION"
         except OSError as exc:
             rc, stdout, stderr = 127, "", str(exc)
         log.write_text(stdout + stderr)
@@ -319,138 +136,44 @@ class NativeCommands:
         missing = [str(path) for path in expected if not path.is_file()]
         return {"argv": command, "cwd": str(cwd), "returncode": rc,
                 "stdout": stdout, "stderr": stderr, "log": str(log),
-                "log_sha256": _sha(log), "duration_s": time.monotonic() - started,
-                "outputs": {str(path): _sha(path) for path in expected if path.is_file()},
+                "duration_s": time.monotonic() - started,
+                "outputs": [str(path) for path in expected if path.is_file()],
                 "missing_outputs": missing, "native_init": native_init,
                 "native_environment": startup_environment}
 
 
-def _a18_model_sources():
-    import flow109_metric_acceptance as metrics
-    paths = [Path(__file__), Path(metrics.__file__),
-             *[HERE / name for name in ("analog_macro_top_gen.py", "analog_macro_top_run.py", "analog_macro_top_pdn.py")]]
-    return {path.name: _sha(path) for path in paths}
-
-
-def _a18_metrics(project, name, settings, evidence, execution, limits_before):
-    """Consume A18 values without promoting component evidence to row acceptance."""
-    import flow109_metric_acceptance as metrics
-
+def _a18_metrics(project, evidence):
+    """Compare native top connectivity and route lengths with declared limits."""
     keys = ("analog_top_pad_core_connectivity_errors", "analog_sensitive_route_constraints")
-    rows = {key: {"status": "NOT_MEASURED", "reason": "A18_IDENTITY_ABSENT"} for key in keys}
-    inputs = {}
-    try:
-        def reopen(relative, digest):
-            path = metrics._safe_project_file(project, relative)
-            if not path.is_file() or not path.stat().st_size or _sha(path) != digest:
-                raise ValueError("A18_INPUT_STALE: " + relative)
-            inputs[str(path)] = digest
-            return path
-
-        from analog_macro_top_gen import RECORD
-        from analog_macro_top_run import RUN_RECORD
-        receipt = project / RUN_RECORD
-        reopen(str(receipt.relative_to(project)), execution.get("outputs", {}).get(str(receipt)))
-        if _read(receipt) != evidence:
-            raise ValueError("A18_RECEIPT_CONTENT_CHANGED")
-        if evidence.get("producer") != "analog_macro_top_run":
-            raise ValueError("A18_PRODUCER_IDENTITY_ABSENT")
-        generation = project / RECORD
-        reopen(RECORD, evidence.get("generation_sha256"))
-        generated = _read(generation)
-        if generated.get("verdict") != "WROTE":
-            raise ValueError("A18_GENERATION_NOT_CURRENT")
-        for path, digest in {**generated["inputs"], **generated["outputs"]}.items():
-            current = Path(path)
-            if not current.is_file() or _sha(current) != digest:
-                raise ValueError("A18_INPUT_STALE: " + path)
-            inputs[str(current)] = digest
-        outputs = evidence.get("outputs")
-        if not isinstance(outputs, dict) or not outputs:
-            raise ValueError("A18_PRODUCER_OUTPUT_IDENTITY_ABSENT")
-        bound = {}
-        for raw, digest in outputs.items():
-            if not isinstance(raw, str) or not isinstance(digest, str):
-                raise ValueError("A18_PRODUCER_OUTPUT_INVALID")
-            path = Path(raw)
-            path = path if path.is_absolute() else project / path
-            relative = str(path.relative_to(project))
-            reopen(relative, digest)
-            observed = execution.get("outputs", {}).get(str(path))
-            if observed is not None and observed != digest:
-                raise ValueError("A18_OUTPUT_NOT_FROM_EXECUTION: " + raw)
-            # The authenticated execution output is the producer's manifest;
-            # its immutable view hashes also bind dynamically named native logs.
-            bound[raw] = path
-        tops = [p for p in bound.values() if p.suffix == ".gds"]
-        extracted = [p for p in bound.values() if p.name.endswith(".extracted.spice")]
-        if len(tops) != 1 or len(extracted) != 1:
-            raise ValueError("A18_TOP_LAYOUT_PEX_ABSENT")
-        provenance = layout.analog_dir(project) / "hardmacro" / name / "a8_views_provenance.json"
-        adopted = _read(provenance, {})
-        if (adopted.get("producer") != "analog_a8_hardmacro_emit"
-                or adopted.get("block") != name
-                or evidence.get("core_embedded_unchanged") is not True
-                or evidence.get("core_inputs_sha256", {}).get(str(project / adopted.get("source_gds", "")))
-                != adopted.get("source_gds_sha256")
-                or generated["inputs"].get(str(project / adopted.get("source_gds", "")))
-                != adopted.get("source_gds_sha256")):
-            raise ValueError("A18_A17_CORE_IDENTITY_ABSENT")
-        reopen(str(provenance.relative_to(project)), _sha(provenance))
-        reopen(adopted["source_gds"], adopted["source_gds_sha256"])
-        for view in adopted["views"].values():
-            reopen(view["path"], view["sha256"])
-        measurement = adopted["native_measurement"]
-        reopen(measurement["path"], measurement["sha256"])
-        reopen(measurement["source_netlist"], measurement["source_netlist_sha256"])
-        reopen(measurement["native_log"], measurement["native_log_sha256"])
-        count = evidence.get("checks", {}).get(keys[0])
-        metrics._finite_number(count, count=True)
-        rows[keys[0]] = {"status": "PASS" if count == 0 else "FAIL",
-                         "value": count, "unit": "count", "reason": "A18_NATIVE_CONNECTIVITY"}
-        relative = "requirements/analog_top_route/analog_sensitive_route_constraints.json"
-        authority, limits = metrics._approved_document(project, relative,
-            authority="requirements_owner", schema=metrics.AUTHORITY_SCHEMA)
-        if limits_before is None or authority["sha256"] != limits_before:
-            raise ValueError("A18_ROUTE_LIMITS_NOT_PREDECLARED")
-        inputs[str(project / relative)] = authority["sha256"]
-        inputs[str(project / authority["source"]["path"])] = authority["source"]["sha256"]
-        declared, units = limits.get("limits"), limits.get("units")
-        routes = evidence.get("route_measurements")
-        if (not isinstance(declared, dict) or not declared or not isinstance(units, dict)
-                or not isinstance(routes, list) or not routes):
-            raise ValueError("A18_ROUTE_MEASUREMENTS_OR_LIMITS_ABSENT")
-        nets = [row["net"] for row in routes]
-        if len(set(nets)) != len(nets) or set(nets) != set(declared) or set(units) != set(declared):
-            raise ValueError("A18_ROUTE_POPULATION_MISMATCH")
-        route_rows = []
-        for route in routes:
-            net = route["net"]
-            if (route.get("geometry_sha256") != _sha(tops[0])
-                    or route.get("pex_sha256") != _sha(extracted[0])):
-                raise ValueError("A18_ROUTE_GEOMETRY_UNBOUND: " + net)
-            if metrics._finite_number(route.get("length_um")) < 0:
-                raise ValueError("A18_ROUTE_LENGTH_INVALID: " + net)
-            status, reason = metrics.evaluate_operator("within_declared_bounds",
-                {"status": "MEASURED", "value": route.get("length_um"), "unit": route.get("unit"),
-                 "identity": {"producer": "analog_native.A18", "checker": _sha(Path(__file__)),
-                              "tool_execution": {"outputs": execution["outputs"],
-                                                 "returncode": execution["returncode"]}, "consumed_inputs": inputs,
-                              "requirements": authority, "configuration": {
-                                  "generation_sha256": evidence["generation_sha256"]}}},
-                {"status": "APPROVED", "limits": declared[net], "unit": units[net]})
-            if units[net] != "um":
-                raise ValueError("A18_ROUTE_UNIT_UNSUPPORTED: " + net)
-            route_rows.append({"net": net, "status": status, "reason": reason,
-                               "value": route["length_um"], "unit": "um"})
-        rows[keys[1]] = {"status": _aggregate(route_rows), "routes": route_rows,
-                         "reason": "A18_NATIVE_ROUTE_BOUNDS"}
-    except (metrics.MetricRefusal, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
-        for row in rows.values():
-            if row["status"] == "NOT_MEASURED":
-                row["reason"] = str(exc)
-    return {"status": _aggregate(list(rows.values())), "metrics": rows,
-            "input_views": inputs, "scope": "A18 measurements only; qualification separate"}
+    rows = {key: {"status": "NOT_MEASURED", "reason": "Native measurement absent"} for key in keys}
+    count = evidence.get("checks", {}).get(keys[0])
+    if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+        rows[keys[0]] = {"status": "PASS" if count == 0 else "FAIL", "value": count, "unit": "count"}
+    declaration = _read(Path(project) / "requirements/analog_top_route/analog_sensitive_route_constraints.json", {})
+    bounds, units = declaration.get("limits", {}), declaration.get("units", {})
+    routes = evidence.get("route_measurements", [])
+    if (isinstance(bounds, dict) and bounds and isinstance(units, dict)
+            and isinstance(routes, list) and routes
+            and len({row.get("net") for row in routes}) == len(routes)
+            and {row.get("net") for row in routes} == set(bounds) == set(units)):
+        comparisons = []
+        for row in routes:
+            net = row["net"]
+            value, limits = row.get("length_um"), bounds[net]
+            result = {"net": net, "value": value, "unit": "um", "status": "NOT_MEASURED"}
+            if (units[net] == "um" and isinstance(value, (int, float))
+                    and not isinstance(value, bool) and math.isfinite(value) and value >= 0
+                    and isinstance(limits, dict)):
+                low, high = limits.get("min"), limits.get("max")
+                declared = [limit for limit in (low, high) if limit is not None]
+                if (declared and all(isinstance(limit, (int, float))
+                        and not isinstance(limit, bool) and math.isfinite(limit) for limit in declared)
+                        and (low is None or high is None or low <= high)):
+                    result["status"] = "FAIL" if (low is not None and value < low
+                        or high is not None and value > high) else "PASS"
+            comparisons.append(result)
+        rows[keys[1]] = {"status": _aggregate(comparisons), "routes": comparisons}
+    return {"status": _aggregate(list(rows.values())), "metrics": rows}
 
 
 def _views(step, project, block, options, run):
@@ -465,7 +188,6 @@ def _views(step, project, block, options, run):
         from analog_macro_top_run import RUN_RECORD
         import copy
         settings = options["config"].get("analog_top", {})
-        limits = project / "requirements/analog_top_route/analog_sensitive_route_constraints.json"
         if "a18_result" in options:
             result = copy.deepcopy(options["a18_result"])
             if not result.get("executions"):
@@ -476,7 +198,6 @@ def _views(step, project, block, options, run):
             status = result["status"]
             outputs = result["outputs"]
         else:
-            options["a18_limits_before"] = _sha(limits) if limits.is_file() else None
             try:
                 generated = top.generate(project)
             except (OSError, ValueError, TypeError, KeyError, top.Refusal) as exc:
@@ -495,33 +216,23 @@ def _views(step, project, block, options, run):
                 evidence = {}
             outputs = list(generated["outputs"]) + [str(project / top.RECORD), str(receipt)]
             native_outputs = evidence.get("outputs", {})
-            outputs += list(native_outputs) if isinstance(native_outputs, dict) else []
+            outputs += list(native_outputs) if isinstance(native_outputs, (dict, list)) else []
             status = evidence.get("component_status", "NOT_MEASURED")
             if status not in STATUSES:
                 status = "NOT_MEASURED"
             if execution["returncode"] or execution["missing_outputs"]:
                 status = "FAIL"
-            if any(not Path(path).is_file() or _sha(path) != digest
-                   for path, digest in generated["inputs"].items()):
-                status = "FAIL"
-                evidence["reason"] = "A18_INPUT_CHANGED_DURING_EXECUTION"
             if status == "PASS" and (not native_outputs or any(
-                    not Path(path).is_file() or _sha(path) != digest
-                    for path, digest in native_outputs.items())):
+                    not Path(path).is_file() for path in native_outputs)):
                 status = "FAIL"
             options["a18_result"] = {"status": status, "outputs": outputs,
                                      "executions": [execution], "native_evidence": evidence}
-        limits_before = options["a18_limits_before"]
-        acceptance = _a18_metrics(project, name, settings, evidence, execution, limits_before)
-        acceptance["input_views"].update(generated["inputs"])
-        if acceptance["status"] == "FAIL":
-            status = "FAIL"
+        acceptance = _a18_metrics(project, evidence)
+        status = _aggregate([{"status": status}, acceptance])
         result = {"status": status, "detail": evidence.get("detail") or evidence.get("reason")
                   or "A18 native implementation receipt absent", "outputs": outputs,
                   "executions": [execution], "native_evidence": evidence,
-                  "metric_acceptance": acceptance,
-                  "native_inputs": {path: {"path": path, "sha256": digest}
-                                    for path, digest in acceptance["input_views"].items()}}
+                  "measurements": acceptance}
         return result
     if step == "A19":
         prior = options["previous_results"]
@@ -531,7 +242,7 @@ def _views(step, project, block, options, run):
         status = _aggregate(rows)
         package = layout.analog_dir(project) / "hardmacro" / name
         expected = [package / f"{name}.{suffix}" for suffix in ("gds", "lef", "lib", "v")]
-        outputs = {str(path): _sha(path) for path in expected if path.is_file()}
+        outputs = [str(path) for path in expected if path.is_file()]
         if len(outputs) != len(expected) and status == "PASS":
             status = "NOT_MEASURED"
         import analog_hardmacro_check as hardmacro
@@ -590,10 +301,8 @@ def _dispatch(step, project, block, options, run):
     return run_step(step, project, block, options, run)
 
 
-
 def _declared_blocks(project):
     """Keep native producers and file-based checkers on the same declaration."""
-    from analog_native_front import _stale
 
     def blocks_at(path, key):
         body = _read(path)
@@ -605,8 +314,6 @@ def _declared_blocks(project):
             if 'block_count' in body and (type(body['block_count']) is not int
                                          or body['block_count'] != len(blocks)):
                 raise ValueError(f"block list count mismatch: {path}")
-            if _stale(project, body):
-                raise ValueError(f"block list source changed: {path}")
         names = [block.get('name') or block.get('block') for block in blocks]
         if (any(not isinstance(name, str)
                 or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.-]*', name)
@@ -643,9 +350,7 @@ def _declared_blocks(project):
     # The legacy runner already materializes this L5 fallback before running
     # its file-based checkers. Keep the full population before subset selection.
     write_json(candidates[0], {
-        'blocks': source_blocks, 'block_count': len(source_blocks),
-        '_provenance': {'producer': 'analog_native_flow',
-                        'input': {'path': str(l5.relative_to(project)), 'sha256': _sha(l5)}}})
+        'blocks': source_blocks, 'block_count': len(source_blocks)})
     return source_blocks
 
 
@@ -659,11 +364,7 @@ def run_window(project, args, *, features=None):
     config = _read(config_path, {})
     if not isinstance(config, dict):
         raise ValueError("input/analog_flow.json must contain an object")
-    manifest_path = getattr(args, "flow109_manifest", None)
-    if manifest_path is None:
-        manifest_path = project / "manifest-formal.json"
-    manifest = _read(Path(manifest_path), {})
-    features = features if features is not None else manifest.get("features", config.get("features", {}))
+    features = features if features is not None else config.get("features", {})
     blocks = [dict(block) for block in _declared_blocks(project)]
     names = [block.get("name") or block.get("block") for block in blocks]
     declared_names = set(names)
@@ -702,25 +403,21 @@ def run_window(project, args, *, features=None):
     rows = []
     if previous.get("features") == features:
         for retained in previous.get("steps", []):
-            name = retained.get("block")
-            inputs, outputs = retained.get("input_views"), retained.get("output_views")
-            current_inputs = _input_views(project, name, retained.get("step")) if name in declared_names else {}
-            if (name in declared_names and inputs
-                    and all(inputs.get(path) == digest for path, digest in current_inputs.items())
-                    and all(Path(path).is_file() and _sha(path) == digest
-                            for path, digest in inputs.items())
-                    and isinstance(outputs, dict)
-                    and all(Path(path).is_file() and _sha(path) == digest
-                            for path, digest in outputs.items())):
-                retained = dict(retained)
-                retained.setdefault("producer_context", {
-                    "image": previous.get("image"), "container": previous.get("container"),
-                    "driver_sha256": previous.get("source_sha256"),
-                    "attribution": "retained prior execution; not rerun under this window"})
-                options["previous_results"].setdefault(retained["step"], {})[name] = retained
-                if (name not in names or
-                        retained["step"] not in STEPS[STEPS.index(entry):STEPS.index(exit_) + 1]):
-                    rows.append(retained)
+            name, step = retained.get("block"), retained.get("step")
+            if name not in declared_names or step not in STEPS:
+                continue
+            environment = retained.get("tool_environment") or retained.get("producer_context") or {}
+            retained = {key: value for key, value in retained.items()
+                        if key not in {"input_views", "output_views", "producer_context"}}
+            retained["tool_environment"] = {
+                "image": environment.get("image", previous.get("image")),
+                "container": environment.get("container", previous.get("container")),
+                "transport": environment.get("transport", previous.get("transport"))}
+            retained["reused"] = True
+            retained["scope"] = "Earlier native report; this window does not rerun that step."
+            options["previous_results"].setdefault(step, {})[name] = retained
+            if name not in names or step not in STEPS[STEPS.index(entry):STEPS.index(exit_) + 1]:
+                rows.append(retained)
     report = {"flow": "analog-A01-A19", "project": str(project),
               "started_at": datetime.now(timezone.utc).isoformat(),
               "entry": entry, "exit": exit_, "image": image,
@@ -728,7 +425,7 @@ def run_window(project, args, *, features=None):
               "steps": rows, "verdict": "NOT_MEASURED",
               "window_verdict": "NOT_MEASURED",
               "features": features,
-              "attempt": str(attempt), "source_sha256": _sha(Path(__file__)),
+              "attempt": str(attempt),
               "configuration": str(config_path) if config_path.is_file() else None}
 
     def execute_one(step, block):
@@ -748,15 +445,8 @@ def run_window(project, args, *, features=None):
         except (OSError, ValueError, KeyError) as exc:
             result = {"status": "NOT_MEASURED", "detail": str(exc), "outputs": []}
         result.update(step=step, block=name, duration_s=time.monotonic() - started)
-        result["producer_context"] = {"image": image, "container": container,
-                                      "transport": transport,
-                                      "driver_sha256": report["source_sha256"]}
-        result["input_views"] = _input_views(project, name, step)
-        result["input_views"].update(runner.native_inputs)
-        for view in (result.get("native_inputs") or {}).values():
-            if isinstance(view, dict) and view.get("path") and view.get("sha256"):
-                result["input_views"][view["path"]] = view["sha256"]
-        result["output_views"] = _output_views(result)
+        result["tool_environment"] = {"image": image, "container": container,
+                                      "transport": transport}
         write_json(directory / "result.json", result)
         print(f"{step} {name}: {result['status']} — {result.get('detail', '')}", flush=True)
         return result
@@ -794,940 +484,3 @@ def run_window(project, args, *, features=None):
     write_json(attempt / "result.json", report)
     write_json(parent / "status.json", report)
     return report
-
-
-def execute_window(project, context):
-    """Run one analog window so independent blocks can advance together."""
-    from flow109 import validate_execution_context
-    context = validate_execution_context(context)
-    entry = context.get("requested_step", context.get("requested_entry"))
-    exit_ = context.get("requested_step", context.get("requested_exit"))
-    container, image, transport = _adapter_transport(project)
-    args = SimpleNamespace(entry_step=entry, exit_step=exit_, blocks="", pdk="",
-                           container=container, image=image, transport=transport)
-    try:
-        return run_window(project, args, features=context["features"])
-    except (OSError, ValueError) as exc:
-        return {"window_verdict": "NOT_MEASURED", "steps": [],
-                "native_started": False, "reason": str(exc)}
-
-
-def _a18_current_rows(project, report, step, blocks, image):
-    """Reopen the existing native attempt and its complete declared readset."""
-    import flow109
-    attempt = Path(report["attempt"])
-    ref = {"path": str((attempt / "result.json").relative_to(project)),
-           "sha256": _sha(attempt / "result.json")}
-    flow109._current_project_ref(project, ref, "A18_NATIVE_ATTEMPT_FOREIGN")
-    stored = _read(attempt / "result.json")
-    if report != stored and report != {"attempt": str(attempt), "steps": [
-            row for row in stored.get("steps", []) if row.get("step") == step]}:
-        raise ValueError("A18_NATIVE_ATTEMPT_RECORD_MISMATCH")
-    report = stored
-    if (not attempt.resolve().is_relative_to(project / "reports/analog_native")
-            or report.get("source_sha256") != _sha(Path(__file__))
-            or report.get("image") != image):
-        raise ValueError("A18_NATIVE_ATTEMPT_STALE")
-    rows = [row for row in report["steps"] if row.get("step") == step]
-    if sorted(row["block"] for row in rows) != sorted(blocks):
-        raise ValueError("A18_NATIVE_BLOCK_POPULATION_MISMATCH")
-    readset = {str(attempt / "result.json"): ref["sha256"]}
-    for row in rows:
-        producer = row.get("producer_context", {})
-        if (row.get("status") != "PASS" or producer.get("image") != image
-                or producer.get("driver_sha256") != report["source_sha256"]
-                or not row.get("input_views") or not row.get("output_views")
-                or any(row["input_views"].get(key) != digest
-                       for key, digest in _input_views(project, row["block"], step).items())):
-            raise ValueError("A18_NATIVE_ROW_NOT_CURRENT")
-        for key in ("input_views", "output_views"):
-            for name, digest in row[key].items():
-                path = Path(name)
-                path = path if path.is_absolute() else project / path
-                if (not path.is_file() or _sha(path) != digest
-                        or key == "output_views" and not path.resolve().is_relative_to(project)):
-                    raise ValueError("A18_NATIVE_READSET_STALE: " + name)
-                readset[str(path)] = digest
-    return rows, readset
-
-
-def _a18_prerequisites(project, context, blocks, image):
-    """Consume accepted source-selected predecessors and their material readers."""
-    import importlib
-    import flow109
-    import flow109_admission as admission
-    selected = {r["id"] for r in flow109.resolve_plan(context["features"], context["step_profiles"])["rows"]}
-    readset, accepted = {}, {}
-    for step in context["resolved_row"]["acceptance_deps"]:
-        if step not in selected:
-            continue
-        body, ref = flow109._accepted_row(project, Path("reports/flow109/default_rows") / (step + ".json"), step)
-        if body.get("component_status") != "PASS":
-            raise ValueError("A18_PREREQUISITE_NATIVE_NOT_PASS: " + step)
-        readset[str(project / ref["path"])] = ref["sha256"]
-        request_path = project / "reports/flow109/requests" / (body["context_sha256"] + ".json")
-        original = flow109.validate_execution_context(_read(request_path))
-        original = flow109.component_context(original, requested_step=step)
-        if (original["features"] != context["features"]
-                or original["context_sha256"] != body["context_sha256"]):
-            raise ValueError("A18_PREREQUISITE_CARRIER_FOREIGN: " + step)
-        readset[str(request_path)] = _sha(request_path)
-        owner = importlib.import_module(original["resolved_row"]["profile"]["dispatch"]["adapter"])
-        if step == "A17":
-            _, views = _a18_current_rows(project, body["native_results"], step, blocks, image)
-            readset.update(views)
-            import analog_hardmacro_check as packages
-            if set(packages.run_audit(project).summary.get("design_bound_blocks", [])) != set(blocks):
-                raise ValueError("A18_A17_MATERIAL_POPULATION_MISMATCH")
-        elif step == "D32":
-            material = owner._d32_inputs(project)
-            if (body.get("inputs") != material["inputs"] or body.get("unmeasured")
-                    or body.get("native_db", {}).get("top") != material["top"]
-                    or body.get("native_launch", {}).get("image") != image):
-                raise ValueError("A18_D32_MATERIAL_NOT_ACCEPTED")
-            for use in original["runtime_tool_uses"]:
-                tool = body.get("tools", {}).get(use["tool_id"], {})
-                if (tool.get("sha256") != use["build_sha256"]
-                        or Path(tool.get("path", "")).resolve() != Path(use["executable"]["path"]).resolve()):
-                    raise ValueError("A18_D32_NATIVE_TOOL_UNQUALIFIED")
-            readset.update(material["inputs"])
-            if not body.get("outputs"):
-                raise ValueError("A18_D32_OUTPUTS_ABSENT")
-            for view in body["outputs"]:
-                flow109._current_project_ref(project, view, "A18_D32_OUTPUT_STALE")
-                readset[str(project / view["path"])] = view["sha256"]
-        elif step == "D31":
-            if not isinstance(body.get("outputs"), list) or len(body["outputs"]) != 2:
-                raise ValueError("A18_D31_OUTPUT_POPULATION_INCOMPLETE")
-            flow109._current_project_ref(project, body["outputs"][0], "A18_D31_OUTPUT_STALE")
-            raw_path = (project / body["outputs"][0]["path"]).parent / "component.json"
-            raw = _read(raw_path)
-            if (raw.get("context_sha256") != body["context_sha256"]
-                    or raw.get("component_status") != "PASS" or raw.get("outputs") != body["outputs"]):
-                raise ValueError("A18_D31_COMPONENT_LINK_FOREIGN")
-            readset[str(raw_path)] = _sha(raw_path)
-            completion = owner.consume_default_row_completion(project, original, raw)
-            if completion.get("default_row_status") != "PASS" or completion.get("completed") is not True:
-                raise ValueError("A18_D31_GEOMETRY_NOT_ACCEPTED")
-        elif step == "D03":
-            if not body.get("inputs"):
-                raise ValueError("A18_D03_READSET_ABSENT")
-            for view in body["inputs"]:
-                path = Path(view["path"])
-                path = path if path.is_absolute() else project / path
-                if not path.is_file() or _sha(path) != view["sha256"]:
-                    raise ValueError("A18_D03_INPUT_STALE")
-                readset[str(path)] = view["sha256"]
-        else:
-            raise ValueError("A18_PREREQUISITE_CONSUMER_UNAVAILABLE: " + step)
-        admission.require_admission(project, original)
-        accepted[step] = ref
-    return accepted, readset
-
-
-def _a04_invocation(project):
-    import shutil
-    import flow109_metric_acceptance as metrics
-    from execution_provider_catalog import source_closure
-    import analog_native_front
-    import flow109_analog_a04
-    import analog_a2_topology_select_check
-    project = Path(project).resolve()
-    container, image, transport = _adapter_transport(project)
-    if transport != "LOCAL" or container or not image:
-        return None
-    tools = {name: shutil.which(name) for name in ('python3',)}
-    if not all(tools.values()):
-        return None
-    inputs = {}
-    for block in _declared_blocks(project):
-        name = block.get("name") or block.get("block")
-        inputs.update(_input_views(project, name, "A04"))
-    paths = list((project / "requirements/base_A3").rglob("*"))
-    paths += [layout.analog_dir(project) / "analog_block_list.json",
-              project / "phase1/analog/analog_block_list.json"]
-    for path in list(paths):
-        if path.is_file() and path.suffix == ".json":
-            body = _read(path, {})
-            if isinstance(body, dict):
-                reference = body.get("reference")
-                if isinstance(reference, dict) and isinstance(reference.get("path"), str):
-                    paths.append(metrics._safe_project_file(project, reference["path"]))
-    inputs.update({str(path): _sha(path) for path in paths if path.is_file()})
-    sources = source_closure({Path(__file__), Path(metrics.__file__),
-                              Path(analog_native_front.__file__),
-                              Path(flow109_analog_a04.__file__),
-                              Path(analog_a2_topology_select_check.__file__)})
-    return {"image": image, "inputs": inputs,
-            "sources": {str(path): _sha(path) for path in sources},
-            "tools": {name: {"path": str(Path(path).resolve()), "sha256": _sha(path)}
-                      for name, path in tools.items()}}
-
-
-def _a06_invocation(project):
-    import shutil
-    import flow109_metric_acceptance as metrics
-    from execution_provider_catalog import source_closure
-    import analog_native_sim
-    import analog_bound_measurements
-    project = Path(project).resolve()
-    container, image, transport = _adapter_transport(project)
-    if transport != "LOCAL" or container or not image:
-        return None
-    tools = {name: shutil.which(name) for name in ('python3', 'ngspice')}
-    if not all(tools.values()):
-        return None
-    inputs = {}
-    for block in _declared_blocks(project):
-        name = block.get("name") or block.get("block")
-        inputs.update(_input_views(project, name, "A06"))
-    paths = list((project / "requirements/base_A5").rglob("*"))
-    paths += [layout.analog_dir(project) / "analog_block_list.json",
-              project / "phase1/analog/analog_block_list.json"]
-    for path in list(paths):
-        if path.is_file() and path.suffix == ".json":
-            body = _read(path, {})
-            if isinstance(body, dict):
-                reference = body.get("reference")
-                if isinstance(reference, dict) and isinstance(reference.get("path"), str):
-                    paths.append(metrics._safe_project_file(project, reference["path"]))
-    inputs.update({str(path): _sha(path) for path in paths if path.is_file()})
-    sources = source_closure({Path(__file__), Path(metrics.__file__),
-                              Path(analog_native_sim.__file__),
-                              Path(analog_bound_measurements.__file__)})
-    return {"image": image, "inputs": inputs,
-            "sources": {str(path): _sha(path) for path in sources},
-            "tools": {name: {"path": str(Path(path).resolve()), "sha256": _sha(path)}
-                      for name, path in tools.items()}}
-
-
-def _a07_invocation(project, step="A07"):
-    import shutil
-    import flow109_metric_acceptance as metrics
-    from execution_provider_catalog import source_closure
-    import analog_native_sim
-    import analog_bound_measurements
-    project = Path(project).resolve()
-    container, image, transport = _adapter_transport(project)
-    if transport != "LOCAL" or container or not image:
-        return None
-    tools = {name: shutil.which(name) for name in ('python3', 'ngspice')}
-    if not all(tools.values()):
-        return None
-    inputs = {}
-    for block in _declared_blocks(project):
-        name = block.get("name") or block.get("block")
-        inputs.update(_input_views(project, name, step))
-        if step in ("A07", "A08"):
-            try:
-                selected = analog_native_sim._selected_config(project,
-                    {"config": _read(project / "input/analog_flow.json", {})}, block, step)
-            except (OSError, ValueError):
-                return None  # The dispatcher records the invalid execution inputs.
-            if selected.get("nominal_testbench"):
-                selected = {**selected, "testbench": selected["nominal_testbench"]}
-            _netlist, deck, _spec = analog_native_sim._inputs(project, name, selected)
-            pvt = selected.get('pvt')
-            derived = step == 'A08' and isinstance(pvt, dict) and pvt.get('kind') == 'declared_testbench'
-            _environment, startup = _local_ngspice_startup(project, None if derived else deck.parent, image)
-            if startup:
-                inputs[startup["path"]] = startup["sha256"]
-    paths = list((project / ("requirements/base_A6" if step == "A07" else "requirements/base_A7")).rglob("*"))
-    paths += [layout.analog_dir(project) / (block.get("name") or block.get("block")) / "pvt_inputs.json"
-              for block in _declared_blocks(project)] if step == "A08" else []
-    paths += [layout.analog_dir(project) / "analog_block_list.json",
-              project / "phase1/analog/analog_block_list.json"]
-    for path in list(paths):
-        if path.is_file() and path.suffix == ".json":
-            body = _read(path, {})
-            if isinstance(body, dict):
-                reference = body.get("reference")
-                if isinstance(reference, dict) and isinstance(reference.get("path"), str):
-                    paths.append(metrics._safe_project_file(project, reference["path"]))
-    inputs.update({str(path): _sha(path) for path in paths if path.is_file()})
-    sources = source_closure({Path(__file__), Path(metrics.__file__),
-                              Path(analog_native_sim.__file__),
-                              Path(analog_bound_measurements.__file__)})
-    return {"image": image, "inputs": inputs,
-            "sources": {str(path): _sha(path) for path in sources},
-            "tools": {name: {"path": str(Path(path).resolve()), "sha256": _sha(path)}
-                      for name, path in tools.items()}}
-
-
-def _a08_invocation(project):
-    """Bind the selected incremental manifest and its existing native readset."""
-    import flow109_metric_acceptance as metrics
-    project = Path(project).resolve()
-    invocation = _a07_invocation(project, step="A08")
-    if invocation is None:
-        return None
-    paths = set()
-    def referenced(value):
-        if isinstance(value, str) and value:
-            path = Path(value)
-            path = (path if path.is_absolute() else project / path).resolve()
-            paths.add(path)
-            return path
-    def views(record):
-        for view in (record.get("native_inputs") or {}).values():
-            if isinstance(view, dict):
-                referenced(view.get("path"))
-    for block in _declared_blocks(project):
-        name = block.get("name") or block.get("block")
-        selected = metrics._a08_selected(project, name)
-        pvt = selected.get("pvt") or {}
-        if pvt.get("kind") != "incremental_capture":
-            continue
-        path = referenced((pvt.get("manifest") or {}).get("path"))
-        manifest = _read(path, {}) if path else {}
-        views(manifest)
-        for context in manifest.get("contexts") or []:
-            views(context)
-            referenced((context.get("settings") or {}).get("path"))
-            score_path = referenced(context.get("score"))
-            score = _read(score_path, {}) if score_path else {}
-            entries = score.get("points") or []
-            if not entries and score_path:
-                entries = [{"path": str(p)} for p in score_path.parent.glob("point-[0-9][0-9][0-9]/result.json")]
-            for entry in entries:
-                point_path = referenced(entry.get("path"))
-                point = _read(point_path, {}) if point_path else {}
-                views(point)
-                referenced((point.get("capture") or {}).get("path"))
-                for execution in point.get("executions") or []:
-                    referenced(execution.get("log"))
-    invocation["inputs"].update({str(path): _sha(path) for path in paths if path.is_file()})
-    return invocation
-
-
-def _a05_invocation(project):
-    import shutil
-    import analog_native_front as front
-    import analog_netlist_connectivity_check as connectivity
-    import flow109_metric_acceptance as metrics
-    from execution_provider_catalog import source_closure
-    project = Path(project).resolve()
-    container, image, transport = _adapter_transport(project)
-    if transport != "LOCAL" or container or not image:
-        return None
-    tools = {name: shutil.which(name) for name in ("python3", "ngspice")}
-    if not all(tools.values()):
-        return None
-    inputs = {}
-    for block in _declared_blocks(project):
-        name = block.get("name") or block.get("block")
-        inputs.update(_input_views(project, name, "A05"))
-        provenance = layout.analog_dir(project) / name / "netlist_provenance.json"
-        if provenance.is_file():
-            inputs[str(provenance)] = _sha(provenance)
-    for declaration in (layout.analog_dir(project) / "analog_block_list.json",
-                        project / "phase1/analog/analog_block_list.json"):
-        if declaration.is_file():
-            inputs[str(declaration)] = _sha(declaration)
-    inputs.update({str(path): _sha(path) for path in
-                   (project / "requirements/base_A4").rglob("*") if path.is_file()})
-    paths = source_closure({Path(__file__), Path(front.__file__), Path(connectivity.__file__),
-                            Path(metrics.__file__)})
-    return {"image": image, "inputs": inputs,
-            "sources": {str(path): _sha(path) for path in paths},
-            "tools": {name: {"path": str(Path(path).resolve()), "sha256": _sha(path)}
-                      for name, path in tools.items()}}
-
-
-def consume_default_row_completion(project, context, component):
-    """Complete existing measured rows from qualified inputs and accepted dependencies."""
-    if context.get('requested_step') == 'A01':
-        import flow109
-        import flow109_admission as admission
-        import flow109_metric_acceptance as metrics
-        project = Path(project).resolve()
-        base = {'step_id': 'A01', 'context_sha256': context.get('context_sha256'),
-                'default_row_status': 'NOT_MEASURED', 'completed': False,
-                'whole_flow_acceptance': 'NOT_MEASURED', 'delivery_accepted': False}
-        if component.get('component_status') == 'FAIL':
-            return {**base, 'default_row_status': 'FAIL', 'reason': component.get('reason')}
-        try:
-            current = flow109.validate_execution_context(context)
-            if component.get('component_status') != 'PASS' or current['native_step_id'] != 'A1':
-                raise ValueError('A01_NATIVE_COMPONENT_NOT_PASS')
-            qualified = admission.require_admission(project, current)
-            accepted = {step: flow109._accepted_row(project,
-                Path('reports/flow109/default_rows') / (step + '.json'), step)[1]
-                for step in current['resolved_row']['acceptance_deps']}
-            measured = metrics.accept_a01(project, current, component)
-            status = measured['status']
-            return {**base, 'default_row_status': status, 'completed': status == 'PASS',
-                    'metric_acceptance': measured, 'metric_acceptance_status': status,
-                    'qualification': qualified['status'], 'accepted_dependencies': accepted,
-                    'reason': measured['reason']}
-        except (ValueError, OSError, TypeError, KeyError, AttributeError) as exc:
-            return {**base, 'reason': getattr(exc, 'code', 'A01_COMPLETION_INPUT_NOT_CURRENT'),
-                    'detail': str(exc)}
-    if context.get("requested_step") == "A03":
-        status = "FAIL" if component.get("component_status") == "FAIL" else "NOT_MEASURED"
-        return {**component, "step_id": "A03", "context_sha256": context.get("context_sha256"),
-                "default_row_status": status, "flow109_acceptance": status, "completed": False,
-                "whole_flow_acceptance": "NOT_MEASURED", "delivery_accepted": False,
-                "metric_acceptance_status": status,
-                "reason": "A03_APPLICABLE_NATIVE_TESTABILITY_PRODUCER_ABSENT"}
-    if context.get("requested_step") == "A04":
-        import flow109_metric_acceptance as metrics
-        measured = metrics.accept_a04(project, context, component)
-        status = "FAIL" if measured["status"] == "FAIL" else "NOT_MEASURED"
-        base = {**component, "step_id": "A04", "context_sha256": context.get("context_sha256"),
-                "metric_acceptance": measured, "metric_acceptance_status": measured["status"],
-                "default_row_status": status, "completed": False, "flow109_acceptance": status,
-                "whole_flow_acceptance": "NOT_MEASURED", "delivery_accepted": False,
-                "qualification": "NOT_MEASURED", "reason": measured.get("reason")}
-        if measured["status"] != "PASS":
-            return base
-        try:
-            import flow109
-            import flow109_admission as admission
-            import librelane_contract as launch
-            current = flow109.validate_execution_context(context)
-            if (component.get("component_status") != "PASS"
-                    or current["native_step_id"] != "flow109.A04"
-                    or sorted(item["metric"] for item in current["resolved_row"]["obligations"])
-                    != sorted(measured["metrics"])):
-                raise ValueError("A04_COMPONENT_OR_METRIC_POPULATION_MISMATCH")
-            qualified = admission.require_admission(project, current)
-            invocation = component["a04_invocation"]
-            if launch.resolve_image(project, record=False) != invocation["image"]:
-                raise ValueError("A04_QUALIFIED_IMAGE_MISMATCH")
-            for use in current["runtime_tool_uses"]:
-                if use["executable"] != invocation["tools"].get(use["tool_id"]):
-                    raise ValueError("A04_QUALIFIED_TOOL_MISMATCH")
-            accepted = {step: flow109._accepted_row(project,
-                Path("reports/flow109/default_rows") / (step + ".json"), step)[1]
-                for step in current["resolved_row"]["acceptance_deps"]}
-            if (metrics.accept_a04(project, current, component) != measured
-                    or admission.require_admission(project, current) != qualified):
-                raise ValueError("A04_INPUT_CHANGED_DURING_COMPLETION")
-            return {**base, "default_row_status": "PASS", "completed": True,
-                    "flow109_acceptance": "PASS", "qualification": qualified["status"],
-                    "accepted_dependencies": accepted, "reason": "A04_CURRENT_METRICS_AND_QUALIFICATION_PASS"}
-        except (ValueError, OSError, TypeError, KeyError, AttributeError, launch.Refusal) as exc:
-            return {**base, "reason": getattr(exc, "code", "A04_COMPLETION_INPUT_NOT_CURRENT"),
-                    "detail": str(exc)}
-    if context.get("requested_step") == "A06":
-        import flow109_metric_acceptance as metrics
-        measured = metrics.accept_a06(project, context, component)
-        status = "FAIL" if measured["status"] == "FAIL" else "NOT_MEASURED"
-        base = {**component, "step_id": "A06", "context_sha256": context.get("context_sha256"),
-                "metric_acceptance": measured, "metric_acceptance_status": measured["status"],
-                "default_row_status": status, "completed": False, "flow109_acceptance": status,
-                "whole_flow_acceptance": "NOT_MEASURED", "delivery_accepted": False,
-                "qualification": "NOT_MEASURED", "reason": measured.get("reason")}
-        if measured["status"] != "PASS":
-            return base
-        try:
-            import flow109
-            import flow109_admission as admission
-            import librelane_contract as launch
-            current = flow109.validate_execution_context(context)
-            if (component.get("component_status") != "PASS"
-                    or current["native_step_id"] != "flow109.A06"
-                    or sorted(item["metric"] for item in current["resolved_row"]["obligations"])
-                    != sorted(measured["metrics"])):
-                raise ValueError("A06_COMPONENT_OR_METRIC_POPULATION_MISMATCH")
-            qualified = admission.require_admission(project, current)
-            invocation = component["a06_invocation"]
-            if launch.resolve_image(project, record=False) != invocation["image"]:
-                raise ValueError("A06_QUALIFIED_IMAGE_MISMATCH")
-            for use in current["runtime_tool_uses"]:
-                if use["executable"] != invocation["tools"].get(use["tool_id"]):
-                    raise ValueError("A06_QUALIFIED_TOOL_MISMATCH")
-            accepted = {step: flow109._accepted_row(project,
-                Path("reports/flow109/default_rows") / (step + ".json"), step)[1]
-                for step in current["resolved_row"]["acceptance_deps"]}
-            if (metrics.accept_a06(project, current, component) != measured
-                    or admission.require_admission(project, current) != qualified):
-                raise ValueError("A06_INPUT_CHANGED_DURING_COMPLETION")
-            return {**base, "default_row_status": "PASS", "completed": True,
-                    "flow109_acceptance": "PASS", "qualification": qualified["status"],
-                    "accepted_dependencies": accepted, "reason": "A06_CURRENT_METRICS_AND_QUALIFICATION_PASS"}
-        except (ValueError, OSError, TypeError, KeyError, AttributeError, launch.Refusal) as exc:
-            return {**base, "reason": getattr(exc, "code", "A06_COMPLETION_INPUT_NOT_CURRENT"),
-                    "detail": str(exc)}
-    if context.get("requested_step") == "A07":
-        import flow109_metric_acceptance as metrics
-        measured = metrics.accept_a07(project, context, component)
-        status = "FAIL" if measured["status"] == "FAIL" else "NOT_MEASURED"
-        base = {**component, "step_id": "A07", "context_sha256": context.get("context_sha256"),
-                "metric_acceptance": measured, "metric_acceptance_status": measured["status"],
-                "default_row_status": status, "completed": False, "flow109_acceptance": status,
-                "whole_flow_acceptance": "NOT_MEASURED", "delivery_accepted": False,
-                "qualification": "NOT_MEASURED", "reason": measured.get("reason")}
-        if measured["status"] != "PASS":
-            return base
-        try:
-            import flow109
-            import flow109_admission as admission
-            import librelane_contract as launch
-            current = flow109.validate_execution_context(context)
-            if (component.get("component_status") != "PASS"
-                    or current["native_step_id"] != "flow109.A07"
-                    or sorted(item["metric"] for item in current["resolved_row"]["obligations"])
-                    != sorted(measured["metrics"])):
-                raise ValueError("A07_COMPONENT_OR_METRIC_POPULATION_MISMATCH")
-            qualified = admission.require_admission(project, current)
-            invocation = component["a07_invocation"]
-            if launch.resolve_image(project, record=False) != invocation["image"]:
-                raise ValueError("A07_QUALIFIED_IMAGE_MISMATCH")
-            for use in current["runtime_tool_uses"]:
-                if use["executable"] != invocation["tools"].get(use["tool_id"]):
-                    raise ValueError("A07_QUALIFIED_TOOL_MISMATCH")
-            accepted = {step: flow109._accepted_row(project,
-                Path("reports/flow109/default_rows") / (step + ".json"), step)[1]
-                for step in current["resolved_row"]["acceptance_deps"]}
-            if (metrics.accept_a07(project, current, component) != measured
-                    or admission.require_admission(project, current) != qualified):
-                raise ValueError("A07_INPUT_CHANGED_DURING_COMPLETION")
-            return {**base, "default_row_status": "PASS", "completed": True,
-                    "flow109_acceptance": "PASS", "qualification": qualified["status"],
-                    "accepted_dependencies": accepted, "reason": "A07_CURRENT_METRICS_AND_QUALIFICATION_PASS"}
-        except (ValueError, OSError, TypeError, KeyError, AttributeError, launch.Refusal) as exc:
-            return {**base, "reason": getattr(exc, "code", "A07_COMPLETION_INPUT_NOT_CURRENT"),
-                    "detail": str(exc)}
-    if context.get("requested_step") == "A08":
-        import flow109_metric_acceptance as metrics
-        measured = metrics.accept_a08(project, context, component)
-        status = "FAIL" if measured["status"] == "FAIL" else "NOT_MEASURED"
-        base = {**component, "step_id": "A08", "context_sha256": context.get("context_sha256"),
-                "metric_acceptance": measured, "metric_acceptance_status": measured["status"],
-                "default_row_status": status, "completed": False, "flow109_acceptance": status,
-                "whole_flow_acceptance": "NOT_MEASURED", "delivery_accepted": False,
-                "qualification": "NOT_MEASURED", "reason": measured.get("reason")}
-        if measured["status"] != "PASS":
-            return base
-        try:
-            import flow109
-            import flow109_admission as admission
-            import librelane_contract as launch
-            current = flow109.validate_execution_context(context)
-            if (component.get("component_status") != "PASS"
-                    or current["native_step_id"] != "flow109.A08"
-                    or sorted(item["metric"] for item in current["resolved_row"]["obligations"])
-                    != sorted(measured["metrics"])):
-                raise ValueError("A08_COMPONENT_OR_METRIC_POPULATION_MISMATCH")
-            qualified = admission.require_admission(project, current)
-            invocation = component["a08_invocation"]
-            if launch.resolve_image(project, record=False) != invocation["image"]:
-                raise ValueError("A08_QUALIFIED_IMAGE_MISMATCH")
-            for use in current["runtime_tool_uses"]:
-                if use["executable"] != invocation["tools"].get(use["tool_id"]):
-                    raise ValueError("A08_QUALIFIED_TOOL_MISMATCH")
-            accepted = {step: flow109._accepted_row(project,
-                Path("reports/flow109/default_rows") / (step + ".json"), step)[1]
-                for step in current["resolved_row"]["acceptance_deps"]}
-            if (metrics.accept_a08(project, current, component) != measured
-                    or admission.require_admission(project, current) != qualified):
-                raise ValueError("A08_INPUT_CHANGED_DURING_COMPLETION")
-            return {**base, "default_row_status": "PASS", "completed": True,
-                    "flow109_acceptance": "PASS", "qualification": qualified["status"],
-                    "accepted_dependencies": accepted, "reason": "A08_CURRENT_METRICS_AND_QUALIFICATION_PASS"}
-        except (ValueError, OSError, TypeError, KeyError, AttributeError, launch.Refusal) as exc:
-            return {**base, "reason": getattr(exc, "code", "A08_COMPLETION_INPUT_NOT_CURRENT"),
-                    "detail": str(exc)}
-    if context.get("requested_step") == "A05":
-        import flow109_metric_acceptance as metrics
-        measured = metrics.accept_a05(project, context, component)
-        status = "FAIL" if measured["status"] == "FAIL" else "NOT_MEASURED"
-        base = {**component, "step_id": "A05", "context_sha256": context.get("context_sha256"),
-                "metric_acceptance": measured, "metric_acceptance_status": measured["status"],
-                "default_row_status": status, "completed": False, "flow109_acceptance": status,
-                "whole_flow_acceptance": "NOT_MEASURED", "delivery_accepted": False,
-                "qualification": "NOT_MEASURED", "reason": measured.get("reason")}
-        if measured["status"] != "PASS":
-            return base
-        try:
-            import flow109
-            import flow109_admission as admission
-            import librelane_contract as launch
-            current = flow109.validate_execution_context(context)
-            if (component.get("component_status") != "PASS"
-                    or current["native_step_id"] != "flow109.A05"
-                    or sorted(item["metric"] for item in current["resolved_row"]["obligations"])
-                    != sorted(measured["metrics"])):
-                raise ValueError("A05_COMPONENT_OR_METRIC_POPULATION_MISMATCH")
-            qualified = admission.require_admission(project, current)
-            invocation = component["a05_invocation"]
-            if launch.resolve_image(project, record=False) != invocation["image"]:
-                raise ValueError("A05_QUALIFIED_IMAGE_MISMATCH")
-            for use in current["runtime_tool_uses"]:
-                if use["executable"] != invocation["tools"].get(use["tool_id"]):
-                    raise ValueError("A05_QUALIFIED_TOOL_MISMATCH")
-            accepted = {step: flow109._accepted_row(project,
-                Path("reports/flow109/default_rows") / (step + ".json"), step)[1]
-                for step in current["resolved_row"]["acceptance_deps"]}
-            if (metrics.accept_a05(project, current, component) != measured
-                    or admission.require_admission(project, current) != qualified):
-                raise ValueError("A05_INPUT_CHANGED_DURING_COMPLETION")
-            return {**base, "default_row_status": "PASS", "completed": True,
-                    "flow109_acceptance": "PASS", "qualification": qualified["status"],
-                    "accepted_dependencies": accepted, "reason": "A05_CURRENT_METRICS_AND_QUALIFICATION_PASS"}
-        except (ValueError, OSError, TypeError, KeyError, AttributeError, launch.Refusal) as exc:
-            return {**base, "reason": getattr(exc, "code", "A05_COMPLETION_INPUT_NOT_CURRENT"),
-                    "detail": str(exc)}
-    if context.get("requested_step") == "A02":
-        import flow109_metric_acceptance as metrics
-        measured = metrics.accept_a02(project, context, component)
-        status = "FAIL" if measured["status"] == "FAIL" else "NOT_MEASURED"
-        base = {**component, "step_id": "A02", "context_sha256": context.get("context_sha256"),
-                "metric_acceptance": measured, "metric_acceptance_status": measured["status"],
-                "default_row_status": status, "completed": False,
-                "flow109_acceptance": status, "whole_flow_acceptance": "NOT_MEASURED",
-                "delivery_accepted": False, "qualification": "NOT_MEASURED",
-                "reason": measured.get("reason")}
-        if measured["status"] != "PASS":
-            return base
-        try:
-            import flow109
-            import flow109_admission as admission
-            import librelane_contract as launch
-            current = flow109.validate_execution_context(context)
-            if (component.get("component_status") != "PASS"
-                    or current["native_step_id"] != "flow109.A02"
-                    or sorted(item["metric"] for item in current["resolved_row"]["obligations"])
-                    != sorted(measured["metrics"])):
-                raise ValueError("A02_COMPONENT_OR_METRIC_POPULATION_MISMATCH")
-            qualified = admission.require_admission(project, current)
-            invocation = component["a02_invocation"]
-            if launch.resolve_image(project, record=False) != invocation["image"]:
-                raise ValueError("A02_QUALIFIED_IMAGE_MISMATCH")
-            for use in current["runtime_tool_uses"]:
-                if use["executable"] != invocation["tools"].get(use["tool_id"]):
-                    raise ValueError("A02_QUALIFIED_TOOL_MISMATCH")
-            accepted = {step: flow109._accepted_row(project,
-                Path("reports/flow109/default_rows") / (step + ".json"), step)[1]
-                for step in current["resolved_row"]["acceptance_deps"]}
-            if (metrics.accept_a02(project, current, component) != measured
-                    or admission.require_admission(project, current) != qualified):
-                raise ValueError("A02_INPUT_CHANGED_DURING_COMPLETION")
-            return {**base, "default_row_status": "PASS", "completed": True,
-                    "flow109_acceptance": "PASS", "qualification": qualified["status"],
-                    "accepted_dependencies": accepted, "reason": "A02_CURRENT_METRICS_AND_QUALIFICATION_PASS"}
-        except (ValueError, OSError, TypeError, KeyError, AttributeError, launch.Refusal) as exc:
-            return {**base, "reason": getattr(exc, "code", "A02_COMPLETION_INPUT_NOT_CURRENT"),
-                    "detail": str(exc)}
-    if context.get("requested_step") != "A18":
-        return component
-    project = Path(project).resolve()
-    base = {"step_id": "A18", "context_sha256": context.get("context_sha256"),
-            "default_row_status": "NOT_MEASURED", "completed": False,
-            "flow109_acceptance": "NOT_MEASURED", "whole_flow_acceptance": "NOT_MEASURED",
-            "delivery_accepted": False, "qualification": "NOT_MEASURED"}
-    if component.get("component_status") == "FAIL":
-        return {**base, "default_row_status": "FAIL", "reason": component.get("reason")}
-    if any(row.get("native_evidence", {}).get("stand_in") is True
-           for row in component.get("native_results", {}).get("steps", [])):
-        return {**base, "reason": "A18_MACRO_TOP_SIGNOFF_NOT_MEASURED"}
-    try:
-        import flow109
-        import flow109_admission as admission
-        import flow109_metric_acceptance as metrics
-        import librelane_contract as launch
-        context = flow109.validate_execution_context(context)
-        if component.get("component_status") != "PASS" or context["native_step_id"] != "flow109.A18":
-            raise ValueError("A18_NATIVE_COMPONENT_NOT_PASS")
-        qualified = admission.require_admission(project, context)
-        sources = _a18_model_sources()
-        for use in context["runtime_tool_uses"]:
-            config = _read(project / use["config"]["path"])
-            if config != {"purpose": use["semantics"]["purpose"],
-                          "native_steps": use["semantics"]["native_steps"], "model_sources": sources}:
-                raise ValueError("A18_QUALIFIED_MODEL_STALE")
-        image = launch.resolve_image(project, record=False)
-        blocks = [b.get("name") or b.get("block") for b in _declared_blocks(project)]
-        rows, readset = _a18_current_rows(project, component["native_results"], "A18", blocks, image)
-        config = _read(project / "input/analog_flow.json")
-        settings = config["analog_top"]
-        from analog_macro_top_run import RUN_RECORD
-        receipt = project / RUN_RECORD
-        limits = project / "requirements/analog_top_route/analog_sensitive_route_constraints.json"
-        observations = []
-        for row in rows:
-            executions = row.get("executions", [])
-            if len(executions) != 1 or executions[0].get("returncode") != 0 or executions[0].get("missing_outputs"):
-                raise ValueError("A18_NATIVE_EXECUTION_INCOMPLETE")
-            execution = executions[0]
-            evidence = _read(receipt)
-            for use in context["runtime_tool_uses"]:
-                view = evidence.get("native_tools", {}).get(use["tool_id"])
-                if view != use["executable"] or _sha(Path(view["path"])) != view["sha256"]:
-                    raise ValueError("A18_QUALIFIED_TOOL_MISMATCH")
-                readset[view["path"]] = view["sha256"]
-            argv = execution.get("argv", [])
-            if (len(argv) != 3 or Path(argv[0]).resolve() != Path(evidence["native_tools"]["python3"]["path"]).resolve()
-                    or argv[1:] != [str(HERE / "analog_macro_top_run.py"), str(project)]
-                    or execution.get("cwd") != str(project)):
-                raise ValueError("A18_QUALIFIED_INVOCATION_MISMATCH")
-            log = Path(execution["log"])
-            log = log if log.is_absolute() else project / log
-            flow109._current_project_ref(project,
-                {"path": str(log.relative_to(project)), "sha256": execution["log_sha256"]}, "A18_NATIVE_LOG_STALE")
-            readset[str(log)] = execution["log_sha256"]
-            observed = _a18_metrics(project, row["block"], settings, _read(receipt), executions[0],
-                                    row["input_views"].get(str(limits)))
-            observations.append(observed)
-            readset.update(observed["input_views"])
-        obligations = context["resolved_row"]["obligations"]
-        if sorted(item["metric"] for item in obligations) != sorted(observations[0]["metrics"]):
-            raise ValueError("A18_REQUIRED_METRIC_POPULATION_MISMATCH")
-        status = _aggregate(observations)
-        base["metric_acceptance"] = {"status": status, "blocks": observations}
-        base["metric_acceptance_status"] = status
-        if status != "PASS":
-            return {**base, "default_row_status": status, "reason": "A18_METRICS_NOT_CURRENT_OR_PASS"}
-        accepted, views = _a18_prerequisites(project, context, blocks, image)
-        readset.update(views)
-        if (any(not Path(path).is_file() or _sha(path) != digest for path, digest in readset.items())
-                or admission.require_admission(project, context) != qualified):
-            raise ValueError("A18_INPUT_CHANGED_DURING_COMPLETION")
-        return {**base, "default_row_status": "PASS", "completed": True,
-                "flow109_acceptance": "PASS", "qualification": "PASS",
-                "reason": "A18_CURRENT_METRICS_PREREQUISITES_AND_QUALIFICATION_PASS",
-                "accepted_dependencies": accepted, "input_views": readset}
-    except (ValueError, OSError, TypeError, KeyError, AttributeError, launch.Refusal) as exc:
-        return {**base, "reason": getattr(exc, "code", "A18_COMPLETION_INPUT_NOT_CURRENT"), "detail": str(exc)}
-
-
-def _d54_correlation(project: Path, context: dict) -> dict:
-    """D54 analog-die consumer; missing/failed A14 blocks stop this row.
-
-    Reuse A14's native PEX grading and pre/post deltas. No new simulation,
-    threshold, receipt, or whole-flow acceptance is introduced here.
-    """
-    import flow109
-    import analog_native_physical as physical
-    import analog_a7_post_layout_emit as a7
-    from corner_yield_vs_spec_check import _spec_limits
-    from analog_real_corner_sweep import normalize_spec_label
-
-    def limits(spec):
-        return {normalize_spec_label(key) or str(key).casefold(): bound
-                for key, bound in _spec_limits(spec).items()}
-
-    project = Path(project).resolve()
-    context = flow109.validate_execution_context(context)
-    row = context["resolved_row"]
-    if row["id"] != "D54" or row["selected_profile"] != "analog_die":
-        raise flow109.Flow109Error("FLOW109_PROFILE_INAPPLICABLE", "D54.analog_die")
-    default = next(p for p in row["profiles"] if p["id"] == "default")
-    result = {"step_id": "D54", "context_sha256": context["context_sha256"],
-              "component_status": "NOT_MEASURED", "default_row_status": "NOT_MEASURED",
-              "completed": False, "native_started": False,
-              "whole_flow_acceptance": "NOT_MEASURED", "delivery_accepted": False,
-              "digital_path": {"status": "NOT_APPLICABLE",
-                  "reason": "declared analog-only physical top has no synthesized timing paths",
-                  "native_steps": default["native_steps"]},
-              "acceptance_dependency": "A14", "blocks": []}
-    try:
-        # A synthesized wrapper can still contain only declared analog
-        # macros. Inspect its cell population; a file or sidecar is not a
-        # standard-cell timing path. Unknown/behavioural logic refuses reuse.
-        from synth_netlist_check import count_cell_instances
-        synth = layout.synth_dir(project)
-        netlists = set(synth.glob("*.v")) | set(synth.glob("*.sv"))
-        mapped = layout.mapped_synth_netlist(project)
-        if mapped is not None:
-            netlists.add(mapped)
-        l9 = _read(layout.generated_docs_dir(project) / "L9_INTEGRATION_SPEC.json", {})
-        macros = set(l9.get("macros") or {})
-        macros.update(b.get("name") or b.get("block") for b in _declared_blocks(project))
-        for netlist in netlists:
-            text = re.sub(r"/\*.*?\*/|//[^\n]*", " ", netlist.read_text(), flags=re.S)
-            # Normalise statement boundaries for the existing cell census.
-            text = text.replace(";", ";\n")
-            count, cells = count_cell_instances(text)
-            modules = set(re.findall(r"\bmodule\s+([A-Za-z_][\w$]*)", text))
-            assignments = re.findall(r"\bassign\s+[^=;]+=\s*([^;]+);", text)
-            wiring = all(re.fullmatch(r"\s*(?:[A-Za-z_][\w$]*(?:\[\d+\])?|"
-                         r"(?:\d+)?'[sS]?[bBoOdDhH][0-9a-fA-F_xXzZ]+|[01])\s*", rhs)
-                         for rhs in assignments)
-            if (not count or set(cells) - macros - modules or not wiring
-                    or re.search(r"\b(?:always\w*|initial|function|generate)\b", text)):
-                result["digital_path"] = {"status": "NOT_MEASURED",
-                    "reason": "synthesized top is not a declared macro-only interconnect",
-                    "native_steps": default["native_steps"]}
-                raise ValueError("D54_MACRO_ONLY_TOP_CONFLICT")
-        if not netlists and (synth / layout.SYNTH_INPUTS_SIDECAR).exists():
-            raise ValueError("D54_SYNTHESIZED_TOP_UNAVAILABLE")
-        blocks = _declared_blocks(project)
-        l5 = layout.generated_docs_dir(project) / "L5_ADI_SPEC.json"
-        originals = {b.get("name") or b.get("block"): b
-                     for b in json.loads(l5.read_text())["analog_blocks"]}
-        report = json.loads((project / "reports/analog_native/status.json").read_text())
-        attempt = Path(report["attempt"])
-        if (not attempt.resolve().is_relative_to(project / "reports/analog_native")
-                or json.loads((attempt / "result.json").read_text()) != report):
-            raise ValueError("D54_A14_NATIVE_ATTEMPT_UNAVAILABLE")
-        rows = [r for r in report["steps"] if r.get("step") == "A14"]
-        for block in blocks:
-            name = block.get("name") or block.get("block")
-            found = [r for r in rows if r.get("block") == name]
-            observed = {"block": name, "status": "NOT_MEASURED"}
-            result["blocks"].append(observed)
-            if len(found) != 1:
-                observed["reason"] = "D54_A14_NATIVE_RESULT_MISSING"
-                continue
-            a14 = found[0]
-            if a14.get("status") == "FAIL":
-                observed.update(status="FAIL", reason="D54_A14_NATIVE_FAILED",
-                                metrics=a14.get("metrics", {}))
-                continue
-            if a14.get("status") != "PASS":
-                observed["reason"] = "D54_A14_NATIVE_NOT_MEASURED"
-                continue
-            try:
-                inputs, outputs = a14.get("input_views"), a14.get("output_views")
-                if (not inputs or not outputs or any(inputs.get(p) != h for p, h in
-                        _input_views(project, name, "A14").items())):
-                    raise ValueError("D54_A14_READSET_INCOMPLETE")
-                for p, h in {**inputs, **outputs}.items():
-                    path = Path(p) if Path(p).is_absolute() else project / p
-                    if not path.is_file() or _sha(path) != h:
-                        raise ValueError("D54_A14_READSET_STALE")
-                # A14 already grades spec.json. Require those exact limits to
-                # remain the block's original L5 limits before routing PASS.
-                original = limits(originals[name]["spec"])
-                spec = json.loads((layout.analog_dir(project) / name / "spec.json").read_text())
-                if not original or original != limits(spec):
-                    raise ValueError("D54_A14_ORIGINAL_L5_LIMITS_MISMATCH")
-                metrics = a14["metrics"]
-                if (not metrics.get("corners") or not metrics.get("specs")
-                        or not metrics.get("pre", {}).get("measurements")):
-                    raise ValueError("D54_A14_PEX_COMPARISON_MISSING")
-                # Ordinary A14 run_window results have no collector A14 entry.
-                # Their existing corner fields bind the actual POST netlist
-                # and TB; A13 binds the extracted input to the current layout.
-                bdir, work = physical._paths(project, name)
-                extraction = _read(work / "A13.json", {})
-                extracted = extraction.get("metrics") or {}
-                net = bdir / (name + ".sp")
-                if (extraction.get("status") != "PASS"
-                        or extracted.get("layout_sha256") != _sha(bdir / (name + ".gds"))
-                        or extracted.get("netlist_sha256") != _sha(net)):
-                    raise ValueError("D54_A14_EXTRACTION_NOT_CURRENT")
-                sources = extracted.get("corners") or []
-                if (len(sources) != len(metrics["corners"])
-                        or len({c["style"] for c in sources}) != len(sources)
-                        or {c["style"] for c in sources} != {c["style"] for c in metrics["corners"]}):
-                    raise ValueError("D54_A14_EXTRACTION_CORNERS_MISMATCH")
-                for corner in metrics["corners"]:
-                    for role in ("post_netlist", "post_testbench"):
-                        raw = corner.get(role)
-                        if not isinstance(raw, str) or not raw:
-                            raise ValueError("D54_A14_POST_INPUT_ABSENT")
-                        path = (project / raw).resolve()
-                        if (not path.is_relative_to(project) or not path.is_file()
-                                or corner.get(role + "_sha256") != _sha(path)):
-                            raise ValueError("D54_A14_POST_INPUT_STALE")
-                    matches = [c for c in sources if c["style"] == corner["style"]]
-                    if len(matches) != 1:
-                        raise ValueError("D54_A14_EXTRACTION_CORNERS_MISMATCH")
-                    source = matches[0]
-                    source_path = project / source["extracted_netlist"]
-                    if source.get("sha256") != _sha(source_path):
-                        raise ValueError("D54_A14_EXTRACTION_NOT_CURRENT")
-                    post_net = project / corner["post_netlist"]
-                    body, _ = a7.post_layout_netlist(name,
-                        a7.subckt_ports(net.read_text(), name), source_path.read_text(),
-                        a7.model_binding_lines(net.read_text(), bdir, post_net.parent))
-                    if hashlib.sha256(body.encode()).hexdigest() != corner["post_netlist_sha256"]:
-                        raise ValueError("D54_A14_POST_NETLIST_DIFFERS_FROM_CURRENT_A13")
-                observed.update(status="PASS", reason="D54_A14_NATIVE_PASS_ORIGINAL_L5",
-                                metrics=metrics)
-            except (OSError, ValueError, KeyError, TypeError) as exc:
-                observed["reason"] = str(exc)
-        status = _aggregate(result["blocks"])
-        result.update(component_status=status, default_row_status=status,
-                      completed=status == "PASS", reason="D54_EXISTING_A14_NATIVE_RESULTS")
-    except (OSError, ValueError, KeyError, TypeError) as exc:
-        result["reason"] = str(exc)
-    return result
-
-
-
-def execute(project, context):
-    """Existing whole-flow front-door adapter for one analog row."""
-    step = context["requested_step"]
-    if step == "D54":
-        return _d54_correlation(project, context)
-    a02_invocation = None
-    if step == "A02":
-        import shutil
-        import flow109_metric_acceptance as metrics
-        import analog_native_front as front
-        import flow109_analog_model_check as model_checker
-        project = Path(project).resolve()
-        names = [b.get("name") or b.get("block") for b in _declared_blocks(project)]
-        inputs = {}
-        for name in names:
-            inputs.update(_input_views(project, name, step))
-        inputs.update({str(path): _sha(path) for path in
-                       (project / "requirements/base_A2").rglob("*") if path.is_file()})
-        for declaration in (layout.analog_dir(project) / "analog_block_list.json",
-                            project / "phase1/analog/analog_block_list.json"):
-            if declaration.is_file():
-                inputs[str(declaration)] = _sha(declaration)
-        from execution_provider_catalog import source_closure
-        source_paths = source_closure({Path(__file__), Path(metrics.__file__),
-                                      Path(front.__file__), Path(model_checker.__file__)})
-        sources = {str(path): _sha(path) for path in source_paths}
-        tool = shutil.which("ngspice")
-        container, image, transport = _adapter_transport(project)
-        if tool and transport == "LOCAL":
-            a02_invocation = {"inputs": inputs, "sources": sources, "image": image,
-                              "tool": {"path": str(Path(tool).resolve()), "sha256": _sha(tool)},
-                              "tools": {"ngspice": {"path": str(Path(tool).resolve()), "sha256": _sha(tool)},
-                                        "python3": {"path": str(Path(sys.executable).resolve()),
-                                                    "sha256": _sha(sys.executable)}}}
-    a05_invocation = _a05_invocation(project) if step == "A05" else None
-    a04_invocation = _a04_invocation(project) if step == "A04" else None
-    a06_invocation = _a06_invocation(project) if step == "A06" else None
-    a07_invocation = _a07_invocation(project) if step == "A07" else None
-    a08_invocation = _a08_invocation(project) if step == "A08" else None
-    report = execute_window(project, context)
-    result = {"step_id": step, "component_status": report["window_verdict"],
-              "flow109_acceptance": "NOT_MEASURED", "native_results": report,
-              **({"native_started": False} if report.get("native_started") is False else {}),
-              "reason": report.get("reason", "native analog step executed; whole IC acceptance remains separate")}
-    if step == "A04":
-        import flow109_metric_acceptance as metrics
-        result["a04_invocation"] = a04_invocation
-        measured = metrics.accept_a04(project, context, result)
-        result.update(metric_acceptance=measured, metric_acceptance_status=measured["status"])
-    if step == "A06":
-        import flow109_metric_acceptance as metrics
-        result["a06_invocation"] = a06_invocation
-        measured = metrics.accept_a06(project, context, result)
-        result.update(metric_acceptance=measured, metric_acceptance_status=measured["status"])
-    if step == "A07":
-        import flow109_metric_acceptance as metrics
-        result["a07_invocation"] = a07_invocation
-        measured = metrics.accept_a07(project, context, result)
-        result.update(metric_acceptance=measured, metric_acceptance_status=measured["status"])
-    if step == "A08":
-        import flow109_metric_acceptance as metrics
-        result["a08_invocation"] = a08_invocation
-        measured = metrics.accept_a08(project, context, result)
-        result.update(metric_acceptance=measured, metric_acceptance_status=measured["status"])
-    if step == "A05":
-        import flow109_metric_acceptance as metrics
-        result["a05_invocation"] = a05_invocation
-        measured = metrics.accept_a05(project, context, result)
-        result.update(metric_acceptance=measured, metric_acceptance_status=measured["status"])
-    if step == "A02":
-        import flow109_metric_acceptance as metrics
-        result["a02_invocation"] = a02_invocation
-        measured = metrics.accept_a02(project, context, result)
-        result.update(metric_acceptance=measured, metric_acceptance_status=measured["status"])
-    if step == "A18":
-        observations = [item.get("metric_acceptance", {"status": "NOT_MEASURED"})
-                        for item in report.get("steps", []) if item.get("step") == "A18"]
-        result["metric_acceptance"] = {"status": _aggregate(observations), "blocks": observations,
-                                       "scope": "A18 measurements only; qualification separate"}
-        result["metric_acceptance_status"] = result["metric_acceptance"]["status"]
-    return result

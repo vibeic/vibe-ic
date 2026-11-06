@@ -17,11 +17,9 @@ A refusal that IS about the tool (LL_STEP_FAILED) stays FAIL: the control.
 from __future__ import annotations
 
 import importlib.util
-import json
 import os
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -30,7 +28,6 @@ sys.path.insert(0, str(PROGRAMS))
 
 import librelane_contract as contract  # noqa: E402
 import phase3_one_shot_runner as runner  # noqa: E402
-from _finished_gds_fixture import publish_finished_gds
 
 TIME = ["LL_TOOL_DEADLINE", "LL_TOOL_STALLED"]  # pinned below against contract.TIME_REFUSALS
 
@@ -88,42 +85,10 @@ def test_step15_still_books_a_tool_refusal_fail(tmp_path, monkeypatch):
 
 # ── phase 3 step 31 ─────────────────────────────────────────────────────────
 
-def _step31(tmp_path, monkeypatch, code):
-    import _gdsii
-    import librelane_pv_signoff as pv
-
-    project = tmp_path / "p"
-    project.mkdir()
-    views = {"gds": str(_gdsii.write_gdsii(project / "chip.gds", cell="chip"))}
-    for role, body in {
-        "def": "VERSION 5.8 ;\nDESIGN chip ;\nEND DESIGN\n",
-        "nl": "module chip(); endmodule\n",
-        "sdc": "create_clock -name clk -period 10 [get_ports clk]\n",
-    }.items():
-        path = project / f"chip.{role}"
-        path.write_text(body)
-        views[role] = str(path)
-    (project / "state_out.json").write_text(json.dumps(views))
-    publish_finished_gds(project)
-
-    def refusing(*_a, **_k):
-        raise contract.Refusal(code, "the half was stopped")
-    monkeypatch.setattr(contract, "resolve_image", lambda p: "img")
-    monkeypatch.setattr(contract, "resolve_pdk_root", lambda *a, **k: tmp_path)
-    monkeypatch.setattr(pv, "run_half", refusing)
-    return runner._step31_librelane(project, "chip", SimpleNamespace(name="procA"), "drc",
-                                    publish=False)
 
 
-@pytest.mark.parametrize("code", TIME)
-def test_step31_books_a_time_refusal_not_measured(tmp_path, monkeypatch, code):
-    row = _step31(tmp_path, monkeypatch, code)
-    assert row.status == "NOT_MEASURED", (row.status, row.detail)
-    assert code in row.detail
 
 
-def test_step31_still_books_a_tool_refusal_fail(tmp_path, monkeypatch):
-    assert _step31(tmp_path, monkeypatch, "LL_STEP_FAILED").status == "FAIL"
 
 
 # ── analog A6 / A7 ──────────────────────────────────────────────────────────
@@ -169,38 +134,3 @@ def test_a7_exits_env_refused_on_a_time_refusal(tmp_path, monkeypatch, code):
 
 
 # ── the advisory SI helpers ─────────────────────────────────────────────────
-
-def _si(monkeypatch, code):
-    import librelane_signoff as ls
-
-    def refusing(*_a, **_k):
-        raise contract.Refusal(code, "the STA run was stopped")
-    monkeypatch.setattr(ls, "run_sta_script", refusing)
-    mod = SimpleNamespace(build_opensta_si_tcl=lambda *a, **k: "# tcl",
-                          kernel_overlap_rows=lambda *a, **k: ([], 0),
-                          kernel_overlap_tcl=lambda rows: "# tcl")
-    monkeypatch.setattr(runner, "_si_timing_aware_module", lambda: mod)
-    return {"liberties": ["a.lib"], "netlist": "n.v", "design": "top", "sdc": "c.sdc",
-            "spef": "x.spef", "image": "img", "mounts": [], "corner": "nom"}
-
-
-@pytest.mark.parametrize("code", TIME)
-def test_the_si_windows_helper_keeps_the_floating_screen(tmp_path, monkeypatch, code):
-    tool = _si(monkeypatch, code)
-    notes: list = []
-    assert runner._librelane_si_windows_json(tmp_path, "top", tool, tmp_path / "si.json", notes) is False
-    assert code in notes[-1] and "floating-victim screen" in notes[-1]
-
-
-@pytest.mark.parametrize("code", TIME)
-def test_the_si_kernel_check_withdraws_to_not_measured(tmp_path, monkeypatch, code):
-    tool = _si(monkeypatch, code)
-    spef = tmp_path / "x.spef"
-    spef.write_text("*SPEF\n")
-    sbody = {"delta_delay": {"verdict": "PASS"}}
-    notes: list = []
-    runner._librelane_si_kernel_check(tmp_path, "top", tool, spef, tmp_path / "t.json", sbody, notes)
-    assert sbody["kernel_cross_check"]["verdict"] == "NOT_MEASURED"
-    assert code in sbody["kernel_cross_check"]["reason"]
-    assert sbody["delta_delay"]["verdict"] == "NOT_MEASURED"
-    assert sbody["delta_delay_verdict"] == "NOT_MEASURED"

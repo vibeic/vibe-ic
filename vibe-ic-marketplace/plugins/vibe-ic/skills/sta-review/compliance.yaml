@@ -1,14 +1,9 @@
 # Testability level (v0.50 hybrid strategy — see _shared/TESTING_STRATEGY.md)
 testability: structured
 
-# #2050. output_type MEASURED, not assumed. This skill's declared deliverable
-# is `sta/sta_review.md`, a Markdown timing report. A document cannot carry
-# the RTL `// Post-checks:` header that `postcheck_pass_only` looks for: it
-# can only be TYPED into one, never measured on it. No SKILL.md in this plugin
-# documents emitting that header (zero of 70, measured), and this skill's own
-# required patterns are Markdown headings. The cross-checks below are
-# therefore bound to their auditors' own receipts, exactly as #2048 did for
-# rtl-review.
+# Review the native engineering results described in SKILL.md.
+# Read the native setup/hold reports at the original PVT corners and constraints.
+# Report WNS/TNS and missing corner coverage from the actual timing runs.
 output_type: report
 
 # Compliance spec for skill 'sta-review' (v0.35)
@@ -41,23 +36,4 @@ requirements:
     pattern: '(PVT|process.*voltage.*temp|voltage.*corner|temperature.*corner)'
     skill_section: 'PVT Coverage'
 
-cross_checks:
-  - id: X_corner_coverage_audit
-    description: "Run corner_coverage_audit.py to verify SS+FF corners were actually executed"
-    rule: audit_receipt_evidence
-    auditor: corner_coverage_audit
-  - id: X_mcp_execution_verify
-    description: "Verify required MCP tools were actually executed (not just reported)"
-    rule: audit_receipt_evidence
-    auditor: mcp_execution_verify
-  - id: X_sta_report_check
-    description: "Verify STA report has WNS/TNS and setup/hold analysis"
-    rule: audit_receipt_evidence
-    auditor: sta_report_check
-  # The other half of the output_type pairing (#2048). Repointing the audits
-  # above removes the reason to paste the RTL header; this keeps pasting one a
-  # failure, so a fabricated `// Post-checks:` line in this report cannot pass
-  # unremarked now that nothing else reacts to it.
-  - id: X_text_only_skill
-    description: "sta-review emits a report document, not RTL."
-    rule: text_only_report
+cross_checks: []

@@ -149,7 +149,7 @@ def test_chip_top_asic_emits_literal_oe_in_rx_masked():
 def test_is_real_submodule_name_rejects_common_verbs():
     """v1.6.90 (#22 Bug 2 P2): the helper itself rejects common
     English verbs that consistently leak from prose extractors."""
-    from programs.phase1_one_shot_runner import _is_real_submodule_name
+    from programs.phase1_doc_one_shot_runner import _is_real_submodule_name
     forbidden = [
         "reads", "writes", "drives", "latches", "decodes",
         "asserts", "deasserts", "samples", "captures", "polls",
@@ -163,7 +163,7 @@ def test_is_real_submodule_name_rejects_common_verbs():
 
 def test_is_real_submodule_name_keeps_real_module_names():
     """Positive control: real RTL module names must NOT be rejected."""
-    from programs.phase1_one_shot_runner import _is_real_submodule_name
+    from programs.phase1_doc_one_shot_runner import _is_real_submodule_name
     # Note: pre-existing helper has a length-floor of 4; "fsm" (3
     # chars) is intentionally rejected as too-short. The positive
     # list below uses only names >= 4 chars.
@@ -179,9 +179,7 @@ def test_is_real_submodule_name_keeps_real_module_names():
 def test_l9_submodule_rejects_verb_reads_end_to_end(tmp_path):
     """End-to-end: 'reads' (verb in prose) must NOT promote to
     L9.submodules even when extractor sees it."""
-    from programs.phase1_one_shot_runner import (
-        gen_l1_datasheet, gen_l9_integration_spec,
-    )
+    from programs.phase1_doc_one_shot_runner import gen_l1_datasheet, gen_l9_integration_spec
     project = tmp_path / "verb_e2e"
     _seed_phase1_workdir(project)
     extracted = {

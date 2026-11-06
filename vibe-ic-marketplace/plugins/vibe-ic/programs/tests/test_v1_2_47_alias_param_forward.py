@@ -33,15 +33,12 @@ Tests:
 """
 import os
 import re
-import subprocess
 import sys
-import tempfile
 
 sys.path.insert(
     0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                     "..", "..", "benchmark"))
 import tb_toplevel_alias as A  # noqa: E402
-import _outcome_states as states  # noqa: E402
 
 
 def _mods(src):
@@ -174,58 +171,8 @@ def test_no_leak_noop_when_toplevel_already_declared():
     assert out == PARAM_MODULE
 
 
-def test_param_aliased_completion_compiles():
-    """The wrapped completion (with parameter port block) compiles under
-    `iverilog -g2012 -s cvdp_copilot_decode_firstbit -t null`.
-
-    The unpatched alias_wrapper emitted `module cvdp_copilot_decode_firstbit(
-        input logic [InWidth_g-1:0] In_Data, ...)` referencing the
-    unbound `InWidth_g` parameter — iverilog ELABs with `Unable to bind
-    parameter 'InWidth_g'` and dies. The patched wrapper re-declares
-    `#(parameter int InWidth_g = 32, ...)` so the port width binds.
-    """
-    # It used to `return` here, so a host without the tool PASSED it having
-    # verified nothing. Absent tool -> NOT_VERIFIED naming the host (R-0927);
-    # present -> runs exactly as before.
-    states.require_tools("iverilog")
-    out = A.maybe_alias_completion(PARAM_MODULE,
-                                   "cvdp_copilot_decode_firstbit", _mods)
-    with tempfile.NamedTemporaryFile("w", suffix=".sv", delete=False) as f:
-        f.write(out)
-        path = f.name
-    try:
-        r = subprocess.run(
-            ["iverilog", "-g2012", "-s", "cvdp_copilot_decode_firstbit",
-             "-t", "null", path],
-            capture_output=True, text=True)
-        assert r.returncode == 0, \
-            f"alias wrapper compile FAILED: stderr={r.stderr!r} stdout={r.stdout!r}"
-    finally:
-        os.unlink(path)
 
 
-def test_nonparam_aliased_completion_still_compiles():
-    """Regression guard: the v1.2.40 NON-parameter alias case (findfasterclock)
-    must continue to compile. If the patch broke the non-param path, all 7
-    non-param alias-wrapped pids (Attenuator_0001 + 6 wirings) would fail
-    on every fresh run."""
-    # It used to `return` here, so a host without the tool PASSED it having
-    # verified nothing. Absent tool -> NOT_VERIFIED naming the host (R-0927);
-    # present -> runs exactly as before.
-    states.require_tools("iverilog")
-    out = A.maybe_alias_completion(NONPARAM_MODULE, "findfasterclock", _mods)
-    with tempfile.NamedTemporaryFile("w", suffix=".sv", delete=False) as f:
-        f.write(out)
-        path = f.name
-    try:
-        r = subprocess.run(
-            ["iverilog", "-g2012", "-s", "findfasterclock",
-             "-t", "null", path],
-            capture_output=True, text=True)
-        assert r.returncode == 0, \
-            f"non-param alias wrapper regressed: stderr={r.stderr!r}"
-    finally:
-        os.unlink(path)
 
 
 if __name__ == "__main__":

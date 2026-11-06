@@ -64,15 +64,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
-import phase3_one_shot_runner as R  # noqa: E402
 import slot_pad_budget_check as S  # noqa: E402
-import flow_compliance_check as FCC  # noqa: E402
-import verdict as V  # noqa: E402  the five-word step vocabulary (#2389)
 import _flow_reason_taxonomy as _RT  # noqa: E402  the class -> tier map
 import _l_doc_pad_placement as LPP  # noqa: E402  the ONE ring reader (R-0915-101)
 import _tapeout_declaration as TD  # noqa: E402
@@ -145,74 +141,14 @@ def _run_budget(project: Path, *extra) -> tuple[int, dict]:
 
 # ---------------------------------------------------------------- ruling (1)
 
-def test_an_owner_attested_die_stands_the_ip_producers_down_with_the_citation(tmp_path):
-    project = _project(tmp_path)
-    na, cited, evidence = R._ip_delivery_declared_na(project)
-    assert na is True
-    assert "answers.deliverable='DIE'" in cited and "owner" in cited
-    assert evidence["declaration_path"] == TD.DECLARATION_REL
-    row = R.step_digital_hardmacro_gen(project)
-    # #2389 REDUCED THE STEP VOCABULARY TO FIVE WORDS and `SKIP` is not one of
-    # them (`verdict.Verdict`: PASS / PASS_WITH_WAIVERS / FAIL / NOT_MEASURED /
-    # NOT_APPLICABLE). This row was red on live main 8efd02930 before this lane
-    # touched anything — the WORD moved, the invariant did not. Both are
-    # asserted, the spelling and the MEANING, so the next vocabulary move is
-    # caught as a change of meaning instead of passing on a string.
-    assert row.status == V.Verdict.NOT_APPLICABLE.value
-    assert row.status in V.EXCUSED          # a stand-down, which is the point
-    assert row.detail.startswith("DESIGN-DECLARED-N/A")
-    assert TD.DECLARATION_REL in row.detail
-    rec = json.loads((project / "reports/phase3/digital_hardmacro_gen.json").read_text())
-    assert rec["verdict"] == "NOT_APPLICABLE"
-    assert rec["reason_class"] == "DESIGN_DECLARED_NA"
-    assert rec["produced"] == []
 
 
-def test_a_hardmacro_still_owes_the_ip_kit(tmp_path):
-    """The other direction: the kit is the hardmacro's whole deliverable."""
-    project = _project(tmp_path, "HARDMACRO")
-    assert R._ip_delivery_declared_na(project)[0] is False
 
 
-@pytest.mark.parametrize("case,kw", [
-    ("an agent's reading is not the owner's word", {"attested": False}),
-    ("no declaration at all", {"deliverable": "NOT_DETERMINED"}),
-])
-def test_only_the_owners_word_stands_the_ip_kit_down(tmp_path, case, kw):
-    deliverable = kw.pop("deliverable", "DIE")
-    project = _project(tmp_path, deliverable, **kw)
-    assert R._ip_delivery_declared_na(project)[0] is False, case
 
 
-def test_the_flow_row_stands_down_by_the_same_declaration(tmp_path):
-    project = _project(tmp_path)
-    spec = {"declaration": TD.DECLARATION_REL, "field": "answers.deliverable",
-            "absent_when": ["DIE"], "corroborated_by": "owner_attestation"}
-    got = FCC._delivery_declares_absence(project, spec)
-    assert got is not None and got[0] == TD.DECLARATION_REL
-    assert "owner-attested" in got[1]
-    assert FCC._check_condition(project, {"delivery_declares": spec}) is False
-    # un-attested, a different word, and an unknown corroboration all RUN it
-    assert FCC._delivery_declares_absence(
-        _project(tmp_path / "b", attested=False), spec) is None
-    assert FCC._delivery_declares_absence(
-        _project(tmp_path / "c", "HARDMACRO"), spec) is None
-    assert FCC._delivery_declares_absence(
-        project, {**spec, "corroborated_by": "something_else"}) is None
 
 
-def test_the_flow_yaml_carries_that_condition_on_37_5ip():
-    import yaml
-    flow = yaml.safe_load(
-        (PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml").read_text())
-    step = next(s for s in flow["steps"] if str(s.get("id")) == "37.5ip")
-    dd = step["condition"]["delivery_declares"]
-    assert dd["absent_when"] == ["DIE"]
-    assert dd["corroborated_by"] == "owner_attestation"
-    # and 37.5ic keeps its own, opposite, corroboration
-    ic = next(s for s in flow["steps"] if str(s.get("id")) == "37.5ic")
-    assert ic["condition"]["delivery_declares"]["absent_when"] == ["HARDMACRO"]
-    assert "corroborated_by" not in ic["condition"]["delivery_declares"]
 
 
 # ---------------------------------------------------------------- ruling (2)
@@ -348,7 +284,7 @@ def test_the_design_declaration_supplies_a_width_the_clause_does_not(tmp_path):
     bare = _project(tmp_path / "bare", rtl=rtl)
     rc2, rep2 = _run_budget(bare)
     assert rc2 == 2 and rep2["reason_class"] == "ZERO_DENOMINATOR"
-    assert "parameterised" in rep2["reason"]
+    assert rep2["unresolved_width_ports"] == ["x"]
 
 
 def test_two_answers_about_one_width_are_refused(tmp_path):

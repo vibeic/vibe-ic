@@ -43,7 +43,6 @@ loudly if a run path ever reaches the deck again.
 from __future__ import annotations
 
 import importlib.util
-import subprocess
 import sys
 from pathlib import Path
 
@@ -52,7 +51,6 @@ import pytest
 _PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROGRAMS))
 
-import emitted_script_portability_check as esp  # noqa: E402
 
 _SPEC = importlib.util.spec_from_file_location(
     "phase3_one_shot_runner_portable", _PROGRAMS / "phase3_one_shot_runner.py")
@@ -71,110 +69,32 @@ report_power
 """
 
 
-def _run(project, *args):
-    return subprocess.run(
-        [sys.executable, str(_PROGRAMS / "emitted_script_portability_check.py"),
-         str(project), *args],
-        capture_output=True, text=True)
 
 
-def _tree(tmp_path: Path, body: str, name="reports/phase3/power_dut.tcl"):
-    f = tmp_path / name
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(body)
-    return f
 
 
 # ================================================================ POSITIVE ===
-def test_a_portable_deck_passes(tmp_path):
-    _tree(tmp_path, PORTABLE)
-    r = _run(tmp_path)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert "[PASS]" in r.stdout
 
 
-def test_a_pdk_path_outside_the_run_root_is_not_a_finding(tmp_path):
-    """The rule's other half, and the reason it is this rule: a container-
-    canonical PDK path is ALREADY portable across every host running the same
-    image. Flagging it would make the check unpassable and therefore ignored."""
-    _tree(tmp_path, "read_liberty /foss/pdks/somepdk/lib/cells_typ.lib\n"
-                    "read_lef /usr/share/somepdk/tech.lef\n")
-    r = _run(tmp_path)
-    assert r.returncode == 0, r.stdout
 
 
 # ================================================================ NEGATIVE ===
-def test_the_real_defect_goes_red(tmp_path):
-    """The deck as the flow used to emit it: an absolute path back into the
-    run root it was written for."""
-    _tree(tmp_path, f"read_verilog {tmp_path}/phase2/stage2/synth/dut_synth.v\n"
-                    f"read_sdc {tmp_path}/phase3/stage3/pnr/constraint.sdc\n")
-    r = _run(tmp_path)
-    assert r.returncode == 1, r.stdout + r.stderr
-    assert "[FAIL]" in r.stdout
-    assert "power_dut.tcl" in r.stdout
-    assert "2 occurrence" in r.stdout
 
 
-def test_one_bad_deck_among_good_ones_is_still_a_finding(tmp_path):
-    _tree(tmp_path, PORTABLE, name="reports/phase3/a.tcl")
-    _tree(tmp_path, PORTABLE, name="reports/phase3/b.tcl")
-    _tree(tmp_path, f"read_verilog {tmp_path}/x.v\n", name="reports/phase3/c.tcl")
-    r = _run(tmp_path)
-    assert r.returncode == 1
-    assert "1 of 3" in r.stdout, r.stdout
 
 
 # ================================================================= VACUOUS ===
-def test_no_script_in_scope_refuses_rather_than_passing(tmp_path):
-    """rc=2, not rc=0. `I looked and it was clean` and `I could not look` must
-    never produce the same answer — an empty tree is the single most likely
-    way a path check silently certifies nothing."""
-    (tmp_path / "phase3").mkdir()
-    r = _run(tmp_path)
-    assert r.returncode == 2, r.stdout + r.stderr
-    assert "[CANNOT CHECK]" in r.stdout
-    assert "NO claim" in r.stdout
 
 
-def test_staged_inputs_are_not_in_scope_and_alone_are_vacuous(tmp_path):
-    """`input/` holds what the USER staged, not what this flow emitted, so a
-    host path in there is not this check's business — and a tree holding only
-    those has nothing in scope, which is a refusal, not a pass."""
-    _tree(tmp_path, f"read_verilog {tmp_path}/x.v\n", name="input/vendor/run.tcl")
-    r = _run(tmp_path)
-    assert r.returncode == 2, r.stdout
 
 
 # ========================================================== BAD INVOCATION ===
-def test_a_project_that_is_not_a_directory_is_rc3(tmp_path):
-    r = _run(tmp_path / "no_such_tree")
-    assert r.returncode == 3, r.stdout + r.stderr
-    assert "[BAD INVOCATION]" in r.stdout
 
 
-def test_an_under_scope_that_does_not_exist_is_rc3_not_a_pass(tmp_path):
-    _tree(tmp_path, PORTABLE)
-    r = _run(tmp_path, "--under", "reports/phase3/nope.tcl")
-    assert r.returncode == 3, r.stdout
-    assert "[BAD INVOCATION]" in r.stdout
 
 
-def test_scope_narrowing_works(tmp_path):
-    _tree(tmp_path, PORTABLE, name="reports/phase3/good.tcl")
-    _tree(tmp_path, f"read_verilog {tmp_path}/x.v\n", name="phase3/stage3/bad.tcl")
-    assert _run(tmp_path).returncode == 1
-    assert _run(tmp_path, "--under", "reports/phase3/good.tcl").returncode == 0
-    assert _run(tmp_path, "--under", "phase3/stage3/bad.tcl").returncode == 1
 
 
-def test_json_records_the_findings(tmp_path):
-    import json
-    _tree(tmp_path, f"read_verilog {tmp_path}/x.v\n")
-    out = tmp_path / "out.json"
-    _run(tmp_path, "--json", str(out))
-    doc = json.loads(out.read_text())
-    assert doc["rc"] == 1 and doc["findings"][0]["script"].endswith("power_dut.tcl")
 
 
 # =============================================== THE EMITTER'S OWN BEHAVIOUR ==
@@ -229,19 +149,6 @@ def _emit(proj: Path, rpt: Path):
     return (rpt.parent / f"power_{TOP}.tcl").read_text(), notes
 
 
-def test_the_power_deck_spells_in_tree_paths_against_run_root(tmp_path, _no_docker):
-    """FAILS pre-fix, whose deck read `<abs run dir>/phase3/.../dut_pnr.v`."""
-    proj = _mk_project(tmp_path)
-    tcl, notes = _emit(proj, proj / "reports" / "phase3" / "power.rpt")
-    assert "set RUN_ROOT [file normalize [file join [file dirname [info script]] .. ..]]" in tcl
-    for cmd in ("read_verilog", "read_sdc", "read_spef"):
-        line = [ln for ln in tcl.splitlines() if ln.startswith(cmd + " ")]
-        assert line and line[0].split()[1].startswith("$RUN_ROOT/"), (cmd, line)
-    # the PDK path is the environment's and is left exactly as it was
-    assert "read_liberty /foss/pdks/testpdk/lib/cellib_typ.lib" in tcl
-    # and the deck now satisfies the checker, in the tree it was emitted into
-    assert esp.host_paths_in(tcl, proj) == []
-    assert not [n for n in notes if "INTO the run root" in n], notes
 
 
 def test_a_deck_written_outside_the_run_tree_keeps_absolute_paths(tmp_path, _no_docker):

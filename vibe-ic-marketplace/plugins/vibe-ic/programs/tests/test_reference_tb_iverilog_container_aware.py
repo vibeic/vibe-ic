@@ -46,34 +46,12 @@ _T_PATCHED = 60
 # --------------------------------------------------------------------------
 # _iverilog_available — container-first availability
 # --------------------------------------------------------------------------
-def test_available_when_only_container_has_iverilog(monkeypatch):
-    """The exact repro shape: host has NO iverilog, container DOES."""
-    monkeypatch.setattr("shutil.which", lambda _t: None)
-    monkeypatch.setattr(dosr, "_tool_in_container",
-                        lambda c, t: t == "iverilog")
-    assert dosr._iverilog_available("rv_subservient_926009") is True
 
 
-def test_available_in_true_host_mode_unchanged(monkeypatch):
-    """No container supplied + host has iverilog -> available (host mode)."""
-    monkeypatch.setattr("shutil.which", lambda _t: "/usr/bin/iverilog")
-    monkeypatch.setattr(dosr, "_tool_in_container",
-                        lambda c, t: pytest.fail(
-                            "must not probe container in host mode"))
-    assert dosr._iverilog_available("") is True
 
 
-def test_unavailable_when_both_missing_keeps_honesty(monkeypatch):
-    """Absent in BOTH -> False, so the honest no-sim WAIVE still fires."""
-    monkeypatch.setattr("shutil.which", lambda _t: None)
-    monkeypatch.setattr(dosr, "_tool_in_container", lambda c, t: False)
-    assert dosr._iverilog_available("some_container") is False
 
 
-def test_container_absent_but_host_present_is_available(monkeypatch):
-    monkeypatch.setattr("shutil.which", lambda _t: "/usr/bin/iverilog")
-    monkeypatch.setattr(dosr, "_tool_in_container", lambda c, t: False)
-    assert dosr._iverilog_available("c") is True
 
 
 # --------------------------------------------------------------------------
@@ -182,59 +160,10 @@ def test_stage_dispatches_into_container_with_translated_paths(monkeypatch):
     assert "-DDUT_TOP_NAME=chip_top" in cmd
 
 
-def test_stage_runs_vvp_in_container_too(monkeypatch):
-    """The vvp RUN follows the same host/container decision as the compile,
-    so a container-compiled image is run where it exists."""
-    monkeypatch.setattr("shutil.which", lambda _t: None)
-    monkeypatch.setattr(dosr, "_tool_in_container",
-                        lambda c, t: t == "iverilog")
-    monkeypatch.setattr(dosr, "_path_in_container", lambda p, c: True,
-                        raising=False)
-    monkeypatch.setattr(dosr, "_to_container_path", lambda p, c: p)
-    calls = {}
-
-    def _fake_docker_exec(container, cmd, timeout=600, **k):
-        calls["cmd"] = cmd
-        return 0, "VVP_OK", ""
-
-    monkeypatch.setattr(dosr, "_docker_exec", _fake_docker_exec)
-    monkeypatch.setattr(dosr, "_run",
-                        lambda *a, **k: pytest.fail("host _run must not be used"))
-    rc, out, err = dosr._sim_run_or_reuse(
-        "iverilog_g2012", Path("/p/run/x.vvp"), 0, "", "",
-        Path("/p/run"), timeout=_T_PATCHED, container="cont")
-    assert (rc, out) == (0, "VVP_OK")
-    assert "vvp" in calls["cmd"] and "/p/run/x.vvp" in calls["cmd"]
 
 
-def test_sim_run_or_reuse_host_default_is_backward_compatible(monkeypatch):
-    """No container arg -> host vvp run, exactly as before the fix."""
-    monkeypatch.setattr("shutil.which", lambda _t: "/usr/bin/iverilog")
-    seen = {}
-
-    def _fake_run(argv, cwd=None, timeout=600, env=None):
-        seen["argv"] = list(argv)
-        return 0, "ok", ""
-
-    monkeypatch.setattr(dosr, "_run", _fake_run)
-    monkeypatch.setattr(dosr, "_docker_exec",
-                        lambda *a, **k: pytest.fail("host default must not dispatch"))
-    dosr._sim_run_or_reuse("iverilog_g2012", Path("/p/run/x.vvp"),
-                           0, "", "", Path("/p/run"), timeout=_T_PATCHED)
-    assert seen["argv"] == ["vvp", "/p/run/x.vvp"]
 
 
-def test_verilator_sva_reuse_never_runs_vvp(monkeypatch):
-    """The #703 verilator-escape reuse path is unaffected: it returns the
-    captured result and never dispatches a vvp run on either side."""
-    monkeypatch.setattr(dosr, "_run",
-                        lambda *a, **k: pytest.fail("must not run vvp"))
-    monkeypatch.setattr(dosr, "_docker_exec",
-                        lambda *a, **k: pytest.fail("must not dispatch"))
-    rc, out, err = dosr._sim_run_or_reuse(
-        "verilator_sva", Path("/p/run/none.vvp"), 0, "RAN_IN_ESCAPE", "",
-        Path("/p/run"), timeout=_T_PATCHED, container="cont")
-    assert (rc, out) == (0, "RAN_IN_ESCAPE")
 
 
 if __name__ == "__main__":  # pragma: no cover

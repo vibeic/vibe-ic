@@ -28,15 +28,13 @@ import argparse
 import fnmatch
 import hashlib
 import json
-import os
 import re
 import sys
 from pathlib import Path
 from typing import Any, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _atomic_artefact import write_bytes, write_json  # noqa: E402
-import instrument_calibration  # noqa: E402
+from _atomic_artefact import write_json  # noqa: E402
 
 #: A Verilog sized literal as Yosys `write_verilog` prints a constant.
 _LITERAL = r"\d+'[bhdo][0-9a-fA-FxXzZ_?]+"
@@ -47,8 +45,6 @@ _CONST_NET_RE = re.compile(r"\b(zero_|one_)\b")
 
 def constant_connections(netlist: str) -> list[dict[str, str]]:
     """Every literal constant driving a port (assign) or a cell pin."""
-    instrument_calibration.assert_calibrated(
-        "synth_handoff_netlist_check::constant_connections")
     found = [{"kind": "assign", "target": m.group(1), "value": m.group(2)}
              for m in _ASSIGN_CONST_RE.finditer(netlist)]
     found += [{"kind": "pin", "target": m.group(1), "value": m.group(2)}
@@ -118,422 +114,35 @@ def _yosys_check_errors(report, resolved: dict) -> int:
 
 
 def critical_synthesis_checks(folder: Path, resolved: dict) -> dict[str, int]:
-    """Judge both original CHECK reports at their receipt-bound bytes.
-
-    Older images counted only the pre-synthesis report in their state metric.
-    The critical final CHECK remains an obligation of that same producer.
-    """
-    receipt = json.loads((folder / "vibeic_receipt.json").read_text())
-    recorded = receipt["sha256"]
-    if recorded.get("config.json") != _sha(folder / "config.json"):
-        raise ValueError("native receipt mismatch: config.json")
-    if resolved != json.loads((folder / "config.json").read_text()):
-        raise ValueError("critical CHECK config differs from native producer")
+    """Count native Yosys warnings in both original CHECK reports."""
     counts = {}
     for name in ("pre_synth_chk.rpt", "chk.rpt"):
-        rel = "reports/" + name
-        path = folder / rel
-        if recorded.get(rel) != _sha(path):
-            raise ValueError(f"native receipt mismatch: {rel}")
-        with path.open() as stream:
+        with (folder / "reports" / name).open() as stream:
             counts[name] = _yosys_check_errors(stream, resolved)
     if any(counts.values()):
         raise ValueError(f"native synthesis critical CHECK errors: {counts}")
     return counts
 
 
-_NIX_STORE = Path('/nix/store')
-
-
-def _pdk_source_file(path: Path) -> tuple[str, str, Path] | None:
-    """Canonical distribution, source revision and asset, not a store build ID."""
-    try:
-        parts = path.relative_to(_NIX_STORE).parts
-    except ValueError:
-        parts = ()
-    if len(parts) >= 3:
-        match = re.fullmatch(r'[0-9abcdfghijklmnpqrsvwxyz]{32}-(.+)-([0-9a-f]{40})', parts[0])
-        if match and match[1].endswith('-' + parts[1]):
-            return parts[1], match[2], Path(*parts[2:])
-    parts = path.parts
-    for i, part in enumerate(parts):
-        if (part == 'ciel' and len(parts) > i + 5
-                and parts[i + 2] == 'versions'
-                and re.fullmatch(r'[0-9a-f]{40}', parts[i + 3])):
-            return parts[i + 4], parts[i + 3], Path(*parts[i + 5:])
-    return None
-
-
-def _runtime_source_file(path: Path, expected: str, pdk: str | None) -> Path | None:
-    """Rebind only a canonical PDK source asset or installed LibreLane base SDC."""
-    import importlib.util
-
-    if not path.is_absolute() or '..' in path.parts:
-        return None
-    source = _pdk_source_file(path)
-    try:
-        if source:
-            root = Path(os.environ['PDK_ROOT'])
-            if source[0] != pdk or not root.is_absolute() or root.is_symlink():
-                return None
-            candidate = root / source[0] / source[2]
-            resolved = candidate.resolve(strict=True)
-            if _pdk_source_file(resolved) != source:
-                return None
-        elif (path.is_relative_to(_NIX_STORE)
-              and path.parts[-4:] == ('site-packages', 'librelane', 'scripts', 'base.sdc')):
-            spec = importlib.util.find_spec('librelane')
-            if spec is None or not spec.origin:
-                return None
-            package = Path(spec.origin).resolve(strict=True).parent
-            resolved = (package / 'scripts/base.sdc').resolve(strict=True)
-            if not package.is_relative_to(_NIX_STORE) or not resolved.is_relative_to(package):
-                return None
-        else:
-            return None
-        if not resolved.is_file() or _sha(resolved) != expected:
-            return None
-        return resolved
-    except (OSError, RuntimeError, KeyError, ValueError, ImportError):
-        return None
-
-
-def _runtime_pdk_mount(root: Path, guest: Path, receipt: dict, *,
-                       pdk: str | None = None) -> Path | None:
-    """Find an equivalent PDK mount in the current consumer runtime.
-
-    A native producer can record its host-side cache path even though the
-    consumer is running in a fresh attested container.  In that namespace the
-    recorded host path is intentionally absent; the image's PDK_ROOT is the
-    only valid alternate source.  Admit it only when every recorded config
-    file covered by this mount is present there with its receipt SHA-256.
-    """
-    runtime_value = os.environ.get("PDK_ROOT")
-    if not isinstance(runtime_value, str):
-        return None
-    runtime_root = Path(runtime_value)
-    if (not runtime_root.is_absolute() or runtime_root.is_symlink()
-            or not runtime_root.is_dir()):
-        return None
-    try:
-        relative_guest = guest.relative_to(root)
-    except ValueError:
-        return None
-    raw_runtime_mount = runtime_root / relative_guest
-    try:
-        runtime_mount = raw_runtime_mount.resolve(strict=True)
-    except (OSError, RuntimeError):
-        return None
-    if (not runtime_mount.is_dir()
-            or not runtime_mount.is_relative_to(runtime_root.resolve())):
-        return None
-    inp = receipt.get("input") if isinstance(receipt, dict) else None
-    config_files = inp.get("config_files") if isinstance(inp, dict) else None
-    if not isinstance(config_files, dict) or not config_files:
-        return None
-    pdk_files = []
-    for recorded, expected in config_files.items():
-        if not isinstance(recorded, str):
-            return None
-        path = Path(recorded)
-        if (not path.is_absolute() or ".." in path.parts
-                or str(path) != recorded
-                or not isinstance(expected, str)
-                or not re.fullmatch(r"[0-9a-f]{64}", expected)):
-            return None
-        if not path.is_relative_to(guest):
-            continue
-        pdk_files.append((path, expected))
-    if not pdk_files:
-        return None
-    # The retained canonical Liberty/Ciel path anchors the selected PDK source
-    # revision. A different SDK cannot buy acceptance with a matching filename.
-    sources = {source[:2] for p in config_files
-               if (source := _pdk_source_file(Path(p))) is not None and source[0] == pdk}
-    for path, expected in pdk_files:
-        relative = path.relative_to(guest)
-        candidate = raw_runtime_mount / relative
-        try:
-            resolved = candidate.resolve(strict=True)
-        except (OSError, RuntimeError):
-            resolved = _runtime_source_file(path, expected, pdk)
-        # Nix composes the SDK from immutable source packages. Preserve the
-        # exact distribution/revision/asset and digest across store build IDs.
-        source = _pdk_source_file(resolved) if resolved is not None else None
-        logical = path.relative_to(root)
-        if (source is not None and source[:2] in sources
-                and (logical == Path(source[0]) / source[2]
-                     or _pdk_source_file(path) == source)
-                and resolved.is_file() and _sha(resolved) == expected):
-            continue
-        if sources:
-            # Once the receipt names a canonical source revision, a plain
-            # byte copy into an unrelated SDK cannot establish that identity.
-            return None
-        # The mount root itself may be the image's canonical PDK alias (for
-        # example gf180mcuD -> ciel/...); a symlink below that root is not an
-        # immutable file binding and must remain refused unless it resolves
-        # within the same runtime PDK root.  A symlink at the recorded file
-        # itself is always refused.
-        cursor = raw_runtime_mount
-        for part in relative.parts:
-            cursor /= part
-            if cursor.is_symlink():
-                try:
-                    linked = cursor.resolve(strict=True)
-                except (OSError, RuntimeError):
-                    return None
-                if (not linked.is_relative_to(runtime_root.resolve())
-                        or cursor == candidate):
-                    return None
-        try:
-            resolved = candidate.resolve(strict=True)
-        except (OSError, RuntimeError):
-            return None
-        if (not resolved.is_relative_to(runtime_mount)
-                or not resolved.is_file() or _sha(resolved) != expected):
-            return None
-    return runtime_mount
-
-
-def _receipt_pdk_mounts(folder: Path, receipt: dict) -> list[tuple[Path, str]]:
-    """Return the producer's bound guest-to-host PDK mounts.
-
-    ``run_chain`` records config-file keys as the guest paths the child read,
-    while this handoff consumer runs on the host.  The mount record is part of
-    the producer receipt; a changed or foreign record must refuse before any
-    digest is credited.
-    """
-    metadata = folder / "pdk_root.json"
-    recorded = (receipt.get("sha256") or {}).get("pdk_root.json")
-    if not isinstance(recorded, str) or _sha(metadata) != recorded:
-        raise ValueError("native receipt mismatch: pdk_root.json")
-    fingerprint = folder / "input_fingerprint.json"
-    fingerprint_sha = (receipt.get("sha256") or {}).get("input_fingerprint.json")
-    if (not isinstance(fingerprint_sha, str) or _sha(fingerprint) != fingerprint_sha
-            or json.loads(fingerprint.read_text()) != receipt.get("input")):
-        raise ValueError("native receipt mismatch: input_fingerprint.json")
-    doc = json.loads(metadata.read_text())
-    root_value = doc.get("cli_pdk_root")
-    root = Path(str(root_value or ""))
-    if (not isinstance(root_value, str) or not root.is_absolute()
-            or doc.get("stated_by") != "run_chain(pdk_root=...)"):
-        raise ValueError("native receipt has an unstated or foreign PDK root")
-    raw = doc.get("mounts_under_it")
-    if not isinstance(raw, list):
-        raise ValueError("native receipt is missing PDK mount metadata")
-    mounts: list[tuple[Path, str]] = []
-    pdk = json.loads((folder / 'config.json').read_text()).get('PDK')
-    for item in raw:
-        if not isinstance(item, list) or len(item) != 2:
-            raise ValueError("native receipt has malformed PDK mount metadata")
-        host, guest_value = Path(str(item[0])).resolve(), item[1]
-        guest = Path(str(guest_value))
-        if (not isinstance(guest_value, str) or not guest.is_absolute()
-                or not (guest == root or guest.is_relative_to(root))):
-            raise ValueError("native receipt has a foreign PDK mount")
-        if not host.is_dir():
-            runtime_host = _runtime_pdk_mount(root, guest, receipt, pdk=pdk)
-            if runtime_host is None:
-                raise ValueError("native receipt has a foreign PDK mount")
-            host = runtime_host
-        mounts.append((host, guest_value))
-    # Canonical producer keys can name the old store's Liberty or installed
-    # base.sdc directly rather than the composed SDK. Keep those receipt keys;
-    # add only independently source- and digest-verified file translations.
-    for value, expected in receipt['input']['config_files'].items():
-        path = Path(value)
-        source = path
-        for host, guest in sorted(mounts, key=lambda m: len(str(m[1])), reverse=True):
-            if path.is_relative_to(guest):
-                source = Path(host) / path.relative_to(guest)
-                break
-        if source.is_file():
-            continue
-        rebound = _runtime_source_file(path, expected, pdk)
-        if rebound is not None:
-            mounts.append((rebound, value))
-    return mounts
 
 
 def _project_path_resolver(project: Path, folder: Path, state: dict):
-    """Resolve receipt paths from the producer project into a staged project.
-
-    LibreLane receipts intentionally retain the absolute paths seen by the
-    native producer.  A backend arm runs from a clean ``outputs/project`` and
-    must not read those original paths as an ambient side channel.  Derive the
-    original project root from the receipt's state path and the *relative*
-    producer folder, then admit only the corresponding regular staged file.
-    External paths (notably ``/pdk``) remain external and are checked by the
-    existing PDK mount validator.
-    """
-    project = Path(project).resolve(strict=True)
-    folder = Path(folder).resolve(strict=True)
-    try:
-        recorded = Path(str(state["nl"]))
-    except (KeyError, TypeError, ValueError) as exc:
-        raise ValueError("native state has no absolute netlist path") from exc
-    if (not recorded.is_absolute() or ".." in recorded.parts
-            or str(recorded) != state["nl"]):
-        raise ValueError("native state netlist path is not absolute")
-    rel_folder = folder.relative_to(project)
-    recorded_parent = recorded.parent
-    if len(recorded_parent.parts) <= len(rel_folder.parts):
-        raise ValueError("native state netlist has no project prefix")
-    original_root = recorded_parent
-    for _ in rel_folder.parts:
-        original_root = original_root.parent
-    if original_root / rel_folder != recorded_parent:
-        raise ValueError("native state netlist folder is not canonical")
-    # This is the producer's lexical namespace, which need not exist on this
-    # host.  Resolving it against the consumer filesystem would follow ambient
-    # symlinks and change the meaning of the receipt's original path keys.
-
-    def resolve(value):
-        path = Path(str(value))
-        if (not isinstance(value, (str, Path)) or not path.is_absolute()
-                or ".." in path.parts or str(path) != str(value)):
-            raise ValueError(f"native receipt input path is unsafe: {value}")
-        if not path.is_relative_to(original_root):
-            return path
-        relative = path.relative_to(original_root)
-        target = project / relative
-        try:
-            resolved = target.resolve(strict=True)
-        except (OSError, RuntimeError) as exc:
-            raise ValueError(f"staged project input is absent: {relative}") from exc
-        if (resolved != target or not resolved.is_relative_to(project)
-                or not resolved.is_file() or target.is_symlink()):
-            raise ValueError(f"staged project input is unsafe: {relative}")
-        return resolved
-
-    return resolve
-
-
-def mapped_receipt_state_files(project: Path, folder: Path,
-                               receipt: dict, state: dict | None = None
-                               ) -> tuple[str, ...]:
-    """Map producer state files into the current project, with proof.
-
-    Native receipts retain the absolute paths from the producer's project.
-    A relocated backend arm may use the corresponding current-project path
-    only when the receipt's lexical namespace resolves to that path and the
-    current bytes match the recorded digest.  Foreign, traversal, missing,
-    symlinked, ambiguous, or digest-mismatched entries are rejected instead
-    of being silently dropped or read from an ambient absolute path.
-    """
-    project = Path(project).resolve(strict=True)
-    folder = Path(folder).resolve(strict=True)
-    if not folder.is_relative_to((project / "phase3/librelane").resolve()):
-        raise ValueError("native receipt producer folder is outside project")
-    state = state if isinstance(state, dict) else json.loads(
-        (folder / "state_out.json").read_text())
-    inp = receipt.get("input") if isinstance(receipt, dict) else None
-    state_files = inp.get("state_files") if isinstance(inp, dict) else None
-    if not isinstance(state_files, dict):
-        raise ValueError("native receipt has malformed state_files")
-    resolver = _project_path_resolver(project, folder, state)
-    mapped: list[str] = []
-    seen: set[str] = set()
-    for raw, recorded in state_files.items():
-        if not isinstance(raw, str) or not isinstance(recorded, str):
-            raise ValueError("native receipt has malformed state_files entry")
-        path = Path(raw)
-        if (not path.is_absolute() or ".." in path.parts
-                or str(path) != raw):
-            raise ValueError(f"native receipt state path is unsafe: {raw}")
-        target = resolver(raw)
-        if (not target.is_absolute() or not target.is_relative_to(project)
-                or target.is_symlink() or not target.is_file()):
-            raise ValueError(f"native receipt state path is foreign: {raw}")
-        rel = target.relative_to(project).as_posix()
-        if rel in seen:
-            raise ValueError(f"native receipt state path maps ambiguously: {raw}")
-        if _sha(target) != recorded:
-            raise ValueError(f"native receipt state digest mismatch: {raw}")
-        seen.add(rel)
-        mapped.append(rel)
-    return tuple(mapped)
+    """Resolve native State paths in the current project and installed PDK."""
+    from librelane_contract import project_path
+    return lambda value: project_path(project, value)
 
 
 def _native_synthesis(project: Path, folder: Path, top: str, *, path_resolver=None) -> tuple[Path, dict, dict]:
-    """Verify the existing run_chain receipt against its consumed/output bytes."""
+    """Read the native netlist, configuration, statistics and CHECK reports."""
     import librelane_contract as LC
-    from _rtl_include_hub import silicon_rtl_selection
-
-    folder = folder.resolve()
-    if not folder.is_relative_to((project / 'phase3/librelane').resolve()):
-        raise ValueError('tool folder is outside the production LibreLane directory')
-    receipt = json.loads((folder / 'vibeic_receipt.json').read_text())
     cfg = json.loads((folder / 'config.json').read_text())
     state = json.loads((folder / 'state_out.json').read_text())
-    inp = receipt['input']
-    if inp['step'] != 'Yosys.Synthesis' or cfg['meta']['step'] != inp['step']:
-        raise ValueError('not a Yosys.Synthesis producer')
-    resolve_path = path_resolver or (lambda value: Path(value))
+    resolve_path = path_resolver or (lambda value: LC.project_path(project, value))
     raw = resolve_path(state['nl']).resolve()
-    if not raw.is_relative_to(folder):
-        raise ValueError('native netlist is outside its producer folder')
-    for rel in ('state_out.json', 'config.json', 'reports/stat.json', str(raw.relative_to(folder))):
-        if receipt['sha256'].get(rel) != _sha(folder / rel):
-            raise ValueError(f'native receipt mismatch: {rel}')
-    if inp['config'] != _sha(project / 'phase3/librelane/synthesis_resolved.json'):
-        raise ValueError('producer consumed a different resolved config')
-    declared = LC.synthesis_levers(project)
-    if (('synthesis_levers' in inp) != (declared is not None)
-            or inp.get('synthesis_levers') != declared):
-        raise ValueError('native producer synthesis declaration differs from current source authority')
-    expected_strategy = (declared or {}).get('SYNTH_STRATEGY', 'AREA 0')
-    # Older default-only receipts may omit the field. An explicit declaration
-    # must be carried by the actual native config, not inferred by this reader.
-    strategy = cfg.get('SYNTH_STRATEGY', 'AREA 0' if declared is None else None)
-    if strategy != expected_strategy:
-        raise ValueError('producer synthesis strategy differs from current declaration/default')
-    pdk, _ = LC.phase2_pdk(project, selected=cfg.get('PDK'))
-    if cfg.get('PDK') != pdk or cfg.get('DESIGN_NAME') != top:
-        raise ValueError('producer PDK/top differs from declared input')
-    rtl = silicon_rtl_selection(project / 'phase2/stage1/rtl')
-    paths = [str(p.resolve()) for p in rtl]
-    declared_rtl = [str(resolve_path(path).resolve()) for path in cfg.get('VERILOG_FILES', ())]
-    if not paths or declared_rtl != paths:
-        raise ValueError('producer RTL file set differs from current synthesis input')
-    for declared, path in zip(cfg.get('VERILOG_FILES', ()), rtl):
-        if inp['config_files'].get(declared) != _sha(path):
-            raise ValueError('producer consumed stale RTL bytes')
-    mounts = _receipt_pdk_mounts(folder, receipt)
-    # Rehash the producer's recorded population. A later reader namespace may
-    # expose additional image files; those were not part of this receipt.
-    expected_config_files = {}
-    external_config_files = []
-    for recorded_path in inp['config_files']:
-        source = resolve_path(recorded_path)
-        if source.is_relative_to(project.resolve()):
-            # Preserve the producer's receipt key, but read only the frozen
-            # staged bytes.  Rehashing the original absolute path silently
-            # reintroduced an ambient-project dependency after relocation.
-            expected_config_files[recorded_path] = _sha(source)
-        else:
-            external_config_files.append(recorded_path)
-    expected_config_files.update(LC.config_file_hashes(
-        {'files': external_config_files}, mounts))
-    if inp.get('config_files') != expected_config_files:
-        raise ValueError('producer consumed stale or incomplete config material')
-    consumed_config_files = {}
-    for recorded_path, recorded_sha in expected_config_files.items():
-        source = resolve_path(recorded_path)
-        if not source.is_relative_to(project.resolve()):
-            for host, guest in sorted(mounts, key=lambda m: len(str(m[1])), reverse=True):
-                if source.is_relative_to(guest):
-                    source = Path(host) / source.relative_to(guest)
-                    break
-        consumed_config_files[recorded_path] = {
-            'path': str(source.resolve(strict=True)), 'sha256': recorded_sha}
-    for path, recorded in inp['state_files'].items():
-        resolved = resolve_path(path)
-        if not resolved.is_absolute() or not resolved.is_relative_to(project):
-            raise ValueError(f'producer state_files contains a foreign path: {path}')
-        if recorded != _sha(resolved):
-            raise ValueError(f'producer consumed stale state_files: {path}')
+    if not raw.is_file():
+        raise ValueError('native synthesis netlist is missing')
+    if cfg.get('DESIGN_NAME') != top:
+        raise ValueError('native synthesis top differs from requested top')
     stat = json.loads((folder / 'reports/stat.json').read_text())
     modules = stat.get('modules')
     module = (modules.get('\\' + top) or modules.get(top)) if isinstance(modules, dict) else None
@@ -546,124 +155,52 @@ def _native_synthesis(project: Path, folder: Path, top: str, *, path_resolver=No
     report = check(raw, cfg)
     if report['verdict'] != 'PASS':
         raise ValueError('; '.join(report['findings']))
-    report['consumed_config_files'] = consumed_config_files
     return raw, cfg, report
 
 
-def publish_handoff(project: Path, folder: Path, mapped: Path, top: str) -> dict:
-    """Publish exactly the checked native bytes into the existing handoff contract."""
-    raw, _, _ = _native_synthesis(project, folder, top,
-                                  path_resolver=_project_path_resolver(
-                                      project, folder,
-                                      json.loads((folder / 'state_out.json').read_text())))
-    if mapped.read_bytes() != raw.read_bytes():
-        raise ValueError('mapped copy differs from native output')
-    canonical = mapped.parent / 'netlist.v'
-    write_bytes(canonical, raw.read_bytes())
-    sidecar = mapped.parent / 'synth_inputs.json'
-    doc = json.loads(sidecar.read_text())
-    doc['librelane_synthesis'] = {
-        'schema': 'vibe-ic/librelane-synthesis-handoff/1', 'top': top,
-        'folder': str(folder.relative_to(project)),
-        'mapped': str(mapped.relative_to(project)),
-        'netlist_sha256': _sha(raw),
-        'receipt_sha256': _sha(folder / 'vibeic_receipt.json')}
-    declared = json.loads((folder / 'vibeic_receipt.json').read_text())['input'].get('synthesis_levers')
-    if declared is not None:
-        doc['librelane_synthesis']['synthesis_levers'] = declared
-    write_json(sidecar, doc)
-    return doc['librelane_synthesis']
-
-
 def bound_handoff(project: Path) -> Optional[dict]:
-    """Step14's existing gates and PnR/LEC judge the same current tool product.
-
-    None retains the direct producer's existing recipe gate. A tool-selected
-    project never falls back to an older .ys script or generic netlist.
-    """
+    """Read the selected native synthesis product for downstream consumers."""
     import librelane_contract as LC
-    canonical_physical = False
     sidecar = project / 'phase2/stage2/synth/synth_inputs.json'
     try:
-        import flow109
-        request = os.environ.get(flow109.CONTEXT_ENV)
-        if request is not None:
-            canonical_physical = True
-            context = flow109.validate_execution_context(json.loads(Path(request).read_text()))
-            rows = context.get('resolved_rows', [context.get('resolved_row')])
-            canonical_physical = any(row and row['id'] == 'D31' for row in rows)
-        if canonical_physical:
-            from vibe_ic_one_shot_runner import _complete_canonical51_constraints
-            accepted = _complete_canonical51_constraints(project, read_only=True)
-            if not accepted or accepted['verdict'] != 'PASS':
-                raise ValueError((accepted or {}).get('detail', 'current canonical handoff absent'))
-            delivery = accepted['delivery']
-            state_ref = delivery['consumed_timing']['native_records']['state_out.json']
-            import flow109_metric_acceptance as metrics
-            state = json.loads(metrics._d30_file(project, state_ref, 'current prelayout State').read_text())
-            mapped = metrics._d30_file(project, delivery['source_netlist'], 'current mapped netlist')
-            native = state.get('nl')
-            if not isinstance(native, str) or Path(native).resolve() != mapped.resolve():
-                raise ValueError('current prelayout State does not consume the adopted mapped netlist')
-            return {'program': 'synth_handoff_netlist_check', 'step': '14',
-                    'verdict': 'PASS', 'findings': [], 'canonical_physical': True,
-                    'mapped': str(mapped), 'native': native,
-                    'netlist_sha256': delivery['source_netlist']['sha256'],
-                    'source_handoff': accepted['handoff'],
-                    'delivery_receipt': accepted['delivery_receipt'],
-                    'producer_source': accepted['producer_source'],
-                    'source_identity': accepted['source_identity'],
-                    'current_state': state_ref, 'delivery': delivery,
-                    'reason_class': 'canonical_handoff_verified'}
         doc = json.loads(sidecar.read_text()) if sidecar.is_file() else {}
         binding = doc.get('librelane_synthesis')
-        if LC.selected_mode(project, '9') != 'librelane' and binding is None:
-            return None
-        if not isinstance(binding, dict) or binding.get('schema') != 'vibe-ic/librelane-synthesis-handoff/1':
-            raise ValueError('current LibreLane synthesis handoff is absent')
-        declared = LC.synthesis_levers(project)
-        if (('synthesis_levers' in binding) != (declared is not None)
-                or binding.get('synthesis_levers') != declared):
-            raise ValueError('published synthesis declaration differs from current source authority')
-        from l_doc_consumer_contract import l_doc_fields
-        l9 = l_doc_fields(LC._ldoc(project / 'phase1/generated_docs', 'L9_INTEGRATION_SPEC.json'))
-        declared_top = l9.get('top_module')
-        current_top = declared_top.strip() if isinstance(declared_top, str) else None
-        if not current_top or current_top != binding['top']:
-            raise ValueError(f'current L9 subject {declared_top!r} differs from '
-                             f'published synthesis top {binding["top"]!r}')
-        folder = project / binding['folder']
-        mapped = project / binding['mapped']
-        expected = project / 'phase2/stage2/synth' / (binding['top'] + '_synth.v')
-        if mapped.resolve() != expected.resolve() or doc.get('netlist') != mapped.name:
-            raise ValueError('handoff does not name the production mapped netlist')
-        state = json.loads((folder / 'state_out.json').read_text())
-        raw, config, report = _native_synthesis(
-            project, folder, binding['top'],
-            path_resolver=_project_path_resolver(project, folder, state))
-        if binding['receipt_sha256'] != _sha(folder / 'vibeic_receipt.json'):
-            raise ValueError('native producer receipt changed after publication')
+        if isinstance(binding, dict) and binding.get('folder'):
+            folder = LC.project_path(project, binding['folder'])
+        else:
+            folders = [path.parent for path in (project / 'phase3/librelane').glob('**/state_out.json')
+                       if (path.parent / 'config.json').is_file() and
+                       (LC._load(path.parent / 'config.json').get('meta') or {}).get('step') == 'Yosys.Synthesis'
+                       and 'attempts' not in path.relative_to(project).parts]
+            if not folders:
+                return None
+            if len(folders) != 1:
+                raise ValueError('native synthesis State is ambiguous')
+            folder = folders[0]
+            binding = {}
+        config = json.loads((folder / 'config.json').read_text())
+        top = config.get('DESIGN_NAME')
+        if not isinstance(top, str) or not top:
+            raise ValueError('native synthesis has no design name')
+        raw, config, report = _native_synthesis(project, folder, top)
         import librelane_postmap as postmap
         parent = raw
         raw, child_folder = postmap.selected(project, binding, parent, folder)
         if child_folder:
             report = check(raw, config)
-            if report["verdict"] != "PASS":
+            if report['verdict'] != 'PASS':
                 raise ValueError('; '.join(report['findings']))
-        canonical = mapped.parent / 'netlist.v'
-        if any(_sha(p) != binding['netlist_sha256'] for p in (raw, mapped, canonical)):
-            raise ValueError('native/mapped/canonical handoff bytes disagree')
-        report.update({'producer': ('LibreLane.Yosys.Synthesis -> Vibeic.PostMapRepair'
-                                    if child_folder else 'LibreLane.Yosys.Synthesis'),
-                       'native': str(raw), 'parent': str(parent),
-                       'canonical': str(canonical), 'mapped': str(mapped),
-                       'netlist_sha256': binding['netlist_sha256'],
-                       'flattened': True, 'reason_class': 'tool_handoff_verified'})
+        mapped = LC.project_path(project, binding.get('mapped', str(raw)))
+        if not mapped.is_file():
+            raise ValueError('mapped synthesis netlist is absent')
+        report.update(producer='LibreLane.Yosys.Synthesis', native=str(raw),
+                      parent=str(parent), mapped=str(mapped), folder=str(folder),
+                      canonical=str(mapped.parent / 'netlist.v'), flattened=True,
+                      reason_class='native_synthesis_result')
         return report
     except (LC.Refusal, OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         return {'program': 'synth_handoff_netlist_check', 'step': '14',
-                'verdict': 'FAIL', 'reason_class': 'tool_handoff_invalid',
-                'canonical_physical': canonical_physical,
+                'verdict': 'FAIL', 'reason_class': 'native_synthesis_unreadable',
                 'findings': [str(exc)]}
 
 

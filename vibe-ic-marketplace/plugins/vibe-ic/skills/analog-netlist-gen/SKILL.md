@@ -68,10 +68,7 @@ XMP1 drain gate source VDD sky130_fd_pr__pfet_01v8 W=2u L=0.15u
    .ends
    ```
 4. Generate testbench:
-   - Power supply: `Vdd VDD 0 DC 3.3` (GF180) or `DC 1.8` (SKY130). The supply value
-     must match the PDK + device flavor — enforced by
-     `programs/analog_tb_supply_pdk_check.py` (`SUPPLY_PDK_MISMATCH` /
-     `SUPPLY_DEVICE_MISMATCH` / `DEVICE_FLAVOR_PDK_MISMATCH`).
+   - Check the actual testbench supply against the selected PDK device flavor and its original voltage limits before running SPICE. A nominal process label alone does not establish device compatibility.
    - Stimulus: DC sweep, AC source, transient pulse — **choosing the stimulus class
      and load network requires understanding the block's function (KEEP-JUDGMENT).**
    - Load: resistive/capacitive per spec
@@ -120,7 +117,7 @@ These rules are enforced by programs, not by prose. Run them after emitting `.sp
 | Include order (design.ngspice before .lib, GF180) | `programs/analog_netlist_include_order_check.py` | `LIB_BEFORE_DESIGN_INCLUDE` |
 | No hardcoded absolute paths (except `/foss/pdks/...`) | `programs/analog_netlist_path_lint.py` | `NON_WHITELISTED_ABSOLUTE_PATH` |
 | No floating nodes / unused ports | `programs/analog_netlist_connectivity_check.py` | `FLOATING_NODE`, `UNUSED_PORT` |
-| Supply value matches PDK + device flavor | `programs/analog_tb_supply_pdk_check.py` | `SUPPLY_PDK_MISMATCH`, `SUPPLY_DEVICE_MISMATCH`, `DEVICE_FLAVOR_PDK_MISMATCH` |
+| Supply value matches PDK + device flavor | Native tool result | `SUPPLY_PDK_MISMATCH`, `SUPPLY_DEVICE_MISMATCH`, `DEVICE_FLAVOR_PDK_MISMATCH` |
 | `.meas` lines from spec.json | `programs/analog_meas_from_spec_gen.py` | (generator) |
 
 ## Do not
@@ -132,17 +129,3 @@ These rules are enforced by programs, not by prose. Run them after emitting `.sp
 
 - `analog/<block>/<block>.sp` + `tb_<block>.sp` → `/ams-sim` or `eda_spice_corner` (Step A4)
 - If simulation fails → back to `/analog-sizing` for re-sizing
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/analog-netlist-gen/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-
-**Your task is not complete until the audit returns PASS.**

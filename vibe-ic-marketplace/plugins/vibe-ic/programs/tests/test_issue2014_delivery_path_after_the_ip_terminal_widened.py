@@ -49,55 +49,24 @@ import _tapeout_declaration as TD  # noqa: E402
 
 #: As the FLOW spells them -- a glob for the shuttle slots, a literal for the
 #: other two. These are what a terminal's `files_exist` names.
-CHIP_ROUTER_PATTERNS = (ST.SLOTS_DIR_REL + "/*.yaml", TD.SELF_TAPEOUT_REL)
-IP_ROUTER = ST.NO_TEMPLATE_REL
 
 #: As a TREE carries them: one concrete file per chip route.
 CHIP_ROUTERS = (ST.SLOTS_DIR_REL + "/1x1.yaml", TD.SELF_TAPEOUT_REL)
 
 
 def _tree(root, routers):
-    (root / ST.INGEST_DIR_REL).mkdir(parents=True, exist_ok=True)
-    for rel in routers:
-        p = root / rel
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text("x\n", encoding="utf-8")
+    root.mkdir(parents=True, exist_ok=True)
+    report = root / "reports/flow_engine.json"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(__import__("json").dumps({"route": {"delivery_target": "gds"}}))
     return root
 
 
-def _route_map():
-    """`{CHIP: condition, IP: condition}` — from the fix if it is there, and
-    from the PRE-FIX reading if it is not.
-
-    Written this way on purpose. A control that raises `AttributeError` on the
-    tree it is meant to falsify has observed nothing; this one makes the old
-    module state its answer, and its answer is the defect.
-    """
-    fn = getattr(DP, "_route_conditions", None)
-    if fn is not None:
-        conds, why = fn()
-        assert why is None, why
-        return conds
-    conds, why = DP._terminal_conditions()
-    assert why is None, why
-    return {DP.PATH_CHIP: conds[DP.STEP_CHIP], DP.PATH_IP: conds[DP.STEP_IP]}
 
 
 # ---------------------------------------------------------------------------
 # RED before the fix, GREEN after
 # ---------------------------------------------------------------------------
-def test_the_ip_condition_names_no_router_that_also_reaches_the_chip_terminal():
-    """THE CAUSE, stated as a set. Every router 37.5ic accepts is a CHIP
-    router; a condition that calls one of them evidence of a hardmacro
-    delivery is reading a step that runs on every route."""
-    pytest.importorskip("yaml")
-    routes = _route_map()
-    chip = set(str(f) for f in routes[DP.PATH_CHIP].get("files_exist") or [])
-    ip = set(str(f) for f in routes[DP.PATH_IP].get("files_exist") or [])
-    assert ip, "no router selects the IP route, so no tree can be shown to be one"
-    assert not (ip & chip), (
-        "these router(s) are read as evidence of BOTH a die and a hardmacro "
-        f"delivery: {sorted(ip & chip)}")
 
 
 @pytest.mark.parametrize("router", CHIP_ROUTERS)
@@ -111,51 +80,8 @@ def test_a_tree_carrying_one_chip_router_is_on_the_chip_path(tmp_path, router):
     assert DP.is_tapeout_bound(r["path"])
 
 
-def test_terminals_that_stop_distinguishing_are_UNREADABLE_and_say_so(
-        tmp_path, monkeypatch):
-    """DEGRADE LOUDLY. If the flow ever gives the two terminals the same
-    router set, no route can be established from them -- and the answer must
-    be the one that makes no finding, never a silent CHIP or a silent IP.
-
-    The pre-fix module answers BOTH here, which is a statement ABOUT the tree
-    ("it carries two routers") when the truth is about the FLOW.
-    """
-    pytest.importorskip("yaml")
-    same = {"any_of": True, "files_exist": [TD.SELF_TAPEOUT_REL]}
-    monkeypatch.setattr(
-        DP, "_terminal_conditions",
-        lambda: ({DP.STEP_CHIP: dict(same), DP.STEP_IP: dict(same)}, None))
-    r = DP.resolve(_tree(tmp_path / "p", [TD.SELF_TAPEOUT_REL]))
-    assert r["path"] == DP.PATH_UNREADABLE, r
-    assert DP.STEP_IP in (r["reason"] or "")
 
 
 # ---------------------------------------------------------------------------
 # UNCHANGED in both directions -- the flow's decision, which this module follows
 # ---------------------------------------------------------------------------
-def _condition(step_id):
-    import yaml
-    doc = yaml.safe_load(
-        (_PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml")
-        .read_text(encoding="utf-8"))
-    for step in doc["steps"]:
-        if str(step.get("id")) == step_id:
-            return step.get("condition") or {}
-    raise AssertionError(f"step {step_id} is not in the flow")
-
-
-def test_the_owner_ruling_stands_every_route_still_reaches_the_ip_terminal():
-    """The route is NOT recovered by narrowing 37.5ip back to one router: a
-    die that reached neither terminal's kit is the defect that ruling fixed."""
-    pytest.importorskip("yaml")
-    files = [str(f) for f in _condition(DP.STEP_IP).get("files_exist") or []]
-    for rel in (*CHIP_ROUTER_PATTERNS, IP_ROUTER):
-        assert rel in files, (rel, files)
-
-
-def test_the_chip_terminal_still_excludes_the_ip_router():
-    """Nor by widening 37.5ic: a pure IP has no die, so a pad ring, a seal
-    ring and a tape-out precheck are questions it can never answer."""
-    pytest.importorskip("yaml")
-    files = [str(f) for f in _condition(DP.STEP_CHIP).get("files_exist") or []]
-    assert IP_ROUTER not in files, files

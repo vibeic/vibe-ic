@@ -17,7 +17,7 @@ sys.path.insert(0, str(PROGRAMS))
 import benchmark_dispatch as bd                         # noqa: E402
 import benchmark_io_adapter as bio                      # noqa: E402
 import flow_phase_attribution as fpa                    # noqa: E402
-from not_verified_tier import not_verified_reason     # noqa: E402
+from _tool_probes import not_verified_reason     # noqa: E402
 
 import sys as _rt_sys
 from pathlib import Path as _rt_path

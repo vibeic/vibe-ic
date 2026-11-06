@@ -36,13 +36,11 @@ import shutil
 import sys
 from pathlib import Path
 
-import pytest
 
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 import design_one_shot_runner as R  # noqa: E402
 import _path_layout as _pl  # noqa: E402
-import _eda_pin as _pin  # noqa: E402
 
 #: THE CONTAINER IS DERIVED FROM THE PIN, NEVER SPELLED.
 #
@@ -70,11 +68,8 @@ import _eda_pin as _pin  # noqa: E402
 # shipped program (42 sites before, 1 after — the definition itself), but
 # its population helper `_shipped_py()` skips `tests/` by construction, so
 # the test tree kept the defect the programs were cleaned of.
-_CONTAINER = _pin.default_container_name()
 
 _HAVE_YOSYS = shutil.which("yosys") is not None
-_yosys = pytest.mark.skipif(not _HAVE_YOSYS,
-                            reason="yosys not on host — step is a no-op")
 
 # ── reusable RTL bodies (generic names; phantom integration-top shape) ──────
 _LEAF = """\
@@ -112,11 +107,6 @@ def _scaffold(tmp_path, rtl_files, l9, waivers=None):
     return proj
 
 
-def _synth_top_in(detail):
-    for tok in detail.split():
-        if tok.startswith("synth_top="):
-            return tok.split("=", 1)[1]
-    return None
 
 
 # ── POSITIVE (resolver unit, no yosys needed) ───────────────────────────────
@@ -137,97 +127,14 @@ def test_resolver_picks_graph_root_for_phantom_top(tmp_path):
 
 # ── POSITIVE (end-to-end through step_yosys_synth) ──────────────────────────
 
-@_yosys
-def test_synth_adopts_graph_root_no_chip_top_fail(tmp_path):
-    proj = _scaffold(
-        tmp_path,
-        {"core.sv": _ROOT_WRAPPING.format(root="core", child="sub"),
-         "sub.sv": _LEAF.format(n="sub")},
-        {"top_module": "the_top", "synth_top": None})
-    res = R.step_yosys_synth(proj, "chip_top", container=_CONTAINER)
-    # THE #683 CLAIM, ON EVERY MACHINE. `synth_top` used to reach the
-    # StepResult only on the PASS path, so a run whose BACKEND failed for a
-    # reason of its own reported no decision at all and this id could assert
-    # nothing. The step now records it on every exit path it has resolved
-    # one, so the resolution — which is the whole of #683 — is pinned here
-    # whatever the synth backend then did with it.
-    assert res.extras.get("synth_top") == "core", res.extras
-    assert res.status == "PASS", res.detail
-    assert _synth_top_in(res.detail) == "core", res.detail
-    # NO 'chip_top is not a valid top-level module' FAIL.
-    assert "chip_top is not a valid" not in res.detail
-    # no spurious chip_top wrapper had to be auto-emitted.
-    rtl = _pl.rtl_dir(proj)
-    assert not (rtl / "chip_top.v").is_file()
-    assert not (rtl / "chip_top.sv").is_file()
 
 
 # ── §4.05 NEGATIVE no-leak ──────────────────────────────────────────────────
 
-@_yosys
-def test_noleak_real_chip_top_not_overridden(tmp_path):
-    """A design WITH a real chip_top module keeps synth_top=chip_top — the
-    fallback must NOT fire (chip_top IS defined in staged rtl/)."""
-    proj = _scaffold(
-        tmp_path,
-        {"chip_top.sv": _ROOT_WRAPPING.format(root="chip_top", child="sub"),
-         "sub.sv": _LEAF.format(n="sub")},
-        {"top_module": "chip_top", "synth_top": None})
-    res = R.step_yosys_synth(proj, "chip_top", container=_CONTAINER)
-    # THE #683 CLAIM, ON EVERY MACHINE. `synth_top` used to reach the
-    # StepResult only on the PASS path, so a run whose BACKEND failed for a
-    # reason of its own reported no decision at all and this id could assert
-    # nothing. The step now records it on every exit path it has resolved
-    # one, so the resolution — which is the whole of #683 — is pinned here
-    # whatever the synth backend then did with it.
-    assert res.extras.get("synth_top") == "chip_top", res.extras
-    assert res.status == "PASS", res.detail
-    assert _synth_top_in(res.detail) == "chip_top", res.detail
 
 
-@_yosys
-def test_noleak_real_l9_synth_top_preserved(tmp_path):
-    """A design with a real L9.synth_top keeps using it (precedence preserved);
-    the fallback never fires because synth_top != the auto-wrapper name."""
-    proj = _scaffold(
-        tmp_path,
-        {"mytop.sv": _ROOT_WRAPPING.format(root="mytop", child="sub"),
-         "sub.sv": _LEAF.format(n="sub")},
-        {"top_module": "the_top", "synth_top": "mytop"})
-    res = R.step_yosys_synth(proj, "chip_top", container=_CONTAINER)
-    # THE #683 CLAIM, ON EVERY MACHINE. `synth_top` used to reach the
-    # StepResult only on the PASS path, so a run whose BACKEND failed for a
-    # reason of its own reported no decision at all and this id could assert
-    # nothing. The step now records it on every exit path it has resolved
-    # one, so the resolution — which is the whole of #683 — is pinned here
-    # whatever the synth backend then did with it.
-    assert res.extras.get("synth_top") == "mytop", res.extras
-    assert res.status == "PASS", res.detail
-    assert _synth_top_in(res.detail) == "mytop", res.detail
 
 
-@_yosys
-def test_noleak_real_waiver_synth_top_preserved(tmp_path):
-    """waivers.json:phase2_synth_top still wins over the graph-root fallback."""
-    proj = _scaffold(
-        tmp_path,
-        {"waivedtop.sv": _ROOT_WRAPPING.format(root="waivedtop", child="sub"),
-         "sub.sv": _LEAF.format(n="sub"),
-         # a DIFFERENT real graph-root the fallback would otherwise pick.
-         "other.sv": _ROOT_WRAPPING.format(root="other", child="sub2"),
-         "sub2.sv": _LEAF.format(n="sub2")},
-        {"top_module": "the_top", "synth_top": None},
-        waivers={"phase2_synth_top": "waivedtop"})
-    res = R.step_yosys_synth(proj, "chip_top", container=_CONTAINER)
-    # THE #683 CLAIM, ON EVERY MACHINE. `synth_top` used to reach the
-    # StepResult only on the PASS path, so a run whose BACKEND failed for a
-    # reason of its own reported no decision at all and this id could assert
-    # nothing. The step now records it on every exit path it has resolved
-    # one, so the resolution — which is the whole of #683 — is pinned here
-    # whatever the synth backend then did with it.
-    assert res.extras.get("synth_top") == "waivedtop", res.extras
-    assert res.status == "PASS", res.detail
-    assert _synth_top_in(res.detail) == "waivedtop", res.detail
 
 
 def test_noleak_ambiguous_multi_root_resolver_returns_none(tmp_path):
@@ -240,60 +147,3 @@ def test_noleak_ambiguous_multi_root_resolver_returns_none(tmp_path):
          "rootB.sv": _LEAF.format(n="rootB")},
         {"top_module": "the_top", "synth_top": None})
     assert R._v661_resolve_dut_module(proj, "chip_top", "the_top") is None
-
-
-@_yosys
-def test_noleak_ambiguous_multi_root_honestly_fails(tmp_path):
-    """End-to-end: the ambiguous case must NOT adopt a wrong root and must NOT
-    masquerade as PASS — it honestly FAILs on the chip_top error (or the
-    existing auto-emit/waiver path), never silently synthesising rootA over
-    rootB."""
-    proj = _scaffold(
-        tmp_path,
-        {"rootA.sv": _LEAF.format(n="rootA"),
-         "rootB.sv": _LEAF.format(n="rootB")},
-        {"top_module": "the_top", "synth_top": None})
-    res = R.step_yosys_synth(proj, "chip_top", container=_CONTAINER)
-    # honest FAIL — neither rootA nor rootB was silently chosen.
-    assert res.status == "FAIL", res.detail
-    # NON-VACUITY. Until the step recorded its decision on the FAIL path,
-    # `_synth_top_in(detail)` was None here and both `!=` below were true of
-    # NOTHING — the id could not have caught a silently-adopted wrong root.
-    # Assert a value is present before asserting what it is not.
-    _chosen = res.extras.get("synth_top")
-    assert _chosen, res.extras
-    assert _chosen not in ("rootA", "rootB"), res.extras
-    assert _synth_top_in(res.detail) == _chosen, res.detail
-    assert _synth_top_in(res.detail) != "rootA"
-    assert _synth_top_in(res.detail) != "rootB"
-
-
-def test_noleak_tb_resolver_path_unchanged(tmp_path):
-    """The TB path `step_full_stack_tb_gen` → `_v661_resolve_dut_module` must be
-    unchanged: it still resolves the graph-root for the same phantom-top shape
-    (the fix is in step_yosys_synth only, sharing the SAME resolver)."""
-    proj = _scaffold(
-        tmp_path,
-        {"core.sv": _ROOT_WRAPPING.format(root="core", child="sub"),
-         "sub.sv": _LEAF.format(n="sub")},
-        {"top_module": "the_top",
-         "top_ports": [
-             {"name": "clk", "direction": "input"},
-             {"name": "rst_n", "direction": "input"},
-             {"name": "q", "direction": "output", "width": 8}]})
-    res = R.step_full_stack_tb_gen(proj, "chip_top")
-    # R-0915-85 — the step emits `NOT_MEASURED(no_population)` where it used
-    # to emit `SKIP`: a CONNECTIVITY-ONLY skeleton golden-compares NOTHING, so
-    # functional correctness was not measured. The detail said so already; the
-    # word says it now. This test's subject is the EMITTED TB, so what it
-    # needs is that the step did not FAIL.
-    assert res.status in ("PASS", "NOT_MEASURED"), res.detail
-    assert res.status != "FAIL", res.detail
-    sim = _pl.sim_full_stack_dir(proj)
-    tbs = sorted(sim.glob("tb_*_full.v"))
-    assert tbs, "a full-stack TB must be emitted"
-    tb = next((t for t in tbs if "core" in t.name), None)
-    assert tb is not None, [t.name for t in tbs]
-    txt = tb.read_text()
-    assert "core u_dut" in txt
-    assert "the_top u_dut" not in txt  # phantom never instantiated

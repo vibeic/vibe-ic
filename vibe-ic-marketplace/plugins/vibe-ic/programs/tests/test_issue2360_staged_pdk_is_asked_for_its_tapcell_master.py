@@ -18,7 +18,6 @@ a refusal, not a NONE.
 from __future__ import annotations
 
 import ast
-import json
 import sys
 from pathlib import Path
 
@@ -26,25 +25,12 @@ import pytest
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
-import phase3_one_shot_runner as p3  # noqa: E402
 
 _TECH = "LAYER MET1\n  TYPE ROUTING ;\nEND MET1\nEND LIBRARY\n"
 _INV = "MACRO INVX1\n  CLASS CORE ;\n  SITE core ;\nEND INVX1\n"
 _TAP = "MACRO TAPX1\n  CLASS CORE WELLTAP ;\n  SITE core ;\nEND TAPX1\n"
 
 
-def _stage(root: Path, cell_lef: str, signoff: dict | None = None) -> Path:
-    pdk = root / "input" / "pdk"
-    (pdk / "liberty").mkdir(parents=True)
-    (pdk / "liberty" / "x_tt.lib").write_text("library(x){}\n")
-    (pdk / "lef").mkdir()
-    (pdk / "lef" / "x_tech.tlef").write_text(_TECH)
-    (pdk / "lef" / "x_cells.lef").write_text(
-        "SITE core ;\n" + cell_lef + "END LIBRARY\n")
-    if signoff is not None:
-        (pdk / "bridge").mkdir()
-        (pdk / "bridge" / "signoff_config.json").write_text(json.dumps(signoff))
-    return root
 
 
 @pytest.fixture(autouse=True)
@@ -53,59 +39,20 @@ def _no_container(monkeypatch):
     monkeypatch.delenv("EDA_CONTAINER", raising=False)
 
 
-def test_a_staged_pdk_that_ships_a_welltap_gets_it(tmp_path):
-    pdk = p3._detect_pdk(_stage(tmp_path, _INV + _TAP))
-    assert pdk.name.startswith("custom:")
-    assert pdk.tapcell_master == "TAPX1"
-    assert pdk.tapcell_master_source.startswith("LEF CLASS CORE WELLTAP in ")
-    assert pdk.tapcell_master_source.endswith("x_cells.lef")
 
 
-def test_a_staged_pdk_that_ships_none_is_recorded_as_none_by_name(tmp_path):
-    pdk = p3._detect_pdk(_stage(tmp_path, _INV))
-    assert pdk.tapcell_master is None
-    src = pdk.tapcell_master_source
-    assert src.startswith("NONE: no CLASS CORE WELLTAP macro in "), src
-    assert "x_cells.lef" in src and "x_tech.tlef" in src, src
 
 
-def test_lowercase_class_core_welltap_is_found(tmp_path):
-    """The shipped gf180mcu library spells it `CLASS core WELLTAP`."""
-    lef = _INV + "MACRO lib__filltie\n  CLASS core WELLTAP ;\nEND lib__filltie\n"
-    assert p3._detect_pdk(_stage(tmp_path, lef)).tapcell_master == "lib__filltie"
 
 
-def test_the_welltap_class_is_attributed_to_its_own_macro(tmp_path):
-    """A WELLTAP later in the file must not be credited to an earlier cell."""
-    pdk = p3._detect_pdk(_stage(tmp_path, _INV + _INV.replace("INVX1", "INVX2")
-                                + _TAP))
-    assert pdk.tapcell_master == "TAPX1"
 
 
-def test_a_bridge_declaration_wins_over_the_lef(tmp_path):
-    pdk = p3._detect_pdk(_stage(tmp_path, _INV + _TAP,
-                                {"tapcell_master": "DECLTAP"}))
-    assert pdk.tapcell_master == "DECLTAP"
-    assert pdk.tapcell_master_source.startswith("DECLARED by ")
-    assert pdk.tapcell_master_source.endswith("signoff_config.json")
 
 
-def test_a_declared_null_is_a_stated_tapless_pdk(tmp_path):
-    pdk = p3._detect_pdk(_stage(tmp_path, _INV + _TAP,
-                                {"tapcell_master": None}))
-    assert pdk.tapcell_master is None
-    assert pdk.tapcell_master_source.startswith("DECLARED_NONE by ")
 
 
-def test_an_unreadable_lef_is_a_refusal_not_a_none(tmp_path):
-    with pytest.raises(SystemExit, match="TAPCELL_MASTER_UNDETERMINED"):
-        p3._derive_tapcell_master({}, "somewhere",
-                                  [str(tmp_path / "absent.lef")])
 
 
-def test_no_lef_at_all_is_a_refusal_not_a_none():
-    with pytest.raises(SystemExit, match="TAPCELL_MASTER_UNDETERMINED"):
-        p3._derive_tapcell_master({}, "somewhere", [None])
 
 
 # ── ONE derivation ─────────────────────────────────────────────────────────

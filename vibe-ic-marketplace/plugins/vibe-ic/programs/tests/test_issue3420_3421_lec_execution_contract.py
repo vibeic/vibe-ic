@@ -5,7 +5,6 @@ from types import SimpleNamespace
 
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
-import design_one_shot_runner as D  # noqa: E402
 import lec_run as LR  # noqa: E402
 
 
@@ -47,25 +46,6 @@ def test_same_invocation_preflight_names_unmounted_input(monkeypatch):
         "/mnt/ssd2/project/reports/lec_equiv.ys"]
 
 
-def test_environment_refusal_is_blocking_not_measured_not_design_fail():
-    doc = {
-        "verdict": "INCONCLUSIVE",
-        "compared_points": 0,
-        "unproven_points": 0,
-        "reason_class": "execution_error",
-        "execution_environment": {
-            "state": "NOT_MEASURED",
-            "reason_class": "execution_error",
-            "container": "vibeic-eda",
-            "missing_paths": ["/mnt/ssd2/project/reports/lec_equiv.ys"],
-        },
-    }
-
-    assert D.lec_inconclusive_reason_class(doc) == "execution_error"
-    status, reason = D.lec_inconclusive_disposition(doc)
-    assert status == D.NOT_EXECUTED_STATUS
-    assert "NOT_MEASURED" in reason
-    assert "/mnt/ssd2/project/reports/lec_equiv.ys" in reason
 
 
 def test_real_mismatch_is_unchanged_fail():

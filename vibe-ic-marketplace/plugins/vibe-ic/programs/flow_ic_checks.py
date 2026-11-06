@@ -109,7 +109,7 @@ class ElectricalRules(Step):
 
     def run(self, state_in, **kwargs):
         from flow_native_adapters import Commands
-        from phase3_one_shot_runner import _parse_native_cvc_report
+        from flow109_final_perc import _parse_native_cvc_report
 
         root = Path(self.step_dir).resolve()
         pdk = Path(str(self.config["PDK_ROOT"])) / self.config["PDK"]

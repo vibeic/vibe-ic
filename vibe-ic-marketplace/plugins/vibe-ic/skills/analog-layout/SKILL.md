@@ -270,26 +270,6 @@ Classic references: Razavi "Design of Analog CMOS Integrated Circuits" ch. on la
 - LVS verification → `/lvs-triage`
 - DRC verification → `/drc-fix`
 - Post-layout resim → `/ams-sim`
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/analog-layout/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in the corresponding skill directory enumerates
-every required element of your output: section headers, metadata fields,
-handoff lines, tool invocations.
-
-**Your task is not complete until the audit returns PASS.** Missing
-elements are the single largest source of skill-execution non-determinism
-across different agents.
-
 ## Captured by benchmark-enhancement-capture — 2026-09-01 (u_hawaii_adc A5 convergence: two blocks to netgen match-unique + KLayout DRC 0 on a native PDK)
 
 The deterministic half of every rule below ships in

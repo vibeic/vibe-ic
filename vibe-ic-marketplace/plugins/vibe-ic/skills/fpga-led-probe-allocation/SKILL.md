@@ -66,7 +66,7 @@ module fpga_top(
     inout  ID_BUS_PIN,
     output [9:0] LEDR
 );
-    // ... 2-FF synchronisers (see fpga_async_input_synchronizer_check) ...
+    // ... 2-FF synchronisers (verify native CDC and simulation results) ...
     // ... DUT instantiation ...
     wire tx_done_pulse, cmd_decoded_pulse;
     wire [7:0] last_response_byte;
@@ -98,25 +98,17 @@ diff to confirm the expected LEDs lit up.
 
 ## Anti-patterns (run the lint — do NOT eyeball these)
 
-> **Doctrine (user, 2026-05-29):** 把修法寫進工具，而非寫進 prompt.
->
-> The four deterministic structural anti-patterns below are now enforced
-> by **`programs/fpga_led_probe_lint.py`** (17 pytest cases pin each
-> rule + every no-false-alert guard). Run the program on your emitted
-> top BEFORE claiming the LED allocation is sound — the prose below is
-> the rationale, not the rule applicator.
+> Review the LED assignments against the actual RTL and board pin map. Simulate probe polarity, pulse stretching and sticky behavior, then read Quartus compile/fit diagnostics.
 
-```bash
-python3 plugins/vibe-ic/programs/fpga_led_probe_lint.py \
-    <your_fpga_top.v> \
-    [--qsf <board.qsf>] \
-    [--json fpga_led_probe_lint.json]
-```
+Review the LED assignments against the actual RTL and board pin map. Simulate probe polarity, pulse stretching and sticky behavior, then read Quartus compile/fit diagnostics.
 
 Exit codes: `0` = PASS (ERROR-free; WARNINGs may still be reported);
 `1` = ERROR anti-pattern found; `2` = **NOTHING EXAMINED** — no input file, or
 no LED drive in any file that was read. `2` is the *disclosed-skip* tier, never
-a pass: `flow_compliance_check` files it as VACUOUS_PASS. The JSON `findings[]`
+a pass: record the unexamined behavior as `NOT_MEASURED` in the native-result
+review. Read the actual FPGA/native tool evidence in `reports/flow_engine.json`
+against its original requirement and AI review it; the lint only establishes
+what its examined LED drives cover. The JSON `findings[]`
 carries `rule` / `file` / `line` / `detail` / `fix_hint` for each ERROR;
 `warnings[]` carries the same shape for advisory hits; `unreadable[]` and
 `led_drives_examined` disclose the lint's actual coverage.
@@ -174,30 +166,11 @@ the code is internally consistent.
 
 This skill emits a *template*. Validate with:
 
-- `fpga_async_input_synchronizer_check` — ensure inputs are properly
+- Native CDC/RDC analysis and source-derived simulation ensure inputs are properly
   synchronised before driving FSMs that LEDs probe.
-- `fpga_pullup_lint` — ensure tri-state pins have the correct pull-up
+- Native board/pin assignments and electrical reports establish tri-state pull-up
   declarations.
 
 When camera capture is part of the verification flow, the LED probe
 allocation should also be cited in `RESULTS.md` so a reviewer can map
 the captured JPGs back to the design.
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/fpga-led-probe-allocation/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in the corresponding skill directory enumerates
-every required element of your output: section headers, metadata fields,
-handoff lines, tool invocations.
-
-**Your task is not complete until the audit returns PASS.** Missing
-elements are the single largest source of skill-execution non-determinism
-across different agents.

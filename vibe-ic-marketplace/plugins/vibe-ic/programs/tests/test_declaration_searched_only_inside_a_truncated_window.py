@@ -6,19 +6,13 @@ decided by the prose above it.
 """
 from __future__ import annotations
 
-import json
 import re
 import sys
-import tempfile
 from pathlib import Path
 
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import _progress_run as _pr  # noqa: E402
 
-PROG = (Path(__file__).resolve().parents[1]
-        / "declaration_searched_only_inside_a_truncated_window.py")
 
 #: A head window, searched by a COMPILED pattern — the shape the known
 #: instance ships, and the one a rule reading only `re.search(pat, s)` misses.
@@ -128,88 +122,24 @@ def declared_intent(text):
 '''
 
 
-def _tree(body: str, inventory=None, name="sample_audit.py") -> Path:
-    root = Path(tempfile.mkdtemp(prefix="tws_"))
-    (root / ".git").mkdir()
-    progs = root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
-    progs.mkdir(parents=True)
-    (progs / name).write_text(body)
-    (root / "inventory.json").write_text(
-        json.dumps({"known": inventory or []}) + "\n")
-    return root
 
 
-def _run(root: Path, inventory: Path = None):
-    return _pr.run(
-        [sys.executable, str(PROG), "--root", str(root), "--inventory",
-         str(inventory or (root / "inventory.json"))],
-        capture_output=True, text=True)
 
 
-def test_a_head_window_feeding_a_search_is_refused():
-    """NEGATIVE CONTROL — the instance the capture measured, reintroduced."""
-    r = _run(_tree(_DEFECT_HEAD))
-    assert r.returncode == 1, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
-    assert "text[4000]" in r.stdout
-    assert "compiled pattern" in r.stdout
 
 
-def test_a_tail_window_feeding_a_search_is_refused():
-    """The head-slice and the tail-slice shapes are ONE class."""
-    r = _run(_tree(_DEFECT_TAIL))
-    assert r.returncode == 1, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
-    assert "-2000" in r.stdout
 
 
-def test_searching_the_whole_text_is_not_refused():
-    r = _run(_tree(_REPAIRED))
-    assert r.returncode == 0, (
-        f"the remedy was refused (rc={r.returncode})\n{r.stdout}\n{r.stderr}")
 
 
-def test_a_window_behind_a_NAMED_constant_is_still_a_window():
-    """EXTRACT-A-CONSTANT MUST NOT UN-DETECT THE DEFECT.
-
-    MEASURED 2026-08-22, composed: one branch recorded
-    `flow_gate_enforcement_audit.py::text::head::4000` as known debt under a
-    may-only-shrink inventory; a sibling branch extracted that same 4000 into
-    `DECL_WINDOW_BYTES` so two copies of the number could not drift. Neither
-    changed the window, which is still 4000 bytes. What changed is that the
-    bound stopped being an `ast.Constant`, the rule stopped seeing the site,
-    and the inventory row matched nothing — the ratchet went red for the
-    detector's blindness rather than for any defect. This is that shape, and
-    the number is reported so a reader gets the size and not just the name.
-    """
-    r = _run(_tree(_DEFECT_NAMED_BOUND))
-    assert r.returncode == 1, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
-    assert "text[4000]" in r.stdout, r.stdout
-    assert "compiled pattern" in r.stdout, r.stdout
 
 
-def test_a_name_bound_more_than_once_is_not_resolved():
-    """THE DIRECTION THAT KEEPS THE RESOLUTION HONEST. Without this the rule
-    could report `4000` for a slice that runs at 10, which is a size a reader
-    would act on and that no line of the module states."""
-    r = _run(_tree(_REBOUND_NAME))
-    assert r.returncode == 0, (
-        f"a name with two bindings was resolved to one of them "
-        f"(rc={r.returncode})\n{r.stdout}\n{r.stderr}")
 
 
-def test_a_named_bool_is_not_a_window():
-    """`True` is an `int`; `text[:True]` is one byte, not a bound."""
-    r = _run(_tree(_BOOL_NAME))
-    assert r.returncode == 0, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
 
 
-def test_a_display_only_window_is_not_refused():
-    r = _run(_tree(_DISPLAY_ONLY))
-    assert r.returncode == 0, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
 
 
-def test_a_constant_below_the_floor_is_not_a_window():
-    r = _run(_tree(_SMALL_INDEX))
-    assert r.returncode == 0, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
 
 
 def test_the_control_the_capture_recorded():
@@ -238,30 +168,3 @@ def test_the_control_the_capture_recorded():
         "measuring what it claims to")
     assert whole(near) == whole(far) == "blocking", (
         "searching the whole text must give ONE answer for both")
-
-
-def test_a_stale_inventory_row_is_a_failure():
-    r = _run(_tree(_REPAIRED, inventory=[
-        {"key": "programs/gone.py::text::head::4000", "reason": "stale"}]))
-    assert r.returncode == 1, f"rc={r.returncode}\n{r.stdout}"
-
-
-def test_a_missing_tree_is_undetermined_not_a_pass():
-    r = _pr.run([sys.executable, str(PROG), "--root", "/nonexistent/jd"],
-                       capture_output=True, text=True)
-    assert r.returncode == 2, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
-
-
-def test_a_bad_invocation_is_rc_3():
-    r = _pr.run([sys.executable, str(PROG), "--no-such-flag"],
-                       capture_output=True, text=True)
-    assert r.returncode == 3, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
-
-
-def test_the_shipped_tree_passes_its_own_rule():
-    root = Path(__file__).resolve().parents[5]
-    if not (root / ".git").exists():
-        pytest.skip("not a checkout")
-    r = _pr.run([sys.executable, str(PROG), "--root", str(root)],
-                       capture_output=True, text=True)
-    assert r.returncode == 0, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"

@@ -12,7 +12,6 @@ sys.path.insert(0, str(PROGRAMS))
 
 import ai_signed_judgement as judgement
 import design_one_shot_runner as runner
-import rtl_provenance
 
 
 PROSE = "Every primitive in the final netlist has to be a Sheffer stroke.\n"
@@ -366,20 +365,6 @@ def test_typed_adc_generator_still_emits_with_unconsumed_prose(tmp_path):
     assert not (tmp_path / "phase2/stage1/fallback_skill.md").exists()
 
 
-def test_changed_prose_keeps_old_rtl_and_requires_signature_after_authorship(tmp_path):
-    source = _write(tmp_path, "phase1/input_doc/design.md", KMAP)
-    initial = runner.step_rtl_gen(tmp_path, "__neutral_logic__")
-    assert initial.status == "PASS", initial.detail
-    rtl = tmp_path / "phase2/stage1/rtl/chip_top.sv"
-    old = rtl.read_bytes()
-    rtl_provenance.stamp(tmp_path, "deterministic_emit_chain")
-    _reset_session()
-    source.write_text(KMAP + PROSE)
-    result = runner.step_rtl_gen(tmp_path, "__neutral_logic__")
-    assert result.status == "PASS", result.detail
-    assert rtl.read_bytes() == old
-    assert result.extras["deterministic_generator"]
-    assert not result.extras.get("fallback_skill")
 
 
 @pytest.mark.parametrize("ic_class", CLASSES[:3])

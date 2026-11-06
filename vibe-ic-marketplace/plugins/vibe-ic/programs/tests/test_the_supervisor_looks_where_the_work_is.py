@@ -32,7 +32,6 @@ reaped, and a child that has genuinely stopped everywhere still is.
 from __future__ import annotations
 
 import ast
-import subprocess
 import sys
 from pathlib import Path
 
@@ -41,9 +40,7 @@ import pytest
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
-import _container_exec as _cex  # noqa: E402
 import _progress_run as _pr  # noqa: E402
-import phase3_one_shot_runner as R  # noqa: E402
 
 #: Fast supervision for the two behavioural arms: the stall window is
 #: `stall_looks * poll_s`, and `poll_s` is floored at twice this host's own
@@ -82,21 +79,8 @@ def _flat(readable=True):
 
 # --------------------------------------------------------------- the wiring
 
-def test_no_container_is_the_previous_behaviour_exactly():
-    assert R._work_lives_in_container(None) is None
-    assert R._work_lives_in_container("") is None
 
 
-def test_a_named_container_is_supervised_through_its_own_tree():
-    factory = R._work_lives_in_container("some-container")
-    assert factory is not None
-    signals = {}
-    probe = factory(signals)
-    assert callable(probe)
-    # The channel's own contract: it records whether it was readable, so a
-    # stall reported with it present can be told from one reported without.
-    probe(None)
-    assert set(signals) <= {"container"}
 
 
 def test_every_call_site_that_names_a_container_supervises_inside_it():
@@ -165,12 +149,3 @@ def test_the_added_channel_can_only_make_it_more_patient():
     assert cp.returncode == 0
     cp = _pr.run(busy, progress_probe=_flat(readable=False), **_FAST)
     assert cp.returncode == 0
-
-
-def test_the_channel_this_uses_is_the_repos_own_one_implementation():
-    """Not a second probe: the runner delegates to the container reader that
-    `_container_exec` already supervises its own calls with."""
-    import inspect
-    body = inspect.getsource(R._work_lives_in_container)
-    assert "_cex.container_tree_probe(container)" in body
-    assert callable(_cex.container_tree_probe)

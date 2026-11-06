@@ -215,7 +215,6 @@ def test_unknown_or_invalid_limits_refuse_before_launch(monkeypatch, option, val
     def forbidden(*args, **kwargs):
         pytest.fail('invalid launch reached attestation or a child process')
 
-    monkeypatch.setattr(contract, 'local_image_attestation', forbidden)
     monkeypatch.setattr(contract.subprocess, 'run', forbidden)
     with pytest.raises(contract.Refusal, match='LL_LOCAL_LAUNCH_UNSUPPORTED'):
         contract._run_local(['docker', 'run', option, value, 'image', '--skip', 'tool'],

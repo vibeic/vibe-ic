@@ -225,7 +225,8 @@ def test_prompt_structure_binding_cannot_be_laundered(tmp_path, native, tamper):
 @pytest.mark.parametrize("rc_value", [0, 17])
 def test_structural_launcher_normalizes_native_and_legacy_without_masking_exit(tmp_path, monkeypatch, entrypoint, prefix, rc_value):
     monkeypatch.setattr(launch, "_image_entrypoint", lambda *args: entrypoint)
-    monkeypatch.setattr(rc, "_docker_image_id", lambda *args: (existing.IMAGE_ID, None))
+    monkeypatch.delenv("VIBEIC_EDA_CONTAINER", raising=False)
+    monkeypatch.setenv("VIBEIC_EDA_IMAGE", existing.IMAGE)
     monkeypatch.setattr(rc.shutil, "which", lambda name: "/usr/bin/" + name)
     calls = []
     def run(argv, **kwargs):

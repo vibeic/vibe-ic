@@ -214,4 +214,3 @@ def test_cli_says_NOT_MEASURED_rather_than_printing_a_digest_of_junk(tmp_path):
     got = _cli(str(junk))
     assert got.returncode == 2
     assert "NOT_MEASURED" in got.stdout
-

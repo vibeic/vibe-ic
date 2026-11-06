@@ -476,41 +476,6 @@ def l20_dft_applicability(project: Path) -> dict:
 
     # A skeleton is not authority. The existing D01 reader can establish
     # current intent without changing that skeleton or re-running DFT.
-    try:
-        import flow109
-        active_context = os.environ.get(flow109.CONTEXT_ENV)
-        if active_context is not None:
-            plan = flow109.validate_execution_context(
-                json.loads(Path(active_context).read_text(encoding="utf-8")))
-            manifest_ref = {"path": active_context,
-                            "context_sha256": plan["context_sha256"]}
-        else:
-            manifest, manifest_ref = flow109._bound_project_json(
-                project, Path("input/flow109-manifest.json"), "FLOW109_DFT_INTENT_MISSING")
-            plan = flow109.resolve_plan(manifest.get("features"), manifest.get("step_profiles"))
-        intent = flow109.dft_source_intent(project, {"features": plan["features"]})
-        if intent["requires_scan"] or plan["features"]["requires_dft"]:
-            out["asserts_dft"] = True
-            out["reason"] = "canonical D01/current features require scan or other DFT"
-            return out
-        binding = intent["source_binding"]
-        decision_ref = flow109._current_project_ref(
-            project, binding["intent"].get("source_reference"), "FLOW109_DFT_INTENT_MISSING")
-        decision, _ = flow109._bound_project_json(
-            project, Path(decision_ref["path"]), "FLOW109_DFT_INTENT_MISSING")
-        reason = binding["intent"]["reason"]
-        if decision.get("dft_selection") != reason:
-            raise ValueError("current reasoned DFT selection differs from D01")
-        out["asserts_dft"] = False
-        out["reason"] = ("canonical D01 reasoned non-DFT decision, current "
-                         "requires_dft=false/requires_scan=false: " + reason)
-        out["source_authority"] = {
-            "declaration": {"path": binding["path"], "sha256": binding["sha256"]},
-            "D01": intent["source_evidence"]["D01"]["producer_result"],
-            "features": manifest_ref, "decision": decision_ref}
-        return out
-    except (ImportError, OSError, ValueError, TypeError, KeyError) as exc:
-        out["source_authority_refusal"] = str(exc)
 
     # NOT-RUN IS NOT RAN-AND-EMPTY. What is left here is a layer that is
     # present, asserts no DFT topology, AND has never claimed extraction — the

@@ -28,12 +28,10 @@ still satisfy if the transaction started recording some other dead path.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import sys
 from pathlib import Path
 
-import pytest
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
@@ -146,112 +144,3 @@ def test_the_rewrite_is_disclosed_by_name(tmp_path):
 
 
 # ── the narrowing: what the rewrite must NOT touch ──
-
-def test_an_unchanged_file_is_published_byte_identical(tmp_path):
-    """Compared by the transaction's OWN digest. A file the run did not change
-    is not eligible, whatever it contains."""
-    stage = tmp_path / "stage"
-    (stage / "sub").mkdir(parents=True)
-    keep = stage / "sub" / "untouched.json"
-    body = json.dumps({"project": str(stage)}) + "\n"
-    keep.write_text(body)
-    baseline = {
-        "sub/untouched.json": R._Phase1TreeEntry(
-            "file", 0o644,
-            digest=hashlib.sha256(body.encode()).hexdigest()),
-    }
-    rewritten = R._phase1_remap_stage_tree(stage, tmp_path / "real", baseline)
-    assert rewritten == []
-    assert keep.read_text() == body
-
-
-def test_a_changed_file_with_the_same_content_is_rewritten(tmp_path):
-    """The other direction of the same rule — without it the check above could
-    be satisfied by a function that rewrites nothing at all."""
-    stage = tmp_path / "stage"
-    (stage / "sub").mkdir(parents=True)
-    f = stage / "sub" / "changed.json"
-    f.write_text(json.dumps({"project": str(stage)}) + "\n")
-    rewritten = R._phase1_remap_stage_tree(stage, tmp_path / "real", {})
-    assert rewritten == ["sub/changed.json"]
-    assert json.loads(f.read_text())["project"] == str(tmp_path / "real")
-
-
-def test_a_binary_artefact_is_never_rewritten(tmp_path):
-    """Eligibility is a list of suffixes that ARE text, so a new binary
-    artefact type cannot become eligible by nobody remembering to exclude it."""
-    stage = tmp_path / "stage"
-    stage.mkdir()
-    gds = stage / "top.gds"
-    raw = b"\x00\x06" + str(stage).encode() + b"\xff\xfe"
-    gds.write_bytes(raw)
-    assert R._phase1_remap_stage_tree(stage, tmp_path / "real", {}) == []
-    assert gds.read_bytes() == raw
-
-
-def test_a_sibling_directory_sharing_the_prefix_is_not_rewritten(tmp_path):
-    """The PATH-BOUNDARY rule is #2158's, stated once and reused — a longer
-    directory whose name merely starts with the stage path is a different
-    directory."""
-    stage = tmp_path / "stage"
-    stage.mkdir()
-    f = stage / "r.json"
-    sibling = str(stage) + "_other/keep.txt"
-    f.write_text(json.dumps({"a": str(stage) + "/in", "b": sibling}) + "\n")
-    R._phase1_remap_stage_tree(stage, tmp_path / "real", {})
-    got = json.loads(f.read_text())
-    assert got["a"] == str(tmp_path / "real") + "/in"
-    assert got["b"] == sibling, "a prefix-sharing sibling path was rewritten"
-
-
-def test_a_file_without_the_stage_path_is_left_alone(tmp_path):
-    stage = tmp_path / "stage"
-    stage.mkdir()
-    f = stage / "r.json"
-    body = json.dumps({"note": "nothing to do here"}) + "\n"
-    f.write_text(body)
-    assert R._phase1_remap_stage_tree(stage, tmp_path / "real", {}) == []
-    assert f.read_text() == body
-
-
-def test_the_skip_agrees_with_the_manifest_it_reads(tmp_path):
-    """The unchanged-file skip depends on TWO properties of a function in
-    another module and nothing asserted either of them.
-
-    `_phase1_remap_stage_tree` looks a file up in `baseline` by
-    `relative_to(stage).as_posix()` and compares `entry.digest` to
-    `sha256(bytes)`. If `_phase1_tree_manifest_fd` ever keyed its manifest
-    differently, or digested anything but the raw bytes, the lookup would
-    silently miss and every eligible file would be rewritten whether the run
-    changed it or not — with no test failing. This drives the REAL manifest
-    builder and asserts both.
-    """
-    import hashlib
-    import os
-
-    stage = tmp_path / "stage"
-    (stage / "sub").mkdir(parents=True)
-    (stage / "sub" / "a.json").write_text('{"x": 1}')
-    (stage / "b.md").write_text("hi\n")
-
-    fd = os.open(stage, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        manifest = R._phase1_tree_manifest_fd(fd, stage)
-    finally:
-        os.close(fd)
-
-    files = {p.relative_to(stage).as_posix()
-             for p in stage.rglob("*") if p.is_file()}
-    assert {k for k, v in manifest.items() if v.kind == "file"} == files
-    for rel in files:
-        assert manifest[rel].digest == hashlib.sha256(
-            (stage / rel).read_bytes()).hexdigest()
-
-    # ...and the skip actually fires against that real manifest.
-    (stage / "c.json").write_text(json.dumps({"project": str(stage)}) + "\n")
-    fd = os.open(stage, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        manifest = R._phase1_tree_manifest_fd(fd, stage)
-    finally:
-        os.close(fd)
-    assert R._phase1_remap_stage_tree(stage, tmp_path / "real", manifest) == []

@@ -180,44 +180,6 @@ def test_default_dt2_retained_unextracted_authority_blocks_dispatch(
     assert declaration.read_bytes() == artifact.read_bytes()
 
 
-def test_default_dt2_source_bound_scope_reaches_launch_admission(
-        tmp_path, monkeypatch):
-    import flow109_admission
-    from l20_dft_scan_topology_extract import extract_dft_scan_topology
-    text = tmp_path / "input/docs/neutral.md"
-    text.parent.mkdir(parents=True)
-    text.write_text(
-        "# DFT scan topology\n"
-        "| name | length | scan_in | scan_out | clock |\n"
-        "| --- | --- | --- | --- | --- |\n"
-        "| chain0 | 8 | test_in | test_out | clk |\n")
-    fields = extract_dft_scan_topology(tmp_path)
-    assert fields and fields["scan_chains"][0]["source"]["document_sha256"]
-    _write_json(tmp_path, "phase1/generated_docs/L20_DFT_SCAN_TOPOLOGY.json", {
-        "doc_id": "L20", "applicability": "APPLICABLE",
-        "extraction_status": "EXTRACTED", "fields": fields,
-        "source_documents": ["input/docs/neutral.md"],
-        "extraction_evidence": fields["scan_topology_sources"],
-    })
-    _write_json(tmp_path, "reports/phase2/dft/transition_coverage.json",
-                {"fixture": "dispatch eligibility only"})
-    spef = tmp_path / "phase3/stage3/extracted/neutral.spef"
-    spef.parent.mkdir(parents=True)
-    spef.write_text("*SPEF fixture\n")
-    calls = []
-
-    class StopBeforeNative(BaseException):
-        pass
-
-    def observe_admission(project, sid, params):
-        calls.append((project, sid))
-        raise StopBeforeNative
-
-    monkeypatch.setattr(flow109_admission, "require_launch_admission",
-                        observe_admission)
-    with pytest.raises(StopBeforeNative):
-        _default_dt2(tmp_path, monkeypatch)
-    assert calls == [(tmp_path, "DT2")]
 
 
 def test_real_flow_opts_dt2_and_dt3_into_dependency_classification():

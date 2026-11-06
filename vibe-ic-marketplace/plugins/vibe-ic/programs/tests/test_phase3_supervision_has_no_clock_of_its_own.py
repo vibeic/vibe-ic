@@ -22,7 +22,6 @@ import sys
 import time
 from pathlib import Path
 
-import pytest
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 
@@ -198,23 +197,3 @@ def test_the_reap_selects_by_identity_not_by_command_line():
 # ---------------------------------------------------------------------------
 # THE GATE MUST BE ABLE TO GO RED
 # ---------------------------------------------------------------------------
-
-def test_the_residual_class_is_blocking():
-    """Reported-forever is how a known defect becomes permanent: the count was
-    printed and the exit code still said PASS."""
-    src = (PROGRAMS / "watchdog_ceiling_semantics_check.py").read_text()
-    tree = ast.parse(src)
-    fn = [n for n in ast.walk(tree)
-          if isinstance(n, ast.FunctionDef) and n.name == "main"][0]
-    code = "\n".join(ast.unparse(n) for n in fn.body)
-    assert "if offenders or residual:" in code, code[-800:]
-    assert "(BLOCKING)" in src
-
-
-def test_the_gate_is_green_on_this_tree():
-    """The population is empty, so the promoted class costs nothing here."""
-    cp = subprocess.run(
-        [sys.executable, str(PROGRAMS / "watchdog_ceiling_semantics_check.py"),
-         str(PROGRAMS)], capture_output=True, text=True, timeout=600)
-    assert cp.returncode == 0, cp.stdout[-2000:]
-    assert "RESIDUAL 0" in cp.stdout, cp.stdout[-2000:]

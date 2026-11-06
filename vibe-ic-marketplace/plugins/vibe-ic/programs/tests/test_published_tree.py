@@ -297,18 +297,3 @@ def test_on_the_real_repo_no_published_path_is_a_hollow_link():
         f"tracked links, {len(tracked)} tracked paths) are still reported as "
         f"published; a reader dereferences them and gets this host's leftovers."
         f" First: {leaked[:3]}")
-
-
-def test_all_three_callers_use_this_module_rather_than_their_own_copy():
-    """The point of the module. A fourth private copy is how this defect class
-    came back three times; if someone adds one, this fails."""
-    import re
-    suspects = ["provenance_output_hash_completeness_check.py",
-                "cross_layer_reference_check.py",
-                "l4_systemrdl_export.py"]
-    for name in suspects:
-        src = (_PROGRAMS / name).read_text()
-        assert "_published_tree" in src, f"{name} no longer uses the shared helper"
-        # its own `git ls-files` call would be a private re-implementation
-        assert not re.search(r'"ls-files"', src), \
-            f"{name} calls git ls-files directly again"

@@ -2,7 +2,7 @@
 name: phase1-completeness-deep-review
 description: After phase1_one_shot_runner emits L*.json, AI checks that admitted source facts retain their meaning, classification, authority, and owning fields in the generated documents. Record documentary additions in the durable review sidecar, never by directly patching generated L documents; capture systematic producer gaps for plugin repair. Mandatory after every phase1 / phase2 / phase23 run before claiming PASS.
 tier: verification
-paired_program: phase1_doc_input_completeness_check.py
+paired_program: phase1_one_shot_runner.py
 mandatory_after: [vibe-ic-phase1, vibe-ic-phase2, vibe-ic-phase23, vibe-ic-all]
 ---
 
@@ -17,9 +17,7 @@ to capture.
 
 This skill closes that loop with a **two-tier strong check**:
 
-1. **Tier 1 — deterministic gate** (`phase1_doc_input_completeness_check.py`):
-   per-input-doc token-level audit. Flags any single doc with
-   <50% capture in `generated_docs/L*.json`.
+1. Compare each source requirement with its owning generated field and downstream consumer. Preserve its meaning, units, bounds and authority; missing or misclassified content remains open extraction work.
 2. **Tier 2 — AI semantic review** (this skill):
    for every doc the deterministic gate flagged FAIL/WARN, AND for
    every doc with `extraction_strategy == bare_value_harvest`
@@ -72,11 +70,7 @@ requirements, or grant design decisions that the source leaves open.
 
 ### Step 1 — run the deterministic gate
 
-```bash
-python3 \
-  /home/<your-user>/AI_IC_design/vibe-ic-marketplace/plugins/vibe-ic/programs/phase1_doc_input_completeness_check.py \
-  <project_dir>
-```
+Compare each source requirement with its owning generated field and downstream consumer. Preserve its meaning, units, bounds and authority; missing or misclassified content remains open extraction work.
 
 Reads:
 * `<project>/input_doc/*.txt` (preferred) and
@@ -127,8 +121,7 @@ inline patches are lost. Instead append to the durable sidecar:
 
 **Path matters**: the sidecar MUST live under `phase1/`. This is the
 canonical location the `_path_layout` resolver returns and the location
-every consuming gate (`phase1_doc_input_completeness_check`,
-`l_doc_structured_field_count_check`) reads. A sidecar written to the
+the actual downstream consumer reads. A sidecar written to the
 project ROOT (`<project>/ai_deep_review_patches.json`) is the wrong path;
 the gates emit a backward-compat WARNING and still read it, but you should
 write it under `phase1/` directly.
@@ -207,12 +200,6 @@ stronger; no project waits for the plugin.
 
 ### Step 5 — re-run deterministic gate to confirm
 
-```bash
-python3 \
-  /home/<your-user>/AI_IC_design/vibe-ic-marketplace/plugins/vibe-ic/programs/phase1_doc_input_completeness_check.py \
-  <project_dir>
-```
-
 Now must report `verdict: PASS`. If it still WARNs, the AI
 patches missed something — repeat Step 2.
 
@@ -272,26 +259,10 @@ Write `<project>/reports/phase1_completeness_deep_review.md` with:
 
 ## Reference
 
-- Tier-1 program: `programs/phase1_doc_input_completeness_check.py`
-- Forbidden waiver prefix: `phase1_input_vs_generated_*`
-  (enforced by `phase1_no_waivers_used_check`)
+- Compare each source requirement with its owning generated field and downstream consumer. Preserve its meaning, units, bounds and authority; missing or misclassified content remains open extraction work.
+- Missing admitted source facts remain open deficiencies. Read the existing
+  native extraction results in `reports/flow_engine.json`, compare against the
+  original provided input, and AI review the actual consumer fields. Missing
+  native evidence is `NOT_MEASURED`; metadata or a waiver cannot establish PASS.
 - Sibling skill (lighter spot-check): `phase1-output-verify`
 - Backlog skill: `community-backlog-submit`
-
-## Compliance gate (mandatory — not optional)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 ../../_shared/skill_compliance_check.py \
-    --requirements ./compliance.yaml <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with the specific missing elements listed.
-`compliance.yaml` (in this skill's directory) enumerates every required
-element of your output — section headers, metadata fields, handoff lines,
-tool invocations.
-
-**Your task is not complete until the audit returns PASS.** If it fails,
-re-read the listed missing elements, patch your output, and re-run the
-audit.

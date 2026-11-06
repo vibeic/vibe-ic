@@ -14,9 +14,6 @@ sys.path.insert(0, str(PROGRAMS))
 sys.path.insert(0, str(TESTS))
 
 import test_io_pad_chip_top_gen as IO  # noqa: E402
-import phase3_one_shot_runner as R   # noqa: E402
-import _l_doc_pad_placement as LPP  # noqa: E402
-import io_pad_chip_top_gen as PADGEN  # noqa: E402
 
 GEN = PROGRAMS / "io_pad_chip_top_gen.py"
 DOC = """# L3 — External Interface
@@ -71,25 +68,6 @@ def _case(tmp_path, *, splits=SPLITS, reused=True, netlist=NETLIST):
     return proj, result
 
 
-def test_declared_split_gets_pads_on_the_carriers_side_and_connects_core(tmp_path):
-    proj, result = _case(tmp_path)
-    assert result.returncode == 0, result.stdout + result.stderr
-    rec = IO._record(proj)
-    wrapper = proj / rec["chip_top_verilog"]
-    text = wrapper.read_text()
-    for name in ("o_memory_waddr", "o_memory_ren"):
-        assert f".{name}(" in text
-    south = set(rec["derived_answers"]["pad_order_by_side"]["south"])
-    assert {"u_pad_o_memory_waddr_0", "u_pad_o_memory_waddr_1",
-            "u_pad_o_memory_ren"} <= south
-    R._validate_padring_core_connections(
-        proj / "phase2/stage2/synth/core_synth.v", wrapper, "core", "chip_top")
-    selected = PADGEN._implemented_core_ports(proj)
-    assert selected is not None
-    ring = LPP.derive_own_ring(proj, selected[1])
-    assert ring["measurable"], ring
-    assert {"o_memory_waddr[0]", "o_memory_waddr[1]", "o_memory_ren"} <= set(
-        ring["by_side"]["S"])
 
 
 def test_unmeasured_or_unmatched_split_cannot_mint_a_pad(tmp_path):
@@ -100,31 +78,3 @@ def test_unmeasured_or_unmatched_split_cannot_mint_a_pad(tmp_path):
     assert result.returncode == 1, result.stdout + result.stderr
     assert "EXPOSED_OUTPUT_SPLIT_INVALID" in result.stdout + result.stderr
     assert not (proj / "phase3/stage3/pnr/chip_top_io.v").exists()
-
-
-def test_non_reused_source_cannot_claim_exposed_output_split(tmp_path):
-    proj, result = _case(tmp_path, reused=False)
-    assert result.returncode == 0, result.stdout + result.stderr
-    wrapper = proj / "phase3/stage3/pnr/chip_top_io.v"
-    assert ".o_memory_waddr(" not in wrapper.read_text()
-    try:
-        R._validate_padring_core_connections(
-            proj / "phase2/stage2/synth/core_synth.v", wrapper, "core", "chip_top")
-    except ValueError as exc:
-        assert "PADRING_CORE_PORT_CONNECTION_MISMATCH" in str(exc)
-    else:
-        raise AssertionError("non-reused manifest bypassed the connection guard")
-
-
-def test_no_declared_split_still_fails_at_core_connection_backstop(tmp_path):
-    proj, result = _case(tmp_path, splits=[])
-    assert result.returncode == 0, result.stdout + result.stderr
-    wrapper = proj / "phase3/stage3/pnr/chip_top_io.v"
-    try:
-        R._validate_padring_core_connections(
-            proj / "phase2/stage2/synth/core_synth.v", wrapper, "core", "chip_top")
-    except ValueError as exc:
-        assert "PADRING_CORE_PORT_CONNECTION_MISMATCH" in str(exc)
-        assert "o_memory_waddr" in str(exc)
-    else:
-        raise AssertionError("undeclared output was silently accepted")

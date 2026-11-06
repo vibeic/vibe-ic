@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from programs.phase1_one_shot_runner import gen_l6_control_logic
+from programs.phase1_doc_one_shot_runner import gen_l6_control_logic
 
 
 _GEN_DIR = Path("phase1") / "generated_docs"

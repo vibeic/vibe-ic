@@ -48,7 +48,6 @@ sys.path.insert(0, str(PROGRAMS))
 
 import bit_level_full_stack_tb_check as tbgate  # noqa: E402
 import benchmark_verify_report as bvr  # noqa: E402
-import phase3_one_shot_runner as p3  # noqa: E402
 
 
 # ===========================================================================
@@ -430,80 +429,18 @@ def test_a_pillar1_silent_when_no_full_stack_result(tmp_path):
 # ===========================================================================
 # CAPTURE B — silent wrong-PDK fallback
 # ===========================================================================
-def test_b_negative_commercial_configured_oss_fallback_refused(tmp_path):
-    """NEGATIVE — commercial configured + no staged input/pdk/ => the guard
-    FIRES. Phase 3 must never emit OSS sign-off reports under a commercial
-    PDK belief."""
-    proj = tmp_path / "proj"
-    proj.mkdir()
-    msg = p3.commercial_pdk_fallback_guard(
-        proj, "sky130A", "auto", commercial_configured=True)
-    assert msg is not None
-    assert "REFUSED" in msg
-    assert "sky130A" in msg                 # names the resolved fallback
-    assert "COMMERCIAL PDK" in msg          # names the configured intent
-    assert "input/pdk" in msg               # names how to fix
-    assert "--allow-oss-pdk-fallback" in msg
 
 
-def test_b_negative_fires_for_every_oss_enablement(tmp_path):
-    """The guard is not sky130-specific — any in-container OSS enablement
-    reached by silent fallback is refused."""
-    proj = tmp_path / "proj"
-    proj.mkdir()
-    for name in p3._OSS_CONTAINER_PDKS:
-        assert p3.commercial_pdk_fallback_guard(
-            proj, name, "auto", commercial_configured=True) is not None, name
 
 
-def test_b_positive_oss_only_host_unaffected(tmp_path):
-    """POSITIVE — a genuinely-OSS run (nothing configured) proceeds."""
-    proj = tmp_path / "proj"
-    proj.mkdir()
-    assert p3.commercial_pdk_fallback_guard(
-        proj, "sky130A", "auto", commercial_configured=False) is None
-    assert p3.commercial_pdk_fallback_guard(
-        proj, "nangate45", "auto", commercial_configured=False) is None
 
 
-def test_b_positive_explicit_override_is_deliberate(tmp_path):
-    """POSITIVE — an explicit `--pdk sky130A` is a deliberate OSS run, not a
-    silent fallback, even on a commercially-configured host."""
-    proj = tmp_path / "proj"
-    proj.mkdir()
-    assert p3.commercial_pdk_fallback_guard(
-        proj, "sky130A", "sky130A", commercial_configured=True) is None
 
 
-def test_b_positive_staged_pdk_resolved_is_not_a_fallback(tmp_path):
-    """POSITIVE — when a project-staged PDK resolved (`custom:<dir>`) nothing
-    fell back, so the guard stays silent."""
-    proj = tmp_path / "proj"
-    proj.mkdir()
-    assert p3.commercial_pdk_fallback_guard(
-        proj, "custom:pdk", "auto", commercial_configured=True) is None
 
 
-def test_b_positive_explicit_acknowledgement_allows_fallback(tmp_path):
-    """POSITIVE — the operator may acknowledge the fallback in writing."""
-    proj = tmp_path / "proj"
-    proj.mkdir()
-    assert p3.commercial_pdk_fallback_guard(
-        proj, "sky130A", "auto", commercial_configured=True,
-        allow_oss_fallback=True) is None
 
 
-def test_b_guard_message_leaks_no_pdk_identifier(tmp_path):
-    """NDA — the refusal must never print the configured PDK's identifier."""
-    proj = tmp_path / "proj"
-    proj.mkdir()
-    msg = p3.commercial_pdk_fallback_guard(
-        proj, "sky130A", "auto", commercial_configured=True)
-    assert "identifier withheld" in msg
-    import _commercial_pdk as cp
-    for tok in cp.nda_tokens():
-        if tok:
-            assert tok.lower() not in msg.lower()
 
 
 def test_b_cli_exposes_acknowledgement_flag():

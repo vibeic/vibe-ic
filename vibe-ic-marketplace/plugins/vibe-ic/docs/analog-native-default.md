@@ -1,24 +1,19 @@
 # Default analog A01–A19 execution
 
-The analog rows in `flow/flow109.json` dispatch to the existing native
-producers through `programs/analog_native_flow.py`. The sole public front door
-uses that implementation:
+The general product entry uses `flow/steps.json` and `flow_engine.py`.
+Analog and mixed-signal table rows that lack a native adapter remain
+`NOT_MEASURED`. The existing native analog tool owner is retained until those
+adapters are connected:
 
 ```sh
-python3 programs/vibe_ic_one_shot_runner.py /path/to/project \
-  --flow 109 --flow109-manifest /path/to/project/manifest.json \
-  --entry-step A04 --exit-step A07 --route ic --container my-eda \
+python3 programs/analog_one_shot_runner.py /path/to/project \
+  --entry-step A04 --exit-step A07 --container my-eda \
   --execution-mode default
 ```
 
-The public front door requires its existing resolved feature manifest. Its
-windows follow the complete flow interleaved row order: an A-row endpoint
-does not imply that intervening digital or mixed-signal rows are absent. Select
-only a contiguous window whose complete resolved ownership is supported.
-Native analog execution does not require a tool qualification registry.
-Other flow owners retain their own admission behavior. User/operator
-instructions use only the current A01–A19 IDs; no former analog numbering or
-alternate public flow is an execution substitute.
+This owner calls the existing producers through `programs/analog_native_flow.py`.
+Its A01–A19 execution window does not establish whole-chip acceptance. It needs
+no Flow109 manifest, row receipt, launch admission, or tool qualification file.
 
 Use the project's existing `phase3/analog/analog_block_list.json`, L-docs,
 per-block `spec.json`, `topology.json`, netlist and testbench. Optional
@@ -55,8 +50,7 @@ existing Docker access.
 | A17–A19 | GDS/LEF/Liberty/Verilog packaging, applicable analog top implementation and block signoff aggregation |
 
 Each block advances through its own chain. A long simulation or missing
-measurement in another block does not prevent independent work. An analog
-window through the whole-flow front door uses the same block scheduler.
+measurement in another block does not prevent independent work. The retained native analog owner uses this block scheduler.
 Native errors, simulator residual failures and measured specification
 violations remain failures. Missing source measurements, reports or native
 producers remain `NOT_MEASURED`; an explicit design feature can make a row

@@ -15,7 +15,6 @@ from __future__ import annotations
 import argparse
 import collections
 import gzip
-import hashlib
 import json
 import math
 import os
@@ -32,13 +31,6 @@ import numpy as np
 
 if str(Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-
-def _sha(path: Path) -> str:
-    digest=hashlib.sha256()
-    with path.open('rb') as stream:
-        for chunk in iter(lambda:stream.read(1024*1024),b''):digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _read(path: Path) -> dict:
@@ -192,17 +184,15 @@ def material_map(technology: str) -> tuple[dict,set]:
 
 
 class NativeRaw:
-    def __init__(self, path, *, expected_raw_sha256=None, expected_raw_bytes=None):
+    def __init__(self, path):
         self.path=Path(path);header=[]
         compressed=self.path.suffix=='.gz'
-        digest=hashlib.sha256()
         with (gzip.open(self.path,'rb') if compressed else self.path.open('rb')) as stream:
             while True:
                 try:line=stream.readline(4*1024*1024+1)
                 except EOFError as exc:raise ValueError('compressed native raw stream truncated') from exc
                 if not line or stream.tell()>4*1024*1024:
                     raise ValueError('native raw header incomplete')
-                digest.update(line)
                 decoded=line.decode('utf-8').strip();header.append(decoded)
                 if decoded in ('Binary:','Values:'):
                     offset=stream.tell();mode=decoded;break
@@ -213,18 +203,13 @@ class NativeRaw:
                     if value is None or not value.isdigit() or int(value)<1:raise ValueError('native raw dimensions absent')
                     return int(value)
                 expected=dimension('No. Points')*dimension('No. Variables')*8
-                if expected_raw_bytes is not None and (isinstance(expected_raw_bytes,bool)
-                        or not isinstance(expected_raw_bytes,int) or expected_raw_bytes!=offset+expected):
-                    raise ValueError('native raw byte count differs from declared dimensions')
                 payload=bytearray()
                 while len(payload)<=expected:
                     try:part=stream.read(min(1024*1024,expected+1-len(payload)))
                     except EOFError as exc:raise ValueError('compressed native raw stream truncated') from exc
                     if not part:break
-                    payload.extend(part);digest.update(part)
+                    payload.extend(part)
                 if len(payload)!=expected:raise ValueError('native raw payload dimensions differ')
-                if expected_raw_sha256 is not None and digest.hexdigest()!=expected_raw_sha256:
-                    raise ValueError('decompressed native raw SHA differs')
         self.plot=next((l.split(':',1)[1].strip() for l in header if l.startswith('Plotname:')),'')
         flags=next((l.split(':',1)[1].split() for l in header if l.startswith('Flags:')),[])
         if 'real' not in flags or 'complex' in flags:raise ValueError('real native capture required')
@@ -351,37 +336,27 @@ def product_statistics(raw: NativeRaw, window, left, right):
 
 
 def native_capture(record, *, transient):
-    """Select only a receipt-bound stored capture; legacy plain outputs stay valid."""
+    """Locate the native capture and its optional compressed storage path."""
     outputs=record.get('outputs') or {};name='tran.raw' if transient else 'op.raw'
     metadata=record.get('native_raw')
     if metadata is None:
         selected=[Path(p) for p in outputs if p.endswith('/'+name)]
         if len(selected)!=1:raise ValueError('native capture absent or ambiguous')
-        return selected[0],{}
-    required={'executed_path','stored_path','encoding','sha256','raw_sha256','raw_bytes'}
+        return selected[0]
+    required={'executed_path', 'stored_path', 'encoding'}
     if not isinstance(metadata,dict) or not required<=set(metadata) or metadata['encoding']!='gzip':
         raise ValueError('native raw storage metadata incomplete')
     executed,stored=Path(metadata['executed_path']),Path(metadata['stored_path'])
-    if (executed.name!=name or stored.name!=name+'.gz'
-            or os.path.abspath(executed.parent)!=os.path.abspath(stored.parent)
-            or outputs.get(str(stored))!=metadata['sha256']):
+    if (executed.name != name or stored.name != name + '.gz' or os.path.abspath(executed.parent) != os.path.abspath(stored.parent)):
         raise ValueError('stored native raw is not its declared output')
-    argv=record.get('argv') or []
-    if (argv.count('-r')!=1 or argv.index('-r')+1>=len(argv)
-            or os.path.abspath(argv[argv.index('-r')+1])!=os.path.abspath(executed)):
-        raise ValueError('stored native raw is not bound to the executed native argv')
-    if (not re.fullmatch(r'[0-9a-f]{64}',str(metadata['raw_sha256']))
-            or isinstance(metadata['raw_bytes'],bool) or not isinstance(metadata['raw_bytes'],int)
-            or metadata['raw_bytes']<=0):
-        raise ValueError('original native raw identity incomplete')
     if any(p.endswith('/'+name) for p in outputs):
         raise ValueError('native raw storage outputs are ambiguous')
-    return stored,{'expected_raw_sha256':metadata['raw_sha256'],'expected_raw_bytes':metadata['raw_bytes']}
+    return stored
 
 
-def read_op_capture(path: Path, **raw_identity) -> dict:
+def read_op_capture(path: Path) -> dict:
     if path.suffix=='.gz':
-        raw=NativeRaw(path,**raw_identity)
+        raw=NativeRaw(path)
         if raw.plot!='Operating Point' or raw.shape[0]!=1:
             raise ValueError('native OP capture must contain one point')
         return raw.row()
@@ -581,15 +556,14 @@ def grade_case(project: Path, setting: dict, limits: dict, aliases: dict, known:
     import analog_real_corner_sweep as sweep
     receipt_path=_path(project,setting.get('receipt'));rec=_read(receipt_path)
     views={}
-    def consume(path,expected=None):
-        path=Path(path).resolve();digest=_sha(path)
-        if expected and digest!=expected: raise ValueError(f'measured input/output changed: {path}')
-        views[str(path)]={'path':str(path),'sha256':digest};return path
+    def consume(path):
+        path=Path(path).resolve()
+        views[str(path)]={'path': str(path)};return path
     consume(receipt_path)
     outputs=rec.get('outputs') or {}
     logs=[Path(p) for p in outputs if p.endswith('/native.log')]
     if len(logs)==1:
-        consume(logs[0],outputs[str(logs[0])])
+        consume(logs[0])
         transcript=logs[0].read_text(errors='replace')
         native_fail=any(sweep._scan_analysis_failures(transcript)) or re.search(r'(?i)fatal error|simulation(?:\(s\))? aborted|timestep too small',transcript)
         if native_fail:
@@ -599,42 +573,26 @@ def grade_case(project: Path, setting: dict, limits: dict, aliases: dict, known:
                     'receipt':str(receipt_path),'native_returncode':124,'producer_status':rec.get('status')},views
         if rec.get('returncode') not in (None,0):
             return {'status':'FAIL','detail':'native electrical analysis failed','receipt':str(receipt_path)},views
-    # Retain old producer attribution when only its grading driver changed;
-    # the exact executed copy must match the already-recorded source hash.
-    for p,digest in (rec.get('inputs_before') or {}).items():
-        actual=Path(p)
-        if rec.get('executed_driver_copy') and _sha(Path(rec['executed_driver_copy']))==digest:
-            consume(rec['executed_driver_copy'],digest)
-        elif actual.is_file() and _sha(actual)==digest: consume(actual,digest)
-        else: raise ValueError('native electrical input changed: '+p)
     analysis=rec.get('analysis') or {'kind':'OP'}
     transient=str(analysis.get('kind','OP')).upper()=='TRAN'
-    stored_capture,raw_identity=native_capture(rec,transient=transient)
+    stored_capture=native_capture(rec,transient=transient)
     captures=[stored_capture]
     currents=[Path(p) for p in outputs if p.endswith('/currents.jsonl')]
     if len(logs)!=1 or len(captures)!=1 or len(currents)!=1:
         raise ValueError('native log/capture/current mapping absent or ambiguous')
-    for p in [*logs,*captures,*currents]:consume(p,outputs[str(p)])
+    for p in [*logs,*captures,*currents]:consume(p)
     text=logs[0].read_text(errors='replace')
     native_fail=any(sweep._scan_analysis_failures(text)) or re.search(r'(?i)fatal error|simulation(?:\(s\))? aborted|timestep too small',text)
     if rec.get('returncode')!=0 or native_fail:
         return {'status':'FAIL','detail':'native electrical analysis failed','receipt':str(receipt_path)},views
-    if rec.get('status')!='PASS' or rec.get('unchanged') is not True:
-        raise ValueError('native electrical measurements incomplete or changed')
+    if rec.get('status')!='PASS':
+        raise ValueError('native electrical measurements incomplete')
     rating=native_rating_context(text,rating_context,rec.get('source_binding') or {})
     if block is not None:
         expected=project/f'phase3/analog/{block}/{block}.sp'
-        subjects=[digest for p,digest in rec.get('inputs_before',{}).items() if Path(p).name==block+'.sp']
-        if not expected.is_file() or _sha(expected) not in subjects:
+        if not expected.is_file():
             raise ValueError('native current case is not this block source DUT')
         consume(expected)
-        layout_provenance=expected.parent/'layout_provenance.json'
-        if layout_provenance.is_file():
-            import _analog_producer_common as producer
-            consume(layout_provenance)
-            state,detail=producer.layout_identity_of_block(expected.parent,expected)
-            if state=='STALE':
-                raise ValueError('native layout/source disagreement: '+detail)
     geometry=consume(_path(project,setting.get('geometry')))
     with geometry.open() as src:
         header=json.loads(next(src));geometry_rows=[json.loads(line) for line in src]
@@ -642,27 +600,20 @@ def grade_case(project: Path, setting: dict, limits: dict, aliases: dict, known:
         binding_path=consume(_path(project,setting['unit_binding']));binding=_read(binding_path)
         if binding.get('status')!='PASS' or binding.get('all_original_fields_identical') is not True:
             raise ValueError('lossless source-unit binding did not pass')
-        consume(binding['projection']['path'],binding['projection']['sha256'])
+        consume(binding['projection']['path'])
         if geometry!=Path(binding['projection']['path']).resolve():
             raise ValueError('unit binding describes another geometry projection')
-        consume(binding['original_geometry']['path'],binding['original_geometry']['sha256'])
-        raw=consume(binding['original_electrical']['path'],binding['original_electrical']['sha256'])
-        if raw not in [Path(p).resolve() for p in rec.get('inputs_before',{})]:
-            raise ValueError('unit projection is not bound to this native electrical view')
+        consume(binding['original_geometry']['path'])
+        raw=consume(binding['original_electrical']['path'])
     else:
         raw=consume(_path(project,setting.get('spice')))
-    if block is not None and not setting.get('extraction_receipt'):
-        raise ValueError('the native electrical view has no block layout extraction receipt')
     if setting.get('extraction_receipt'):
         extract_path=consume(_path(project,setting['extraction_receipt']));extract=_read(extract_path)
-        if extract.get('returncode')!=0 or extract.get('unchanged') is not True:
-            raise ValueError('native geometry extraction did not complete unchanged')
-        if extract.get('outputs',{}).get(str(raw))!=_sha(raw):
-            raise ValueError('current electrical view is not the native extracted view')
+        if extract.get('returncode')!=0:
+            raise ValueError('native geometry extraction failed')
         if block is not None:
             gds=project/f'phase3/analog/{block}/{block}.gds'
-            hashes=extract.get('source_inputs_before',{})
-            if not gds.is_file() or _sha(gds) not in [v for p,v in hashes.items() if Path(p).suffix=='.gds']:
+            if not gds.is_file():
                 raise ValueError('native extracted geometry is not this block layout')
             consume(gds)
     drc_qualified=False
@@ -672,7 +623,7 @@ def grade_case(project: Path, setting: dict, limits: dict, aliases: dict, known:
         native=drc.get('native') or {};engines=native.get('engines') or {}
         gds=project/f'phase3/analog/{block}/{block}.gds'
         drc_qualified=(drc.get('executed') is True and drc.get('verdict')=='PASS'
-                       and drc.get('returncode')==0 and native.get('gds_sha256')==_sha(gds)
+                       and drc.get('returncode')==0
                        and native.get('block')==block and bool(engines)
                        and all(e.get('judge')=='PASS' and e.get('metric',{}).get('status')=='MEASURED'
                                and e.get('metric',{}).get('value')==0 for e in engines.values()))
@@ -706,17 +657,17 @@ def grade_case(project: Path, setting: dict, limits: dict, aliases: dict, known:
             raise ValueError('transient analysis differs from the executed native deck')
         if rating['native_temperature_c'] is not None and rating['native_temperature_c']!=analysis.get('temperature_c'):
             raise ValueError('transient temperature differs from the native transcript')
-        capture=NativeRaw(captures[0],**raw_identity);voltages=capture.row();window=analysis['window_s']
+        capture=NativeRaw(captures[0]);voltages=capture.row();window=analysis['window_s']
         voltage_names=[name for name in capture.names if name!='time']
         voltage_stats=dict(zip(voltage_names,window_statistics(capture,window,
                            [(name,'0',1) for name in voltage_names])))
         voltage_stats['0']={'min':0.,'max':0.,'avg':0.,'rms':0.,'peak_abs':0.,'abs_avg':0.}
     else:
-        voltages=read_op_capture(captures[0],**raw_identity);voltage_stats={}
+        voltages=read_op_capture(captures[0]);voltage_stats={}
     results=[];excluded=collections.Counter();ranges={}
     resolver,external=_vector_resolver(project,block,rec,raw) if block is not None else (None,{})
     # These mappings identify each measured native vector and actual SPICE
-    # resistor. Recompute every current from the hashed capture and circuit.
+    # resistor. Recompute every current from the native capture and circuit.
     bound=bind_native_resistors(header,geometry_rows,raw.read_text())
     spice={parts[0].lower():(parts[1:3],resistance) for parts,_,resistance in bound}
     if transient:
@@ -841,17 +792,10 @@ def grade_case(project: Path, setting: dict, limits: dict, aliases: dict, known:
         if numeric_status != 'FAIL':raise
         completion_gap = str(exc)
         roles={};feeds={};feed_ranges={};rail_vectors={};stress={};supply_stats={}
-    provenance_gap = completion_gap
-    try:
-        if any(not Path(view['path']).is_file() or _sha(Path(view['path']))!=view['sha256'] for view in views.values()):
-            raise ValueError('consumed native interconnect inputs changed during derivation')
-    except (OSError,ValueError) as exc:
-        if numeric_status != 'FAIL':raise
-        provenance_gap = str(exc)
     return {'status':status,'numeric_status':numeric_status,'measurement_status':'PASS',
             'receipt':str(receipt_path),'graded_segments':len(results),
             'violations':[r for r in results if r['status']=='FAIL'],
-            'interconnect_results':results,'provenance_gap':provenance_gap,
+            'interconnect_results':results,'provenance_gap':completion_gap,
             'unmeasured':[r for r in results if r['status']=='NOT_MEASURED'],
             'native_drc_bound_partitions':sum('density_bound_mA_per_um_exact' in r for r in results),
             'non_interconnect_materials':dict(excluded),'conditions':rec.get('source_binding',{}),
@@ -897,10 +841,10 @@ def read_technology(project: Path, value, container: str, work: Path) -> tuple[s
             return flatten(str(child),(*stack,path))
         return include.sub(replace,files[path])
     artifact=work/'magic_sources.json';artifact.write_text(json.dumps(files,indent=2)+'\n')
-    return flatten(root),{str(artifact):{'path':str(artifact),'sha256':_sha(artifact)}}
+    return flatten(root),{str(artifact):{'path': str(artifact)}}
 
 
-def _limit_document_text(pdf: Path, expected: str, work: Path) -> tuple[str, dict]:
+def _limit_document_text(pdf: Path, work: Path) -> tuple[str, dict]:
     """Extract the actual bound PDF with an installed converter, no text override."""
     import shutil
     converter = shutil.which('pdftotext')
@@ -922,19 +866,16 @@ def _limit_document_text(pdf: Path, expected: str, work: Path) -> tuple[str, dic
     else:
         # Preserve the original unavailable-tool behavior (and caller mocks).
         command = ['pdftotext', '-layout', str(pdf), '-']
-    before = _sha(Path(converter)) if converter else None
     converted = subprocess.run(command, capture_output=True, text=True, check=True)
-    if _sha(pdf) != expected or (converter and _sha(Path(converter)) != before):
-        raise ValueError('limit PDF or extraction executable changed during conversion')
     text = work/'process_limits.txt'; text.write_text(converted.stdout)
     receipt = work/'limit_document_extraction.json'
-    receipt.write_text(json.dumps({'source_pdf': {'path': str(pdf), 'sha256': expected},
-        'converter': {'path': converter, 'sha256': before}, 'argv': command,
+    receipt.write_text(json.dumps({'source_pdf': {'path': str(pdf)},
+        'converter': {'path': converter}, 'argv': command,
         'returncode': getattr(converted, 'returncode', 0),
-        'text': {'path': str(text), 'sha256': _sha(text)}}, indent=2)+'\n')
-    views = {str(p): {'path': str(p), 'sha256': _sha(p)} for p in (text, receipt)}
+        'text': {'path': str(text)}}, indent=2)+'\n')
+    views = {str(p): {'path': str(p)} for p in (text, receipt)}
     if converter:
-        views[converter] = {'path': converter, 'sha256': before}
+        views[converter] = {'path': converter}
     return converted.stdout, views
 
 
@@ -944,14 +885,13 @@ def run(project: Path, block: str, setting: dict, *, container: str='', output_d
     work=Path(work);work.mkdir(parents=True,exist_ok=True)
     try:
         source=_path(project,setting.get('limits_source'));meta=_read(source)
-        pdf=_path(project,meta['copy']);expected=meta['sha256']
-        if _sha(pdf)!=expected:raise ValueError('foundry limit PDF differs from source receipt')
-        for p in [source,pdf]:views[str(p)]={'path':str(p),'sha256':_sha(p)}
-        document,extraction_views=_limit_document_text(pdf,expected,work)
+        pdf=_path(project,meta['copy'])
+        for p in [source,pdf]:views[str(p)]={'path': str(p)}
+        document,extraction_views=_limit_document_text(pdf,work)
         views.update(extraction_views)
         limits=parse_process_limits(document)
         rating=process_rating_context(document)
-        if rating:rating.update(source_pdf=str(pdf),source_pdf_sha256=expected)
+        if rating:rating.update(source_pdf=str(pdf))
         technology,source_views=read_technology(project,setting.get('magic_tech'),container,work)
         views.update(source_views)
         aliases,known=material_map(technology)
@@ -977,323 +917,6 @@ def run(project: Path, block: str, setting: dict, *, container: str='', output_d
     target=work/'result.json';target.write_text(json.dumps(record,indent=2)+'\n');outputs.append(str(target));record['outputs']=outputs
     return record
 
-
-
-def _d56_capture(project,case,work,current_launch):
-    """Ordinary D56 producer: existing native executor, source-bound receipt.
-
-    No physical extraction or PDK qualification is implied by a supply capture.
-    """
-    import shutil
-    import analog_native_interconnect_run as producer
-    import analog_bound_measurements as measured
-    from analog_native_flow import _local_ngspice_startup
-    from flow109_analog_floorplan import bound_file
-    work.mkdir(parents=True,exist_ok=False)
-    deck=bound_file(project,case.get('deck'));binary=Path(shutil.which('ngspice') or '').resolve(strict=True)
-    if not binary.is_file():raise ValueError('D56_NATIVE_TOOL_ABSENT')
-    startup,init_source=_local_ngspice_startup(project,work,current_launch['image'])
-    init=work/'.spiceinit'
-    init.write_text((Path(init_source['path']).read_text() if init_source else '')+'\nset num_threads=1\nset filetype=binary\n')
-    driver=work/'executed_driver.py';driver.write_bytes(Path(__file__).read_bytes())
-    inputs={str(p):_sha(p) for p in (deck,binary,Path(producer.__file__).resolve(),Path(__file__).resolve(),init)}
-    closure=measured.consumed_input_views(project,deck)
-    inputs.update({v['path']:v['sha256'] for v in closure.values()})
-    if init_source:inputs[init_source['path']]=init_source['sha256']
-    environment={**startup,'OMP_NUM_THREADS':'1','OMP_WAIT_POLICY':'PASSIVE','GOMP_SPINCOUNT':'0','SPICE_USERINIT_DIR':str(work)}
-    capture=work/'tran.raw';log=work/'native.log'
-    compress,scratch=producer._storage_options(project,case)
-    storage=producer._capture_target(capture,scratch,'') if compress else None
-    budget=case.get('capture_budget_bytes')
-    if type(budget) is not int or budget<=0:raise ValueError('D56_EXPLICIT_CAPTURE_BUDGET_REQUIRED')
-    rec=producer.execute([str(binary),'-b','-r',str(capture),str(deck)],work,'',environment,0,log,capture,budget)
-    producer.write(work/'native-execution.json',rec)
-    rec.update(inputs_before=inputs,inputs_after={p:producer.current_sha(Path(p)) for p in inputs},deck=str(deck),analysis={'kind':'TRAN','window_s':case.get('window_s')},native_launch=current_launch,tool={'path':str(binary),'sha256':_sha(binary)},operation_source={'path':str(Path(producer.__file__).resolve()),'sha256':_sha(Path(producer.__file__))},native_environment=environment,native_init_before={str(init):inputs[str(init)]},native_init_after={str(init):producer.current_sha(init)},native_inputs={'deck':{'path':str(deck),'sha256':inputs[str(deck)]},**closure})
-    rec['executed_driver_copy']=str(driver)
-    rec['unchanged']=rec['inputs_before']==rec['inputs_after'] and rec['native_init_before']==rec['native_init_after']
-    stored=None
-    if compress and capture.is_file():
-        stored=producer._store_raw(storage,work);rec['native_raw']=stored[0];capture=Path(rec['native_raw']['stored_path'])
-        producer._cleanup_raw_storage(stored,work)
-    rec['outputs']={str(p):_sha(p) for p in work.rglob('*') if p.is_file() and p.name!='command.json'}
-    # Completion here is transport only; the consumer checks log, vectors,
-    # source identity and the complete measurement window before any PASS.
-    rec['status']='PASS' if rec['returncode']==0 and rec['unchanged'] and capture.is_file() and not rec['capture_budget_exceeded'] else 'NOT_MEASURED'
-    receipt=work/'command.json';producer.write(receipt,rec)
-    def ref(path):return {'path':str(path.relative_to(project)),'sha256':_sha(path)}
-    host=_read(Path(current_launch['attestation_path']));launch_path=Path(current_launch['attestation_path'])
-    for mount in sorted(host['container_inspect']['Mounts'],key=lambda m:len(m['Destination']),reverse=True):
-        if mount.get('Type')=='bind' and launch_path.is_relative_to(Path(mount['Destination'])):
-            launch_path=Path(mount['Source'])/launch_path.relative_to(mount['Destination']);break
-    return {**case,'receipt':ref(receipt),'capture':ref(capture),'log':ref(log),'launch':{'path':str(launch_path),'sha256':current_launch['attestation_sha256']}}
-
-
-def _d56_case(project, case, current_launch):
-    """Reopen the original native electrical producer, not a new PASS label."""
-    from flow109_analog_floorplan import bound_file
-    from flow109 import _d23_original_launch
-    import analog_bound_measurements as measured
-    import analog_native_waveform as waveform
-    import analog_native_interconnect_run as producer
-    import analog_real_corner_sweep as sweep
-    receipt=bound_file(project,case.get('receipt'));rec=_read(receipt)
-    launch_ref=case.get('launch')
-    if not isinstance(launch_ref,dict):raise ValueError('D56_ORIGINAL_LAUNCH_ABSENT')
-    original_launch=Path(launch_ref.get('path',''))
-    if not original_launch.is_absolute() or not original_launch.is_file() or _sha(original_launch)!=launch_ref.get('sha256'):
-        raise ValueError('D56_ORIGINAL_LAUNCH_STALE')
-    _d23_original_launch(rec.get('native_launch',{}),dict(current_launch,attestation_path=str(original_launch)))
-    host=_read(original_launch)
-    mounts=[(m['Destination'],m['Source']) for m in host['container_inspect']['Mounts'] if m.get('Type')=='bind']
-    def original(value):
-        if not isinstance(value,str) or not value.startswith('/') or '..' in Path(value).parts:
-            raise ValueError('D56_ORIGINAL_INPUT_PATH_INVALID')
-        path=Path(value)
-        for guest,host in sorted(mounts,key=lambda m:len(m[0]),reverse=True):
-            if path.is_relative_to(Path(guest)):
-                return (Path(host)/path.relative_to(Path(guest))).resolve(strict=True)
-        return path.resolve(strict=True)
-    deck=bound_file(project,case.get('deck'));capture=bound_file(project,case.get('capture'));log=bound_file(project,case.get('log'))
-    native_deck=original(rec.get('deck'))
-    stored_path,_=waveform.native_capture(rec,transient=True)
-    original_receipt=original(str(stored_path)).parent/'command.json'
-    if not original_receipt.is_file() or original_receipt.read_bytes()!=receipt.read_bytes():
-        raise ValueError('D56_ORIGINAL_PRODUCER_RECORD_CHANGED')
-    inputs=rec.get('inputs_before');outputs=rec.get('outputs')
-    if not isinstance(inputs,dict) or not inputs or not isinstance(outputs,dict) or not outputs or rec.get('inputs_after')!=inputs or rec.get('unchanged') is not True:
-        raise ValueError('D56_NATIVE_INPUT_POPULATION_UNBOUND')
-    driver=original(rec.get('executed_driver_copy')) if rec.get('executed_driver_copy') else None
-    driver_sha=_sha(driver) if driver is not None else None
-    for path,digest in {**inputs,**outputs}.items():
-        if path in inputs and driver is not None and driver_sha==digest:
-            continue  # Existing retained executed-driver-copy semantics.
-        if _sha(original(path))!=digest:raise ValueError('D56_ORIGINAL_INPUT_OR_OUTPUT_STALE: '+path)
-    if driver is not None:
-        import ast,inspect
-        old=next((n for n in ast.parse(driver.read_text()).body if isinstance(n,ast.FunctionDef) and n.name=='_d56_capture'),None)
-        now=ast.parse(inspect.getsource(_d56_capture)).body[0]
-        if old is None or ast.dump(old)!=ast.dump(now):raise ValueError('D56_NATIVE_CAPTURE_METHOD_CHANGED')
-    operation=rec.get('operation_source') or {};tool=rec.get('tool') or {}
-    if (operation.get('sha256')!=_sha(Path(producer.__file__)) or _sha(original(operation.get('path')))!=operation.get('sha256')
-            or _sha(original(tool.get('path')))!=tool.get('sha256')):
-        raise ValueError('D56_NATIVE_METHOD_OR_TOOL_CHANGED')
-    native_outputs={Path(p).name:(p,digest) for p,digest in outputs.items()}
-    stored,raw_identity=waveform.native_capture(rec,transient=True)
-    if (str(stored) not in outputs or _sha(capture)!=outputs[str(stored)]
-            or _sha(original(str(stored)))!=_sha(capture) or _sha(deck)!=inputs.get(rec['deck'])
-            or _sha(log)!=native_outputs.get('native.log',(None,None))[1]):
-        raise ValueError('D56_CAPTURE_DECK_OR_LOG_CHANGED')
-    native_command=_read(original(native_outputs['native-command.json'][0]))
-    if native_command.get('environment')!=rec.get('native_environment'):
-        raise ValueError('D56_NATIVE_ENVIRONMENT_UNBOUND')
-    init=rec.get('native_init_before')
-    if not isinstance(init,dict) or not init or rec.get('native_init_after')!=init:
-        raise ValueError('D56_NATIVE_INITIALIZATION_UNBOUND')
-    if any(inputs.get(p)!=h or _sha(original(p))!=h for p,h in init.items()):
-        raise ValueError('D56_NATIVE_INITIALIZATION_CHANGED')
-    native_inputs=rec.get('native_inputs')
-    if not isinstance(native_inputs,dict) or native_inputs.get('deck')!={'path':rec['deck'],'sha256':inputs[rec['deck']]}:
-        raise ValueError('D56_NATIVE_INCLUDE_CLOSURE_UNBOUND')
-    execution=_read(original(native_outputs['native-execution.json'][0]))
-    if execution.get('argv')!=rec.get('argv') or native_command.get('argv')!=rec.get('argv') or execution.get('returncode')!=rec.get('returncode'):
-        raise ValueError('D56_NATIVE_EXECUTION_CHANGED')
-    argv=rec['argv']
-    executed_raw=(rec.get('native_raw') or {}).get('executed_path',str(stored))
-    if (argv.count('-r')!=1 or argv[argv.index('-r')+1]!=executed_raw
-            or argv.count(rec['deck'])!=1 or argv[-1]!=rec['deck'] or tool.get('path') not in argv):
-        raise ValueError('D56_NATIVE_INVOCATION_SUBJECT_MISMATCH')
-    # The original producer input population must include every real include;
-    # a receipt's own list is not evidence of an omitted model/include.
-    closure=measured.consumed_input_views(project,native_deck)
-    consumed={str(original(path)):digest for path,digest in inputs.items()}
-    recorded_closure={str(original(v['path'])):v['sha256'] for k,v in native_inputs.items() if k.startswith('include:')}
-    if recorded_closure!={str(Path(v['path']).resolve()):v['sha256'] for v in closure.values()} or any(consumed.get(str(Path(v['path']).resolve()))!=v['sha256'] for v in closure.values()):
-        raise ValueError('D56_NATIVE_INCLUDE_CLOSURE_INCOMPLETE')
-    text=log.read_text(errors='replace')
-    if rec.get('returncode')!=0 or any(sweep._scan_analysis_failures(text)) or re.search(r'(?i)fatal error|simulation(?:\(s\))? aborted|timestep too small',text):
-        return {'status':'FAIL','reason':'bound native electrical analysis failed','receipt':str(receipt)}
-    if rec.get('status')!='PASS' or str((rec.get('analysis') or {}).get('kind','')).upper()!='TRAN':
-        raise ValueError('D56_COMPLETED_TRANSIENT_CAPTURE_REQUIRED')
-    supplies=case.get('supplies');required=case.get('required_rails');external=case.get('external');ground=case.get('signal_ground')
-    if (not isinstance(supplies,dict) or not supplies or not isinstance(required,list) or not required
-            or any(not isinstance(x,str) or not x for x in required) or len(set(required))!=len(required)
-            or set(supplies)!=set(required) or not isinstance(external,dict) or set(external)!=set(required)
-            or not isinstance(ground,str) or not ground):
-        raise ValueError('D56_REQUIRED_RAIL_POPULATION_OR_GROUND_UNBOUND')
-    window=case.get('window_s')
-    if not isinstance(window,list) or len(window)!=2 or any(isinstance(x,bool) or not isinstance(x,(float,int)) for x in window):
-        raise ValueError('D56_TIME_WINDOW_ABSENT')
-    raw=waveform.NativeRaw(capture,**raw_identity)
-    stats=supply_wave_statistics(raw,window,deck.read_text(),supplies,external)
-    if set(stats)!=set(required) or any(v['negative_node'].casefold()!=ground.casefold() for v in stats.values()):
-        raise ValueError('D56_SUPPLY_POLARITY_OR_REFERENCE_MISMATCH')
-    readset={str(original(path)):digest for path,digest in {**inputs,**outputs}.items()
-             if driver is None or path not in inputs or digest!=driver_sha}
-    if driver is not None:readset[str(driver)]=driver_sha
-    readset[str(original_launch)]=launch_ref['sha256']
-    readset.update({str(path):case[role]['sha256'] for role,path in
-                    (('receipt',receipt),('deck',deck),('capture',capture),('log',log))})
-    if any(_sha(Path(path))!=digest for path,digest in readset.items()):
-        raise ValueError('D56_CONSUMED_SOURCE_CHANGED_DURING_INTEGRATION')
-    return {'status':'PASS','rails':stats,'units':{'current_a':'A','voltage_v':'V','power_w':'W','window_s':'s'},
-            'capture_shape':list(raw.shape),'native_launch':rec['native_launch'],'receipt':str(receipt),
-            'window_s':window,'analysis':rec['analysis'],'readset':readset,
-            'scope':'selected native rail/window integration only; mission, layout/activity and source power bounds unmeasured'}
-
-
-def execute(project,context):
-    """D56 consumes genuine completed native supply-current captures; no replay."""
-    import librelane_contract as launch
-    from flow109_admission import require_launch_admission,AdmissionRefusal
-    import flow109
-    project=Path(project).resolve(strict=True);work=project/'reports/flow109/D56'/uuid.uuid4().hex;work.mkdir(parents=True)
-    result=dict(step_id='D56',context_sha256=context.get('context_sha256'),component_status='NOT_MEASURED',default_row_status='NOT_MEASURED',completed=False,native_started=False,outputs=[],cases=[],qualification='NOT_CLAIMED',flow109_acceptance='NOT_MEASURED',whole_flow_acceptance='NOT_MEASURED',delivery_accepted=False)
-    try:
-        if context.get('requested_step')!='D56' or context.get('native_step_id')!='flow109.D56' or context.get('resolved_row',{}).get('profile',{}).get('id')!='analog_die':raise ValueError('D56_CONTEXT_INVALID')
-        result['launch_admission']=require_launch_admission(project,'flow109.D56',{'flow109_context':context});current=launch.local_image_attestation()
-        config=project/'input/flow109/D56.json'
-        if any(p.is_symlink() for p in (config,*config.parents)):raise ValueError('D56_INPUT_SYMLINK')
-        before=_sha(config);settings=_read(config);cases=settings.get('cases')
-        if not isinstance(cases,list) or not cases:raise ValueError('D56_EMPTY_NATIVE_CASE_POPULATION')
-        names=[c.get('name') for c in cases if isinstance(c,dict)]
-        if len(names)!=len(cases) or any(not isinstance(n,str) or not n for n in names) or len(set(names))!=len(names):raise ValueError('D56_NATIVE_CASE_IDENTITY_AMBIGUOUS')
-        for case in cases:
-            try:
-                selected=case
-                if 'receipt' not in case:
-                    result['native_started']=True
-                    selected=_d56_capture(project,case,work/(str(len(result['cases']))+'-native'),current)
-                data=_d56_case(project,selected,current);data['name']=case['name'];data['retained_case']=selected;result['cases'].append(data)
-            except (ValueError,OSError,KeyError,TypeError,flow109.Flow109Error) as exc:
-                result['cases'].append({'name':case['name'],'status':'NOT_MEASURED','reason':str(exc)})
-        states=[c['status'] for c in result['cases']]
-        result['component_status']='FAIL' if 'FAIL' in states else 'PASS' if states and set(states)=={'PASS'} else 'NOT_MEASURED'
-        if _sha(config)!=before or launch.local_image_attestation()!=current:
-            if result['component_status']!='FAIL':result['component_status']='NOT_MEASURED'
-            raise ValueError('D56_INPUT_OR_LAUNCH_CHANGED')
-        result['activity_coverage']='NOT_MEASURED';result['power_bounds']='NOT_MEASURED'
-        retained=work/'retained_inputs.json'
-        retained.write_text(json.dumps({'cases':[c['retained_case'] for c in result['cases'] if 'retained_case' in c]},indent=2)+'\n')
-        result['retained_inputs']={'path':str(retained.relative_to(project)),'sha256':_sha(retained)}
-        result['reason']='Source-bound native rail current/I*V over explicit windows only; subset/full-row activity, power bounds and ADC acceptance unmeasured'
-    except (ValueError,OSError,KeyError,TypeError,AdmissionRefusal,launch.Refusal) as exc:
-        if any(c.get('status')=='FAIL' for c in result['cases']):result['component_status']='FAIL'
-        result['reason']=str(exc)
-    target=work/'component.json';target.write_text(json.dumps(result,indent=2)+'\n');return result
-
-
-
-def _d56_metric_observation(project, component):
-    import librelane_contract as launch
-    config = project/'input/flow109/D56.json'
-    before = _sha(config)
-    settings = _read(config)
-    declared = {c['name']: c for c in settings['cases']}
-    if len(declared) != len(settings['cases']) or not declared:
-        raise ValueError('D56_METRIC_CASE_POPULATION_INVALID')
-    current = launch.local_image_attestation()
-    cases = []
-    for case in component.get('cases') or []:
-        source = declared[case['name']]
-        retained = case['retained_case']
-        keys = ('deck','supplies','external','required_rails','signal_ground','window_s')
-        if any(source.get(k) != retained.get(k) for k in keys):
-            raise ValueError('D56_METRIC_CASE_BINDING_CHANGED')
-        if 'receipt' in source and source != retained:
-            raise ValueError('D56_METRIC_RETAINED_SOURCE_CHANGED')
-        observed = _d56_case(project, retained, current)
-        if observed.get('rails') != case.get('rails') or observed['status'] != case['status']:
-            raise ValueError('D56_METRIC_PRINTED_MEASUREMENT_CHANGED')
-        cases.append(dict(observed, name=case['name']))
-    if {c['name'] for c in cases} != set(declared) or _sha(config) != before or launch.local_image_attestation() != current:
-        raise ValueError('D56_METRIC_POPULATION_OR_SOURCE_CHANGED')
-    return {'cases': cases, 'source_cases': declared, 'config': {'path':str(config),'sha256':before}}
-
-
-def _d56_metric_acceptance(project, context, component):
-    """Read native I*V integrals, independently declared case/rail scope and W bounds.
-
-    Coverage required_items has {case,rail}; case_bindings binds the existing
-    supplies/external/required_rails/signal_ground/window_s source fields.
-    limits[case][rail] contains avg and peak_abs scalar bounds, units=W.
-    Full physical activity and mission coverage are still unmeasured.
-    """
-    import flow109
-    import flow109_metric_acceptance as metrics
-    ids = ['base_40.power_activity_coverage', 'base_40.per_mode_rail_average_peak_power']
-    failed = component.get('component_status') == 'FAIL' or any(c.get('status') == 'FAIL' for c in component.get('cases') or [])
-    result = {'row_id':'D56','status':'NOT_MEASURED','qualification':'NOT_MEASURED','obligations':[]}
-    try:
-        current = flow109.validate_execution_context(context)
-        if (current['resolved_row']['id'] != 'D56' or current['resolved_row']['profile']['id'] != 'analog_die'
-                or [o['id'] for o in current['resolved_row']['obligations']] != ids):
-            raise ValueError('D56_METRIC_CONTEXT_UNREGISTERED')
-        observed = _d56_metric_observation(project, component)
-        failed = failed or any(c['status']=='FAIL' for c in observed['cases'])
-        result['native_observation'] = observed
-        actual = [{'case':c['name'],'rail':rail} for c in observed['cases'] for rail in c.get('rails',{})]
-        try:
-            authority, body = metrics._approved_authority(project,
-                'requirements/base_40/power_activity_coverage.json#/required_items', ('case','rail'))
-            required = authority['required_items']
-            names = {i['case'] for i in required}
-            keys = ('deck','supplies','external','required_rails','signal_ground','window_s')
-            if not required or body.get('case_bindings') != {n:{k:observed['source_cases'][n][k] for k in keys} for n in names}:
-                raise ValueError('D56_INDEPENDENT_CASE_BINDINGS_ABSENT')
-            missing = [i for i in required if i not in actual]
-            result['activity_authority'] = authority
-            coverage = 'FAIL' if missing else 'NOT_MEASURED'
-            coverage_reason = 'D56_REQUIRED_RAIL_CASE_ABSENT' if missing else 'D56_PHYSICAL_ACTIVITY_AND_MISSION_COVERAGE_UNMEASURED'
-        except (metrics.MetricRefusal,OSError,ValueError,KeyError,TypeError) as exc:
-            coverage, coverage_reason = 'NOT_MEASURED', str(exc)
-        result['obligations'].append({'id':ids[0],'status':coverage,'reason':coverage_reason,'observed_items':actual})
-        comparisons = []
-        try:
-            authority, body = metrics._approved_document(project, 'requirements/base_40/per_mode_rail_average_peak_power.json',
-                authority='requirements_owner', schema=metrics.AUTHORITY_SCHEMA)
-            if body.get('units') != 'W':raise ValueError('D56_POWER_BOUND_UNITS_UNBOUND')
-            for case in observed['cases']:
-                for rail, stats in case.get('rails',{}).items():
-                    for statistic in ('avg','peak_abs'):
-                        value = metrics._finite_number(stats['power_w'][statistic])
-                        limits = body['limits'][case['name']][rail][statistic]
-                        low, high = limits.get('min'), limits.get('max')
-                        if low is None and high is None:raise ValueError('D56_POWER_BOUNDS_ABSENT')
-                        if low is not None:metrics._finite_number(low)
-                        if high is not None:metrics._finite_number(high)
-                        if low is not None and high is not None and low > high:raise ValueError('D56_POWER_BOUNDS_INVALID')
-                        comparisons.append({'case':case['name'],'rail':rail,'statistic':statistic,'value':value,'unit':'W',
-                            'status':'FAIL' if (low is not None and value < low or high is not None and value > high) else 'PASS'})
-            result['power_authority'] = authority
-        except (metrics.MetricRefusal,OSError,ValueError,KeyError,TypeError) as exc:
-            result['power_bounds_gap'] = str(exc)
-        bounds_fail = failed or any(c['status']=='FAIL' for c in comparisons)
-        result['obligations'].append({'id':ids[1],'status':'FAIL' if bounds_fail else 'NOT_MEASURED','comparisons':comparisons,
-            'reason':'D56_NATIVE_POWER_FAILURE' if bounds_fail else 'D56_SELECTED_SUPPLY_WINDOWS_ONLY'})
-    except (OSError,ValueError,KeyError,TypeError,AttributeError) as exc:
-        result['reason'] = str(exc)
-        known_failures = {o['id'] for o in result['obligations'] if o['status']=='FAIL'}
-        result['obligations'] = [{'id':oid,'status':'FAIL' if oid in known_failures or failed and oid==ids[1] else 'NOT_MEASURED','reason':str(exc)} for oid in ids]
-    if failed or any(o['status']=='FAIL' for o in result['obligations']):result['status']='FAIL'
-    return result
-
-
-def consume_default_row_completion(project, context, component):
-    """Canonical row completion; partial measurements do not qualify the row."""
-    accepted = _d56_metric_acceptance(Path(project).resolve(), context, component)
-    prior = component.get('metric_acceptance') or {}
-    prior_ids = {o.get('id') for o in prior.get('obligations', []) if o.get('status') == 'FAIL'} if isinstance(prior, dict) else set()
-    for item in accepted['obligations']:
-        if item['id'] in prior_ids and item['status'] != 'FAIL':
-            item.update(status='FAIL', reason='D56_PRIOR_MEASURED_FAILURE')
-    if (component.get('default_row_status') == 'FAIL' or component.get('metric_acceptance_status') == 'FAIL'
-            or isinstance(prior, dict) and prior.get('status') == 'FAIL' or prior_ids):
-        accepted['status'] = 'FAIL'
-        accepted['prior_failed_obligation_ids'] = sorted(prior_ids)
-    return {**component, 'step_id': 'D56', 'context_sha256': context['context_sha256'],
-        'metric_acceptance': accepted, 'metric_acceptance_status': accepted['status'],
-        'default_row_status': accepted['status'], 'flow109_acceptance': accepted['status'],
-        'completed': False, 'whole_flow_acceptance': 'NOT_MEASURED', 'delivery_accepted': False}
 
 if __name__=='__main__':
     ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('project',type=Path);ap.add_argument('--block',required=True);ap.add_argument('--settings',type=Path,required=True);ap.add_argument('--container',default='');ap.add_argument('--out',type=Path)

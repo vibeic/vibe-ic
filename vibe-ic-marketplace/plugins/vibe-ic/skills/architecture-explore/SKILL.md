@@ -24,33 +24,19 @@ The decisions with the biggest PPA impact happen before a line of RTL is written
 
 ## Workflow
 
-1. **Define the parameter space** — typically 3–5 knobs with 2–4 levels each.
-   *This is an AI-judgment step:* pick the knobs and levels that matter for
-   THIS block and workload (you know the design; the program does not).
-2. **Build analytic model + prune** — do NOT hand-compute the PPA math or
-   eyeball dominance. Encode each candidate as a knob row with the per-unit
-   coefficients and run the deterministic program. It applies the four
-   formulas (Throughput = parallelism × frequency, Area = Σ(units × unit_area)
-   + memory × bit_area, Power = activity × C × Vdd² × f, Latency = depth ×
-   cycle_time) and returns the Pareto frontier (area-minimise, power-minimise,
-   latency-minimise, throughput-maximise) via a dominance filter:
-
-   ```bash
-   python3 plugins/vibe-ic/programs/arch_dse_pareto.py knobs.json --json arch/dse.json
-   ```
-
-   `knobs.json` is a list of candidates, each giving its knob values plus the
-   coefficients the formulas need (`unit_area`, `activity`, `cap`, `vdd`, …).
-   The program is chip-AGNOSTIC and hard-codes no process numbers — you supply
-   the coefficients. It degrades gracefully (reports `status: MISSING` /
-   per-candidate `notes`) on partial input rather than crashing or
-   over-flagging. The `pareto_frontier` list in the output is the set of
-   non-dominated points to carry forward.
-3. **Spot-check** the frontier candidates with `/ppa-predict`
-4. **Plot** (or tabulate) the Pareto frontier from `arch/dse.json`
-5. **Recommend** 1–2 architectures with rationale. *This is an AI-judgment
-   step:* the program tells you WHICH points are Pareto-optimal; you decide
-   WHICH of those best fits the PPA target priorities, risk, and roadmap.
+1. Define the candidate knobs and the workload they affect. Pipeline depth,
+   parallel lanes, banking and bus width are common choices.
+2. Build a labelled analytic estimate or run native synthesis/implementation
+   for each candidate under the same PDK, clock and constraints. Estimates may
+   use throughput = parallelism × frequency, area = sum of unit areas plus
+   memory area, dynamic power = activity × C × Vdd² × frequency, and latency =
+   pipeline depth × cycle time. State every coefficient and assumption.
+3. Compare actual candidate values and identify non-dominated points. Preserve
+   missing values rather than assigning them zero or a default score.
+4. Plot or tabulate the tradeoffs and validate the strongest estimates with
+   native measurements where available.
+5. Recommend an architecture from the original target priorities, remaining
+   uncertainty, implementation risk and measured tradeoffs.
 
 ## Output format
 
@@ -70,22 +56,3 @@ Classic DSE references: Patterson & Hennessy quantitative approach. Industry ref
 - Chosen architecture → `/spec-to-rtl`
 - PPA cross-check → `/ppa-predict`
 - Risk list → `/regression-manage`
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/architecture-explore/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in the corresponding skill directory enumerates
-every required element of your output: section headers, metadata fields,
-handoff lines, tool invocations.
-
-**Your task is not complete until the audit returns PASS.** Missing
-elements are the single largest source of skill-execution non-determinism
-across different agents.

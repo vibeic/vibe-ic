@@ -49,10 +49,8 @@ _FLOW = _PLUGIN / "flow" / "phase1_phase2_phase3.yaml"
 _BASELINE = _PROGRAMS / "flow_gate_enforcement_baseline.json"
 
 sys.path.insert(0, str(_PROGRAMS))
-import flow_gate_enforcement_audit as AUDIT  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import _progress_run as _pr  # noqa: E402
 
 # The two entries THIS change pays down. Both live in phase3_one_shot_runner.
 _PAID = (
@@ -62,15 +60,8 @@ _PAID = (
 _RUNNER = "phase3_one_shot_runner.py"
 
 
-def _audit():
-    return AUDIT.audit(_FLOW, _PROGRAMS)
 
 
-def _row(rep, gate):
-    for r in rep["gates"]:
-        if r["gate"] in (gate, f"{gate}.py"):
-            return r
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -91,27 +82,8 @@ def test_306_paid_gates_left_the_register(gate):
     assert f"orphan::{gate}" not in known
 
 
-def test_306_shipped_tree_is_green_against_its_register():
-    """An audit that ships red blocks nothing — the failure mode it names."""
-    r = _pr.run([sys.executable,
-                        str(_PROGRAMS / "flow_gate_enforcement_audit.py")],
-                       capture_output=True, text=True)
-    assert r.returncode == 0, r.stdout + r.stderr
 
 
-@pytest.mark.parametrize("gate", _PAID)
-def test_306_paid_gates_are_enforced_not_merely_declared(gate):
-    """ENFORCED means a runner invokes it inline, so it can stop the step it
-    guards. Being present in the flow YAML is NOT that: the YAML gates are
-    evaluated by `flow_compliance_check`, which the runners call as the LAST
-    step — after every artefact already exists."""
-    rep = _audit()
-    row = _row(rep, gate)
-    assert row is not None, f"{gate} is not in the flow definition at all"
-    assert row["enforcement"] == "ENFORCED", row
-    assert row["declared"] == "blocking", row
-    assert not any(c["gate"].startswith(gate) for c in rep["contradictions"])
-    assert not any(o["gate"].startswith(gate) for o in rep["orphaned"])
 
 
 def test_306_drv_blast_radius_is_stated_where_the_wiring_is():
@@ -126,58 +98,10 @@ def test_306_drv_blast_radius_is_stated_where_the_wiring_is():
 # ---------------------------------------------------------------------------
 # MUTATION CONTROL — the assertions above must be caused by the wiring
 # ---------------------------------------------------------------------------
-def _mutated_programs(tmp_path: Path) -> Path:
-    """A programs dir whose runner no longer INVOKES the two gates.
-
-    Reproduces the pre-fix tree: the gate files and the flow YAML are
-    untouched, only the runner-side invocation is gone.
-    """
-    d = tmp_path / "programs"
-    d.mkdir()
-    text = (_PROGRAMS / _RUNNER).read_text(errors="replace")
-    mutations = 0
-    for gate in _PAID:
-        token = f"{gate}.py"
-        mutations += text.count(token)
-        text = text.replace(token, "__mutated_away__.py")
-    assert mutations == 2, (
-        f"expected exactly 2 invocation sites to strip, stripped {mutations}: "
-        "a control that mutates nothing proves nothing")
-    (d / _RUNNER).write_text(text)
-    for gate in _PAID:
-        (d / f"{gate}.py").write_text(
-            (_PROGRAMS / f"{gate}.py").read_text(errors="replace"))
-    return d
 
 
-def test_306_mutation_control_removing_the_wiring_restores_the_debt(tmp_path):
-    """Strip the invocations -> both fall straight back into the register.
-
-    This is what makes the ENFORCED assertions above load-bearing rather than
-    a restatement of the tree's current text.
-    """
-    rep = AUDIT.audit(_FLOW, _mutated_programs(tmp_path))
-    back = {c["gate"] for c in rep["contradictions"]} | \
-           {o["gate"] for o in rep["orphaned"]}
-    for gate in _PAID:
-        assert gate in back, (
-            f"{gate} stayed clean with its invocation removed — the audit is "
-            f"not measuring the wiring")
 
 
-def test_306_mutation_control_the_unmutated_tree_is_clean(tmp_path):
-    """The other side of the control: same harness, real source, no debt for
-    either gate. A one-sided control cannot tell a working audit from a stuck
-    one."""
-    d = tmp_path / "programs"
-    d.mkdir()
-    for f in (_RUNNER,) + tuple(f"{g}.py" for g in _PAID):
-        (d / f).write_text((_PROGRAMS / f).read_text(errors="replace"))
-    rep = AUDIT.audit(_FLOW, d)
-    back = {c["gate"] for c in rep["contradictions"]} | \
-           {o["gate"] for o in rep["orphaned"]}
-    for gate in _PAID:
-        assert gate not in back, rep
 
 
 # ---------------------------------------------------------------------------

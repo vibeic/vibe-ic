@@ -27,7 +27,6 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -199,7 +198,6 @@ def test_a_pad_the_tool_did_not_place_is_refused(tmp_path):
 
 # ---- the runner's LibreLane floorplan branch calls producer, then gate ----
 
-import phase3_one_shot_runner as runner  # noqa: E402
 
 _spec_b = importlib.util.spec_from_file_location(
     "f30_bridge_fixtures",
@@ -208,66 +206,10 @@ BR = importlib.util.module_from_spec(_spec_b)
 _spec_b.loader.exec_module(BR)
 
 
-def _drive_branch(tmp_path, monkeypatch, rc_by_program):
-    project = tmp_path / "project"
-    out_dir = project / "phase3/stage3/pnr"
-    wrapper = BR.write(out_dir / "chip_top_io.v", "module chip_top(a);\n  input a;\n  core u_core (.a(a));\nendmodule\n")
-    BR.put(project / "phase3/librelane_switch.json", {"pdk_root_host": str(tmp_path)})
-    monkeypatch.setattr(runner, "_padring_chip_top_record", lambda p: {
-        "core_module": "core", "chip_top_verilog": str(wrapper.relative_to(project))})
-    netlist = BR.write(project / "phase3/stage2/core.v", "module core(a);\n  input a;\nendmodule\n")
-    monkeypatch.setattr(runner, "pnr_input_netlist", lambda p, core: (netlist, "n", False))
-    monkeypatch.setattr(runner, "_docker_exec", lambda *a, **k: (0, "ok", ""))
-    monkeypatch.setattr(contract, "flow_segment", lambda image, first, last, **k: [first, last])
-    monkeypatch.setattr(contract, "resolve_step_configs", lambda p, i, pdk, ids, **k: {
-        s: BR._declared(tmp_path, s, tmp_path) for s in ids})
-    monkeypatch.setattr(contract, "emit_pdn_cfg", lambda *a, **k: None)
-
-    def chain(project, image, triples, **k):
-        out = []
-        for step, _c, _s in triples:
-            f = project / "phase3/librelane/15-floorplan" / step
-            BR.put(f / "state_out.json", {"def": str(BR.write(f / "x.def", BR.DEF_TEXT)),
-                                          "odb": str(BR.write(f / "x.odb", "o"))})
-            out.append(f)
-        return out
-    monkeypatch.setattr(contract, "run_chain", chain)
-    calls = []
-
-    def run(argv, **k):
-        calls.append(argv)
-        name = Path(argv[1]).name
-        return SimpleNamespace(returncode=rc_by_program.get(name, 0),
-                               stdout=f"{name} said so", stderr="")
-    monkeypatch.setattr(runner._pr, "run", run)
-    pdk = BR._pdk(tmp_path)
-    result, consumer = runner._prepare_librelane_floorplan_for_route(
-        project, pdk, "c", out_dir, BR._deck(), {"15": "direct", "15.5ic": "librelane"},
-        io_view_discover=lambda *a: ([], []))
-    return result, consumer, calls, pdk
 
 
-def test_the_branch_writes_the_record_before_the_step_gate_reads_it(tmp_path, monkeypatch):
-    result, consumer, calls, pdk = _drive_branch(tmp_path, monkeypatch, {})
-    assert result.status == "PASS", result.detail
-    names = [(Path(c[1]).name, c[3] if len(c) > 3 else None) for c in calls]
-    assert names[:3] == [("pad_ring_check.py", "--librelane-state"),
-                         ("pad_ring_gen.py", "--librelane-state"),
-                         ("pad_ring_check.py", "--pdk-root")]
-    state = calls[1][calls[1].index("--librelane-state") + 1]
-    assert state.endswith("OpenROAD.PadRing/state_out.json")
-    root_c, tree = runner._padring_pdk_root_and_tree(pdk, "c")
-    for argv in calls[:3]:
-        assert argv[-4:] == ["--pdk-root", str(root_c), "--pdk", str(tree)]
-    assert "pad_ring_gen.py --librelane-state: rc=0" in result.detail
 
 
-def test_a_producer_refusal_blocks_routing_by_name(tmp_path, monkeypatch):
-    result, consumer, calls, _ = _drive_branch(
-        tmp_path, monkeypatch, {"pad_ring_gen.py": 1})
-    assert result.status == "FAIL" and consumer is None
-    assert result.detail.startswith("PADRING_LL_PRODUCER_FAILED")
-    assert [Path(c[1]).name for c in calls] == ["pad_ring_check.py", "pad_ring_gen.py"]
 
 
 # --------------------------------------------------------------------------

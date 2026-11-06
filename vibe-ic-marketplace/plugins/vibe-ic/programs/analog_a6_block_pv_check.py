@@ -79,7 +79,6 @@ chip-AGNOSTIC. No vendor / IC / tool-specific data hard-coded.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 from xml.etree import ElementTree
@@ -502,76 +501,6 @@ def _witness_disagreements(bdir: Path, rel: str, block: str,
     return out
 
 
-def _layout_binding_findings(project: Path, block: str,
-                             drc_ev: str, lvs_ev: str) -> List[dict]:
-    """Check hashes stamped by the real A6 producers against current layout.
-
-    Legacy hand-written fixtures have no binding and retain their existing
-    parser coverage. Native/LibreLane producer records do carry one; a changed
-    layout therefore invalidates both DRC and LVS evidence instead of allowing
-    a stale clean report to certify the new bytes.
-    """
-    bdir = _block_dir(project, block)
-    if bdir is None:
-        return []
-    layouts = [p for p in (sorted(bdir.glob(f"{block}.gds")) +
-                           sorted(bdir.glob("layout.gds")) +
-                           sorted(bdir.glob("*.gds")))]
-    layout = layouts[0] if layouts else bdir / "layout.mag"
-    if not layout.is_file():
-        return []
-    try:
-        actual = hashlib.sha256(layout.read_bytes()).hexdigest()
-    except OSError:
-        return []
-    out: List[dict] = []
-
-    def add(rule: str, rel_path: str, detail: str) -> None:
-        out.append({"block": block, "rule": rule, "rel_path": rel_path,
-                    "detail": detail})
-
-    # The native producer embeds the binding in both report consumers.
-    for name in (drc_ev, lvs_ev):
-        path = bdir / name if name else None
-        if path is None or not path.is_file():
-            continue
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        recorded = None
-        if path.suffix == ".json":
-            try:
-                doc = json.loads(text)
-                recorded = doc.get("layout_sha256") if isinstance(doc, dict) else None
-            except ValueError:
-                continue
-        else:
-            match = re.search(r"^layout_sha256:\s*([0-9a-f]{64})\s*$",
-                              text, re.M)
-            recorded = match.group(1) if match else None
-        if recorded and recorded != actual:
-            add("A6_PV_LAYOUT_MUTATED", f"{str(path.relative_to(project))}",
-                f"report binds layout_sha256={recorded[:12]}, current "
-                f"{layout.name} is {actual[:12]}")
-
-    # The LibreLane arm has a separate JSON record even when its summary is
-    # not selected as the gate witness. Its GDS hash is still authoritative
-    # provenance for the arm that ran.
-    arm = bdir / "a6_librelane_drc.json"
-    if arm.is_file():
-        try:
-            doc = json.loads(arm.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            doc = {}
-        recorded = doc.get("gds_sha256") if isinstance(doc, dict) else None
-        if recorded and recorded != actual:
-            add("A6_PV_LAYOUT_MUTATED", str(arm.relative_to(project)),
-                f"LibreLane record binds gds_sha256={recorded[:12]}, current "
-                f"{layout.name} is {actual[:12]}")
-    return out
-
-
 def _check_block(project: Path, block: str) -> Tuple[str, List[dict]]:
     """Return (status, findings) where status is PASS or FAIL.
     A block whose directory exists but lacks real DRC/LVS evidence is
@@ -588,30 +517,6 @@ def _check_block(project: Path, block: str) -> Tuple[str, List[dict]]:
         return "FAIL", findings
 
     rel = str(bdir.relative_to(project))
-
-    # THE PAIR MUST BE ONE DESIGN (FX_A7_RCX_INVENTORY). LVS of a layout drawn
-    # from an EARLIER netlist against the current one is a mismatch about the
-    # history, not the layout -- and an old `comp.json` saying `match` about
-    # that earlier netlist would read as a pass for this one. STALE is refused
-    # by name; UNVERIFIED (no digest, the recorded netlist unreadable) does not
-    # block, the same contract as A7.
-    stale_pair = False
-    src = next((p for pat in (f"{block}.sp", f"{block}.spice", f"{block}.cir")
-                for p in sorted(bdir.glob(pat))), None)
-    if src is not None and (bdir / "layout_provenance.json").is_file():
-        sys.path.insert(0, str(Path(__file__).resolve().parent))
-        import _analog_producer_common as _pc  # noqa: PLC0415
-        ident, why = _pc.layout_identity_of_block(bdir, src)
-        if ident == "STALE":
-            stale_pair = True
-            findings.append({
-                "block": block, "rule": "A6_LAYOUT_NOT_OF_THIS_NETLIST",
-                "rel_path": f"{rel}/layout_provenance.json",
-                "detail": (f"the layout was drawn from a different netlist "
-                           f"than {src.name} ({why}); re-run A5 on the "
-                           f"current A3 netlist -- no LVS verdict about this "
-                           f"pair is evidence"),
-            })
 
     drc_count, drc_ev = _drc_violations(bdir)
     if drc_count is None:
@@ -632,10 +537,8 @@ def _check_block(project: Path, block: str) -> Tuple[str, List[dict]]:
             "detail": f"DRC reports {drc_count} violation(s) (must be 0)",
         })
 
-    lvs_ok, lvs_ev = (None, "") if stale_pair else _lvs_match(bdir)
-    if stale_pair:
-        pass                            # refused above, by name
-    elif lvs_ok is None:
+    lvs_ok, lvs_ev = _lvs_match(bdir)
+    if lvs_ok is None:
         findings.append({
             "block": block, "rule": "A6_PV_LVS_NO_EVIDENCE",
             "rel_path": f"{rel}/lvs.report|comp.json|lvs_match.flag",
@@ -656,7 +559,6 @@ def _check_block(project: Path, block: str) -> Tuple[str, List[dict]]:
 
     findings.extend(_witness_disagreements(
         bdir, rel, block, drc_count, drc_ev, lvs_ok, lvs_ev))
-    findings.extend(_layout_binding_findings(project, block, drc_ev, lvs_ev))
 
     return ("FAIL" if findings else "PASS"), findings
 

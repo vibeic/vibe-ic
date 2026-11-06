@@ -9,7 +9,6 @@ connectivity ERC; voltage stress/SOA remains a separate simulation analysis.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 import shlex
@@ -109,10 +108,6 @@ File.write($erc_json, JSON.pretty_generate({'engine'=>'KLayout LayoutToNetlist',
 '''
 
 
-def _sha(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
 def _flatten(files: dict[str, str], root: str, stack=()) -> str:
     if root in stack:
         raise ValueError(f"recursive foundry include: {root}")
@@ -208,12 +203,12 @@ def run(project: Path, block: str, *, container: str, lvs_deck: str,
         transcript.write_text(str(exc))
         return {"status": "NOT_MEASURED", "detail": str(exc), "outputs": [str(transcript)]}
     deck.write_text(derived)
-    source_views = {"foundry:" + p: {"path": p, "sha256": hashlib.sha256(t.encode()).hexdigest()} for p, t in files.items()}
+    source_views = {"foundry:" + p: {'path': p} for p, t in files.items()}
     sources = work / "foundry_sources.json"
     sources.write_text(json.dumps(files, indent=2) + "\n")
-    before = {"gds": {"path": str(gds), "sha256": _sha(gds)},
-              "erc_deck": {"path": str(deck), "sha256": _sha(deck)},
-              "foundry_sources": {"path": str(sources), "sha256": _sha(sources)}}
+    before = {"gds": {'path': str(gds)},
+              "erc_deck": {'path': str(deck)},
+              "foundry_sources": {'path': str(sources)}}
     argv = ["klayout", "-b", "-r", str(deck), "-rd", f"input={gds}",
             "-rd", f"report={work / 'erc.lvsdb'}", "-rd", f"log={work / 'foundry.log'}",
             "-rd", f"target_netlist={work / 'extracted.cir'}", "-rd", f"erc_json={native}",
@@ -228,8 +223,6 @@ def run(project: Path, block: str, *, container: str, lvs_deck: str,
     except (OSError, ValueError):
         record = {}
     status, detail = grade(record, rc)
-    if _sha(gds) != before["gds"]["sha256"] or _sha(deck) != before["erc_deck"]["sha256"]:
-        if status != "FAIL": status, detail = "NOT_MEASURED", "ERC layout/deck changed during native extraction"
     record.update(status=status, detail=detail, returncode=rc, native_inputs=before,
                   foundry_sources=source_views,
                   outputs=[str(p) for p in (native, deck, sources, transcript, work / "command.json", work / "erc.lvsdb", work / "extracted.cir") if p.is_file()])

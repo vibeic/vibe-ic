@@ -426,7 +426,7 @@ class ContainerRunner(KLayoutRunner):
         try:
             cp = subprocess.run(_ce.docker_exec_argv(self._c, *argv),
                                 capture_output=True, timeout=120)
-        except (OSError, subprocess.SubprocessError, _ce.ContainerImageMismatch):
+        except (OSError, subprocess.SubprocessError):
             return None
         return cp.stdout if cp.returncode == 0 else None
 

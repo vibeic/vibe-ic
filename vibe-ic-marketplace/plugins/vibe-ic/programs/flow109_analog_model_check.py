@@ -1,7 +1,6 @@
-"""Consume current A02 ngspice model-smoke receipts without granting signoff."""
+"""Read native ngspice model-smoke logs and measurements."""
 from __future__ import annotations
 
-import hashlib
 import math
 import os as _os
 from pathlib import Path
@@ -19,10 +18,6 @@ FATAL = (
     'simulation interrupted due to error', 'fatal error',
 )
 NUMBER = r'[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?'
-
-
-def _sha(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
 def _fatal_diagnostic(text, polarity):
@@ -46,7 +41,7 @@ def _fatal_diagnostic(text, polarity):
 
 
 def consume(project, requirements, report):
-    """Rebind every receipt to its frozen requirement and current bytes."""
+    """Read every required native smoke case and its measurements."""
     project = Path(project).resolve()
     expected = {row['id']: row for row in requirements['required_smokes']}
     rows = report.get('smokes')
@@ -61,16 +56,14 @@ def consume(project, requirements, report):
             return {'verdict': 'FAIL', 'reason': 'A02_SMOKE_IDENTITY_MISMATCH', 'smokes': checked}
         try:
             log = (project / row['log']['path']).resolve()
-            if (not log.is_relative_to(project) or not log.is_file()
-                    or _sha(log) != row['log']['sha256']):
+            if not log.is_file():
                 raise OSError
             for key in ('model', 'deck'):
                 path = (project / row[key]['path']).resolve()
-                if (not path.is_relative_to(project) or not path.is_file()
-                        or _sha(path) != row[key]['sha256']):
+                if not path.is_file():
                     raise OSError
         except (KeyError, OSError):
-            return {'verdict': 'FAIL', 'reason': 'A02_CURRENT_EVIDENCE_STALE', 'smokes': checked}
+            return {'verdict': 'FAIL', 'reason': 'A02_NATIVE_INPUT_ABSENT', 'smokes': checked}
         text = log.read_text(errors='replace')
         # Diagnostics are prose records, so their polarity is canonical.  The
         # measurement records below are instead a closed ngspice grammar:

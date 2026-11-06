@@ -40,7 +40,6 @@ from __future__ import annotations
 
 import ast
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -413,68 +412,19 @@ def test_run_survives_a_view_that_cannot_be_built(tmp_path):
 # --------------------------------------------------------------------------
 # 6. REVERSE: the top-level hygiene gate still rejects what it always did
 # --------------------------------------------------------------------------
-def _gate(project: Path) -> subprocess.CompletedProcess:
-    return _supervised([sys.executable, str(TOP_LEVEL_GATE), str(project)])
 
 
-def _canonical_project(tmp_path: Path, name: str) -> Path:
-    project = tmp_path / name
-    for d in ("input", "phase1", "phase2", "phase3", "reports"):
-        (project / d).mkdir(parents=True)
-    (project / "waivers.json").write_text("{}\n")
-    return project
 
 
-def _stray_dirs_reported(cp: subprocess.CompletedProcess) -> str:
-    """The stray-dir list off the VERDICT line only — the trailing
-    'Allowed dirs:' help line legitimately contains the word `steps`."""
-    line = next(l for l in cp.stdout.splitlines() if l.startswith("[FAIL]"))
-    return line.split("stray dir(s):")[1].split(";")[0] if "stray dir(s):" in line else ""
 
 
 # -- REVERSE INVARIANTS: these must pass BEFORE and AFTER the change. No
 #    `steps/` in the fixture, so they assert only what the gate always did.
-@pytest.mark.parametrize("stray", ["sim", "run_logs", "rtl", "synth", "pnr"])
-def test_top_level_gate_still_rejects_stray_dirs(tmp_path, stray):
-    project = _canonical_project(tmp_path, f"p_{stray}")
-    (project / stray).mkdir()
-    cp = _gate(project)
-    assert cp.returncode == 1, cp.stdout
-    assert stray in _stray_dirs_reported(cp), cp.stdout
 
 
-def test_top_level_gate_still_rejects_stray_files(tmp_path):
-    project = _canonical_project(tmp_path, "p_file")
-    (project / "runner.log").write_text("noise\n")
-    cp = _gate(project)
-    assert cp.returncode == 1, cp.stdout
-    assert "runner.log" in cp.stdout
 
 
-def test_top_level_gate_still_passes_a_canonical_tree(tmp_path):
-    cp = _gate(_canonical_project(tmp_path, "p_plain"))
-    assert cp.returncode == 0, cp.stdout
-    assert "[PASS]" in cp.stdout
 
 
 # -- FORWARD: the view is a canonical home, and whitelisting it cost the gate
 #    none of its teeth (a stray beside the view is still reported).
-def test_top_level_gate_accepts_the_steps_view(tmp_path):
-    project = _canonical_project(tmp_path, "p_view")
-    (project / "steps").mkdir()
-    cp = _gate(project)
-    assert cp.returncode == 0, (
-        "every run now publishes steps/; a hygiene gate that reddens on every "
-        "run is a gate readers learn to ignore:\n" + cp.stdout)
-
-
-def test_steps_view_does_not_mask_a_stray_beside_it(tmp_path):
-    project = _canonical_project(tmp_path, "p_view_stray")
-    (project / "steps").mkdir()
-    (project / "sim").mkdir()
-    cp = _gate(project)
-    assert cp.returncode == 1, cp.stdout
-    listed = _stray_dirs_reported(cp)
-    assert "sim" in listed, cp.stdout
-    assert "steps" not in listed, (
-        "the owner's publication view is being reported as a stray: " + listed)

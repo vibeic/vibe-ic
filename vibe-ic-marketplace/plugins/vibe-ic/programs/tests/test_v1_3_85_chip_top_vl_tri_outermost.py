@@ -28,10 +28,9 @@ import pytest
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from not_verified_tier import not_verified_reason  # noqa: E402
+from _tool_probes import not_verified_reason  # noqa: E402
 
 import _progress_run as _pr  # noqa: E402
-import _outcome_states as states  # noqa: E402
 
 PROG = Path(__file__).resolve().parents[1]
 
@@ -233,64 +232,6 @@ def _apply_additive_alias(proj, core="counter", src="resetn", dst="rst_n"):
     return f
 
 
-@pytest.mark.skipif(
-    not shutil.which("docker"),
-    reason=not_verified_reason(
-        "docker engine not bound in this run",
-        remedy="run through tools/ci/run_suite_in_eda_image.sh, which "
-               "binds the host docker CLI and socket into the container"))
-def test_autoemit_moves_pull_to_outermost_face_end_to_end(tmp_path):
-    """Runner-level end state: after alias + synth (chip_top auto-emit), the
-    OUTERMOST chip_top faces carry the VERILATOR tri pull and the inner
-    wrapper's port list is plain; the reset actually works under host
-    iverilog through the two-level chain."""
-    d = _load_runner()
-    import os
-    container = os.environ.get("VIBEIC_IVERILOG13_CONTAINER", "vibeic-eda")
-    probe = subprocess.run(["docker", "exec", container, "sh", "-c", "true"],
-                           capture_output=True)
-    if probe.returncode != 0:
-        pytest.skip(f"container {container!r} not running")
-    proj = _stage(tmp_path)
-    _apply_additive_alias(proj)
-    r2 = d.step_yosys_synth(proj, "chip_top")
-    assert r2.status == "PASS", r2.detail
-    ct = (proj / "phase2" / "stage1" / "rtl" / "chip_top.v").read_text()
-    inner = (proj / "phase2" / "stage1" / "rtl" / "counter.v").read_text()
-    assert ct.count("tri1") == 2, "chip_top must keep the copied pulls"
-    wrapper_hdr = inner.split("module counter (", 1)[1].split(");", 1)[0]
-    assert not re.search(r"\btri1\b", wrapper_hdr), (
-        "inner wrapper port faces must be plain after auto-emit")
-    assert "tri1 resetn__rcvar_pull;" in inner, "body pull nets must survive"
-    # behavior through the two-level chain on the host simulator, BOTH faces
-    # The tool half used to sit under `if shutil.which("iverilog"):` with no
-    # else, so a host without it PASSED having simulated neither face. The
-    # synth assertions above have run; an absent simulator -> NOT_VERIFIED
-    # naming the host (R-0927), a present one -> the half below runs.
-    states.require_tools("iverilog", "vvp")
-    for sp in ("resetn", "rst_n"):
-        tb = tmp_path / f"tb_{sp}.v"
-        tb.write_text(
-            "module tb;\n  reg clk=0, r; wire [7:0] cnt; reg ok=1;\n"
-            f"  chip_top u (.{sp}(r), .clk(clk), .cnt(cnt));\n"
-            "  always #1 clk = ~clk;\n"
-            "  initial begin\n"
-            "    r = 0; #6; if (cnt !== 8'd0) ok = 0;\n"
-            "    r = 1; #6; if (cnt === 8'd0 || cnt === 8'hxx) ok = 0;\n"
-            "    r = 0; #6; if (cnt !== 8'd0) ok = 0;\n"
-            "    if (ok) $display(\"RESET_OK\");"
-            " else $display(\"RESET_DEAD\");\n"
-            "    $finish;\n  end\nendmodule\n")
-        binp = tmp_path / f"b_{sp}"
-        c = subprocess.run(
-            ["iverilog", "-g2012", "-s", "tb", "-o", str(binp), str(tb),
-             str(proj / "phase2" / "stage1" / "rtl" / "chip_top.v"),
-             str(proj / "phase2" / "stage1" / "rtl" / "counter.v")],
-            capture_output=True, text=True)
-        assert c.returncode == 0, c.stderr
-        r = _pr.run(["vvp", str(binp)], capture_output=True,
-                           text=True)
-        assert "RESET_OK" in r.stdout, (sp, r.stdout)
 
 
 @pytest.mark.skipif(

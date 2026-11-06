@@ -27,9 +27,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import phase3_one_shot_runner as runner  # noqa: E402
 from _release_docs_contract import NOT_MEASURED  # noqa: E402
-from _release_kit import SUBJECT, PDK, build_project, docs_dir  # noqa: E402
+from _release_kit import SUBJECT, build_project, docs_dir
 
 
 PROGRAMS = Path(__file__).resolve().parents[1]
@@ -130,35 +129,6 @@ def test_project_json_overrides_context_and_absent_role_stays_not_measured(
     assert rows["Module role"][1].startswith("reason:")
 
 
-def test_phase3_runner_writes_and_passes_the_context(tmp_path):
-    project = _project(tmp_path / "p")
-    (project / "input/project.json").write_text("{}\n", encoding="utf-8")
-    role = "A runner-resolved integration role."
-    l9_path = project / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
-    l9 = json.loads(l9_path.read_text(encoding="utf-8"))
-    l9["module_role"] = role
-    l9_path.write_text(json.dumps(l9, indent=2) + "\n", encoding="utf-8")
-
-    result = runner.step_ip_release_docs_gen(
-        project,
-        design_name="runner_widget",
-        pdk_name="neutral_pdk",
-        source_sha=SOURCE_SHA,
-        module_role=role,
-    )
-    assert result.status == "PASS", result
-    context = json.loads((project / CONTEXT_REL).read_text(encoding="utf-8"))
-    assert context["runner_invocation"] == {
-        "ic_name": "runner_widget", "pdk": "neutral_pdk"}
-    assert context["run_manifest"]["source_sha"] == SOURCE_SHA
-    assert context["l9_derivation"]["module_role"] == role
-    assert str(project / CONTEXT_REL) in result.output_files
-    assert _rows(project)["Design"][0] == "runner_widget"
-
-    front_door = (PROGRAMS / "vibe_ic_one_shot_runner.py").read_text(
-        encoding="utf-8")
-    assert '"--ic-name", args.ic_name' in front_door, (
-        "the canonical --ic-name invocation is still dropped before phase3")
 
 
 @pytest.mark.parametrize("mutation", ["missing_receipt", "changed_view", "changed_input", "unbound_view"])

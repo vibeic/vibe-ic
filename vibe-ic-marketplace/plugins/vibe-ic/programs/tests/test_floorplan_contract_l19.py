@@ -435,37 +435,12 @@ def test_phase3_l19_die_area_reader_rejects_garbage(tmp_path):
         assert P3._l19_declared_die_area(proj) is None
 
 
-def test_phase3_effective_die_honors_l19(tmp_path):
-    # die-um=auto + no L9 prose → L19.die_area_budget_um is honored.
-    proj = _mk_proj_with_l19_die(tmp_path, "800x600")
-    eff, note = P3._effective_die_um("auto", proj)
-    assert eff == "800x600"
-    assert note and "L19" in note
 
 
-def test_phase3_explicit_flag_beats_l19(tmp_path):
-    # An explicit --die-um WxH ALWAYS wins over any mandated die.
-    proj = _mk_proj_with_l19_die(tmp_path, "800x600")
-    eff, note = P3._effective_die_um("400x400", proj)
-    assert eff == "400x400"
-    assert note is None
 
 
-def test_phase3_l9_prose_beats_l19(tmp_path):
-    # L9 prose rect outranks L19 (precedence: flag > L9 prose > L19 > auto).
-    proj = _mk_proj_with_l19_die(tmp_path, "800x600")
-    _write(proj / "input" / "docs" / "L9_floorplan.md",
-           "`DIE_AREA = [0, 0, 1500, 1500]` µm fixed.\n")
-    eff, _note = P3._effective_die_um("auto", proj)
-    assert eff == "1500x1500"
 
 
-def test_phase3_no_mandate_passes_auto_through(tmp_path):
-    proj = tmp_path / "p"
-    (proj / "phase1" / "generated_docs").mkdir(parents=True)
-    eff, note = P3._effective_die_um("auto", proj)
-    assert eff == "auto"
-    assert note is None
 
 
 # ── polarity for FP_SIZING, the sibling of the guarded DIE_AREA path (#712) ──

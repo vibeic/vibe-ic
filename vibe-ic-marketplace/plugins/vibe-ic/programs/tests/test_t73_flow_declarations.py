@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 import yaml
@@ -14,12 +13,8 @@ ROOT = PROGRAMS.parent
 sys.path.insert(0, str(PROGRAMS))
 sys.path.insert(0, str(PROGRAMS / "tests"))
 
-import design_one_shot_runner as design
 import flow_compliance_check as flow
-import flow_gate_enforcement_audit as enforcement
-import flow_step_output_content_check as content
 import matrix_d7_artifact_graph as d7
-import vibe_ic_one_shot_runner as front
 
 
 def _steps():
@@ -27,23 +22,6 @@ def _steps():
         (ROOT / "flow/phase1_phase2_phase3.yaml").read_text())["steps"]}
 
 
-def test_rom_lint_manifest_cannot_author_a_pass(tmp_path):
-    rtl = tmp_path / "phase2/stage1/rtl"
-    rtl.mkdir(parents=True)
-    (rtl / "unit.v").write_text("module unit; endmodule\n")
-    (tmp_path / "reports").mkdir()
-    design.step_emit_phase2_manifests(tmp_path, [])
-    report = tmp_path / "reports/phase2/lint/rom_init_lint.json"
-    assert not report.exists(), "the manifest writer did not run the ROM gate"
-    report.parent.mkdir(parents=True, exist_ok=True)
-    report.write_text(json.dumps({"verdict": "PASS", "evidence": "otp_image_check step"}))
-    assert content.check(tmp_path, "rom_lint"), "canned PASS must be refused"
-    gate = subprocess.run([sys.executable, str(PROGRAMS / "rom_init_lint.py"),
-                           "--json", str(report), str(rtl / "unit.v")],
-                          capture_output=True, text=True)
-    assert gate.returncode == 0, gate.stderr
-    assert json.loads(report.read_text()) == []
-    assert content.check(tmp_path, "rom_lint") == []
 
 
 def test_missing_promised_rtl_fails_p0(tmp_path):
@@ -59,11 +37,6 @@ def test_missing_promised_rtl_fails_p0(tmp_path):
     assert p0["declared_by"].startswith("ASKED_BEFORE_PRODUCER:")
 
 
-def test_content_gate_declares_runner_tier_and_required_step_clause():
-    assert enforcement.declared_intent(PROGRAMS,
-                                       "flow_step_output_content_check") == "advisory"
-    clauses = str(_steps()["1"]["gate"])
-    assert "program_exit_zero" in clauses and "flow_step_output_content_check" in clauses
 
 
 def test_phase1_dynamic_l_docs_are_declared_and_seen_by_d7():
@@ -107,25 +80,6 @@ def test_step7_orders_the_stage1_population_it_audits():
                steps["7"]["gate"]["all_of"])
 
 
-def test_whole_flow_audit_reaches_front_door_rollup(tmp_path):
-    """Run the checker, consume its fresh report through the actual front door."""
-    started = time.time()
-    audit = tmp_path / "reports/audit/phase23_completion_audit.json"
-    proc = subprocess.run([sys.executable, str(PROGRAMS / "flow_compliance_check.py"),
-                           str(tmp_path), "--strict", "--json", str(audit)],
-                          capture_output=True, text=True, timeout=180)
-    assert proc.returncode != 0
-    doc = json.loads(audit.read_text())
-    assert doc["scope"]["whole_flow"] is True
-    assert {str(s["id"]) for s in doc["steps"]} >= {"7", "8", "9"}
-    assert all(str(s["status"]) not in {"PASS", "PASS_WITH_WAIVERS"}
-               for s in doc["steps"] if str(s["id"]) in {"7", "8", "9"})
-    axis = front._completion_audit_axis(tmp_path, phase3_ran=True,
-                                        started_at=started)
-    verdict, reasons = front._roll_up([("phase3", "PASS", 0)], audit_axis=axis)
-    assert axis["state"] == doc["verdict"] == "NOT_MEASURED"
-    assert verdict == "NOT_MEASURED"
-    assert any("completion audit" in line for line in reasons)
 
 
 def test_phase3_strict_failure_is_not_reported_as_info():

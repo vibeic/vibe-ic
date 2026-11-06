@@ -75,7 +75,6 @@ if str(_PROGRAMS) not in sys.path:
 
 import _vacuous_exit as _vx  # noqa: E402
 import flow_compliance_check as F  # noqa: E402
-import gate_skip_routing_check as GSR  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
@@ -234,28 +233,3 @@ def test_umbrella_no_longer_records_an_executed_pass_for_a_vacuous_run(
     assert rec["reason_class"] == "ZERO_DENOMINATOR", rec
     assert rec["evidence"].get("exit_code") == _vx.RC_VACUOUS, rec
     assert rec["evidence"].get("skip_kind") == "input-missing", rec
-
-
-def test_the_gate_is_out_of_the_unrouted_inventory():
-    """The baseline register must not outlive its truth.
-
-    `gate_skip_routing_check`'s ratchet is exact in BOTH directions: an entry
-    whose measured count reached zero FAILs the check with "delete the
-    inventory entry". This pins that the deletion happened in the same commit
-    as the fix rather than the register being left to claim a defect that no
-    longer exists.
-    """
-    assert _GATE_NAME not in GSR._UNROUTED_INVENTORY
-    res = GSR.audit(_PROGRAMS.parent)
-    assert res.passed, [f.message for f in res.findings]
-    # And the row itself, so this test cannot pass by the gate having
-    # disappeared from the enumeration: it still HAS a skip path, and that
-    # path is now routed. (`res.ratchet` has no per-gate measured map — a
-    # `.get("measured", {})` here would be the very vacuity under fix.)
-    row = next(r for r in res.rows if r.gate == _GATE_NAME)
-    assert row.tier == 1, row          # its rc is read as a verdict today
-    assert row.skip_paths == 1, row    # the branch still exists
-    assert row.unrouted_paths == 0, row
-    assert row.routed_paths == 1, row
-    assert row.sentinel_only_paths == 0, (
-        "routed by the rc channel, not only by the fragile stdout token")

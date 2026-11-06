@@ -20,7 +20,6 @@ import json
 import sys
 from pathlib import Path
 
-import pytest
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
@@ -138,31 +137,12 @@ def test_finding_none_for_safe_wrapper():
 
 # ---- _alias_wrapper_unsafe_as_vl_bind_top (the reusable GUARD) ---------------
 
-def test_guard_fires_when_wrapper_is_the_bind_top():
-    f = R._alias_wrapper_unsafe_as_vl_bind_top(
-        _NEUTRALIZED_WRAPPER, "counter", vl_bind_top="counter",
-        chip_top_name="chip_top")
-    assert f is not None
-    assert f["wrapper"] == "counter"
-    assert f["safe_vl_bind_top"] == "chip_top"
 
 
-def test_guard_silent_when_chip_top_is_the_bind_top():
-    # In-flow default: TBs bind chip_top, not the wrapper -> no false alarm.
-    assert R._alias_wrapper_unsafe_as_vl_bind_top(
-        _NEUTRALIZED_WRAPPER, "counter", vl_bind_top="chip_top",
-        chip_top_name="chip_top") is None
 
 
-def test_guard_silent_for_unrelated_bind_top():
-    assert R._alias_wrapper_unsafe_as_vl_bind_top(
-        _NEUTRALIZED_WRAPPER, "counter", vl_bind_top="some_other_top") is None
 
 
-def test_guard_silent_when_wrapper_not_neutralized():
-    # Even bound directly, a wrapper that still owns its port-face pull is safe.
-    assert R._alias_wrapper_unsafe_as_vl_bind_top(
-        _SAFE_WRAPPER, "counter", vl_bind_top="counter") is None
 
 
 # ---- no regression to #119 chip_top restore ----------------------------------

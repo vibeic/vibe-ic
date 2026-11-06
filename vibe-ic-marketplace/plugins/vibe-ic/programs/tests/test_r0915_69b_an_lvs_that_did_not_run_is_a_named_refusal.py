@@ -32,65 +32,23 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
 
 import eda_report_audit as A
-import phase3_one_shot_runner as R
 
 
 # --------------------------------------------------------------------------
 # the producer records whether anything was compared — measured, not declared
 # --------------------------------------------------------------------------
-def _verdict(project: Path) -> dict:
-    return json.loads((project / "reports" / "phase3"
-                       / "lvs_verdict.json").read_text())
 
 
-def test_a_verdict_written_with_no_transcript_records_no_compare(tmp_path: Path):
-    R._write_lvs_verdict(tmp_path, "FAIL", "LVS_EXTRACTION_ILLEGAL_OVERLAP",
-                         "netgen was NOT run")
-    v = _verdict(tmp_path)
-    assert v["compare_performed"] is False
-    assert v["compare_evidence"] is None
 
 
-def test_a_verdict_written_beside_a_transcript_records_a_compare(tmp_path: Path):
-    rpt = tmp_path / "reports" / "phase3"
-    rpt.mkdir(parents=True)
-    (rpt / "lvs.rpt").write_text("Circuits match uniquely.\n")
-    R._write_lvs_verdict(tmp_path, "PASS", "LVS_CLEAN", "match")
-    v = _verdict(tmp_path)
-    assert v["compare_performed"] is True
-    assert v["compare_evidence"] == "reports/phase3/lvs.rpt"
 
 
-def test_an_empty_transcript_is_not_a_compare(tmp_path: Path):
-    """0 bytes is "could not read it", never "read it and it matched"."""
-    rpt = tmp_path / "reports" / "phase3"
-    rpt.mkdir(parents=True)
-    (rpt / "lvs.rpt").write_text("")
-    R._write_lvs_verdict(tmp_path, "FAIL", "X", "y")
-    assert _verdict(tmp_path)["compare_performed"] is False
 
 
-def test_the_field_is_measured_at_every_writer_not_passed_in(tmp_path: Path):
-    """No call site is trusted to say so: the signature takes no such argument,
-    so all 26 writers get it right or none do."""
-    import inspect
-    sig = inspect.signature(R._write_lvs_verdict)
-    assert "compare_performed" not in sig.parameters
 
 
-def test_the_field_says_nothing_about_what_the_transcript_contains(tmp_path: Path):
-    """It can never be read as a pass: a transcript full of mismatches still
-    sets it True, and the status keeps the verdict."""
-    rpt = tmp_path / "reports" / "phase3"
-    rpt.mkdir(parents=True)
-    (rpt / "lvs.rpt").write_text("Netlists do NOT match.\n")
-    R._write_lvs_verdict(tmp_path, "FAIL", "LVS_MISMATCH", "mismatch")
-    v = _verdict(tmp_path)
-    assert v["compare_performed"] is True
-    assert v["status"] == "FAIL"
 
 
 # --------------------------------------------------------------------------

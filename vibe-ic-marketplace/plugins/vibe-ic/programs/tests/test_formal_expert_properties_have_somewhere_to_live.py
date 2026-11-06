@@ -309,7 +309,7 @@ def _neutral_invocation_flow(project, provider="complete", proof_mutation=None,
                              reused=False, deterministic=False, program=False):
     import hashlib
     import shutil
-    from not_verified_tier import skip_not_verified
+    from _tool_probes import skip_not_verified
     import formal_proof_evidence_check as consumer
     if any(shutil.which(tool) is None for tool in ("yosys", "sby")):
         skip_not_verified("native invocation control needs yosys/sby",
@@ -516,7 +516,7 @@ def _whole_harness_flow(project, *, regenerate=True, provider="complete",
     """#3320: neutral INPUT with no registered output, real owner/proof calls."""
     import hashlib
     import shutil
-    from not_verified_tier import skip_not_verified
+    from _tool_probes import skip_not_verified
     if any(shutil.which(tool) is None for tool in ("yosys", "sby")):
         skip_not_verified("whole-harness control needs yosys/sby",
                           "Run this selector in the pinned EDA image")

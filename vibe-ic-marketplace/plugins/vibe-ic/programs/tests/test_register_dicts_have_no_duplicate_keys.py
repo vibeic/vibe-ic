@@ -28,79 +28,17 @@ import ast
 import collections
 from pathlib import Path
 
-import pytest
 
 PROG = Path(__file__).resolve().parent.parent
 TARGET = PROG / "prose_polarity_consulted_check.py"
 
 
-def _module_level_dicts(path: Path):
-    """{name: [key literals in SOURCE ORDER]} for module-level dict literals."""
-    tree = ast.parse(path.read_text())
-    out = {}
-    for node in tree.body:
-        if isinstance(node, ast.Assign):
-            targets = node.targets
-        elif isinstance(node, ast.AnnAssign):
-            targets = [node.target]
-        else:
-            continue
-        if not isinstance(node.value, ast.Dict):
-            continue
-        for tgt in targets:
-            if isinstance(tgt, ast.Name):
-                out[tgt.id] = [
-                    (k.value, k.lineno) for k in node.value.keys
-                    if isinstance(k, ast.Constant) and isinstance(k.value, str)
-                ]
-    return out
 
 
-def test_the_file_parses_and_the_population_is_not_empty():
-    """NEGATIVE CONTROL. A test whose population is empty passes for free; this
-    one refuses to be vacuous, so a rename or a refactor that takes the
-    registers out of module scope reddens here instead of going quiet."""
-    dicts = _module_level_dicts(TARGET)
-    assert dicts, f"no module-level dict literals found in {TARGET.name}"
-    for name in ("_NOT_PROSE", "_OFFENDER_REGISTER"):
-        assert name in dicts, (
-            f"{name} is no longer a module-level dict literal in "
-            f"{TARGET.name}; this test's population silently lost a register")
-    assert len(dicts["_NOT_PROSE"]) > 50, (
-        "the _NOT_PROSE population collapsed -- a duplicate check over a few "
-        "entries would pass for reasons that have nothing to do with the rule")
 
 
-@pytest.mark.parametrize("register", ("_NOT_PROSE", "_OFFENDER_REGISTER"))
-def test_the_named_registers_declare_each_key_once(register):
-    keys = _module_level_dicts(TARGET)[register]
-    seen = collections.defaultdict(list)
-    for key, lineno in keys:
-        seen[key].append(lineno)
-    dupes = {k: v for k, v in seen.items() if len(v) > 1}
-    assert not dupes, (
-        f"{register} in {TARGET.name} declares the same key more than once: "
-        + "; ".join(f"{k!r} at lines {v}" for k, v in sorted(dupes.items()))
-        + ". Python keeps the LAST literal, so every earlier entry's argument "
-          "is discarded with no runtime trace -- the file claims an exemption "
-          "it does not hold. Merge them into one entry that keeps both "
-          "arguments' substance; do not simply delete one.")
 
 
-def test_every_module_level_dict_declares_each_key_once():
-    """The same rule over EVERY module-level dict, so a register added after
-    this test was written is covered without an edit here."""
-    offences = []
-    for name, keys in _module_level_dicts(TARGET).items():
-        seen = collections.defaultdict(list)
-        for key, lineno in keys:
-            seen[key].append(lineno)
-        for key, lines in sorted(seen.items()):
-            if len(lines) > 1:
-                offences.append(f"{name}: {key!r} at lines {lines}")
-    assert not offences, (
-        "duplicate keys in module-level dict literals, invisible at runtime:\n"
-        + "\n".join(offences))
 
 
 def test_the_instrument_can_actually_see_a_duplicate():

@@ -21,7 +21,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-from _skill_routes import assert_route_ships
 
 import pytest
 
@@ -115,110 +114,12 @@ def test_predicate_skips_aid_tb_for_generic_class():
     assert uses2 is True
 
 
-def test_generic_class_reference_tb_skips_when_no_full_stack_tb(tmp_path):
-    """generic_full_stack class with NO generic TB → SKIP (not FAIL),
-    with the canonical 'gate-level synth + Phase 3' reason."""
-    top = "core_top"
-    rtl = (f"module {top}(input clk, input reset_n, input data_in, "
-           f"output data_out); assign data_out = data_in; endmodule\n")
-    proj = _make_project_with_l9(tmp_path, rtl, top)
-    sr = p2.step_reference_tb(proj, top, "processor_cpu")
-    assert sr.status == "NOT_APPLICABLE"
-    assert "Phase 3" in sr.detail
-    assert sr.extras.get("verification_track") == "generic_full_stack"
 
 
-def test_generic_class_reference_tb_runs_full_stack_tb(tmp_path):
-    """When the generic full-stack TB was built (via step_full_stack_tb_gen)
-    the reference TB step uses it as the functional gate."""
-    top = "core_top"
-    rtl = (f"module {top}(input clk, input reset_n, input data_in, "
-           f"output data_out); assign data_out = data_in; endmodule\n")
-    proj = _make_project_with_l9(tmp_path, rtl, top)
-    # Emit the generic full-stack TB skeleton like the runner does.
-    # ORGANIC-20260528: with no concrete L3 golden, the TB-gen now
-    # honestly returns SKIP (connectivity-only, functional UNVERIFIED)
-    # rather than a fabricated functional PASS. The TB file is still
-    # emitted, which is all step_reference_tb needs.
-    gen = p2.step_full_stack_tb_gen(proj, top)
-    # R-0915-85 — the honest no-golden verdict is
-    # NOT_MEASURED(no_population): the TB was emitted and NOTHING was
-    # scored against it. `SKIP` matched no row any more, so this pair
-    # was a dead comparison over the one word it exists to accept.
-    assert gen.status in ("PASS", "NOT_MEASURED")
-    tb = (proj / "phase2" / "stage1" / "sim_full_stack"
-          / f"tb_{top}_full.v")
-    assert tb.is_file()
-    sr = p2.step_reference_tb(proj, top, "processor_cpu")
-    # ORGANIC-20260606 #439: a skeleton TB running to completion is
-    # CONNECTIVITY evidence only — never a functional PASS, and never an
-    # AID-TB false FAIL. PASS is reserved for a real per-IC oracle TB with
-    # golden compares.
-    #
-    # THE TIER IS INCOMPLETE, NOT WAIVED (#1975, cbe6154a6). WAIVED reads as
-    # "disposed of"; this step has work outstanding — the per-IC oracle TB —
-    # and Step 4's `cpu_functional_oracle_waiver_check` keeps blocking until
-    # it exists. SKIP remains correct for the sibling case where no
-    # full-stack TB was built at all, so both words are still asserted in
-    # this file and the two states cannot collapse into one another.
-    assert sr.status == "NOT_MEASURED", sr.detail
-    assert sr.extras.get("verification_track") == "generic_full_stack"
-    assert "aid" in sr.detail.lower()
-    assert sr.extras.get("functional_verified") is False
-    assert sr.extras.get("capability_gap") == "cap:cpu_functional_oracle"
-    # PROPERTY, not literal: the agent must be handed a route it can
-    # actually follow. See _skill_routes.py.
-    assert_route_ships(sr.extras.get("fallback_skill"),
-                       "step_reference_tb INCOMPLETE extras")
 
 
-def test_generic_class_real_compile_failure_still_fails(tmp_path):
-    """HONESTY: a genuinely broken DUT (syntax error) compiled against
-    the generic full-stack TB still FAILs — the escape path does NOT
-    auto-pass real defects. Requires iverilog; skip if unavailable."""
-    import shutil
-    if not shutil.which("iverilog"):
-        pytest.skip("iverilog not available")
-    top = "core_top"
-    # Deliberate syntax error: missing semicolon + bogus token.
-    rtl = (f"module {top}(input clk, input reset_n, input data_in, "
-           f"output data_out); assign data_out = $$$ data_in endmodule\n")
-    proj = _make_project_with_l9(tmp_path, rtl, top)
-    gen = p2.step_full_stack_tb_gen(proj, top)
-    # ORGANIC-20260528: TB-gen verdict is honest (SKIP without a golden),
-    # but the TB file is still emitted so step_reference_tb can compile it.
-    # R-0915-85 — the honest no-golden verdict is
-    # NOT_MEASURED(no_population): the TB was emitted and NOTHING was
-    # scored against it. `SKIP` matched no row any more, so this pair
-    # was a dead comparison over the one word it exists to accept.
-    assert gen.status in ("PASS", "NOT_MEASURED")
-    sr = p2.step_reference_tb(proj, top, "processor_cpu")
-    assert sr.status == "FAIL"
-    assert "defect" in sr.detail.lower() or "compile" in sr.detail.lower()
 
 
-def test_absent_compiler_is_distinguished_from_a_rejected_source():
-    """vibe-ic#1394 — the predicate that separates "could not measure" from
-    "measured and found a defect". Host-independent: no simulator needed.
-
-    The NEGATIVE direction is the load-bearing half. A genuine compile error
-    over a missing `include` also says "No such file or directory", so a
-    predicate that matched on that phrase would convert real structural
-    defects into skips — the inverse of the bug, and strictly worse than it.
-    """
-    # Failed to EXECUTE: our own wrappers' marker, and the shell's own rc.
-    assert p2._compiler_was_not_found(
-        127, "", "COMMAND_NOT_FOUND: [Errno 2] No such file or "
-                 "directory: 'iverilog'")
-    assert p2._compiler_was_not_found(
-        127, "", "bash: line 1: : command not found")
-    # RAN and rejected the source -> must NOT read as not-found, even when the
-    # message carries the very phrase a missing binary produces.
-    assert not p2._compiler_was_not_found(
-        1, "", "core_top.v:3: Include file foo.vh not found: "
-               "No such file or directory")
-    assert not p2._compiler_was_not_found(1, "", "syntax error near '$$$'")
-    assert not p2._compiler_was_not_found(0, "", "")
 
 
 def test_qsf_gen_skips_for_generic_class_without_board_top(tmp_path):

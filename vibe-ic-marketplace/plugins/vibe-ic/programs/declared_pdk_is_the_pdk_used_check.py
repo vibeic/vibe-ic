@@ -461,7 +461,7 @@ def declared_distribution(project: Path) -> Tuple[str, List[Tuple[Path, str]]]:
 
     Unlike the historical post-run audit reader, this input boundary never
     consumes a CLI selection, staging adoption, switch, resolved config or
-    installed default. L1/L19 and the case manifest must agree when populated.
+    installed default. L1 and L19 must agree when populated.
     """
     import pdk_family_identity as identity
 
@@ -470,13 +470,6 @@ def declared_distribution(project: Path) -> Tuple[str, List[Tuple[Path, str]]]:
         path, doc = load_l_doc(project, layer)
         if path is not None:
             documents.append((path, doc, keys, True))
-    manifest = project / "input/flow109-manifest.json"
-    if manifest.exists():
-        try:
-            doc = json.loads(manifest.read_text())
-        except (OSError, ValueError) as exc:
-            raise PDKDeclarationError("PDK_DECLARATION_INVALID", str(exc)) from exc
-        documents.append((manifest, doc, ("target_pdk", "pdk_target", "pdk"), False))
     targets: Set[str] = set()
     sources: List[Tuple[Path, str]] = []
     for path, doc, keys, layered in documents:
@@ -502,7 +495,7 @@ def declared_distribution(project: Path) -> Tuple[str, List[Tuple[Path, str]]]:
                 targets.add(canonical or value)
                 sources.append((path, prefix + key))
     if not targets:
-        raise PDKDeclarationError("PDK_UNDECLARED", "declare target PDK in L1, L19 or input/flow109-manifest.json")
+        raise PDKDeclarationError("PDK_UNDECLARED", "declare target PDK in L1 or L19")
     if len(targets) != 1:
         raise PDKDeclarationError("PDK_DECLARATION_CONFLICT", "case target PDK declarations disagree")
     return next(iter(targets)), sources

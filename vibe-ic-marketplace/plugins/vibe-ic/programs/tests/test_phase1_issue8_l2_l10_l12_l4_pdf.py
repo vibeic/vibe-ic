@@ -25,12 +25,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from programs.phase1_one_shot_runner import (
-    gen_l2_frs,
-    gen_l4_regmap,
-    gen_l10_test_cases,
-    gen_l12_behavioral,
-)
+from programs.phase1_doc_one_shot_runner import gen_l2_frs, gen_l4_regmap, gen_l10_test_cases, gen_l12_behavioral
 
 _GEN_DIR = Path("phase1") / "generated_docs"
 

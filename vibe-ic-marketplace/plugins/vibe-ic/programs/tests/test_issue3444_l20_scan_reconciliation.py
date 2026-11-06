@@ -11,7 +11,6 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
 
-import design_one_shot_runner as D  # noqa: E402
 import fault_scan_chain_insert as S  # noqa: E402
 
 
@@ -46,17 +45,6 @@ def _report(binding: dict) -> dict:
     return report
 
 
-def test_positive_current_one_chain_contract_reconciles(tmp_path):
-    project = _project(tmp_path, [_chain()])
-    binding, problems = S.load_l20_scan_contract(
-        project, expected_clock="clk", expected_length=2)
-    assert problems == [] and binding is not None
-    assert binding["path"].endswith("L20_DFT_SCAN_TOPOLOGY.json")
-    assert len(binding["sha256"]) == 64
-    report = _report(binding)
-    assert report["l20_reconciliation"]["ok"] is True
-    assert S.l20_binding_is_current(project, report)[0] is True
-    assert D.dft_scan_insertion_contract(project)[0] is True
 
 
 def test_stale_l20_bytes_invalidate_the_receipt(tmp_path):
@@ -149,7 +137,6 @@ def test_reconciliation_rejects_measured_length_port_and_clock_mutations(tmp_pat
 import pytest
 import hashlib
 import spec_declaration_emit as DECL
-import librelane_contract as LL
 
 
 def _intent():
@@ -239,22 +226,6 @@ def _native_payload(project, monkeypatch, *, actual=2):
     return calls
 
 
-def test_d09_planned_authority_reaches_existing_native_boundary(tmp_path, monkeypatch):
-    project = _planned(tmp_path)
-    # This assertion is the substantive reverse: old caller returns False
-    # despite real owner declaration, before it can reach the native producer.
-    assert D.dft_scan_insertion_contract(project)[0] is True
-    calls = []
-    def refused_native(project, argv, **kwargs):
-        calls.append(argv)
-        return 1, '', 'intentional native-boundary refusal in source control'
-    monkeypatch.setattr(S._fatpg, '_run_docker', refused_native)
-    rc, report = S.run_chain(project, 'phase2/stage2/synth/netlist.v', 'clk', 'sky130',
-                             reset='rst', require_l20_contract=True)
-    assert rc == 1 and report['stage'] == 'chain'
-    assert len(calls) == 1 and calls[0][:2] == ['fault', 'chain']
-    assert '--l20-contract' not in calls[0]  # no guessed native length argument
-    assert not (project / S.SCAN_NETLIST_REL).exists()
 
 
 def test_d09_native_measurement_publishes_existing_l20_receipt(tmp_path, monkeypatch):
@@ -285,54 +256,12 @@ def test_d09_native_measurement_publishes_existing_l20_receipt(tmp_path, monkeyp
     assert S.l20_binding_is_current(project, report)[0] is False
 
 
-@pytest.mark.parametrize('damage', ['declaration', 'sidecar', 'publication', 'source'])
-def test_d09_forged_authority_cannot_dispatch(tmp_path, monkeypatch, damage):
-    project = _planned(tmp_path)
-    paths = {'declaration': 'plugin_output/declaration.json',
-             'sidecar': 'plugin_output/declaration.provenance.json',
-             'publication': 'provenance.jsonl', 'source': 'input/docs/L7_verification_plan.md'}
-    path = project / paths[damage]
-    path.write_text(path.read_text() + ' altered')
-    monkeypatch.setattr(S._fatpg, '_run_docker', lambda *a, **k: pytest.fail('native started'))
-    with pytest.raises(LL.Refusal, match='D09_DFT_AUTHORITY_INVALID'):
-        D.dft_scan_insertion_contract(project)
-    rc, report = S.run_chain(project, 'phase2/stage2/synth/netlist.v', 'clk', 'sky130',
-                             reset='rst', require_l20_contract=True)
-    assert rc == 1 and report['stage'] == 'd09_contract'
 
 
-@pytest.mark.parametrize('wrong', ['length', 'clock', 'reset', 'polarity', 'domains'])
-def test_d09_guessed_or_unsupported_intent_refuses(tmp_path, monkeypatch, wrong):
-    intent = _intent()
-    if wrong == 'length': intent['chain_length'] = 64
-    if wrong == 'clock': intent['test_mode']['clock'] = 'other_clk'
-    if wrong == 'reset': intent['test_mode']['reset']['signal'] = 'other_rst'
-    if wrong == 'polarity': intent['test_mode']['reset'].update(active_level=0, shift_value=1)
-    if wrong == 'domains': intent['test_mode']['clock_domains'].append('other_clk')
-    project = _planned(tmp_path, intent)
-    monkeypatch.setattr(S._fatpg, '_run_docker', lambda *a, **k: pytest.fail('native started'))
-    with pytest.raises(LL.Refusal, match='D09_DFT_AUTHORITY_INVALID'):
-        D.dft_scan_insertion_contract(project)
 
 
-def test_d09_missing_authority_is_named_refusal(tmp_path):
-    project = _project(tmp_path, [])
-    with pytest.raises(LL.Refusal, match='D09_DFT_AUTHORITY_REQUIRED'):
-        D.dft_scan_insertion_contract(project)
 
 
-def test_d09_explicit_no_scan_is_scan_only_and_composable(tmp_path, monkeypatch):
-    intent = {'requires_scan': False, 'reason': 'test declares scan not required', 'bist': {'required': True}, 'compression': {'required': True}}
-    project = _planned(tmp_path, intent)
-    enabled, reason = D.dft_scan_insertion_contract(project)
-    assert enabled is False and 'D09_REQUIRES_SCAN_DISABLED' in reason
-    binding, problems = S.load_d09_dft_contract(project)
-    assert problems == [] and binding['intent']['bist']['required'] is True
-    monkeypatch.setattr(S._fatpg, '_run_docker', lambda *a, **k: pytest.fail('native started'))
-    rc, report = S.run_chain(project, 'phase2/stage2/synth/netlist.v', 'clk', 'sky130',
-                             require_l20_contract=True)
-    assert rc == 0 and report['verdict'] == 'NOT_APPLICABLE'
-    assert report['reason_code'] == 'D09_REQUIRES_SCAN_DISABLED' and not report['published']
 
 
 def test_d09_incomplete_native_mapping_does_not_publish(tmp_path, monkeypatch):
@@ -349,50 +278,8 @@ def test_d09_incomplete_native_mapping_does_not_publish(tmp_path, monkeypatch):
 
 # Return1: complete clock-control authority, consuming the exact retained native
 # two-DFF artifact. No Fault invocation is executed by these source controls.
-def test_d09_old_three_role_intent_must_refuse(tmp_path, monkeypatch):
-    intent = _intent()
-    for role in ('test', 'tck'):
-        intent['test_port_def'].pop(role)
-    for key in ('scan_clock', 'scan_clock_domains', 'scan_edge', 'clock_select'):
-        intent['test_mode'].pop(key)
-    project = _planned(tmp_path, intent)
-    monkeypatch.setattr(S._fatpg, '_run_docker', lambda *a, **k: pytest.fail('native started'))
-    refused = False
-    try:
-        allowed, _ = D.dft_scan_insertion_contract(project)
-    except LL.Refusal:
-        refused, allowed = True, False
-    assert allowed is False  # parent returns True: substantive observed VALUE
-    assert refused is True  # unknown/incomplete is not a scan-test:false skip
 
 
-@pytest.mark.parametrize('damage', [
-    'missing_test', 'missing_tck', 'changed_test', 'changed_tck',
-    'aliased_public_control', 'aliased_public_clock', 'missing_scan_clock',
-    'changed_scan_clock', 'aliased_clock_domain', 'missing_select',
-    'changed_select', 'swapped_mode_values',
-])
-def test_d09_complete_control_authority_rejects_damage(tmp_path, monkeypatch, damage):
-    intent = _intent()
-    defs, mode = intent['test_port_def'], intent['test_mode']
-    if damage == 'missing_test': defs.pop('test')
-    if damage == 'missing_tck': defs.pop('tck')
-    if damage == 'changed_test': defs['test']['native'] = 'shift'
-    if damage == 'changed_tck': defs['tck']['native'] = 'clk'
-    if damage == 'aliased_public_control': defs['test']['public'] = defs['scan_enable']['public']
-    if damage == 'aliased_public_clock': defs['tck']['public'] = 'clk'
-    if damage == 'missing_scan_clock': mode.pop('scan_clock')
-    if damage == 'changed_scan_clock': mode['scan_clock'] = 'clk'
-    if damage == 'aliased_clock_domain': mode['scan_clock_domains'] = ['clk']
-    if damage == 'missing_select': mode.pop('clock_select')
-    if damage == 'changed_select': mode['clock_select']['native'] = 'shift'
-    if damage == 'swapped_mode_values': mode['clock_select'].update(functional_value=1, scan_value=0)
-    project = _planned(tmp_path, intent)
-    monkeypatch.setattr(S._fatpg, '_run_docker', lambda *a, **k: pytest.fail('native started'))
-    binding, problems = S.load_d09_dft_contract(project)
-    assert binding is None and problems[0].startswith('D09_DFT_AUTHORITY_INVALID:')
-    with pytest.raises(LL.Refusal, match='D09_DFT_AUTHORITY_INVALID'):
-        D.dft_scan_insertion_contract(project)
 
 
 def _wrong_control(text, mutation):

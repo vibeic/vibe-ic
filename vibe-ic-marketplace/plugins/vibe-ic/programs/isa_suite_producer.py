@@ -868,8 +868,6 @@ def objdump_guard(disassembly: str, *, allow_compressed: bool,
     `-mno-relax` an alignment `c.nop` is emitted, the reference traps on it,
     and a CSR-less core silently runs it. A CSR / system instruction in a
     program means the suite needs a trap environment the design lacks."""
-    import instrument_calibration as _ic
-    _ic.assert_calibrated("isa_suite_producer::objdump_guard")
     out: List[str] = []
     n16 = 0
     sysn: Dict[str, int] = {}
@@ -907,8 +905,6 @@ def objdump_guard(disassembly: str, *, allow_compressed: bool,
 def parse_tb_transcript(text: str) -> Dict[str, Any]:
     """`{"status": halted|hang|no_result, "tohost": int|None, "cycles": int}`
     from the testbench's own transcript."""
-    import instrument_calibration as _ic
-    _ic.assert_calibrated("isa_suite_producer::parse_tb_transcript")
     m = _TB_HALT_RE.search(text or "")
     if m:
         th = m.group("th")

@@ -59,7 +59,7 @@ are just views over it.
 | L8     | L8_TIMING_WAVEFORM.json        | 1     | core  |
 | L8R    | L8_RTL_CONSTANTS.json          | 1     | core  |
 | L9     | L9_INTEGRATION_SPEC.json       | 1     | core  |
-| **L10** | **L10_TEST_CASES.json**       | **1** | extension — CMD→RSP byte vectors used by `cmd_response_conformance_check` |
+| **L10** | **L10_TEST_CASES.json**       | **1** | extension — CMD→RSP byte vectors for native simulation |
 | **L11** | **L11_CALIBRATION.json**      | **1** | extension — platform-specific tuning tables; required `domain_clock` / `source_clock` / `scale_factor` |
 | **L12** | **L12_BEHAVIORAL_SEQUENCES.json** | **1** | extension — multi-step protocols (engineer mode unlock, CC reset, etc.) |
 | **L13** | **L13_LAB_CALIBRATION.json**  | **1+2b** | extension — Phase 1 fills the **contract** (criterion / criterion_params / tester); Phase 2 appends **evidence** (known_pass_bitstream + known_pass_transcript) |
@@ -204,7 +204,7 @@ re-rendering is a re-run of that track, not a separate skill invocation.
 | L11 | `L11_CALIBRATION.json` |
 | L12 | `L12_BEHAVIORAL_SEQUENCES.json` |
 | L13 | `L13_LAB_CALIBRATION.json` |
-| cross-layer | consistency is checked by `doc_consistency_no_unresolved_conflicts_check` |
+| cross-layer | AI review each admitted fact at its real consumer field against the provided source; read native results in `reports/flow_engine.json` against original requirements and disclose `NOT_MEASURED` where evidence is absent |
 
 The skills that DO ship for this stage are this `phase1` skill and the two
 verification-tier reviewers `phase1-output-verify` and
@@ -236,40 +236,16 @@ calling `tools/phase1_engine/cli.py` internally:
    no facts under their prefix exist (e.g. an IC with no L12 sequences
    simply doesn't get an `L12_BEHAVIORAL_SEQUENCES.json`).
 
-## Gates
+## Review the generated documents
 
-After render, the orchestrator runs the existing gate suite. Run the
-core four for every project; the extension gates fire only when the
-matching extension layer was rendered (or, for `no_protocol_consistency`,
-when L3 declares the sentinel).
+Read the current document-generation row and its native producer output.
+Compare the input documents with the owning generated fields. Check layer
+coverage, cross-layer consistency, units, clock scales, register and opcode
+semantics, and explicit absent-feature declarations. A missing requirement
+stays open until its producer carries it to the correct consumer.
 
-**Core (always run)**
-
-1. `phase1_doc_presence_check.py` — all 10 core L*.json present (L3 + L8R
-   skip cleanly when L1/L3 declares `protocol_present:false`, v0.57 D2).
-2. `phase1_consistency_check.py` — cross-layer consistency (K4 rules).
-3. `phase1_quality_parity_check.py` — spec_floor minimums met
-   (auto-resolves `--class-path` from `L1.class_path`, v0.56 A1).
-4. `json_schema_check.py` — each L*.json conforms to its skill profile.
-
-**Extension (conditional)**
-
-5. `layer_extension_presence_check.py` — required L10/L11/L12 categories
-   per the class template's `spec_floor`.
-6. `cmd_response_conformance_check.py` — each L10 vector drives RTL via
-   iverilog and matches expected response byte-for-byte (Phase 2).
-7. `clock_scale_consistency_check.py` — every L11 calibration entry
-   declares `domain_clock` / `source_clock` / `scale_factor`.
-8. `no_protocol_consistency_check.py` — when L3 sentinel is in effect,
-   verify no contradicting `command_set` / `crc` / L8R CRC constants
-   / class-floor opcode-count mismatches (v0.56 C3 / v0.57 D1).
-9. `hardware_pass_attestation_check.py` — Phase 1 reads the L13
-   **contract**; Phase 2 appends and re-reads with the real-tester
-   evidence (5 criterion types, v0.56 B4).
-
-All four core gates must exit 0 before Phase 2 can start. Extension
-gates that fire must also exit 0; gates whose trigger artefact is
-absent skip cleanly.
+Use the selected row's original requirements. Do not replace source review
+with a schema, receipt, persona-quality score or fixed document count.
 
 ## Agents
 
@@ -297,8 +273,8 @@ See `../../agents/ic-expert-agent.md`.
 | Class templates (K1) | `vibe-ic/agents/class_kb/templates/` |
 | Q-bank (K2) | `vibe-ic/agents/qbank/` |
 | Defaults (K3) | `vibe-ic/agents/defaults/` |
-| Consistency rules (K4) | `vibe-ic/programs/phase1_consistency_check.py` |
-| Runtime feedback (K5) | `vibe-ic/programs/phase1_k5_quality_check.py` + `tools/training/phase1_k5_autopatch.py` |
+| Consistency rules (K4) | Source facts and their owning generated fields |
+| Runtime feedback (K5) | Measured downstream failures and extractor regression cases |
 
 ## Legacy
 
@@ -311,22 +287,3 @@ were archived in v0.58. This file used to claim they were "restored to active
 in v0.60"; they were not, and none of them ships. Entry B
 (existing-Design-Documents → L1-L27) is served by the unified DOC→JSON track.
 See "Phase 1 layers and where each one is authored" above.
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/phase1/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in the corresponding skill directory enumerates
-every required element of your output: section headers, metadata fields,
-handoff lines, tool invocations.
-
-**Your task is not complete until the audit returns PASS.** Missing
-elements are the single largest source of skill-execution non-determinism
-across different agents.

@@ -41,7 +41,6 @@ if str(_PROG) not in sys.path:
     sys.path.insert(0, str(_PROG))
 
 import phase1_protocol_spec_extract as P                 # noqa: E402
-import protocol_detector_no_misfire_matrix as M          # noqa: E402
 from _hostpaths import corpus_path  # noqa: E402
 
 _FIX = Path(__file__).resolve().parent / "fixtures" / "synthetic_benchmark_phase1"
@@ -145,25 +144,8 @@ def test_corpus_present():
     assert n >= 8
 
 
-@pytest.mark.parametrize("proto", sorted(_DOCS))
-def test_own_detector_fires(proto):
-    dets = M.discover_detectors()
-    stem = _ALIAS.get(proto, proto)
-    if stem not in dets:
-        pytest.skip(f"no detector stem for {proto}")
-    assert dets[stem](_DOCS[proto]), f"{proto}: own detector did not fire"
 
 
-@pytest.mark.parametrize("proto", sorted(_DOCS))
-def test_no_foreign_detector_misfire(proto):
-    # no OTHER protocol's detector may claim this doc (recognizer precision). The
-    # matrix's gold allowlist covers the few faithful sub-clause fires.
-    dets = M.discover_detectors()
-    stem = _ALIAS.get(proto, proto)
-    allow = {b for (a, b) in M.ACCEPTABLE_GOLD_SUBCLAUSE_FIRES if a == stem}
-    foreign = [k for k, fn in dets.items()
-               if k != stem and k not in allow and fn(_DOCS[proto])]
-    assert not foreign, f"{proto}: foreign detectors misfired: {foreign}"
 
 
 def test_extractor_defers_on_descriptive_prose_no_fabrication():

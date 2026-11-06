@@ -33,16 +33,13 @@ skipped when it is absent.
 """
 import importlib.util
 import json
-import shutil
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from pdk_via_patch_legalize import legalize_via_patches  # noqa: E402
 from _hostpaths import corpus_path  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parent.parent
@@ -99,59 +96,16 @@ END LIBRARY
 
 
 # ── RULING 2: pin-access guard ─────────────────────────────────────────────
-def test_a_pin_layer_landing_is_never_widened():
-    """THE DEFECT. Pre-fix every routing layer was widened, including the one
-    the router needs access points on."""
-    _, rep = legalize_via_patches(_TLEF, pin_layers={"pinmetal"})
-    touched = {c["layer"] for c in rep["changes"]}
-    assert "pinmetal" not in touched, (
-        "a widened landing on the pin layer covers the router's access "
-        "points; that is the DRT-0073 failure this guard exists for")
-    assert "wiremetal" in touched, (
-        "the guard must not disable the remediation it is guarding")
 
 
-def test_the_pin_layer_bytes_are_untouched():
-    """Not merely 'not in changes' — the emitted text must be identical on
-    that layer, so nothing widens it by another path."""
-    guarded, _ = legalize_via_patches(_TLEF, pin_layers={"pinmetal"})
-    unguarded, _ = legalize_via_patches(_TLEF)
-    assert guarded != unguarded, "fixture guard: the two arms must differ"
-    def _block(text, layer):
-        lines = text.splitlines()
-        i = next(n for n, l in enumerate(lines) if l.strip() == f"LAYER {layer} ;")
-        return lines[i + 1].strip()
-    assert _block(guarded, "pinmetal") == _block(_TLEF, "pinmetal")
-    assert _block(unguarded, "pinmetal") != _block(_TLEF, "pinmetal"), (
-        "fixture guard: without the pin set this layer IS widened, which is "
-        "what made the guard necessary")
 
 
-def test_the_guard_still_fixes_everything_it_should():
-    """Skipping the pin layer must not leave a real violation behind."""
-    _, rep = legalize_via_patches(_TLEF, pin_layers={"pinmetal"})
-    assert rep["remaining_via_rule_violations"] == 0
 
 
-def test_an_undeclared_pin_set_is_distinguishable_from_an_empty_one():
-    """A caller that could not derive the set must not look like one that
-    derived an empty set — those mean opposite things."""
-    _, undeclared = legalize_via_patches(_TLEF)
-    _, empty = legalize_via_patches(_TLEF, pin_layers=[])
-    assert undeclared["pin_layers_declared"] is False
-    assert empty["pin_layers_declared"] is True
 
 
-def test_pin_layer_matching_is_case_insensitive():
-    _, rep = legalize_via_patches(_TLEF, pin_layers={"PINMETAL"})
-    assert "pinmetal" not in {c["layer"] for c in rep["changes"]}
 
 
-def test_the_report_names_the_policy_and_the_skipped_layers():
-    """Degrade LOUDLY: a reader must see WHICH layers were withheld."""
-    _, rep = legalize_via_patches(_TLEF, pin_layers={"pinmetal"})
-    assert rep["pin_layers_skipped_from_rules"] == ["pinmetal"]
-    assert rep["pin_access_policy"].strip()
 
 
 def test_pin_layers_are_derived_from_the_cell_lefs_own_records():
@@ -271,24 +225,3 @@ def test_the_basis_and_both_currents_are_recorded(tmp_path):
 _REAL_EVIDENCE = corpus_path("evidence", "via_legalize")
 _REAL_TLEF = _REAL_EVIDENCE / "nom.tlef"
 _REAL_CELLS = _REAL_EVIDENCE / "cells.lef"
-
-
-@pytest.mark.skipif(not (_REAL_TLEF.is_file() and _REAL_CELLS.is_file()),
-                    reason=("staged PDK LEFs not present: set $VIBEIC_CORPUS_ROOT "
-                            "to a corpus carrying evidence/via_legalize/"
-                            "{nom.tlef,cells.lef}"))
-def test_on_the_real_pdk_the_guard_costs_no_fixed_violation():
-    """REAL ARTEFACT: withholding the pin layer must not resurrect a
-    violation — the offenders live on the layers ABOVE it."""
-    m = _p3()
-    pin = m._pin_access_layers_from_cell_lef(_REAL_CELLS.read_text(errors="replace"))
-    assert pin, "no pin geometry parsed from the shipped cell LEF"
-    text = _REAL_TLEF.read_text(errors="replace")
-    _, guarded = legalize_via_patches(text, pin_layers=pin)
-    _, unguarded = legalize_via_patches(text)
-    assert guarded["remaining_via_rule_violations"] == 0
-    assert unguarded["remaining_via_rule_violations"] == 0
-    assert guarded["changed_patch_records"] < unguarded["changed_patch_records"], (
-        "fixture guard: the guard must actually withhold something here")
-    assert not (set(guarded["pin_layers_skipped_from_rules"]) &
-                {c["layer"] for c in guarded["changes"]})

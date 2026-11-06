@@ -30,11 +30,9 @@ THE SHAPE PROVEN HERE
 """
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
-import pytest
 
 PROGS = Path(__file__).resolve().parent.parent
 if str(PROGS) not in sys.path:
@@ -42,7 +40,6 @@ if str(PROGS) not in sys.path:
 
 import _tapeout_declaration as td            # noqa: E402
 import general_precheck as gp                # noqa: E402
-import phase3_one_shot_runner as r           # noqa: E402
 
 from test_general_precheck import (          # noqa: E402
     _die_at_origin, _project as _gp_project, _step, _NEVER_RAN)
@@ -51,108 +48,18 @@ _DEF = ("VERSION 5.8 ;\nDESIGN spm ;\nUNITS DISTANCE MICRONS 2000 ;\n"
         "DIEAREA ( 762000 762000 ) ( 4800000 4800000 ) ;\nEND DESIGN\n")
 
 
-class _Pdk:
-    tech_lef = "/foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc/tech.lef"
-    tech_lef_source = None
-    cell_lef = ""
-    liberty = ""
-    cell_gds = ""
 
 
-def _publisher_project(tmp_path: Path, deliverable: str | None = None) -> Path:
-    """The tree the publisher runs on, with the delivery DECLARED.
-
-    `deliverable` is written as an OWNER-ATTESTED answer, because that is the
-    state every project reaching this publisher is in: since R-0915-95 step
-    0.5ic HALTS until the owner answers it, and `_effective_deliverable` reads
-    the declaration's own answer. The fixture used to leave the declaration
-    blank and state the route through the `_declared_deliverable` mock alone,
-    so the two positive cases below were measuring the DERIVATION rather than
-    the declaration -- and this file's own header says an undeclared deliverable
-    publishes neither name. `deliverable=None` keeps exactly that blank tree for
-    the undeclared case, which is the one test that wants it.
-    """
-    (tmp_path / "input" / "submission_template").mkdir(parents=True)
-    doc = td.blank_declaration()
-    if deliverable is not None:
-        doc.setdefault("answers", {})["deliverable"] = deliverable
-        doc.setdefault(td.PROVENANCE_KEY, {})["deliverable"] = {
-            "answered_by": td.ANSWERED_BY_OWNER_VALUE,
-            "citation": "the owner's delivery answer at step 0.5ic — fixture"}
-    (tmp_path / td.DECLARATION_REL).write_text(json.dumps(doc, indent=2))
-    (tmp_path / "phase3" / "stage3" / "pnr").mkdir(parents=True)
-    (tmp_path / "phase3" / "stage3" / "pnr" / "routed.def").write_text(_DEF)
-    r._floorplan_rectangles_record(
-        tmp_path, die_rect=[0, 0, 3162, 3162], fp_rect=[381, 381, 2400, 2400],
-        die_source="--die-um 3162x3162 at the origin", core_pad=381,
-        ring_inset_um=380.4)
-    return tmp_path
 
 
-def _publish(project, monkeypatch, deliverable):
-    """Drive the publisher with the delivery route stated, and nothing else
-    mocked: the size pair is derived by the real `declared_die_rect`."""
-    monkeypatch.setattr(
-        r, "_declared_deliverable",
-        lambda _p: ((deliverable, "the test states the route") if deliverable
-                    else (None, "no route and no die sides")))
-    # The technology's seal-ring answer is vibe-ic#2112's business, not this
-    # one's; it needs a live container, so it is held OUT of this measurement.
-    monkeypatch.setattr(r, "_docker_exec", lambda *a, **k: (1, "", "no such"))
-    return r.publish_tapeout_declarations(
-        project, _Pdk(), "c", project / "phase3/stage3/pnr/routed.def", "spm")
 
 
 # ── the publisher, both deliverables ───────────────────────────────────────
 
-def test_a_hardmacro_publishes_a_macro_box_and_refuses_the_die_pair_by_name(
-        tmp_path, monkeypatch):
-    project = _publisher_project(tmp_path, td.DELIVERABLE_HARDMACRO)
-    rec = _publish(project, monkeypatch, td.DELIVERABLE_HARDMACRO)
-
-    assert "macro_area_um" in rec["published"], rec
-    assert "macro_origin_um" in rec["published"], rec
-    assert "die_area_um" not in rec["published"], rec
-    assert "die_origin_um" not in rec["published"], rec
-
-    for key in ("die_area_um", "die_origin_um"):
-        why = rec["not_determined"].get(key)
-        assert why, f"{key} was left silently absent, not refused: {rec}"
-        assert td.DELIVERABLE_HARDMACRO in why, why
-        assert "2118" in why, why
-
-    doc, err = td.load(project / td.DECLARATION_REL)
-    assert err is None
-    assert td.answer(doc, "macro_area_um") == [0, 0, 3162, 3162]
-    assert td.answer(doc, "macro_origin_um") == [0, 0]
-    assert td.answer(doc, "die_area_um") == td.NOT_DETERMINED
-    assert td.answer(doc, "die_origin_um") == td.NOT_DETERMINED
-    assert td.validate(doc) == [], "the declaration it wrote is well-formed"
 
 
-def test_a_die_publishes_exactly_what_it_always_did(tmp_path, monkeypatch):
-    """The control. A change that fixed the macro by disturbing the die would
-    be a different defect, so the die arm is pinned to the same values."""
-    project = _publisher_project(tmp_path, td.DELIVERABLE_DIE)
-    rec = _publish(project, monkeypatch, td.DELIVERABLE_DIE)
-
-    assert "die_area_um" in rec["published"] and "die_origin_um" in rec["published"]
-    assert "macro_area_um" not in rec["published"]
-    doc, _err = td.load(project / td.DECLARATION_REL)
-    assert td.answer(doc, "die_area_um") == [0, 0, 3162, 3162]
-    assert td.answer(doc, "die_origin_um") == [0, 0]
-    assert td.answer(doc, "macro_area_um") == td.NOT_DETERMINED
-    for key in ("macro_area_um", "macro_origin_um"):
-        assert td.DELIVERABLE_DIE in rec["not_determined"][key]
 
 
-def test_an_undeclared_deliverable_publishes_neither_name(tmp_path, monkeypatch):
-    project = _publisher_project(tmp_path)
-    rec = _publish(project, monkeypatch, None)
-    for key in ("die_area_um", "die_origin_um",
-                "macro_area_um", "macro_origin_um"):
-        assert key not in rec["published"], rec
-        assert "not known" in rec["not_determined"][key], rec["not_determined"]
 
 
 # ── the schema itself ──────────────────────────────────────────────────────

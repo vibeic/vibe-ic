@@ -113,8 +113,8 @@ requirements:
 #   X_cli_importable            — already discharged, and was before this
 #     change: `tools/phase1_engine/tests/` imports cli, ingest, render,
 #     schema and gap_detect directly, so a broken module fails those tests.
-#     `programs/tests/test_phase1_dead_postchecks_key.py` states the
-#     obligation by name so it is findable from here.
+#     The historical import-coverage regression recorded this obligation;
+#     use the surviving module tests for current verification.
 #   X_round_trip_byte_identical — MEASURED, and it does NOT hold today.
 #     `cli round-trip` over a checked-in 24-layer `generated_docs/` re-renders
 #     14 files, identically on three separate fixtures. Cause, read off the
@@ -122,5 +122,5 @@ requirements:
 #     `schema.ALL_LAYER_CODES` (L1..L13, 14 codes) while `render_layers` can
 #     write `GENERATABLE_LAYER_CODES` (28), so the opt-in advanced layers
 #     L14..L27 are written by Phase 1 and then dropped by the reverse-extract
-#     without a word. The same test file pins that shortfall by name, so it is
+#     without a word. That historical regression recorded the shortfall, so it is
 #     a number a reader can shrink rather than a claim in a key nobody read.

@@ -10,7 +10,6 @@ import pytest
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
-import phase3_one_shot_runner as p3  # noqa: E402
 import sdf_gate_sim as sdfsim  # noqa: E402
 import spice_correlation_check as spice  # noqa: E402
 
@@ -62,17 +61,6 @@ module unrelated; endmodule
     assert sdfsim.find_reusable_testbench(tmp_path, "neutral_top") is None
 
 
-def test_step29_capability_gap_is_only_an_observed_missing_tool(tmp_path):
-    sdf = tmp_path / "neutral.sdf"
-    sdf.write_text('(DELAYFILE (SDFVERSION "3.0"))\n')
-    flag, _ = p3._sdf_sim_skip_disclosure(
-        {"verdict": "NOT_APPLICABLE", "reason": "no simulator"}, sdf)
-    assert flag == "cap:sdf_gatelevel_simulator_toolchain"
-    for reason in ("port shape", "no pdk lib", "no self-checking testbench",
-                   "compile failed", "simulator probe failed"):
-        flag, _ = p3._sdf_sim_skip_disclosure(
-            {"verdict": "ERROR", "reason": reason}, sdf)
-        assert flag is None, reason
 
 
 def _neutral_liberty() -> str:
@@ -140,19 +128,6 @@ def test_step30_installed_deck_references_models_and_measures_path():
     assert ".meas tran tpd_rise" in deck
 
 
-def test_step30_capability_gap_is_only_an_observed_missing_tool():
-    flag, reason = p3._spice_correlation_skip_disclosure(
-        {"status": "NO_TOOL", "reason": "ngspice executable absent"})
-    assert flag == "cap:post_layout_spice_correlation"
-    assert "genuinely lacks" in reason
-    for result in (
-        {"status": "ERROR", "reason": "model unresolved"},
-        {"status": "ERROR", "reason": "ngspice execution failed"},
-        {"status": "ERROR", "reason": "critical path did not swing"},
-    ):
-        flag, reason = p3._spice_correlation_skip_disclosure(result)
-        assert flag is None
-        assert "not a capability gap" in reason
 
 
 def test_core_source_has_no_fixed_path_correlation_thresholds():

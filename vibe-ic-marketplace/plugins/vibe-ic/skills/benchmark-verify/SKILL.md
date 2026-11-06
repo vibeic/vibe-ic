@@ -1,6 +1,6 @@
 ---
 name: benchmark-verify
-description: "Normalized, MANDATORY end-to-end verification for any benchmark IC after it has been driven from Design Documents → generated RTL → silicon through the flow public entry. Produces ONE BENCHMARK_VERIFICATION_REPORT.md per IC covering all six pillars with hard gates: (1) Functional Verification Coverage == 100% (closed-loop until met), (2) current flow row/output comparison vs the open-source reference (every selected applicable row PASS), (3) Code Coverage line >= 90%, (4) FPGA digital verification (test patterns on-board/BFM), (5) Analog closed-loop verification (or N/A for pure-digital), (6) Design-for-ECO readiness — spare-cell coverage PASS + spare preservation intact (or N/A if the IC has no place-and-route). Use when: 'verify the benchmark', 'benchmark verification report', 'is this IC production-ready', 'cross-check vs open source', after a /vibe-ic-all invocation whose saved argv proves --flow 109, an explicit manifest/window and --execution-mode default, or for any IC in benchmark_clean/."
+description: "Normalized, MANDATORY end-to-end verification for any benchmark IC after it has been driven from Design Documents → generated RTL → silicon through the native table public entry. Produces ONE BENCHMARK_VERIFICATION_REPORT.md per IC covering all six pillars with hard gates: (1) Functional Verification Coverage == 100% (closed-loop until met), (2) native step/output comparison vs the open-source reference (every selected applicable row PASS), (3) Code Coverage line >= 90%, (4) FPGA digital verification (test patterns on-board/BFM), (5) Analog closed-loop verification (or N/A for pure-digital), (6) Design-for-ECO readiness — spare-cell coverage PASS + spare preservation intact (or N/A if the IC has no place-and-route). Use when: 'verify the benchmark', 'benchmark verification report', 'is this IC production-ready', 'cross-check vs open source', after a /vibe-ic-all invocation whose saved argv uses the public runner with a Router-selected window, or for any IC in benchmark_clean/."
 ---
 
 # Benchmark Verify — normalized doc→production-ready verification
@@ -20,10 +20,7 @@ Read `benchmark_clean/METHODOLOGY.md` first. Non-negotiable:
 - **Phase-2 RTL must be GENERATED**; IP reuse is allowed but **every reused source MUST be
   tagged `REUSED-IP` in `SOURCE_MANIFEST.md`** (vs `GENERATED`). Production-readiness credit
   applies only to GENERATED content; reused content is reported separately.
-- **No vacuous result counts as PASS** (e.g. a Magic `gds read` that dropped geometry and
-  reports "0 DRC" is INCONCLUSIVE, not clean). A missing input is **PENDING**, never a silent PASS.
-  *Enforced by `programs/drc_vacuous_pass_check.py`* — flips a 0-violation DRC verdict to
-  INCONCLUSIVE unless the log proves geometry was loaded; SKIPs (never PASSes) when no DRC log exists.
+- Read the native layout-tool log and DRC result together. A run that did not load the required geometry did not measure that geometry, even if it printed zero violations.
 - The upstream open-source IP is the **golden oracle for cross-check only** — never a Phase-1/2 input.
 
 ## The five pillars (== report sections == hard gates)
@@ -35,8 +32,7 @@ a program cannot reliably know that a prose timing sentence in L8 is a distinct 
 requirement (vs a restatement) nor author the directed test that covers it. For each requirement,
 bind a verification item (directed test, assertion, golden-vector check, or formal property) and
 confirm it PASSES against the generated RTL.
-- `Functional Coverage = verified_requirements / total_requirements` → **must be 100%**
-  (*the == 100% gate is enforced by `programs/benchmark_verify_report.py`*).
+- Write the benchmark report from the completed native results and official scoring outputs. Disclose cohort scope, unresolved cases and every unavailable measurement; do not fabricate an accepted score.
 - Emit `reports/functional_coverage.json`: `{"requirements":[{"id","source","desc","status":"PASS|FAIL|PENDING"}]}`.
 - **Closed-loop:** if < 100%, write the missing tests and/or fix the RTL (use `rtl-repair`)
   and re-verify until 100%. Do not waive a requirement; if a doc requirement is genuinely
@@ -62,59 +58,30 @@ confirm it PASSES against the generated RTL.
 > deterministic; deciding whether a prose sentence is a distinct *testable* requirement is the LLM
 > step above.)
 
-> **Independent differential self-verification (ORGANIC #700, BINDING — N-version):** #697 makes
-> the self-TB as *complete* as the hidden scorer, but a single agent that derives BOTH the RTL and
-> the self-TB from ONE reading still self-verifies **circularly** — a misread bakes into both
-> surfaces. Break the circularity by deriving a **reference model INDEPENDENTLY** (fresh reasoning,
-> not reusing the RTL derivation; explicitly enumerate + example-pin every ambiguous quantity —
-> latency / registered-vs-comb / off-by-one / packing / encoding) and cross-checking it against the
-> RTL every cycle:
-> ```bash
-> python3 programs/diff_verify_harness.py --rtl <rtl> --ref <independent_ref.py> \
->     --top <module> --vectors directed+random+boundary
-> ```
-> `AGREE` ⇒ the two independent derivations match every cycle; a first-mismatch line ⇒ a
-> designer-vs-reference DIFF — adjudicate by re-reading the spec, fix the wrong derivation, re-run.
-> Emit only after they AGREE. **Honest scope:** it catches OVERSIGHT misreads (one derivation
-> noticed a clause the other missed; empirically caught an hmac live-vs-latched read, 3471 diffs →
-> 0), NOT genuine ambiguity that biases all blind readings the same way nor benchmark spec↔TB
-> contradictions (FLOOR per #697; 0/8 on the hardest CVDP ambiguity residual). It is a COMPLEMENT to
-> #697 + #699, run BEFORE the scorer on fresh runs.
+> Verify behavior through the selected native simulator or formal tool. Keep benchmark oracle material outside author/reviewer environments and use only input-derived tests for design changes.
 
-### Pillar 2 — selected flow row outputs vs open-source reference  ▸ gate: **every applicable selected row PASS**
-Read the exact run's flow plan/request and enumerate its selected applicable
-rows by stable ID. Record each row's current 1-based `position` from the exact
-`flow/flow109.json` used by that run, but never use position as entry, exit, or
-acceptance authority. Compare OUR output for every selected applicable row
-against the reference's corresponding output. There is no fixed required row
-count: unselected and inapplicable rows are disclosed separately and cannot be
-counted as PASS. Comparison is **row-appropriate, not byte-identical**.
+### Pillar 2 — selected native step outputs vs open-source reference  ▸ gate: **every applicable selected row PASS**
+Read `flow/steps.json` and the exact run's selected `steps/<step-name>/result.json`
+results. Compare every selected applicable native tool output with the reference's
+corresponding output. Report the step's position in the run's complete `flow/steps.json` table and name.
+Unselected and inapplicable steps do not count as PASS. Compare engineering
+meaning rather than requiring identical bytes.
 
-*The step→class→comparison-method dispatch table and the legal verdict-token enum
-(MATCH / EQUIVALENT / IN-RANGE / BOTH-CLEAN / DIFFERENT-BUT-OK / N/A / GAP / NO-TOOL / FAIL) and
-which tokens count as PASS are enforced by `programs/benchmark_verify_report.py`* (its
-`STEP_METHOD`, `VERDICT_TOKENS`, `PASS_TOKENS`). The step classes are:
-**equivalence** (RTL/sim/formal/LEC/post-layout — LEC/co-sim/proof), **metric** (synth/SDC/DEF/
-CTS/STA/SPEF/power — magnitude in range), **clean** (lint/CDC/DRC/LVS/IR/EM/antenna/SI — both
-independently clean), **layout-endpoint** (GDS — both DRC/LVS/STA-clean + functional-equiv), **N/A**
-(analog A1–A9 / mixed-signal M1–M4 for a pure-digital IC; manufacturing for no-silicon).
+Write the benchmark report from the completed native results and official scoring outputs. Disclose cohort scope, unresolved cases and every unavailable measurement; do not fabricate an accepted score.
 
 **LLM judgment (irreducible):** for a *metric* step, deciding whether two magnitudes are in a
 *sensible* range (vs a hard threshold) requires understanding WHY they diverge; for a
 *layout-endpoint* step, deciding that a different micro-architecture (our carry-save vs the ref's
 array) is a *benign* divergence rather than a failure is design judgment, not a fixed compare.
 
-Produce one `cross_check/flow109/<stable-id>.md` per selected applicable row
-(stable ID, current position, what ran, OUR result, REF result, and verdict
+Produce one `cross_check/steps/<step-name>.md` per selected applicable row
+(step name, canonical position, what ran, OUR result, REF result, and verdict
 token from the enum above).
 **Close runnable GAPs** (e.g. run SPEF/IR/EM/antenna/power if the flow skipped them). Genuine
 NO-TOOL items (e.g. open-source full-chip fast-SPICE) are recorded honestly — and noted if the
 reference shares the same limitation. No step may be left unresolved.
 
-### Pillar 3 — Test Cases & Code Coverage  ▸ gate: **line coverage >= 90%**
-Author unit-test-style test cases (cocotb / SV testbench, via `eda_cocotb` / `eda_simulate`)
-for the generated RTL. *The coverage measurement + the >= 90% line-coverage gate are enforced by
-`programs/coverage_metric_check.py` / `coverage_closure.py` / `verilator_coverage_measure.py`.*
+Use native coverage results to select the next input-derived test. Rerun the simulator and retain the original coverage target and actual measured denominator. Read line, branch, toggle and assertion coverage from the actual native simulator. Compare coverage with the original requested target and add input-derived tests for the uncovered behavior.
 - **Line coverage >= 90%** (report branch + toggle too). Emit `reports/code_coverage.json`:
   `{"line_pct","branch_pct","toggle_pct"}`.
 - **Closed-loop:** below 90% → add test cases targeting the uncovered lines until >= 90%.
@@ -139,10 +106,7 @@ after placement and before CTS at ~1-5% density. The methodology is the **`desig
 skill. This pillar reads the two deterministic checker outputs:
 - **Coverage / readiness** — `reports/spare_cell_coverage.json` from
   `spare_cell_coverage_check.py`: density / distribution / tie-off targets met → `status: PASS`.
-- **Preservation** — `reports/spare_preservation.json` from `spare_cell_preservation_check.py`:
-  NO spare/ECO cell/gate/pad was optimized away by any later step → `all_keep_attr_intact: true`
-  and `removed: 0`. (Every optimization skill — synth-doctor, rtl-repair, hold-fix, eco-plan,
-  ppa-predict, drc-fix — carries the hard rule that it must never strip a keep-marked spare.)
+- Compare the native netlist or implementation database before and after optimization. Preserve every unused ECO spare, its keep attributes and the reserved pads; an unintentionally removed spare must be restored.
 
 **Applicability:** this gate applies to any **digital place-and-route IC** (a DEF/GDS exists
 under `phase3/`). It is **N/A** only for an IC that genuinely never reached place-and-route
@@ -152,9 +116,9 @@ restore any spare a prior optimization dropped) until coverage PASS + preservati
 
 ## Procedure (run for each benchmark IC)
 1. Confirm the IC reached the flow end (RTL generated + phase3 attempted). Read `SOURCE_MANIFEST.md`.
-2. **Pillar 2:** dispatch comparisons only for the stable IDs selected by the
+2. **Pillar 2:** dispatch comparisons only for the step names selected by the
    exact flow plan/request, keeping tool runs bounded. Write
-   `cross_check/flow109/<stable-id>.md` with the current registry position as
+   `cross_check/steps/<step-name>.md` with the current registry position as
    display metadata. Run REAL tools in `vibeic-eda`; close gaps.
 3. **Pillar 1:** build `reports/functional_coverage.json` from the L-doc requirements; close-loop to 100%.
 4. **Pillar 3:** author tests, measure coverage → `reports/code_coverage.json`; close-loop to >= 90%.
@@ -164,64 +128,46 @@ restore any spare a prior optimization dropped) until coverage PASS + preservati
     checkers → `reports/spare_cell_coverage.json` (readiness PASS) + `reports/spare_preservation.json`
     (`all_keep_attr_intact` + `removed:0`). N/A only if the IC never reached place-and-route.
 7. **Aggregate + gate** — generate the single report:
-   ```bash
-   python3 ${CLAUDE_PLUGIN_ROOT}/programs/benchmark_verify_report.py <project_dir> \
-       --ref <open_source_reference_dir>
-   ```
+Write the benchmark report from the completed native results and official scoring outputs. Disclose cohort scope, unresolved cases and every unavailable measurement; do not fabricate an accepted score.
    It emits `<project>/BENCHMARK_VERIFICATION_REPORT.md` with the 6-pillar gate summary +
    the complete selected-applicable flow row comparison table. The table must
-   identify every row by stable ID and current position and must not treat position
+   identify every row by step name and current position and must not treat position
    as execution authority. The gate remains non-PASS until every selected applicable
    row is represented and every pillar passes.
 8. **Close the loop** on any failing/pending gate, then re-aggregate. The benchmark IC is
    **DONE only when the report's OVERALL is PRODUCTION-READY** (functional 100% · every
-   selected applicable flow stable ID PASS · code line >= 90% · FPGA PASS · analog
+   selected applicable flow step name PASS · code line >= 90% · FPGA PASS · analog
    converged-or-N/A · Design-for-ECO ready-or-N/A) —
    with honest, evidence-backed results and source provenance tagged.
 
 ## Acceptance
 A benchmark IC passes `benchmark-verify` iff its `BENCHMARK_VERIFICATION_REPORT.md` shows:
 - Functional Coverage **100%**, and
-- Every selected applicable flow row = PASS, identified by its stable ID and
+- Every selected applicable flow row = PASS, identified by its step name and
   current position (no GAP/PENDING/FAIL/unexplained NO-TOOL); unselected or
   inapplicable rows are disclosed and never counted as PASS, and
 - Code line coverage **>= 90%**, and
 - FPGA digital verification **PASS** (or justified N/A), and
 - Analog **converged** (or N/A), and
-- **Design-for-ECO ready** — `reports/spare_cell_coverage.json` readiness PASS **and**
-  `reports/spare_preservation.json` `all_keep_attr_intact` + `removed:0` (or N/A if the IC has
-  no place-and-route); verified by `spare_cell_coverage_check.py` + `spare_cell_preservation_check.py`,
-  per the `design-for-eco` skill, and
+- Compare the native netlist or implementation database before and after optimization. Preserve every unused ECO spare, its keep attributes and the reserved pads; an unintentionally removed spare must be restored.
 - `SOURCE_MANIFEST.md` present with GENERATED/REUSED-IP tagged.
 Anything short of that is **NOT complete** — keep working (closed-loop), do not claim done.
 
-> **Plugin-test hard rule.** If the verification run modified any plugin code (e.g. a chip-agnostic fix to `benchmark_verify_report.py` or a checker), re-run the FULL suite before claiming done: `cd <plugin> && pytest -q` (pytest.ini collects BOTH `programs/tests/` AND `tests/`). Never validate with only `programs/tests/` — the integration/regression gates (INDEX freshness, every-skill-has-compliance, orchestrator branch tests) live in `tests/`. See `_shared/TESTING_STRATEGY.md`.
-> *Enforced by `programs/plugin_change_pytest_gate.py`* — detects changed plugin `*.py` (git or an explicit `--changed-files` list) and FAILs DONE unless `--pytest-log` attests a clean run that collected BOTH test trees; ERRORs (never silent-PASSes) when the change state can't be determined.
+If verification changes plugin code, run the relevant existing tests and the
+full suite when requested by the owner. Inspect the current `pytest.ini` and
+`run_tests.sh` discovery so the report distinguishes configured pytest
+collection from other test directories. Use `./run_tests.sh --list-tiers` to
+inspect that discovery and `./run_tests.sh` for the requested full run. Report
+the actual commands, collected and executed tests, failures, skips, and missing
+dependencies. A collection error is not a passing test; a log or added policy
+checker does not replace execution. Keep the IC coverage and engineering
+limits above unchanged.
 
 ## Worked example
 `benchmark_clean/spm/` is a report-shape example only: retain its RTL provenance,
 functional equivalence evidence, and signed-off DRC/LVS/STA evidence where their
-hashes remain current. For Pillar 2, derive the exact selected stable IDs from
+hashes remain current. For Pillar 2, derive the exact selected step names from
 the current flow plan/request, record each current registry position for
 display, and write one comparison per selected applicable row under
-`benchmark_clean/spm/cross_check/flow109/`. Historical fixed-count tables are
+`benchmark_clean/spm/cross_check/steps/`. Historical fixed-count tables are
 not current acceptance authority.
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/benchmark-verify/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in the corresponding skill directory enumerates
-every required element of your output: section headers, metadata fields,
-handoff lines, tool invocations.
-
-**Your task is not complete until the audit returns PASS.** Missing
-elements are the single largest source of skill-execution non-determinism
-across different agents.

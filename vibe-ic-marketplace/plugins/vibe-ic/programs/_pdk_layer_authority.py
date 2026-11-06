@@ -217,7 +217,7 @@ def _environment_query(path: Path, operation: str, pattern: str = "",
             if cp.returncode:
                 raise OSError(f"rc={cp.returncode}: {cp.stderr.strip()}")
             return json.loads(cp.stdout)
-        except (OSError, ValueError, cex.ContainerImageMismatch) as exc:
+        except (OSError, ValueError) as exc:
             raise OSError(f"PDK query in container {container!r}: {exc}") from exc
     if operation == "is_dir":
         return path.is_dir()

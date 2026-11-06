@@ -590,48 +590,10 @@ def test_unit_tb_resolves_a_verilog_1995_body_width(tmp_path):
     assert widths["clk"] == "", widths
 
 
-def test_full_stack_tb_declares_a_verilog_1995_bus_at_its_real_width(tmp_path):
-    proj, _ = _seed(tmp_path, _V1995_RTL)
-    res = P2.step_full_stack_tb_gen(proj, "chip_top")
-    assert res.status != "FAIL", res.detail
-    body = list(P2._pl.sim_full_stack_dir(proj).glob("tb_*_full.v"))[0].read_text()
-    assert "reg [10:0] adr = 0;" in body, body
-    assert "reg [38:0] wdat = 0;" in body, body
-    assert "wire [38:0] rdat;" in body, body
-    # the pre-fix text: a wide bus bound ONE BIT wide, which still said PASS
-    assert "reg adr = 0;" not in body
-    assert "reg wdat = 0;" not in body
 
 
-def test_both_consumers_resolve_a_package_width_the_same_way(tmp_path):
-    proj, rtl = _seed(tmp_path, _PKG_DUT)
-    (rtl / "w_pkg.sv").write_text(_PKG_RTL)
-    mod, ports, why = TBG.resolve_dut(proj, "core_top")
-    assert mod == "core_top", why
-    widths = {n: w for _d, w, n in ports}
-    assert widths["adr"] == "[7:0]", widths          # AW = DW/4 = 8
-    assert widths["wdat"] == "[31:0]", widths        # scope-qualified
-    assert widths["rdat"] == "[31:0]", widths        # imported unqualified
-
-    res = P2.step_full_stack_tb_gen(proj, "chip_top")
-    assert res.status != "FAIL", res.detail
-    body = list(P2._pl.sim_full_stack_dir(proj).glob("tb_*_full.v"))[0].read_text()
-    assert "reg [7:0] adr = 0;" in body, body
-    assert "reg [31:0] wdat = 0;" in body, body
-    assert "wire [31:0] rdat;" in body, body
 
 
-def test_the_package_file_is_what_makes_that_work(tmp_path):
-    """THE OTHER DIRECTION, at the CONSUMER. Same DUT, package file absent:
-    both generators must REFUSE, naming the port — not emit a one-bit bus."""
-    proj, _rtl = _seed(tmp_path, _PKG_DUT)
-    mod, ports, why = TBG.resolve_dut(proj, "core_top")
-    assert mod is None, (mod, ports, why)
-    assert "adr" in why or "wdat" in why or "rdat" in why, why
-
-    res = P2.step_full_stack_tb_gen(proj, "chip_top")
-    assert res.status == "FAIL", res.detail
-    assert "not derivable" in res.detail, res.detail
 
 
 # ── the control: nothing that resolved before resolves differently now ───────

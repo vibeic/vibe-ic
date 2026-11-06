@@ -33,7 +33,6 @@ PROGRAMS = PLUGIN / "programs"
 BUNDLED = PLUGIN / "tools" / "phase1_engine"
 
 sys.path.insert(0, str(PROGRAMS))
-import phase1_one_shot_runner as p1r  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
@@ -145,28 +144,8 @@ def test_bundled_class_kb_resolves_self_anchored():
     assert (kb / "class-tree.yaml").is_file()
 
 
-def test_runner_resolves_bundled_engine_first():
-    cli, tried = p1r._find_phase1_engine()
-    assert cli is not None and cli.is_file()
-    assert tried[0] == str(PLUGIN / "tools" / "phase1_engine" / "cli.py")
-    assert cli == Path(tried[0])  # bundle wins the chain
 
 
-def test_named_error_lists_searched_locations(tmp_path, monkeypatch):
-    # simulate "nothing resolves": point PROGRAMS_DIR into an empty tree
-    # and clear the env hint; the step must FAIL naming every location.
-    monkeypatch.setattr(p1r, "PROGRAMS_DIR", tmp_path / "nowhere" / "programs")
-    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-    monkeypatch.setattr(p1r.Path, "is_file",
-                        lambda self: False)  # no guesses resolve either
-    proj = tmp_path / "proj"
-    (proj / "input").mkdir(parents=True)
-    (proj / "input" / "phase1_prompt.md").write_text("a divider.")
-    res = p1r.step_ingest_render(proj, "x")
-    assert res.status == "FAIL"
-    assert "NOT FOUND" in res.detail
-    assert "Searched (in order)" in res.detail
-    assert "tools/phase1_engine/cli.py" in res.detail
 
 
 def test_install_smoke_bare_cache_layout(tmp_path):

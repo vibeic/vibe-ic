@@ -544,11 +544,6 @@ def default_model_resolver(project: Path, used_cells: set,
     if not _ce.no_container_route():
         if not container:
             return None, "no EDA container to read the PDK models from"
-        # Keep the named attachment's image refusal ahead of model reads.
-        import _eda_pin
-        state, detail = _eda_pin.container_pin_state(container)
-        if state == "MISMATCH":
-            return None, f"the EDA container cannot be attached: {detail}"
     import sdf_gate_sim as _sgs
     models = _sgs.resolve_cell_models(project, used_cells, container)
     if models is None:

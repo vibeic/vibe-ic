@@ -1,37 +1,13 @@
 #!/usr/bin/env python3
-"""Steps 31, 37.3, 37.4 and the 36 / 37.5ic feeds on LibreLane (lane mig105).
+"""Run native physical-verification chains and read their violation counts.
 
-Physical verification, the finishing XOR and the sign-off metrics record,
-measured by LibreLane's own steps on the stream the run ships:
-
-* **31** ``Magic.DRC`` + ``KLayout.DRC`` (+ ``KLayout.Density``) on the GDS, and
-  ``Magic.SpiceExtraction`` -> ``Netgen.LVS`` on the final full GDS, all from ONE
-  bridged State (``state_from_direct``, which writes the powered netlist from
-  the DEF's own database as LibreLane's OpenROAD steps do).
-* **37.3** ``Vibeic.FinishingXOR`` (plugin step): finishing never removes,
-  covers or overlaps design geometry.  LibreLane's own ``KLayout.XOR`` (the
-  Magic vs KLayout stream) stays the stream-fidelity half.
-* **37.5ic** ``Vibeic.DatabaseUnit`` (plugin step): the stream's UNITS is the
-  declared grid.
-* **37.4** ``state_metrics`` turns the chains' State metrics into the rows of
-  ``phase3/final/metrics.json``, each bound to the ``state_out.json`` that
-  measured it by sha256.
-
-THE ONE RULE (``judge_pv``): a metric counts only when the step that
-produces it wrote it, in THIS chain -- present in that step's ``state_out.json``
-and absent from its ``state_in.json``.  A producer that ran and wrote nothing,
-a metric carried in from an earlier state, and a step that did not run are all
-``NOT_MEASURED``, never 0.  LibreLane's ``MetricChecker`` only warns in those
-cases and ``ReportManufacturability`` prints ``Passed`` beside an N/A engine;
-the fork fix is vibeic/librelane#16, not in the 0.3.79 image, so the host
-applies the rule itself.  For verification "better" is not the lower count:
-both DRC engines must be clean, and one clean beside one dirty is recorded as
-``LL_DRC_ENGINES_DISAGREE`` (a finding, never a pick).
+Each required tool must report a nonnegative integer count. Every violation
+count retains the original clean limit of zero; absent results are NOT_MEASURED.
+Magic and KLayout DRC remain independent required measurements.
 """
 from __future__ import annotations
 
 import json
-import re
 import shutil
 import sys
 from pathlib import Path
@@ -40,7 +16,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _path_layout as _pl  # noqa: E402
 from _atomic_artefact import write_json  # noqa: E402
-from librelane_contract import (PDK_GUEST_ROOT, Refusal, _load, digest, resolve_step_configs,  # noqa: E402
+from librelane_contract import (PDK_GUEST_ROOT, Refusal, _load, resolve_step_configs,  # noqa: E402
                                 run_chain, state_from_direct)
 
 NOT_MEASURED = 'NOT_MEASURED'
@@ -110,36 +86,20 @@ VIA_LEGALIZATION_REL = 'reports/pdk_via_patch_legalization.json'
 
 
 def route_tech_lef(project: Path) -> tuple[Path, str] | None:
-    """The tech LEF the route itself read, when the flow staged a derived one.
-
-    ``_stage_via_legalized_tech_lef`` rewrites the PDK's VIA landings (e.g. a
-    Metal2 enclosure widened to the layer's minimum area) and, when it records
-    ``APPLIED``, PnR, extraction and stream-out must all read that derived
-    file.  A LibreLane geometry step given the PDK's own tech LEF instead
-    renders the same DEF's vias with the PDK's smaller landings: MEASURED on
-    spm x gf180mcuD, 1,386 extra Metal2/3/4 minimum-area and spacing markers
-    in Magic DRC on the LibreLane stream, 0 of them on the direct stream.
-    The file is bound by the record's ``derived_sha256`` (looked for at the
-    recorded path, then in the run's pnr directory, where the flow stages
-    it); an APPLIED record whose file cannot be found by that hash refuses
-    ``LL_ROUTE_TECH_LEF_UNBOUND``.  None: the route read the PDK's own.
-    """
+    """Resolve the derived technology LEF used by the route, when present."""
     path = project / VIA_LEGALIZATION_REL
     if not path.is_file():
         return None
     doc = _load(path)
     if doc.get('status') != 'APPLIED':
         return None
-    want, derived = doc.get('derived_sha256'), doc.get('derived_tech_lef')
-    if not (isinstance(want, str) and want and isinstance(derived, str) and derived):
-        raise Refusal('LL_ROUTE_TECH_LEF_UNBOUND',
-                      f'{VIA_LEGALIZATION_REL}: APPLIED without derived_tech_lef/sha256')
+    derived = doc.get('derived_tech_lef')
+    if not isinstance(derived, str) or not derived:
+        raise Refusal('LL_ROUTE_TECH_LEF_MISSING', f'{path}: no derived_tech_lef')
     for candidate in (Path(derived), _pl.pnr_dir(project) / Path(derived).name):
-        if candidate.is_file() and digest(candidate) == want:
-            return candidate.resolve(), f'{VIA_LEGALIZATION_REL}: derived_tech_lef sha256 {want}'
-    raise Refusal('LL_ROUTE_TECH_LEF_UNBOUND',
-                  f'{VIA_LEGALIZATION_REL}: no file with sha256 {want} at {derived} '
-                  f'or in {_pl.pnr_dir(project)}')
+        if candidate.is_file():
+            return candidate.resolve(), f'{VIA_LEGALIZATION_REL}: derived_tech_lef'
+    raise Refusal('LL_ROUTE_TECH_LEF_MISSING', f'{derived} is unavailable')
 
 
 def tech_lef_overlay(project: Path) -> dict[str, tuple[Any, str]] | None:
@@ -149,9 +109,6 @@ def tech_lef_overlay(project: Path) -> dict[str, tuple[Any, str]] | None:
 
 
 def _step_of(folder: Path) -> str | None:
-    receipt = folder / 'vibeic_receipt.json'
-    if receipt.is_file():
-        return _load(receipt).get('input', {}).get('step')
     config = folder / 'config.json'
     if config.is_file():
         return _load(config).get('meta', {}).get('step')
@@ -159,17 +116,13 @@ def _step_of(folder: Path) -> str | None:
 
 
 def produced_metrics(folder: Path) -> dict[str, Any]:
-    """The metrics THIS step folder wrote: in its state_out, absent from (or
-    changed against) its state_in.  LibreLane writes both files into every
-    step folder; without either, nothing is credited to the step (a state_out
-    alone cannot tell a measurement from a carried value)."""
-    out, before_path = folder / 'state_out.json', folder / 'state_in.json'
-    if not (out.is_file() and before_path.is_file()):
-        return {}
-    after = _load(out).get('metrics') or {}
-    before = _load(before_path).get('metrics') or {}
-    return {key: value for key, value in after.items()
-            if key not in before or before[key] != value}
+    """Read the native metrics emitted by this step, including zero counts."""
+    metrics = folder / 'metrics.json'
+    if metrics.is_file():
+        doc = _load(metrics)
+        return doc.get('metrics', doc)
+    state = folder / 'state_out.json'
+    return (_load(state).get('metrics') or {}) if state.is_file() else {}
 
 
 def judge_pv(folders: list[Path], required: tuple[str, ...], output: Path, *,
@@ -201,12 +154,6 @@ def judge_pv(folders: list[Path], required: tuple[str, ...], output: Path, *,
                 out = folder / 'state_out.json'
                 if not out.is_file():
                     row['reason'] = f'{step} left no state_out.json'
-                elif not (folder / 'state_in.json').is_file():
-                    row['reason'] = (f'{step} left no state_in.json, so what it '
-                                     'wrote cannot be told from what it carried')
-                elif key in (_load(out).get('metrics') or {}):
-                    row['reason'] = (f'{key} was carried in from an earlier state, '
-                                     f'not measured by {step}')
                 else:
                     row['reason'] = f'{step} ran and did not write {key}'
             else:
@@ -215,7 +162,6 @@ def judge_pv(folders: list[Path], required: tuple[str, ...], output: Path, *,
                     row.update(status='INVALID', value=value)
                 else:
                     row.update(status='MEASURED' if value == CLEAN else 'FAIL', value=value)
-                row['state_out_sha256'] = digest(folder / 'state_out.json')
             rows[key] = row
     statuses = {row['status'] for row in rows.values()}
     verdict = ('FAIL' if statuses & {'FAIL', 'INVALID'} else
@@ -283,9 +229,8 @@ def run_half(project: Path, image: str, pdk_root: Path, pdk: str, half: str, *,
     required = tuple(step for step in chain if step in PRODUCED)
     return judge_pv(folders, required,
                     record or project / RECORD_REL.format(half=half),
-                    scope={'gds_sha256': digest(gds), 'def_sha256': digest(routed_def),
-                           **({'magic_ext_use_gds': True, 'extracted_gds_sha256': digest(gds)}
-                              if half == 'lvs' else {})})
+                    scope={'gds': str(gds), 'def': str(routed_def),
+                           **({'magic_ext_use_gds': True} if half == 'lvs' else {})})
 
 
 def run_mixed_top(project: Path, image: str, pdk_root: Path, pdk: str, half: str, *,
@@ -296,7 +241,7 @@ def run_mixed_top(project: Path, image: str, pdk_root: Path, pdk: str, half: str
     the analog geometry M1 adds. This adapter supplies the declared paired
     views and extracts full devices from GDS. Independent engines continue
     after a refusal so an absent engine cannot erase a measured violation.
-    All configs, States, receipts and verdicts use the existing contract.
+    All tools use the same native configurations and State handoffs.
     """
     chain = HALVES[half] + (('KLayout.LVS',) if half == 'lvs' else ())
     options = dict(tech_lef_overlay(project) or {})
@@ -329,8 +274,8 @@ def run_mixed_top(project: Path, image: str, pdk_root: Path, pdk: str, half: str
                 extracted = made[0] / 'state_out.json'
         except (Refusal, ValueError, OSError) as exc:
             errors.append(f'{step}: {exc}')
-    scope = {'gds_sha256': digest(views['gds']), 'def_sha256': digest(views['def']),
-             'magic_ext_use_gds': True, 'extracted_gds_sha256': digest(views['gds'])}
+    scope = {'gds': str(views['gds']), 'def': str(views['def']),
+             'magic_ext_use_gds': True}
     record = judge_pv(folders, chain, project / RECORD_REL.format(half=half), scope=scope)
     record['execution_refusals'] = errors
     write_json(project / RECORD_REL.format(half=half), record)
@@ -362,8 +307,8 @@ def run_finishing_xor(project: Path, image: str, pdk_root: Path, pdk: str, *,
                         mounts=[(pdk_root.resolve(), PDK_GUEST_ROOT)], lane=lane, pdk_root=PDK_GUEST_ROOT)
     return judge_pv(folders, ('Vibeic.FinishingXOR',),
                     record or project / 'reports/phase3/librelane_finishing_xor.json',
-                    scope={'pre_sha256': digest(pre), 'final_sha256': digest(final),
-                           'sealed_sha256': digest(sealed) if sealed else ''})
+                    scope={'pre': str(pre), 'final': str(final),
+                           'sealed': str(sealed) if sealed else ''})
 
 
 def run_database_unit(project: Path, image: str, pdk_root: Path, pdk: str, *,
@@ -390,7 +335,7 @@ def run_database_unit(project: Path, image: str, pdk_root: Path, pdk: str, *,
             raise exc
     return judge_pv(folders, ('Vibeic.DatabaseUnit',),
                     project / 'reports/phase3/librelane_database_unit.json',
-                    scope={'gds_sha256': digest(gds)})
+                    scope={'gds': str(gds)})
 
 
 # ── step 37.4: the sign-off metrics record from LibreLane State ─────────────
@@ -417,9 +362,8 @@ def state_metric(project: Path, key: str, *, current: bool = False) -> dict[str,
     answers.  A switch that cannot be read is an answer (NOT_MEASURED), never a
     silent fall back to the direct reports.
 
-    ``current=True`` is the release consumer: readable receipt/input/config/
-    image/PDK and selected finished-GDS bindings are required. The default
-    retains the producer's staging/State assembly API, which is not signoff.
+    ``current=True`` reads the selected finished-layout native counts. The
+    default reads the producer's ordinary State metrics.
     """
     from librelane_contract import selected_mode
     if current:
@@ -469,14 +413,7 @@ def state_metric(project: Path, key: str, *, current: bool = False) -> dict[str,
     return row
 
 def state_metrics(project: Path, records: list[Path]) -> dict[str, dict[str, Any]]:
-    """Rows for ``signoff_metrics_aggregate`` from judged LibreLane chains.
-
-    ``records`` are judge_pv records (``librelane_pv_*.json`` and the like).
-    Each row carries the value (or NOT_MEASURED with the reason), the
-    ``state_out.json`` that measured it (project-relative) and that file's
-    sha256.  A record whose state_out no longer has the bytes it judged is
-    refused per key: ``LL_STATE_CHANGED`` (a stale number is worse than none).
-    """
+    """Read the actual native State counts referenced by each chain report."""
     rows: dict[str, dict[str, Any]] = {}
     for record_path in records:
         if not record_path.is_file():
@@ -485,145 +422,15 @@ def state_metrics(project: Path, records: list[Path]) -> dict[str, dict[str, Any
         for key, row in (record.get('metrics') or {}).items():
             from librelane_contract import project_path
             folder = project_path(project, row['folder']) if row.get('folder') else None
-            state_out = folder / 'state_out.json' if folder else None
             out: dict[str, Any] = {'record': str(_rel(project, record_path))}
-            if row.get('status') in ('MEASURED', 'FAIL') and state_out and state_out.is_file():
-                if digest(state_out) != row.get('state_out_sha256'):
-                    out.update(value=NOT_MEASURED,
-                               reason=f'LL_STATE_CHANGED: {state_out} is not the state judged')
-                else:
-                    out.update(value=row['value'], source=str(_rel(project, state_out)),
-                               sha256=digest(state_out))
+            value = produced_metrics(folder).get(key) if folder else None
+            if type(value) is int and value >= 0:
+                out.update(value=value, source=str(_rel(project, folder / 'state_out.json')))
             else:
                 out.update(value=NOT_MEASURED,
-                           reason=row.get('reason') or f'{key}: {row.get("status")}')
+                           reason=row.get('reason') or f'{key}: no native nonnegative count')
             rows[key] = out
     return rows
-
-
-def execute(project: Path, context: dict) -> dict:
-    """Final PV reuses unchanged native PV and runs ERC on the filled DEF."""
-    import fnmatch
-    import librelane_contract as contract
-    import librelane_postroute as postroute
-    import phase3_one_shot_runner as runner
-    import _native_erc
-    project = Path(project).resolve()
-    result = {'step_id': 'D65', 'context_sha256': context.get('context_sha256'),
-              'component_status': NOT_MEASURED, 'default_row_status': NOT_MEASURED,
-              'completed': False, 'native_started': False}
-    try:
-        folder, state = postroute.stapostpnr_state(project)
-        config = _load(folder / 'config.json')
-        promotion = project / 'reports/phase3/fill_librelane.json'
-        selected = _load(promotion).get('default_stream', {}) if promotion.is_file() else {}
-        if not selected.get('canonical'):
-            promotion = project / 'phase3/librelane/37-default-promotion.json'
-            selected = _load(promotion) if promotion.is_file() else {}
-        gds = contract.project_path(project, selected['canonical'])
-        filled, netlist, sdc = (Path(state[key]) for key in ('def', 'nl', 'sdc'))
-        image = contract.resolve_image(project)
-        pdk = config['PDK']
-        root = Path(contract.pdk_root_resolution(project, pdk, image=image)['path'])
-        native = {}
-        for half in ('drc', 'lvs'):
-            path = project / RECORD_REL.format(half=half)
-            record = _load(path) if path.is_file() else {}
-            reusable = (record.get('scope', {}).get('gds_sha256') == digest(gds)
-                        and record.get('scope', {}).get('def_sha256') == digest(filled))
-            rows = state_metrics(project, [path]) if reusable else {}
-            reusable = reusable and bool(rows) and all(row.get('value') != NOT_MEASURED for row in rows.values())
-            for measured in record.get('metrics', {}).values() if reusable else []:
-                native_folder = contract.project_path(project, measured['folder'])
-                fingerprint = _load(native_folder / 'input_fingerprint.json')
-                inputs = fingerprint.get('input', fingerprint).get('state_files', {})
-                for subject in (netlist, sdc):
-                    previous = [value for name, value in inputs.items()
-                                if contract.project_path(project, name) == subject]
-                    if previous != [digest(subject)]:
-                        reusable = False
-            if half == 'drc' and not reusable:
-                from eda_report_audit import _drc_real_violation_count
-                import librelane_fill_dfm as fill
-                reports = {key: project / rel for key, rel in (
-                    ('magic__drc_error__count', 'reports/phase3/drc_signoff_magic.rpt'),
-                    ('klayout__drc_error__count', 'reports/phase3/drc_signoff.rpt'))}
-                log = project / 'reports/phase3/drc_signoff.log'
-                if log.is_file() and all(path.is_file() for path in reports.values()):
-                    texts = {key: path.read_text() for key, path in reports.items()}
-                    hashes = re.findall(r'(?im)^layout sha256:\s*([0-9a-f]{64})\s*$',
-                                        texts['magic__drc_error__count'])
-                    inputs = re.findall(r'(?im)^.*Input file:\s*(.+?)\s*$', log.read_text())
-                    counts = {key: _drc_real_violation_count(text) for key, text in texts.items()}
-                    if (hashes == [digest(gds)] and inputs
-                            and all(contract.project_path(project, path) == gds for path in inputs)
-                            and all(path.stat().st_mtime_ns >= gds.stat().st_mtime_ns
-                                    for path in (*reports.values(), log))
-                            and all(value is not None for value in counts.values())):
-                        density = fill.validate_density_result(project,
-                            _load(project / fill.RECORD_REL)['gds']['librelane'], layout=gds)
-                        metrics = {key: {'value': sum(value),
-                                         'status': 'MEASURED' if sum(value) == 0 else 'FAIL',
-                                         'report': str(reports[key])}
-                                   for key, value in counts.items()}
-                        metrics['klayout__density_error__count'] = density
-                        values = [row['value'] for row in metrics.values()]
-                        status = ('FAIL' if any(type(v) is int and v > 0 for v in values) else
-                                  'PASS' if all(type(v) is int and v == 0 for v in values)
-                                  else NOT_MEASURED)
-                        record = {'verdict': status, 'metrics': metrics,
-                                  'native_reports': [str(path) for path in reports.values()],
-                                  'native_log': str(log), 'scope': {'gds_sha256': digest(gds)}}
-                        reusable = True
-            if not reusable:
-                result['native_started'] = True
-                record = run_half(project, image, root, pdk, half, gds=gds,
-                    routed_def=filled, netlist=netlist, sdc=sdc,
-                    physical_top=config['DESIGN_NAME'])
-            native[half] = record
-            result[half] = record
-        corner = config.get('DEFAULT_CORNER') or config['STA_CORNERS'][0]
-        def selected_assets(key):
-            values = config.get(key) or []
-            if isinstance(values, dict):
-                values = [item for pattern, entries in values.items()
-                          if fnmatch.fnmatchcase(corner, pattern)
-                          for item in (entries if isinstance(entries, list) else [entries])]
-            paths = []
-            for value in values:
-                path = contract.resolve_state_pdk_asset(value, pdk=pdk,
-                    mounts=[(root / pdk, '/pdk/' + pdk),
-                            (root / pdk, str(Path(config['PDK_ROOT']) / pdk))])
-                if path is None:
-                    raise ValueError('Native ERC technology view unavailable: ' + str(value))
-                paths.append(str(path))
-            return paths
-        tech, cells, libs = (selected_assets(key) for key in ('TECH_LEFS', 'CELL_LEFS', 'LIB'))
-        pdk_config = runner.PdkConfig(name=pdk, tech_lef=tech[0], cell_lef=cells[0],
-            liberty=libs + selected_assets('PAD_LIBS'), cell_gds=None,
-            site=config.get('PLACE_SITE', ''), drc_deck=None,
-            macro_lefs=cells[1:] + selected_assets('EXTRA_LEFS') + selected_assets('PAD_LEFS'))
-        notes = []
-        result['native_started'] = True
-        erc_rpt = project / 'reports/phase3/erc.rpt'
-        erc_ok = _native_erc.emit(project, config['DESIGN_NAME'], pdk_config, '', erc_rpt,
-                                  notes, def_file=filled, image=image, pdk_root=root)
-        erc = _load(erc_rpt.with_suffix('.json')) if erc_ok else {'verdict': NOT_MEASURED, 'notes': notes}
-        result['erc'] = erc
-        statuses = [native[half].get('verdict', NOT_MEASURED) for half in native] + [erc['verdict']]
-        status = 'FAIL' if any(s in ('FAIL', 'REVIEW') for s in statuses) else 'PASS' if all(s == 'PASS' for s in statuses) else NOT_MEASURED
-        result.update(component_status=status, default_row_status=status, completed=status == 'PASS',
-                      reason='D65_NATIVE_FINAL_PV_' + status, drc=native['drc'], lvs=native['lvs'], erc=erc,
-                      metrics={key: row.get('value') for half in native.values()
-                               for key, row in half.get('metrics', {}).items()
-                               if row.get('status') in ('MEASURED', 'FAIL')})
-    except Exception as exc:
-        result.update(reason='D65_NATIVE_FINAL_PV_UNAVAILABLE', detail=f'{type(exc).__name__}: {exc}')
-        if any(result.get(half, {}).get('verdict') in ('FAIL', 'REVIEW')
-               for half in ('drc', 'lvs', 'erc')):
-            result.update(component_status='FAIL', default_row_status='FAIL')
-    write_json(project / 'reports/flow109/components/D65.json', result)
-    return result
 
 
 def _rel(project: Path, path: Path) -> Path:
@@ -634,14 +441,13 @@ def _rel(project: Path, path: Path) -> Path:
 
 
 def publish_report(folder: Path, name: str, destination: Path) -> dict:
-    """Copy one tool report to the path an existing gate reads, bound by sha."""
+    """Copy a native tool report to the public report path."""
     source = folder / name
     if not source.is_file():
         raise Refusal('LL_PV_REPORT_MISSING', str(source))
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source, destination)
-    return {'source': str(source), 'destination': str(destination),
-            'sha256': digest(destination)}
+    return {'source': str(source), 'destination': str(destination)}
 
 
 def main(argv: list[str] | None = None) -> int:

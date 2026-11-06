@@ -141,7 +141,7 @@ def _resolve_interface(project, original, population=None):
         a7.model_binding_lines((bdir / (block + ".sp")).read_text(), bdir, post.parent))
     if post.read_text() != rebuilt:
         refuse("A7 post-layout view differs from the current extracted circuit")
-    _, macros, views, netlist, detail, _ = m1.current_merge_inputs(project, data["top"])
+    _, macros, views, netlist, detail = m1.current_merge_inputs(project, data["top"])
     expected_instances = {(view["canonical"]["block"], view["canonical"]["instance"]) for view in population}
     actual_instances = [(cell, item["inst"]) for cell, items in detail["placements"].items() for item in items]
     if ({p.stem for p in macros} != expected_blocks or len(actual_instances) != len(expected_instances)
@@ -157,22 +157,17 @@ def _resolve_interface(project, original, population=None):
         refuse("A7 and current routed timing use different PDKs")
     if data["digital"]["netlist"] != str(netlist.relative_to(project)):
         refuse("the digital wrapper is not M1's current netlist")
-    retained_inputs = set()
 
     def model_paths(values):
         paths = []
         for value in values:
             path = Path(value) if Path(value).is_absolute() else n.local(project, value)
-            if not path.resolve().is_relative_to(project.resolve()):
-                # The step's guest namespace names the retained host material;
-                # a conventional /pdk name alone does not identify that root.
+            if not path.is_file():
                 roots = n.api().read(folder / "pdk_root.json")
-                mapping = [(guest, host) for host, guest in roots["mounts_under_it"]]
-                mapped = localise_mounted_paths(value, mapping)
-                path = Path(mapped)
-                if mapped == value or not path.is_file():
-                    refuse("the routed timing model path is unavailable")
-                retained_inputs.add(folder / "pdk_root.json")
+                mapping = [(guest, host) for host, guest in roots.get("mounts_under_it", [])]
+                path = Path(localise_mounted_paths(value, mapping))
+            if not path.is_file():
+                refuse("native PDK model is unavailable: " + value)
             paths.append(path)
         return paths
 
@@ -326,10 +321,11 @@ def _resolve_interface(project, original, population=None):
             if target not in model_inputs:
                 model_inputs.add(target)
                 pending.append(target)
-    inputs = {str(p.relative_to(project)) for p in [block_list, record_path, bdir / "topology.json",
+    inputs = {str(p.relative_to(project)) for p in [block_list, record_path, bdir / "pre_vs_post.json", bdir / "topology.json",
         bdir / (block + ".sp"), extracted, post,
-        project / "reports/analog/mixed_signal/power_domain_tool/netlist.json",
-        project / postroute.STEP23_RECORD, folder / "config.json", folder / c["sta_corner"] / "sta.log", *libs, *model_inputs, *logical_sources, *retained_inputs]}
+        project / "reports/analog/mixed_signal/top_lvs.json",
+        project / "reports/analog/mixed_signal/power_domain_run.json", project / "reports/analog/mixed_signal/power_domain_tool/netlist.json",
+        project / postroute.STEP23_RECORD, folder / "config.json", folder / c["sta_corner"] / "sta.log", *libs, *model_inputs, *logical_sources]}
     inputs.update(timing[k] for k in ("sta_netlist", "sdc", "spef", "state"))
     data["si"] = {**data["si"], "netlist": timing["sta_netlist"], "sdc": timing["sdc"],
                   "spef": timing["spef"], "liberties": [str(p.relative_to(project)) for p in libs]}
@@ -381,7 +377,6 @@ def deck(project, data, row, drive, wave):
         refuse("noise bias must lie inside the current rails")
     if m["temperature_c"] is None:
         refuse("current Liberty temperature is unavailable")
-    model_sha = n.api().digest(n.local(project, m["post"]))
     lines = ["* Current A7 + same-PDK driver + actual SPEF R/C; no analytical augmentation",
              *(f'.include "{n.local(project, p)}"' for p in m["driver_sources"]),
              f'.include "{n.local(project, m["post"])}"', f'.temp {m["temperature_c"]:.17g}',
@@ -419,7 +414,7 @@ def deck(project, data, row, drive, wave):
         f"echo M3RUN {token}", f'tran {step * 1e-9:.17g} {cycles * period * 1e-9:.17g}',
         f'wrdata wave.txt v(live_{sense_index})', f'wrdata coupling.txt v(live_{sense_index}) v(reference_{sense_index})',
         f"echo M3DONE {token}", "unset sqrnoise",
-        f'echo M3NOISE_RUN {token} {row["id"]} {model_sha}',
+        f'echo M3NOISE_RUN {token} {row["id"]}',
         f'noise v(live_{sense_index}) Vdrive dec {count} {start:.17g} {stop:.17g}',
         "setplot noise1", "wrdata spectrum.txt onoise_spectrum", "setplot noise2",
         "wrdata integrated.txt onoise_total", "print onoise_total", f'echo M3NOISE_DONE {token} {row["id"]}',
@@ -465,7 +460,7 @@ def measure(project, data, row, work, token):
     criteria = [{**c, "measured": peak, "verdict": "PASS" if c.get("min", 0) <= peak <= c["max"] else "FAIL"}
                 for c in data["canonical"]["crosstalk"]["criteria"]]
     spec = {**data["canonical"]["noise"], "id": row["id"], "top": data["top"], "scope": SCOPE,
-            "analysis": "ngspice_noise", "model": m["post"], "model_sha256": n.api().digest(n.local(project, m["post"])),
+            "analysis": "ngspice_noise", "model": m["post"],
             "subckt": m["block"], "temperature_c": m["temperature_c"]}
     # derive() checks the independent scalar/spectrum, actual band and tokens.
     noise_spec = noise.derive(project, spec, work, token, log_name="ngspice.log")

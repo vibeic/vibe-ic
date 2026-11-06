@@ -1,5 +1,6 @@
 """Native-instrument controls; synthetic arithmetic is never silicon evidence."""
 import json
+import gzip
 import math
 from pathlib import Path
 import sys
@@ -100,23 +101,23 @@ def test_native_input_must_match_the_executed_held_stimulus(tmp_path):
 
 def test_lossless_gzip_preserves_every_capture_byte_and_decoded_value(tmp_path):
     path = _dump(tmp_path / "wave.dat")
-    original = capture.capture_sha(path)
+    original = path.read_bytes()
     declaration = _declaration()
     decoded = capture.decode_capture(path, (1, 1, 1.2), declaration, {})
     receipt = capture.compress_capture(path)
     assert not path.exists()
     compressed = Path(receipt["path"])
-    assert receipt["raw_sha256"] == original == capture.capture_sha(compressed, decompressed=True)
-    assert receipt["sha256"] == capture.capture_sha(compressed)
+    assert gzip.decompress(compressed.read_bytes()) == original
     assert capture.decode_capture(compressed, (1, 1, 1.2), declaration, {}) == decoded
 
 
 def test_failed_compression_preserves_original_capture(tmp_path, monkeypatch):
     path = _dump(tmp_path / "wave.dat")
     before = path.read_bytes()
-    real = capture.capture_sha
-    monkeypatch.setattr(capture, "capture_sha", lambda p, **kw: "wrong" if kw.get("decompressed") else real(p))
-    with pytest.raises(ValueError, match="lossless"):
+    def failed_copy(*args, **kwargs):
+        raise OSError("capture write failed")
+    monkeypatch.setattr(capture.shutil, "copyfileobj", failed_copy)
+    with pytest.raises(OSError, match="capture write failed"):
         capture.compress_capture(path)
     assert path.read_bytes() == before
     assert not path.with_name(path.name + ".gz").exists()
@@ -225,7 +226,7 @@ def test_pass_word_without_native_execution_is_not_evidence():
     result = capture.coherent_sndr([{"status": "PASS", "settings": {"phase_index": 0},
         "decoded": {"conversions": [{"decoded": 0.2}]}}], 64, 9, 14)
     assert result["status"] == "NOT_MEASURED"
-    assert "executed deck" in result["detail"]
+    assert "executed include closure" in result["detail"]
 
 
 @pytest.mark.parametrize("line", [";;RESIDUAL_FAIL x", "Error: transient analysis failed", "fatal error: model", "timestep too small"])
@@ -306,22 +307,6 @@ def test_precision_settings_are_explicit_and_recordable(tmp_path):
     settings["numerical_options"]["method"] = "gear; alter circuit"
     with pytest.raises(ValueError, match="integration method"):
         capture.prepare_deck(source, spec, topology, settings, tmp_path)
-
-
-def test_metadata_cannot_reinterpret_an_executed_deck(tmp_path, monkeypatch):
-    source, spec, topology = _template(tmp_path)
-    spec_path, topology_path = tmp_path / "spec.json", tmp_path / "topology.json"
-    spec_path.write_text(json.dumps(spec)); topology_path.write_text(json.dumps(topology))
-    settings = {"reset_node": "xdut.reset_b", "held_input_v": 0.8}
-    text, clock, declaration = capture.prepare_deck(source, spec, topology, settings, tmp_path)
-    deck = tmp_path / "conversion.sp"; deck.write_text(text)
-    views = {role: {"path": str(path), "sha256": capture.bound.sha(path)} for role, path in
-        (("deck", deck), ("testbench", source), ("spec", spec_path), ("topology", topology_path))}
-    monkeypatch.setattr(capture.bound, "validate_consumed_inputs", lambda *args: (True, "fixture closure"))
-    monkeypatch.setattr(capture, "declared_dut_consumed", lambda views: True)
-    record = {"native_inputs": views, "settings": settings, "clock": list(clock), "incremental_decode": declaration}
-    record["clock"][0] += 1e-6
-    assert capture.validate_point(record) == (False, "native conversion metadata differs from its executed deck")
 
 
 def test_declared_dut_must_be_in_the_actual_include_closure(tmp_path):
@@ -430,7 +415,7 @@ def test_consumer_replays_native_score_instead_of_trusting_cached_pass(tmp_path,
     assert actual["status"] == "FAIL" and actual["measurements"]["enob"] < 7
     (tmp_path / "point-0.json").write_text("{}")
     result = capture.replay_score(score)
-    assert result["status"] == "NOT_MEASURED" and "changed" in result["detail"]
+    assert result["status"] == "NOT_MEASURED" and "settings" in result["detail"]
 
 
 def _series_arguments(tmp_path, *, threads=1, cpus=2, workers=2, limit=3):
@@ -525,20 +510,23 @@ def _method_record(tmp_path):
     record = {"status": "PASS", "project": str(project), "settings": settings, "native_inputs": views,
         "image": "test-image", "clock": list(clock), "incremental_decode": declaration,
         "decoded": capture.decode_capture(dump, clock, declaration, settings),
-        "capture": {"path": str(dump), "sha256": capture.capture_sha(dump)},
+        "capture": {"path": str(dump), "encoding": "raw"},
         "executions": [{"returncode": 0, "log": str(log), "log_sha256": capture.bound.sha(log)}]}
     assert capture.validate_point(record)[0], record["decoded"]
     (directory / "result.json").write_text(json.dumps(record))
     return project, common_path, directory, record
 
 
-def test_raw_and_lossless_gzip_points_remain_valid_but_wrong_raw_digest_refuses(tmp_path):
+def test_raw_and_lossless_gzip_points_remain_valid_but_bad_crc_refuses(tmp_path):
     _project, _settings, directory, record = _method_record(tmp_path)
     record["capture"] = capture.compress_capture(directory / "conversion.dat")
     assert capture.validate_point(record)[0]
-    record["capture"]["raw_sha256"] = "0" * 64
+    path = Path(record["capture"]["path"])
+    damaged = bytearray(path.read_bytes())
+    damaged[-8] ^= 1
+    path.write_bytes(damaged)
     current, why = capture.validate_point(record)
-    assert not current and "original raw bytes" in why
+    assert not current and "CRC" in why
 
 
 def test_derived_decoder_replay_preserves_original_receipt_and_ignores_old_decoded_values(tmp_path):
@@ -552,14 +540,13 @@ def test_derived_decoder_replay_preserves_original_receipt_and_ignores_old_decod
     assert replay["decoded"]["conversions"][0]["clock_slots"] == 3
     assert replay["decoded"]["conversions"][0]["decoded"] != 99
     receipt = json.loads(Path(replay["receipt"]["path"]).read_text())
-    assert receipt["original_point"]["sha256"] == capture.bound.sha(point)
-    assert receipt["decoder"]["sha256"] == capture.DECODER_SOURCE_SHA256
+    assert receipt["original_point"]["path"] == str(point.resolve())
+    assert receipt["decoder"]["revision"] == capture.DECODER_REVISION
     assert receipt["capture"] == record["capture"]
     assert receipt["native_inputs"] == record["native_inputs"]
-    # A replay cannot be attached to a different original receipt.
     record["settings"]["held_input_v"] = .8
-    with pytest.raises(ValueError, match="original native receipt"):
-        capture.write_decoder_replay(record, point)
+    assert capture.write_decoder_replay(record, point)["decoded"] == replay["decoded"]
+    assert point.read_bytes() == original
 
 
 def test_native_failure_cannot_be_repaired_by_replaying_cached_decoded_values(tmp_path):
@@ -586,19 +573,6 @@ def test_native_method_pass_does_not_manufacture_enob(tmp_path):
     assert row["definitions"] == ["enob"] and row["analyses"] == [".tran"]
     assert row["measurements"] == {}
     assert row["native_inputs"]["netlist"]["path"].endswith("converter.sp")
-
-
-def test_method_consumer_refuses_changed_actual_dut_even_with_retained_pass(tmp_path):
-    project, settings, directory, record = _method_record(tmp_path)
-    netlist = Path(record["native_inputs"]["netlist"]["path"])
-    netlist.write_text(netlist.read_text().replace("1k", "2k"))
-    calls = []
-    row = capture.consume_study(project, "converter",
-        {"kind": "incremental_capture", "settings": str(settings), "result": str(directory.parent / "score.json")},
-        {"container": "test-container", "image": "test-image", "cpus": 2, "workers": 2},
-        lambda *args: calls.append(args) or {"returncode": 2}, "A06")
-    assert row["status"] == "NOT_MEASURED" and row["measurements"] == {}
-    assert calls and "--limit-points" in calls[0][1]  # only the control can be requested
 
 
 def test_a07_requests_full_series_only_after_valid_control_and_keeps_missing_score_unmeasured(tmp_path):

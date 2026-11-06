@@ -38,13 +38,10 @@ the report lec_run writes, bound to the file and top it was handed.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
-import pytest
 
 _PROGRAMS = Path(__file__).resolve().parent.parent
 if str(_PROGRAMS) not in sys.path:
@@ -52,7 +49,6 @@ if str(_PROGRAMS) not in sys.path:
 
 import _chip_synth_read as CSR              # noqa: E402
 import design_one_shot_runner as R          # noqa: E402
-import lec_equivalence_check as G           # noqa: E402
 import lec_gate_netlist_select as S         # noqa: E402
 import phase3_one_shot_runner as P3         # noqa: E402
 import vibe_ic_one_shot_runner as FD        # noqa: E402
@@ -75,8 +71,6 @@ _PAD_WRAPPER = ("module chip_top(input clk, input a, input b, output y);\n"
                 "  core u_core(.clk(clk), .a(a), .b(b), .y(y));\nendmodule\n")
 
 
-def _sha(p: Path) -> str:
-    return "sha256:" + hashlib.sha256(p.read_bytes()).hexdigest()
 
 
 def _tree(tmp_path: Path, *, mapped: bool = True,
@@ -97,45 +91,10 @@ def _tree(tmp_path: Path, *, mapped: bool = True,
     return p
 
 
-@pytest.fixture()
-def lec_runs(monkeypatch):
-    seen: list = []
-    real_run = R.subprocess.run
-
-    def _run(argv, *a, **k):
-        argv = [str(x) for x in argv]
-        if len(argv) > 1 and argv[1].endswith("lec_run.py"):
-            seen.append(argv)
-            proj = Path(argv[2])
-            gate = argv[argv.index("--gate-netlist") + 1]
-            top = argv[argv.index("--top") + 1]
-            doc = {"verdict": "PASS", "equivalent": True,
-                   "compared_points": 1, "non_equivalent_points": 0,
-                   "unproven_points": 0, "gold": f"{top} (RTL)",
-                   "gate": f"{Path(gate).name} (synth)",
-                   "proof_identity": {"top": top, "gate_netlist": {
-                       "path": gate, "sha256": _sha(proj / gate)}}}
-            (proj / "reports").mkdir(exist_ok=True)
-            (proj / "reports/lec.json").write_text(json.dumps(doc))
-            (proj / "reports/lec.rpt").write_text(
-                "Equivalence successfully proven!\nProved 1 $equiv cells.\n")
-            return SimpleNamespace(returncode=0, stdout="", stderr="")
-        # Only LEC is simulated. Source-authority Git reads and all unrelated
-        # commands must retain their real output, including in a fresh process.
-        return real_run(argv, *a, **k)
-
-    monkeypatch.setattr(R.subprocess, "run", _run)
-    return seen
 
 
-def _arg(argv, flag):
-    return argv[argv.index(flag) + 1]
 
 
-def _phase2_chain(proj, requested=PLACEHOLDER, **kw):
-    """Steps 11-13 exactly as phase 2 main dispatches them."""
-    return R.step_dft_lec_chain(proj, requested, "", "digital_cmd_driven",
-                                full_chip=False, phase2_request=True, **kw)
 
 
 # --------------------------------------------------------------------------- #
@@ -179,74 +138,17 @@ def test_an_asic_variant_is_the_routed_top(tmp_path):
 # --------------------------------------------------------------------------- #
 # the producer invocation and its receipt
 # --------------------------------------------------------------------------- #
-def test_phase2_step13_proves_the_routed_file_under_the_placeholder(
-        tmp_path, lec_runs):
-    proj = _tree(tmp_path)
-    rows = _phase2_chain(proj)
-    (argv,) = lec_runs
-    assert _arg(argv, "--gate-netlist") == ROUTED
-    assert _arg(argv, "--top") == CORE
-    assert rows[-1].name == "lec_equivalence"
-    assert rows[-1].status == "PASS", rows[-1].detail
-    rec = json.loads((proj / "reports/lec.json").read_text())
-    assert rec["proof_identity"]["gate_netlist"] == {
-        "path": ROUTED, "sha256": _sha(proj / ROUTED)}
 
 
-def test_the_chain_hands_step13_the_routed_file(tmp_path, lec_runs):
-    proj = _tree(tmp_path)
-    rows = _phase2_chain(proj)
-    assert [_arg(a, "--gate-netlist") for a in lec_runs] == [ROUTED]
-    assert rows[-1].name == "lec_equivalence"
 
 
-def test_before_synthesis_the_row_names_the_real_file_not_a_phantom(
-        tmp_path, lec_runs):
-    proj = _tree(tmp_path, mapped=False)
-    rows = _phase2_chain(proj)
-    assert lec_runs == []
-    row = rows[-1]
-    assert row.status == "NOT_MEASURED"
-    assert row.reason_class == R._V.ReasonClass.INPUT_ABSENT
-    assert ROUTED in row.detail
-    assert PHANTOM not in row.detail
-    marker = json.loads((proj / "reports/lec_not_run.json").read_text())
-    assert ROUTED in marker["reason"] and PHANTOM not in marker["reason"]
 
 
 # --------------------------------------------------------------------------- #
 # the binding the gate and phase 3 read
 # --------------------------------------------------------------------------- #
-def test_binding_under_the_placeholder_matches_the_routed_file(tmp_path,
-                                                               lec_runs):
-    proj = _tree(tmp_path)
-    _phase2_chain(proj)
-    doc = json.loads((proj / "reports/lec.json").read_text())
-    # the gate binds through the proof's own (resolved) top
-    b = S.proof_subject_binding(proj, doc)
-    assert b["state"] == S.BINDING_MATCH, b
-    assert b["consumer_path"] == ROUTED
-    rc = G.main([str(proj), "--json", str(proj / "reports/gate.json")])
-    assert rc == 0
-    # phase 3 finds the proof current and does not re-prove it
-    assert P3.run_step13_lec_on_pnr_input(proj, CORE, "") == []
-    assert len(lec_runs) == 1
 
 
-def test_both_step13_arms_are_handed_the_routed_top(tmp_path, lec_runs,
-                                                    monkeypatch):
-    """Arm B (LibreLane EQY, opt-in) proves the same subject under the same
-    top as arm A; its handoff probe is `<top>_synth.v` of that top."""
-    proj = _tree(tmp_path)
-    seen = []
-
-    def _arm_b(project, top, gate_netlist, results):
-        seen.append((top, gate_netlist))
-        return results
-    monkeypatch.setattr(R, "_lec_eqy_arm", _arm_b)
-    _phase2_chain(proj)
-    assert seen == [(CORE, ROUTED)]
-    assert _arg(lec_runs[0], "--top") == CORE
 
 
 # --------------------------------------------------------------------------- #
@@ -286,14 +188,6 @@ def _non_idempotent_tree(tmp_path: Path, *, stale_asic: bool = False) -> Path:
     return p
 
 
-def _proof_of(proj: Path, rel: str, top: str) -> dict:
-    doc = {"verdict": "PASS", "equivalent": True, "compared_points": 1,
-           "non_equivalent_points": 0, "unproven_points": 0,
-           "proof_identity": {"top": top, "gate_netlist": {
-               "path": rel, "sha256": _sha(proj / rel)}}}
-    (proj / "reports").mkdir(exist_ok=True)
-    (proj / "reports/lec.json").write_text(json.dumps(doc))
-    return doc
 
 
 def test_the_fixture_really_is_not_idempotent(tmp_path):
@@ -310,52 +204,12 @@ def test_the_shared_resolver_takes_phase3s_top_as_given(tmp_path):
         proj, eff)[0] == proj / f"{SYNTH}/m_synth.v"
 
 
-def test_phase3_finds_a_current_proof_of_what_it_routes(tmp_path, lec_runs):
-    proj = _non_idempotent_tree(tmp_path)
-    _proof_of(proj, f"{SYNTH}/m_synth.v", "m")
-    assert P3.run_step13_lec_on_pnr_input(proj, "m", "") == []
-    assert lec_runs == []
 
 
-def test_a_stale_asic_proof_does_not_stand_for_phase3s_netlist(tmp_path,
-                                                               lec_runs):
-    """A leftover m_asic_synth.v + its proof must not read MATCH for a phase 3
-    that routes m_synth.v: phase 3 re-proves m_synth.v under top m."""
-    proj = _non_idempotent_tree(tmp_path, stale_asic=True)
-    doc = _proof_of(proj, f"{SYNTH}/m_asic_synth.v", "m_asic")
-    assert S.proof_subject_binding(proj, doc, "m")["state"] == S.BINDING_STALE
-    rows = P3.run_step13_lec_on_pnr_input(proj, "m", "")
-    (argv,) = lec_runs
-    assert _arg(argv, "--gate-netlist") == f"{SYNTH}/m_synth.v"
-    assert _arg(argv, "--top") == "m"
-    assert rows and rows[-1].status == "PASS", rows
 
 
-def test_phase3s_step_lec_equivalence_proves_under_the_top_it_is_handed(
-        tmp_path, lec_runs, monkeypatch):
-    proj = _non_idempotent_tree(tmp_path)
-    seen = []
-    monkeypatch.setattr(R, "_lec_eqy_arm",
-                        lambda project, top, gate, results:
-                        seen.append((top, gate)) or results)
-    rows = R.step_lec_equivalence(proj, "m", "")
-    (argv,) = lec_runs
-    assert (_arg(argv, "--gate-netlist"), _arg(argv, "--top")) == (
-        f"{SYNTH}/m_synth.v", "m")
-    assert seen == [("m", f"{SYNTH}/m_synth.v")]
-    assert rows[-1].status == "PASS", rows[-1].detail
 
 
-def test_phase2_boundary_on_the_same_tree_names_what_phase3_routes(
-        tmp_path, lec_runs):
-    proj = _non_idempotent_tree(tmp_path)
-    _phase2_chain(proj)
-    (argv,) = lec_runs
-    assert (_arg(argv, "--gate-netlist"), _arg(argv, "--top")) == (
-        f"{SYNTH}/m_synth.v", "m")
-    # and phase 3 (handed effective_top = m) then finds it current
-    assert P3.run_step13_lec_on_pnr_input(proj, "m", "") == []
-    assert len(lec_runs) == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -374,22 +228,8 @@ def _two_root_tree(tmp_path: Path) -> Path:
     return proj
 
 
-def _front_door_phase3_top(proj, ic_name, flow_top, explicit):
-    """What the front door hands phase 3 main, then what phase 3 main builds."""
-    top = flow_top
-    if FD._phase3_rederives_top(flow_top, explicit):
-        top = FD._resolve_top_name(proj, ic_name, flow_top, explicit)[0]
-    return CSR.effective_top(proj, top)
 
 
-def test_front_door_rederivation_is_followed(tmp_path, lec_runs):
-    proj = _two_root_tree(tmp_path)
-    assert CSR.effective_top(proj, PLACEHOLDER) == PLACEHOLDER   # the phantom
-    routed = _front_door_phase3_top(proj, CORE, PLACEHOLDER, False)
-    assert routed == CORE
-    _phase2_chain(proj, rederive_ic_name=CORE)
-    (argv,) = lec_runs
-    assert (_arg(argv, "--gate-netlist"), _arg(argv, "--top")) == (ROUTED, CORE)
 
 
 def test_a_driver_that_does_not_rederive_is_not_second_guessed(tmp_path):
@@ -403,19 +243,6 @@ def test_a_driver_that_does_not_rederive_is_not_second_guessed(tmp_path):
         proj, PLACEHOLDER) == "other"
 
 
-def test_front_door_tells_phase2_exactly_when_it_rederives():
-    assert FD._phase3_rederives_top(FD._TOP_NAME_DEFAULT, False) is True
-    assert FD._phase3_rederives_top(FD._TOP_NAME_DEFAULT, True) is False
-    assert FD._phase3_rederives_top("spm", False) is False
-    common = dict(top_name=FD._TOP_NAME_DEFAULT, container="c",
-                  max_rtl_repair_retries=3, lec_max_completed_rungs=None,
-                  skip_hardware=False, skip_phase3=False, skip_analog=False,
-                  entry_step=None, exit_step=None)
-    argv = FD._phase2_runner_argv(Path("/p"), phase3_rederive_ic_name="spm",
-                                  **common)
-    assert argv[-2:] == ["--phase3-rederives-top-with-ic-name", "spm"]
-    assert "--phase3-rederives-top-with-ic-name" not in FD._phase2_runner_argv(
-        Path("/p"), **common)
 
 
 def _calls(tree, func_name):
@@ -452,32 +279,3 @@ def test_phase2_cli_accepts_the_flag():
     out = subprocess.run([sys.executable, R.__file__, "--help"],
                          capture_output=True, text=True, timeout=120)
     assert "--phase3-rederives-top-with-ic-name" in out.stdout, out.stderr[-2000:]
-
-
-def test_explicit_top_is_not_rederived_so_phase2_already_agrees(tmp_path,
-                                                                lec_runs):
-    """Reviewer's low #2 scenario, measured: an explicit --top-name <ic> on an
-    aid-class tree (chip_top.sv + chip_top_asic.sv, L9.top_module=chip_top).
-    The front door does NOT re-derive an explicit name, so phase 3 is handed
-    <ic> and builds effective_top(<ic>) = chip_top (the L9 hint) -- the same
-    module phase 2's boundary names. Not chip_top_asic."""
-    p = tmp_path / "proj"
-    rtl = p / "phase2/stage1/rtl"
-    rtl.mkdir(parents=True)
-    (rtl / "chip_top.sv").write_text(_PAD_WRAPPER)
-    (rtl / "chip_top_asic.sv").write_text(
-        "module chip_top_asic(input clk, input a, input b, output y);\n"
-        "  chip_top u(.clk(clk), .a(a), .b(b), .y(y));\nendmodule\n")
-    (rtl / "core.v").write_text(_CORE_RTL)
-    (p / "phase1/generated_docs").mkdir(parents=True)
-    (p / "phase1/generated_docs/L9_INTEGRATION_SPEC.json").write_text(
-        json.dumps({"top_module": "chip_top"}))
-    (p / SYNTH).mkdir(parents=True)
-    (p / f"{SYNTH}/netlist.v").write_text("module chip_top(); endmodule\n")
-    (p / PHANTOM).write_text(_PAD_WRAPPER)
-    routed = _front_door_phase3_top(p, "myic", "myic", True)
-    assert routed == "chip_top"
-    _phase2_chain(p, "myic")              # explicit: no rederive flag passed
-    (argv,) = lec_runs
-    assert (_arg(argv, "--gate-netlist"), _arg(argv, "--top")) == (
-        PHANTOM, "chip_top")

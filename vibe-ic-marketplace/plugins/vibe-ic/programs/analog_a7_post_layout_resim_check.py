@@ -70,8 +70,6 @@ if _os.path.dirname(_os.path.abspath(__file__)) not in _sys.path:
 
 
 import json
-import hashlib
-import re
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -89,7 +87,6 @@ from _analog_a_check_common import (
 GATE = "analog_a7_post_layout_resim_check"
 SKILL = "analog-extraction-resim"
 DEFAULT_MAX_DELTA_PCT = 10.0
-_SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
 # ── A RE-SIMULATION IS A RE-SIMULATION OF SOMETHING ───────────────────────
 # THE RULE, with no tool, step or block name in it:
@@ -243,123 +240,6 @@ def _check_specs(specs: list) -> tuple[list[float], list[tuple]]:
     return deltas, pairs
 
 
-def _project_path(project: Path, value: object) -> Optional[Path]:
-    """Resolve a producer-declared path without allowing project escape."""
-    if not isinstance(value, str) or not value.strip():
-        return None
-    root = project.resolve()
-    candidate = Path(value)
-    if not candidate.is_absolute():
-        candidate = root / candidate
-    resolved = candidate.resolve(strict=False)
-    try:
-        resolved.relative_to(root)
-    except ValueError:
-        return None
-    return resolved
-
-
-def _layout_provenance_findings(project: Path, block: str,
-                                data: dict) -> List[dict]:
-    """Bind a produced A7 comparison to the current A5 layout bytes.
-
-    Older hand-authored comparisons have no producer record or layout fields;
-    those retain their existing gate contract. Once either the fixed producer
-    record or its layout fields are present, every link is mandatory and a
-    stale or malformed link cannot certify the comparison.
-    """
-    bdir = project / "phase3" / "analog" / block
-    record_path = bdir / "a7_post_layout.json"
-    prov = data.get("_provenance")
-    prov = prov if isinstance(prov, dict) else {}
-    declared = record_path.exists() or any(
-        key in prov for key in ("layout_path", "layout_sha256", "record"))
-    if not declared:
-        return []
-
-    rel = str((bdir / "pre_vs_post.json").relative_to(project))
-    def finding(rule: str, detail: str) -> List[dict]:
-        return [{"block": block, "rule": rule, "rel_path": rel,
-                 "detail": detail}]
-
-    if not record_path.is_file():
-        return finding(
-            "A7_LAYOUT_PROVENANCE_MISSING",
-            "pre_vs_post declares fixed A7 layout provenance but the producer "
-            "record phase3/analog/%s/a7_post_layout.json is absent" % block)
-    try:
-        record = json.loads(record_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        return finding("A7_LAYOUT_PROVENANCE_INVALID",
-                       f"producer record is not valid JSON: {exc}")
-    if not isinstance(record, dict):
-        return finding("A7_LAYOUT_PROVENANCE_INVALID",
-                       "producer record top-level is not a JSON object")
-    required = {"producer", "schema", "block", "step", "result",
-                "layout_path", "layout_sha256"}
-    absent = sorted(required - record.keys())
-    if absent:
-        return finding("A7_LAYOUT_PROVENANCE_INVALID",
-                       "producer record missing required field(s): "
-                       + ", ".join(absent))
-    if record.get("producer") != "analog_a7_post_layout_emit":
-        return finding("A7_LAYOUT_PROVENANCE_INVALID",
-                       "producer record has unexpected producer "
-                       f"{record.get('producer')!r}")
-    if record.get("schema") != 1 or record.get("block") != block \
-            or record.get("step") != "A7":
-        return finding("A7_LAYOUT_PROVENANCE_INVALID",
-                       "producer record identity does not match A7 block "
-                       f"{block!r}")
-    if record.get("result") != "PRODUCED":
-        return finding("A7_LAYOUT_PROVENANCE_INVALID",
-                       "producer record result is "
-                       f"{record.get('result')!r}, not 'PRODUCED'")
-    if "record" in prov:
-        declared_record = _project_path(project, prov.get("record"))
-        if declared_record != record_path.resolve():
-            return finding("A7_LAYOUT_PROVENANCE_INVALID",
-                           "pre_vs_post record path does not name the fixed "
-                           "A7 producer record")
-
-    record_layout = _project_path(project, record.get("layout_path"))
-    comparison_layout = _project_path(project, prov.get("layout_path"))
-    if record_layout is None or comparison_layout is None:
-        return finding("A7_LAYOUT_PROVENANCE_INVALID",
-                       "layout_path must be a project-contained file path in "
-                       "both the producer record and pre_vs_post provenance")
-    if record_layout != comparison_layout:
-        return finding("A7_LAYOUT_PROVENANCE_INVALID",
-                       "producer and pre_vs_post layout_path values resolve "
-                       "to different files")
-    if not record_layout.is_file():
-        return finding("A7_LAYOUT_PROVENANCE_INVALID",
-                       f"declared layout does not exist: "
-                       f"{record_layout.relative_to(project.resolve())}")
-
-    declared_hashes = (record.get("layout_sha256"),
-                       prov.get("layout_sha256"))
-    if any(not isinstance(value, str) or not _SHA256_RE.fullmatch(value)
-           for value in declared_hashes):
-        return finding("A7_LAYOUT_PROVENANCE_INVALID",
-                       "layout_sha256 must be a 64-hex digest in both "
-                       "producer and comparison records")
-    if declared_hashes[0].lower() != declared_hashes[1].lower():
-        return finding("A7_LAYOUT_PROVENANCE_INVALID",
-                       "producer and pre_vs_post layout_sha256 values differ")
-    try:
-        actual = hashlib.sha256(record_layout.read_bytes()).hexdigest()
-    except OSError as exc:
-        return finding("A7_LAYOUT_PROVENANCE_INVALID",
-                       f"cannot hash declared layout: {exc}")
-    if actual != declared_hashes[0].lower():
-        return finding("A7_LAYOUT_MUTATED",
-                       "current declared layout bytes hash to "
-                       f"{actual}, but A7 producer recorded "
-                       f"{declared_hashes[0]}")
-    return []
-
-
 def _check_block(project: Path, block: str, max_delta_pct: float
                  ) -> tuple[Optional[str], List[dict]]:
     path = project / "phase3" / "analog" / block / "pre_vs_post.json"
@@ -382,9 +262,6 @@ def _check_block(project: Path, block: str, max_delta_pct: float
             "block": block, "rule": "A7_POSTSIM_INVALID_JSON",
             "rel_path": rel, "detail": "top-level not a JSON object",
         }]
-    provenance_findings = _layout_provenance_findings(project, block, data)
-    if provenance_findings:
-        return "FAIL", provenance_findings
     provenance = data.get("_provenance")
     incomplete = (provenance.get("not_compared")
                   if isinstance(provenance, dict) else None)

@@ -23,88 +23,28 @@ PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 import phase3_one_shot_runner as R  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _prestream_admission_fixture import admit_fixture_layout  # noqa: E402
 
 
-def _write_map(p: Path) -> Path:
-    p.write_text("MET1 drawing 9 0\nVIA1 drawing 10 0\nMET2 drawing 11 0\n")
-    return p
 
 
 # ---------------------------------------------------------------------------
 # Declared map (the bundle that stages `lef/*.lef` without the sibling map)
 # ---------------------------------------------------------------------------
-def test_declared_layermap_resolves_relative_to_pdk_dir(tmp_path: Path):
-    _write_map(tmp_path / "streamout.map")
-    got = R._declared_lefdef_layermap(
-        tmp_path, {"lefdef_layermap": "streamout.map"})
-    assert got == str(tmp_path / "streamout.map")
 
 
-def test_declared_layermap_accepts_absolute_path(tmp_path: Path):
-    m = _write_map(tmp_path / "abs.map")
-    assert R._declared_lefdef_layermap(tmp_path,
-                                       {"lefdef_layermap": str(m)}) == str(m)
 
 
-def test_declared_layermap_none_when_undeclared_or_absent(tmp_path: Path):
-    assert R._declared_lefdef_layermap(tmp_path, {}) is None
-    assert R._declared_lefdef_layermap(
-        tmp_path, {"lefdef_layermap": "missing.map"}) is None
 
 
-def test_discovery_still_finds_a_staged_vendor_map(tmp_path: Path):
-    """The declaration supplements glob discovery; it does not replace it."""
-    lef = tmp_path / "lef"
-    lef.mkdir()
-    _write_map(lef / "KF_common_layermap_for_SOC_encounter.txt")
-    assert R._discover_lefdef_layermap(tmp_path) is not None
 
 
 # ---------------------------------------------------------------------------
 # The gate
 # ---------------------------------------------------------------------------
-def _pdk(**kw):
-    base = dict(name="t", liberty="l", tech_lef="t.lef", cell_lef="c.lef",
-                cell_gds="c.gds", site="s", drc_deck=None, metal_prefix="met")
-    base.update(kw)
-    return R.PdkConfig(**base)
 
 
-def test_signoff_streamout_without_map_fails(tmp_path: Path, monkeypatch):
-    """A foundry deck is present and no map was resolved → FAIL, not PASS."""
-    pnr = tmp_path / "phase3" / "stage3" / "pnr"
-    pnr.mkdir(parents=True)
-    (pnr / "top.def").write_text("DESIGN top ;\nEND DESIGN\n")
-    monkeypatch.setattr(R._pl, "pnr_dir", lambda _p: pnr)
-    pdk = _pdk(calibre_drc="/pdk/deck.rule", lefdef_layermap=None)
-    # v1.24.73 (#2635): admit the fixture's routed basis, or the step stops
-    # at the pre-stream boundary and the map gate is never reached.
-    admit_fixture_layout(monkeypatch, R, tmp_path, "top", pdk, "container")
-
-    res = R.step_gds(tmp_path, "top", pdk, "container")
-    assert res.status == "FAIL"
-    assert "layer map" in res.detail.lower()
 
 
-def test_no_foundry_deck_keeps_legacy_path_open(tmp_path: Path, monkeypatch):
-    """OSS PDKs are not gated: without a vendor deck there is no foundry
-    numbering to conform to, so the streamout proceeds as before."""
-    pnr = tmp_path / "phase3" / "stage3" / "pnr"
-    pnr.mkdir(parents=True)
-    (pnr / "top.def").write_text("DESIGN top ;\nEND DESIGN\n")
-    monkeypatch.setattr(R._pl, "pnr_dir", lambda _p: pnr)
-    monkeypatch.setattr(R, "_magic_def_to_gds",
-                        lambda *a, **k: (False, "no magic"))
-    monkeypatch.setattr(R, "_docker_exec", lambda *a, **k: (1, "", "no tool"))
-    pdk = _pdk(calibre_drc=None, lefdef_layermap=None)
-    # Admitted too, so this negative arm is measured behind the pre-stream
-    # boundary rather than passing on the admission refusal's text.
-    admit_fixture_layout(monkeypatch, R, tmp_path, "top", pdk, "container")
-
-    res = R.step_gds(tmp_path, "top", pdk, "container")
-    # It may still fail for want of a tool, but never for the map reason.
-    assert "layer map" not in res.detail.lower()
 
 
 def test_pdkconfig_carries_signoff_config_path():

@@ -113,21 +113,24 @@ design INPUT — prompt + provided context — never the oracle / harness / gold
 ### § IC-EXPERT OPERATING MAP — phase → step → program → gate → skill (when/where to trigger)
 
 The canonical, machine-readable sources you MUST consult (never guess the flow):
-`flow/phase1_phase2_phase3.yaml` (the 44-step single source of truth, enforced by
-`flow_compliance_check.py` — never claim PASS without its exit 0) and
-`benchmark/CAPTURE_ROUTING.json` (step → program → skill). The readable summary:
+`flow/steps.json` (the ordered table for the sole engine path),
+`reports/flow_engine.json` from the normal public runner, and
+`benchmark/CAPTURE_ROUTING.json` (program → skill). Use each row's current table
+position and `name`. Read each native report, actual value and original limit,
+then AI review its meaning. Missing native data remains `NOT_MEASURED`; a
+summary or deferred obligation cannot establish PASS. The readable summary:
 
 | Phase / step | Trigger a PROGRAM (deterministic, first) | then a GATE / SKILL (verify / judge / repair) |
 |---|---|---|
 | **P1** NL/docs → L1-L27 JSON | `phase1_one_shot_runner.py` (+`phase1_engine/ingest.py`) | IC-Expert dialogue + `phase1-completeness-deep-review`, `phase1-output-verify` |
 | **P2** detect ic_class | `ic_class_profile.py` | — (dispatch decision) |
-| **P2** RTL authoring | `rtl_hygiene_lint.py --fix` (hygiene) | AI authors via `spec-to-rtl` when `rtl_gen=null`; wrap in `chip_top_gate_wrapper_gen.py` |
+| **P2** RTL authoring | Selected deterministic producer and native validation tools | `spec-to-rtl` authors missing RTL or integration glue when the producer returns its fallback |
 | **P2** synth | `design_one_shot_runner.py` (yosys) | `synth-doctor` |
 | **P2** reference TB | `bit_level_full_stack_tb_check.py` | `phase2-rtl-verify` |
 | **P2** ECO / repair loop | `design_one_shot_runner.py` | `rtl-repair`, `eco-plan` |
 | **P2** spec conformance | `spec_conformance_check.py` | `spec-review` |
 | **P2** lint / equivalence | `rtl_hygiene_lint.py` / `equivalence-check` | `rtl-review` |
-| **P2** final audit | `flow_compliance_check.py` | `checkpoint-gate` |
+| **P2** native-result review | Per-row native reports in `reports/flow_engine.json`, against original limits | `phase2-rtl-verify`, `rtl-review` |
 | **P3** synth→PnR→CTS | `phase3_one_shot_runner.py` | `synth-doctor`, `sta-review`, `hold-fix` |
 | **P3** DRC / LVS / STA / IR | `phase3_one_shot_runner.py` | `drc-fix`, `lvs-triage`, `sta-review`, `ir-drop-triage` |
 | **Analog A2-A9** | `analog_a{2..9}_*_check.py` | `analog-topology-select`, `ams-sim`, `analog-layout`, … |
@@ -166,11 +169,7 @@ triage.
   native `svrfdrc` C++ buddy (`db::SVRFEngine`), byte-identical to the reference on a
   real 87k-line foundry deck, license-free. That is the pattern for every remaining
   gap.
-- **How to discharge (do NOT restate here — follow the mechanism):** classify + file
-  the gap via **Bucket T** in `benchmark-enhancement-capture` (step→forked-tool
-  ownership map + mandatory identification fields, enforced by `enhancement_emit.py`);
-  for a benchmark, a plain tool-substitution gap is **Category-D FORK-FIXABLE**, not a
-  §9-T5 floor (`open-benchmark-methodology` § 4 row D / § 9 T5).
+- Capture the reproducible discrepancy, affected source fact or native result, owning design/tool/plugin fix and the verification performed. Keep this evidence outside the plugin repository when required by the task.
 - **Honesty is preserved, not weakened:** if the fork genuinely cannot do it *yet*, an
   honest `ENV_UNAVAILABLE` / deferred verdict is still correct — but it must be FRAMED
   as a fork-and-enhance backlog item (with the Bucket-T fields), never as "impossible
@@ -264,28 +263,14 @@ operate in **two registers** — never blur them:
 > persona-high` agents remain as TEST drivers — a `persona-common` run that
 > surfaces ANY jargon in your user-facing turns is a regression.
 
-### Dialogue ingestion is a DUAL-TRACK CONVERGENCE (program-first + AI-backup, ORGANIC #716)
+### Review the normal dialogue producer independently
 
-The user's dialogue is "like a freestyle document". Ingest it through the SAME
-DOC->JSON backend as every other Phase-1 input, then converge two independent
-tracks — never accept a lone track:
-
-1. **Program track.** The deterministic DOC->JSON doc-extraction runner extracts
-   L1–L24 from the dialogue-as-freestyle-document (the runner render-bridges a
-   `phase1_structured.yaml` / transcript via `programs/phase1_dialogue_render.py`).
-2. **AI track.** You independently read the same dialogue and emit L1–L24 JSON
-   yourself.
-3. **Converge.** Run `programs/phase1_json_converge.py --program <dir> --ai <dir>`.
-   It diffs the two fact-by-fact (agree / disagree / program_only / ai_only) and
-   marks every disagreement with a `_conflict` in the merged candidate. You
-   root-cause EACH disagreement (which track is right and why) and synthesize the
-   correct merged JSON. Agreement is auto-accepted; a lone-track fact is never
-   blindly trusted.
-4. **Sufficiency gate.** Run `programs/phase1_sufficiency_check.py <merged>`. It
-   reports whether the converged JSON is actually SUFFICIENT TO DESIGN THE IC and
-   emits ready-to-ask **plain-language** questions for anything REQUIRED that is
-   missing. If insufficient, you do NOT guess — you ask the user those questions
-   (external register) and re-ingest until sufficient.
+Treat the user's dialogue as design input for the normal document producer.
+Read its generated fields independently against the same source dialogue.
+Resolve disagreements in the owning fields, preserving source meaning, units
+and authority. If required physical delivery or design facts remain unclear,
+ask concise plain-language questions and continue independent work. Do not
+add a second convergence or sufficiency gate.
 
 ## Core Principle
 
@@ -308,33 +293,16 @@ tracks — never accept a lone track:
 - Never let your INTERNAL technical register reach the user. You DO talk to the user directly through your external plain-language register — silicon jargon shown to the user is a hard violation (see "Dual-register user-facing dialogue" above).
 - Never skip cross-layer consistency checks. An L3 CRC polynomial that disagrees with L8 bit timing is a bug you must catch *before* L9.
 - Never leave `TBD`, `???`, or placeholder values in a finalized layer JSON; fill with a documented `auto_decided` expert assumption.
-- Never produce a layer that fails its JSON schema. `json_schema_check.py` is a hard gate.
+- Preserve source meaning, units and authority in each owning generated field.
 - Never excuse a capability gap with "needs a commercial / licensed EDA tool" (Calibre / VCS / DC / PrimeTime / Spectre / Xcelium / HSPICE) or "the OSS tool can't do it" — we fork + enhance the OSS toolchain, so that gap is a fork-and-enhance BACKLOG item (Bucket T), never a hard limitation (see § 0.5).
 
-## Filing dialogue craft back into the IC Expert DB (optional, GATED, non-autonomous)
+## Retain useful dialogue craft
 
-You **consume** the IC Expert DB every session (`ic_expert_db_query.py` — class-matched
-advisory craft). When a *dialogue* surfaces a genuinely **general, chip-AGNOSTIC design-class
-insight** (the same kind of algorithm/interface/latency craft the DB already holds) that is
-NOT yet in the DB, you MAY file it back so the knowledge compounds instead of evaporating —
-today the DB only grows from scored benchmark recoveries, so a plain user session is the gap.
-
-This is **not** an autonomous write. Route it through the gated writer:
-
-```
-# 1) DRY-RUN first — validates only, writes nothing
-python3 programs/ic_expert_db_capture.py --ic-class <class> --lesson "<general craft>"
-# 2) if it passes, STAGE it (an uncommitted, reviewable git diff — NEVER a commit)
-python3 programs/ic_expert_db_capture.py --ic-class <class> --lesson "<general craft>" --write
-```
-
-The writer REFUSES on any governance finding (blindness / oracle-value / gate-override via
-`ic_expert_db_consistency_check`, plus an explicit chip-deny-token scan because
-`source_chip_agnostic_check` does not walk `agents/`). It only stages a working-tree diff and
-appends a `capture_log.md` line; the **repo-gatekeeper still reviews the diff and assigns the
-version**. Obey §4.05: a captured lesson is chip-AGNOSTIC design CRAFT — NEVER the user's
-specific values, NEVER an oracle/harness/golden quote, NEVER a chip/vendor/SKU name. If in
-doubt, do NOT file it — the DB is advisory, so a missed capture costs nothing, a bad one pollutes.
+Preserve general IC-expert knowledge, its source evidence and the scope in
+which it applies. When expert-DB maintenance is authorized, prepare a concrete
+reviewable change to the existing expert knowledge files. Keep design-specific
+values and benchmark oracle material out of general lessons. This work does
+not introduce a result-admission gate.
 
 ## Reset-value default thinking (gshare lesson, 2026-06-23)
 
@@ -764,7 +732,6 @@ latency. For deterministic arithmetic scenarios, state `transaction_rearm`
 `parallel_hold=through_final_product_bit` before generating the TB. An
 unsupported or ambiguous scope still needs the expert handoff.
 
-
 ### Skill: functional-TB golden authoring for a CPU-core reset-to-first-activity BOOT-LATENCY case
 A CPU-core (or any clocked-core) L10 case is sometimes NOT an instruction-execution oracle at all but a
 BOOT-LATENCY property: "N cycles after reset release, the design has performed its first bus access /
@@ -840,7 +807,7 @@ Some specs are internally inconsistent or contradict their own reference. When y
 - a "fix-the-bug" problem whose intended fix contradicts the embedded code's apparent semantics;
 - a K-map whose stated cells disagree with any provided reference expression.
 These are unsolvable-as-stated; the honest move is to surface the contradiction, not to guess.
-(`spec_self_consistency_check` / `eda_spec_lint` catch some of these from the prompt alone.)
+Use the current source-document producer and native verification results to investigate these conflicts.
 
 ### Skill: width-consistency arithmetic to disambiguate concat / replication
 Prose that describes a concatenation/replication (`{N{x}}`, `{a,b}`, replicate/repeat/extend) is
@@ -985,36 +952,19 @@ If `NEED_MORE_INPUT`, you re-open the dialogue in the plain-language register. I
 
 ## Success Criteria
 
-- Every layer JSON passes `json_schema_check.py`.
+- Resolve required missing or contradictory facts before downstream execution.
 - No layer contains `TBD`, `???`, or undocumented defaults.
 - The cross-layer matrix passes after every step.
 - L9 references are triangulated against L5 + L6 + L8.
-- **Every layer passes `phase1_quality_parity_check.py`** — see fill-to-floor rule below.
+- Review all generated requirements against their actual source and consumer.
 
-## Fill-to-Floor Rule (v0.50, MANDATORY)
+## Review defaults against source requirements
 
-**Problem this solves**: v0.49 3-persona BENCH-A benchmark showed that when a common-user persona leaves Phase-1 under-specified, the IC Expert was producing a *degenerate* IC (4 opcodes, 32-byte OTP, placeholder CRC poly) that passed `phase1_doc_presence_check` + `json_schema_check` but was functionally useless for hardware. The three personas ended up with three different ICs instead of one.
-
-**New mandatory behaviour**: The class template (`class_kb/templates/<class>.yaml`) now carries a `spec_floor:` block defining minimum quantitative richness — opcode count, OTP size, submodule count, CRC polynomial whitelist, etc. When the user's answers leave any floor metric below its minimum, you MUST lift the design to the floor using documented industry defaults **before** writing the layer JSON.
-
-**Rules**:
-
-1. Read `spec_floor:` from the class template that matches `class_path` in `01_prompt.md` (fall back to `protocol-ic` then `any-ic`).
-2. For every floor field that is below its minimum after the user dialogue, lift it using industry defaults:
-   - `L3_opcode_count_min` → use the class median opcode count; use template or canonical opcode values
-   - `L3_crc_poly_allowed` → pick a whitelisted poly (prefer `0x31` MAXIM for protocol-ic)
-   - `L4_otp_bytes_min` → extend OTP map to at least `_min` bytes; fill with vendor defaults + trim + serial + lock zones
-   - `L6_submodule_count_min` / `L6_required_submodules` → add every listed submodule
-   - `L9_internal_wire_count_min` / `L9_top_level_port_count_min` → expand top-level port set and submodule wire nets
-3. Record each lift in the layer JSON's `provenance` block:
-   ```json
-   { "provenance": { "auto_decided": true,
-     "reason": "spec_floor.L3_opcode_count_min=8; user gave 4; lifted to 13 via class template protocol-ic defaults" } }
-   ```
-4. Never produce a layer where `spec_floor.*_min` is unmet. If the user explicitly states a smaller value, escalate to the user (plain-language register) to explain the floor, then either lift (with `auto_decided`) or halt Phase 1 with a documented deviation.
-5. `phase1_quality_parity_check.py` runs as a gate after every layer. Across three personas (common / medium / high), metric output should now be within ±10% on every floor metric.
-
-**Rationale**: A common user's vague cue "like a USB thing" should not produce a different IC than a senior architect's "protocol IC with 13 opcodes". The hardware floor is the same; only the user's vocabulary differs. IC Expert owns the class-level knowledge so the hardware converges regardless of persona fidelity.
+Use expert class knowledge to identify missing design facts and to propose
+explicit assumptions. Preserve the user's original requirements and limits.
+Do not inflate a declared port, opcode, memory or submodule count to satisfy a
+software quality score. Record the reason and scope of any assumption and
+review the generated field where its downstream tool consumes it.
 
 ## Class-typical structure — generalised learning from auto-run loop (v0.74)
 
@@ -1061,54 +1011,24 @@ block captures the **pattern**; the specifics stay with the specific IC.
 
 ---
 
-## External plugin sources (v0.85+)
+## External plugin sources
 
-`class_reference.yaml` is the **core** K3 source. Starting v0.85, additional
-K3 entries can be installed from third-party plugins under
-`~/.vibe-ic/plugins/<namespace>/<plugin_id>/<version>/k3/*.yaml`.
+Use `agents/defaults/class_reference.yaml` as the shipped core K3 source.
+Read the matching class reference and `agents/class_kb/templates/` entry,
+then apply the user's supplied facts before filling any unspecified default.
 
-When resolving a class, **always** use the unified view from
-`vibe-ic-marketplace/plugins/vibe-ic-d/programs/k3_view_resolve.py`
-(or call the same logic in-process). It walks core + every installed
-`L_exp` plugin and returns the merged view with full provenance.
+A separately installed plugin may supply additional class knowledge. Consult
+that installed plugin's actual documentation and interface before consuming
+it; the core plugin does not ship a merged external-source resolver. If no
+such interface is installed, continue with the core references and disclose
+any missing class knowledge rather than inventing a command or default.
 
-**Conflict policy** (per roadmap § 6.3):
-
-- Core entry wins on a tie. The community entry, if any, appears in the
-  returned dict under `_alternatives:` so the user can see what was
-  available.
-- When NO core entry exists, multiple community entries on the same key
-  are returned as a ranked list under `_ranked_alternatives:` (sorted
-  by `trust_tier` weight). Default to the highest-weight entry.
-- Trust-tier weights:
-    `core` = 1.0
-    `vendor-verified` = 1.0
-    `community-trusted` = 0.8
-    `community` = 0.5
-    `experimental` = 0.3
-    `quarantined` = 0.0  (never consumed)
-
-**Provenance trace**: when you fill a default value from K3, your "where
-did this come from?" trace MUST cite the source from `_provenance` (e.g.
-`example-org/spi-peripheral-experience@0.1.0`). Never present a community
-entry as if it were core.
-
-**Manual override** (operator-side): user can add `--trust-allow @org`
-or `--trust-block @org` flags at the CLI to override tier weights for
-a session. Recorded in provenance.
-
-CLI utility for inspecting the merged view:
-
-```bash
-# What does the agent see for class spi-peripheral right now?
-python3 vibe-ic-marketplace/plugins/vibe-ic-d/programs/k3_view_resolve.py \
-    --class spi-peripheral
-
-# All visible classes
-python3 vibe-ic-marketplace/plugins/vibe-ic-d/programs/k3_view_resolve.py \
-    --list
-```
-
+When sources disagree, show the differing values and their applicable design
+conditions. Prefer the current task's explicit source facts; use core craft
+as the default when it applies, and ask for a design decision when the facts
+do not settle the conflict. Cite the actual source file or installed plugin
+and version for an external default. Keep alternative advice visible and
+never present external advice as if it came from the core references.
 
 ## Captured by benchmark-enhancement-capture (anonymized close-loop sweeps, 2026-05-28)
 
@@ -1283,7 +1203,6 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 _Captured by benchmark-enhancement-capture 2026-05-28._
 
-
 ## Captured by benchmark-enhancement-capture — 2026-05-28 (Shape B + `benchmark_clean` + Shape D cross-step capture)
 
 ### Skill: MCP `eda_cocotb` — stage all sibling .py from the testbench dir + set PYTHONPATH
@@ -1299,7 +1218,6 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 **Why this is GENERAL**: Universal across cocotb harnesses. Every multi-file cocotb test (and there are many: any real-world IP, any vendor-supplied verification IP) hits the same gap.
 
 _Captured by benchmark-enhancement-capture 2026-05-28._
-
 
 ## Captured by benchmark-enhancement-capture — 2026-05-28 (v0.1.37 close-loop sweep, 22 fresh + 3 close-loop agents)
 
@@ -1492,7 +1410,6 @@ _Promoted to program rule 2026-05-28 v0.1.38._
 **v0.1.38**: this is being upgraded to a `BENCHMARK_REGISTRY.scorer_substitution_gap` field + scorer support so flagged designs don't count against pass rate. The scorer infrastructure ships in v0.1.38; the per-design corpus is filed as `ORGANIC-20260528-scorer-substitution-gap-registry-population` (P2) for the per-benchmark population sweep. The AI doesn't need to remember which designs are gaps — the scorer tracks them.
 
 _Promoted to scorer feature 2026-05-28 v0.1.38._
-
 
 ## Captured by benchmark-enhancement-capture — 2026-05-28 (v0.1.44 asyn-FIFO close-loop)
 
@@ -1800,7 +1717,7 @@ _Captured by benchmark-enhancement-capture 2026-06-01._
 
 ### Skill: Cross-module producer→consumer handshakes — latch-on-arrival, never re-check a 1-cycle strobe
 
-**Pattern**: When you author a protocol controller as a core that emits a 1-cycle `*_valid` / `*_strobe` to a separate PHY/shifter module, do NOT make the consumer act on the pulse by RE-checking `valid && ready` at the end of a wait/countdown. The pulse is one cycle wide; if the consumer is still busy that cycle the byte is silently lost, and the pulse can phase-lock with a periodic producer on a shared bidirectional wire. (`handshake_check` flags this as a potential handshake race; it has no comment-silence — it wants the real fix.)
+**Pattern**: When you author a protocol controller as a core that emits a 1-cycle `*_valid` / `*_strobe` to a separate PHY/shifter module, do NOT make the consumer act on the pulse by RE-checking `valid && ready` at the end of a wait/countdown. The pulse is one cycle wide; if the consumer is still busy that cycle the byte is silently lost, and the pulse can phase-lock with a periodic producer on a shared bidirectional wire. Verify the prompt-required handshake with a prompt-derived executable challenge: pulse `valid` while the consumer is busy, then make it ready and check that the payload is consumed exactly once. Review the native simulation or formal result; a hygiene lint result does not prove this behavior.
 
 **When to apply**: Any producer-in-module-A / consumer-in-module-B handshake where the producer's `valid` is a single-cycle strobe (assigned 1 then 0 in the same always block) and the consumer has its own busy/countdown state.
 
@@ -1814,15 +1731,17 @@ _Captured by benchmark-enhancement-capture 2026-06-02._
 
 ### Skill: Annotate FSM error-assertions with recoverable/fatal intent
 
-**Pattern**: When an FSM asserts an error/fault output (`*_error`, `*_fault`, `crc_error`, …) inside a deep (non-idle) state, a downstream consumer cannot tell whether to tolerate-and-continue or halt. (`fsm_error_invariant` flags every such site and is silenced ONLY by an inline intent comment — it asks a real design question, not a style nit.)
+**Pattern**: When an FSM asserts an error/fault output (`*_error`, `*_fault`, `crc_error`, …) inside a deep (non-idle) state, a downstream consumer cannot tell whether to tolerate-and-continue or halt. Review each such site against the provided protocol's error semantics. An intent comment documents that decision; it does not prove the behavior or silence a measured failure.
 
 **When to apply**: Any `err_sig <= 1'b1;` (or equivalent) assigned inside an FSM state that is not the idle/reset state.
 
-**What to do**: Add an inline `// fsm_error: recoverable` or `// fsm_error: fatal` (also accepted: `intentional` / `tolerated`) next to the assignment, chosen from the PROTOCOL's own error semantics — and only when it is genuinely true. A protocol whose spec defines a non-fatal error response (receiver re-issues / retries) is `recoverable`; one that mandates a link re-init / reset is `fatal`.
+**What to do**: Add an inline `// fsm_error: recoverable` or `// fsm_error: fatal` next to the assignment, chosen from the PROTOCOL's own error semantics — and only when it is genuinely true. A protocol whose spec defines a non-fatal error response (receiver re-issues / retries) is `recoverable`; one that mandates a link re-init / reset is `fatal`.
 
-**Worked pattern** (anonymized): An eSPI slave asserted `crc_error_o` in its CRC-check state. eSPI defines a CRC mismatch as a non-fatal error response (code 0x02) — the master simply re-issues — so the honest annotation is `// fsm_error: recoverable`. (Do NOT annotate `recoverable` just to silence the gate if the spec treats the error as fatal — that would be a false annotation.)
+**Worked pattern** (anonymized): An eSPI slave asserted `crc_error_o` in its CRC-check state. eSPI defines a CRC mismatch as a non-fatal error response (code 0x02) — the master simply re-issues — so the honest annotation is `// fsm_error: recoverable`. (Do NOT annotate `recoverable` if the spec treats the error as fatal — that would be a false annotation.)
 
-**Why this is GENERAL**: the recoverable/fatal classification comes from the protocol's published error-response semantics, not from any testbench; documenting it is faithful transcription.
+**Verify it**: derive an executable challenge from the prompt and provided L3/L5 input. Trigger the error and offer a subsequent legal transaction: recoverable behavior must serve it as specified; fatal behavior must remain halted until the specified reset or clear. Read the native simulation or formal result against that requirement. Missing evidence is `NOT_MEASURED`; hygiene lint does not establish recoverability or fatality.
+
+**Why this is GENERAL**: the recoverable/fatal classification comes from the protocol's published error-response semantics, not from any hidden testbench; documenting and testing it is faithful transcription.
 
 _Captured by benchmark-enhancement-capture 2026-06-02._
 
@@ -2592,8 +2511,6 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 
 **Why this is GENERAL**: cocotb's edge-trigger read-region semantics are a fixed, documented property of the simulator interface; aligning observable timing to it is general TB-aware authoring (cf. the NBA-vs-blocking clock-toggle rule). *`why_not_bucket_a`*: a program cannot infer, from the prompt, which exact edge a Python TB samples a given signal on, or how many pipeline stages land the value there — it needs reasoning about the TB's await/read sequence.
 
-_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
-
 ### Skill: a status/error flag the TB samples at a done/valid strobe edge must be SETTLED and STICKY before that edge
 
 **Pattern**: When a checker reads a status/error/valid flag at the same edge a strobe (done/valid/ack) fires — or some cycles AFTER the triggering event — a flag that is merely combinational, or registered-but-then-cleared in the next state, loses the same-NBA stale-read race or is already gone by the sample. The flag must be registered, asserted at least one cycle BEFORE the strobe edge the TB samples, and HELD (sticky) until the next start/reset.
@@ -2603,8 +2520,6 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 **What to do**: Drive the flag from a clock-edge sample (e.g. registered `write_en & full` / `read_en & empty`), assert it before the strobe the TB watches, and clear it only when a new transaction BEGINS or on reset — never pulse-then-clear in the immediately-following FSM state. Note "valid dropped mid-computation" means ANY in-flight cycle lacking the full handshake (not just a valid-mismatch), so latch the error on the first such cycle and hold it.
 
 **Why this is GENERAL**: matching a status output's stability window to the consumer's sampling instant is standard registered-handshake discipline. *`why_not_bucket_a`*: a program cannot know which cycle (relative to a strobe) the TB samples the flag, so it cannot decide combinational-vs-registered-and-held — that is a timing judgment against the TB. (Refines the "status flag must be REGISTERED" and "held through the consume window" rules with the exact strobe-edge timing.)
-
-_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
 
 ### Skill: honor data-dependent latency with a REAL iterative datapath, and fold pure-transition no-op states
 
@@ -2616,8 +2531,6 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 
 **Why this is GENERAL**: cycle count is part of the timing contract whenever the TB checks it; "real schedule, no idle bubbles, no instant folds" is general FSM discipline. *`why_not_bucket_a`*: distinguishing a no-op transition state from a counted work-state, and deciding when a combinational fold violates a data-dependent schedule, requires reading the latency model and the FSM's per-state semantics — not a liftable value. (Complements the "enumerated per-step latency budget — never fuse two counted steps" rule, which governs the opposite over-folding direction.)
 
-_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
-
 ### Skill: 2-D / windowed array reads — straight index mapping, per-axis boundary policy, registered output from the pre-mutation state
 
 **Pattern**: For a module that reads a window out of a 2-D buffer: (1) the output-index→storage-index mapping must be STRAIGHT (row→row, col→col) — a transpose silently swaps strides and only the boundary/new-row taps go wrong; (2) the border policy (clamp/reflect/wrap) must be applied to EACH axis INDEPENDENTLY so the both-out-of-range CORNER is right (reflect uses `2N−1−i`, not `N−1−i`); (3) when the reference selects the window from the buffer BEFORE the same-cycle line insertion (read-then-write ordering) and holds it while a load-enable is low, the RTL output must be REGISTERED at the clock edge from the PRE-mutation state with that load-enable, not combinationally derived from the post-mutation state.
@@ -2627,8 +2540,6 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 **What to do**: Keep row and col strides distinct and verified; compute each axis's boundary index separately and combine for the corner; and when the model produces the output before a same-cycle write and holds it under a deasserted update-enable, register the output (`enable = update`) from the pre-insertion buffer.
 
 **Why this is GENERAL**: independent per-axis boundary handling and read-then-write output registering are standard image/stencil datapath rules. *`why_not_bucket_a`*: a program cannot read the reference model's window-selection ordering or its per-axis boundary semantics and re-derive the registered-vs-combinational, transpose-free RTL — it is structural design reasoning.
-
-_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
 
 ### Skill: X-safety — procedural priority arbitration over bitwise selects, and initialize any storage read before its first write
 
@@ -2640,8 +2551,6 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 
 **Why this is GENERAL**: X-pessimism robustness (procedural-if over bitwise, reset-before-first-read) is standard defensive RTL that recurs across arbiters, FIFOs, and memory-fed datapaths. *`why_not_bucket_a`*: a program cannot tell which inputs the TB leaves undriven or which locations are read-before-write — that requires reading the TB's drive/sequence behavior. (Extends "a value sampled at the first post-reset edge must be reset-initialised" to the X-crash case.)
 
-_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
-
 ### Skill: cache / TLB / memory-fed lookup — implement the miss path, pass the backing value through combinationally, latch deferred fills, read with matched port latency
 
 **Pattern**: For cache/TLB-style lookups verified one-access-per-cycle: (a) implement BOTH hit and miss paths — on a miss, fill/mark the currently-selected VICTIM as used (the new line becomes MRU; the hit-way select is irrelevant on a miss); (b) on a miss the output must pass the lower-level (page-table/backing-memory) value through COMBINATIONALLY, not emit 0/default; (c) a fill deferred N cycles past the miss must use a REGISTERED copy of the key/data captured AT the miss, never the live port (the stimulus has advanced — silently caching the wrong key); (d) a capture register fed by a memory read selected by a same-edge-changing control needs a COMBINATIONAL read port — a registered (1-cycle-latency) read port samples stale data at every control transition.
@@ -2651,8 +2560,6 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 **What to do**: Code the miss branch explicitly (mark victim used; apply the saturate rule so a replacement candidate always exists); mux the backing-store value out on miss; latch the missing address/data at detection and use the registered copy for the deferred fill; use `reg <= mem[sel]` (combinational read) so a same-cycle-selected operand is captured skew-free; verify with a back-to-back distinct-key prime-then-hit sequence.
 
 **Why this is GENERAL**: miss-path completeness, combinational miss-passthrough, capture-at-event, and read-port-latency matching are standard memory-datapath semantics. *`why_not_bucket_a`*: a program cannot infer the implied miss semantics, the combinational passthrough, or the capture timing from prose — these are design judgments against the access protocol. (Complements "implement every spec-enumerated branch" and "capture combinational reads in a flop".)
-
-_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
 
 ### Skill: memory access — distinguish "needs >1 bus transaction" from "naturally aligned"
 
@@ -2664,8 +2571,6 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 
 **Why this is GENERAL**: the alignment-vs-transaction-count distinction is a standard memory-subsystem rule, not specific to any block. *`why_not_bucket_a`*: deciding that raw-forwarding follows natural-alignment (not transaction count) is a datapath judgment against the memory model's `expected_rdata`, not a regex.
 
-_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
-
 ### Skill: don't over-build beyond what the TB checks — transparent passthrough, identity transforms, same-cycle single-transfer translation
 
 **Pattern**: When a spec describes a transparent / single-register or single-transfer datapath with NO buffering/endian/pipelining language, do NOT default to a heavier idiom. Drive upstream-ready as a direct pass-through of downstream-ready and latch the lone register every clock (no skid-buffer/credit `| ~valid` terms); drive a single-transfer bridge's address-phase attributes and write data COMBINATIONALLY from the active request (a registered multi-state FSM makes them appear a cycle late to a same-phase TB); treat "endian conversion" as IDENTITY unless the TB's expected bytes are actually reversed.
@@ -2675,8 +2580,6 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 **What to do**: `s_ready = m_ready` and unconditional latch for a transparent stage; combinational same-cycle translation for a single-transfer bridge; only add a skid buffer / byte-swap / pipeline when the spec or the TB's expected bytes demand it.
 
 **Why this is GENERAL**: "implement exactly the described mechanism, no speculative machinery" is core spec-fidelity discipline — over-engineering a skid buffer or byte-swap is as wrong as under-building. *`why_not_bucket_a`*: recognizing that "single register stage / endian conversion" means passthrough/identity HERE — versus a buffered/byte-swapping design — requires reading the handshake intent and the TB's expected bytes, not a keyword. (Complements "implement the EXACT structural convention the spec states".)
-
-_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
 
 ### Skill: reproduce a partial-template's provided register pipeline / cadence LITERALLY
 
@@ -2688,8 +2591,6 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 
 **Why this is GENERAL**: faithfully preserving a provided pipeline's latency is standard "complete, don't redesign" discipline for template tasks. *`why_not_bucket_a`*: a program cannot decide that a template's two-stage address pipeline is load-bearing for the TB's `Timer`-tuned windows — that is timing reasoning about the provided structure.
 
-_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
-
 ### Skill: sample a non-uniform stimulus stream by input change-detection, not a hard-coded FSM iteration length
 
 **Pattern**: When a TB streams one stimulus per time window, the windows are NON-UNIFORM (e.g. 60 ns and 70 ns) and not an integer multiple of any fixed FSM iteration period, and the TB only checks an ACCUMULATED result (not cycle-by-cycle state), a free-running fixed-cycle-count FSM drifts relative to the windows and captures the wrong samples. Drive the datapath by edge/change-detection of the relevant inputs instead.
@@ -2699,8 +2600,6 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 **What to do**: Apply exactly ONE update per DISTINCT input-sample change (one accumulate per input-pair change), and reset accumulators on the run-boundary control change (mode/select). Confirm by running the actual cocotb TB, not by cycle-counting on paper.
 
 **Why this is GENERAL**: making a datapath robust to a TB's exact (and possibly irregular) window widths via change-detection is standard timing-robust design. *`why_not_bucket_a`*: a program cannot tell that the TB's windows are non-uniform and result-only-checked (so a fixed-cadence FSM will drift) — that requires reading the TB's stimulus timing.
-
-_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
 
 ### Skill: clock/strobe modeling — explicit @(posedge X) for edge-triggered actions; an active-high strobe on one clock over a gated clock as a sampling edge
 
@@ -2712,8 +2611,6 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 
 **Why this is GENERAL**: avoiding gated-clock sampling edges and modeling true edge events explicitly are standard CDC / clocking-discipline rules. *`why_not_bucket_a`*: deciding that "on the positive edge of X" needs an explicit edge process (vs a synchronized detector), and that a gated clock should be refactored to an enable, are structural clocking judgments, not regex fixes. (See the gated-clock single-cycle-pulse-drop hygiene WARN.)
 
-_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
-
 ### Skill: carry a single-cycle event across clock domains as a HELD level, not a 1-cycle pulse
 
 **Pattern**: A one-cycle pulse pushed through a 2-FF synchronizer can fall ENTIRELY between the receiving domain's edges (lost), and re-narrowing it back to a 1-cycle pulse on the far side fails a consumer that samples a LEVEL at a fixed instant. Convert the event to a held level (or a toggle whose level is synchronized) so the receiver always captures it regardless of the clock-frequency ratio.
@@ -2723,8 +2620,6 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 **What to do**: Drive a HELD level on the event, synchronize that level across the domain (2-FF), and clear/re-arm only when the originating request is withdrawn; do NOT edge-detect the crossing back into a 1-cycle pulse if the consumer reads a level.
 
 **Why this is GENERAL**: level/toggle synchronization for single-cycle events is textbook CDC. *`why_not_bucket_a`*: recognizing that the consumer samples a level (so a pulse must become a held level across the crossing) requires reading the receiving-domain sampling semantics, not a regex.
-
-_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
 
 ### Skill: FIFO / double-buffer completion checklist
 
@@ -2760,8 +2655,6 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 
 **Why this is GENERAL**: complete control assertion and a correct decode default are standard datapath/decoder completeness. *`why_not_bucket_a`*: knowing that a given opcode's semantics REQUIRE the carry-enable (vs a routing-only op), and that the address default means "backing memory" not "error", is a reading of the operation's intent, not a regex. (Complements "implement every spec-enumerated branch" with control-signal completeness WITHIN a branch.)
 
-_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
-
 ### Skill: compile/lint portability — validate against the harness's strict simulator and scope-waive legitimately-unused ports
 
 **Pattern**: RTL that compiles on a lenient local simulator can FAIL the scoring harness's stricter version — a build that returns exit 2 zeroes EVERY parametrized test before any simulation runs. Likewise a verilator `-Wall` gate fails on an interface input the design legitimately ignores (UNUSEDSIGNAL). Both are pre-functional gates that silently destroy the whole score.
@@ -2772,8 +2665,6 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 
 **Why this is GENERAL**: matching the scoring toolchain and waiving (not hiding) unused interface ports are standard portability/lint hygiene. *`why_not_bucket_a`*: the build/lint gate itself is deterministic (a program), but deciding WHICH unused port is legitimate-to-waive versus a real wiring bug is a reading judgment. (Complements "declare every port the interface lists".)
 
-_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
-
 ### Skill: area/PPA-optimization tasks need STRUCTURAL transforms that survive synthesis — a reusable transform catalog
 
 **Pattern**: A task whose oracle is a synthesis area/PPA budget (reduce cells/wires/area by X% vs a baseline while keeping functional AND latency equivalence) is NOT solved by cosmetic refactors — yosys folds those away and the count never moves. Attack the DOMINANT structural cost with exact, latency-preserving rewrites, and verify each with a cycle-exact co-sim against the unmodified reference before trusting it. Functional correctness of the optimized RTL is the PRIMARY gate (the area metric may be scored by a separate synth service that does not always run).
@@ -2783,8 +2674,6 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 **What to do**: Apply the reusable catalog — (1) a variable-OFFSET indexed write `mem[base+k]<=tmp[k]` → store at ABSOLUTE position with a shadow buffer pre-synced to the main array, so the write-back becomes a straight `mem[k]<=tmp[k]` copy and the O(N²) base-offset barrel-mux network disappears; (2) a serial-receive indexed bit write `data_reg[count]<=bit` → a plain SHIFT register `data_reg<={bit,data_reg[N-1:1]}` (fixed wiring, no per-bit demux); (3) drive a wide output port as a fixed CONCATENATION wire rather than a registered copy; (4) signed saturation to the full ±2^(W−1) range == overflow clamp via one `(W+1)`-bit add + clamp on `sum[W]!=sum[W−1]` (avoid compare-to-2^(W−1) constants → large comparators); (5) `(s>=T)||(s<=−T)` for T>0 == `|s|>=T` via a one's-complement magnitude fold `m=s^{W{s[W−1]}}` compared to `(s<0?T−1:T)`; (6) an OR of `|x|>=Ti` collapses to `|x|>=min(Ti)`. NEVER delete config-inactive-but-reachable functionality (e.g. saturation whose bounds equal the full datatype range still clamps on overflow) to hit the number — re-encode it cheaply instead (that deletion is overfitting). Measure with local yosys, gate cycle-accuracy with an event-driven (await-done) replica TB across ALL parameter modes, and aim WELL PAST threshold to absorb tool-version count skew.
 
 **Why this is GENERAL**: these are reusable RTL area-reduction transforms (barrel-mux elimination, SIPO shift register, magnitude folding) applicable to any merge/scan/scatter/serial/saturating datapath, plus the general "structural-not-cosmetic + co-sim-guarded + don't-delete-reachable-functionality" methodology. *`why_not_bucket_a`*: identifying the dominant structural cost term and choosing an exact equivalent rewrite is closed-loop synthesize-measure-restructure reasoning with an equivalence guard, not a regex edit; whether a given budget is even reachable blind requires judgment. (Adds a concrete transform catalog under "an area-reduction task needs a structural transform that survives synthesis".)
-
-_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
 
 ### Skill: priority arbiter — keep PENDING, SELECTED, and ACTIVE/ACK identities distinct
 
@@ -2808,8 +2697,6 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 
 **Why this is GENERAL**: swap-at-per-bank-capacity and hold-empty-until-a-whole-bank-fills are the defining semantics of every double-buffer, independent of the data it carries. *`why_not_bucket_a`*: a program cannot tell from prose that the structure is two banks rather than one ring, nor that the quiescent test leaves the enable stuck high — that is a reading of the architecture against the TB's idle behavior. (Builds on "FIFO / double-buffer completion checklist" with the bank-swap-timing facet that checklist does not cover.)
 
-_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2 — official full-objective)._
-
 ### Skill: a re-runnable / multi-pass test arms its snapshot on the start/done RISING edge only, and re-inits the FSM on restart
 
 **Pattern**: When a self-checking TB runs a module MORE THAN ONCE (re-trains, re-loads, sweeps modes) and samples a result register at a done/converged strobe, the design must: (a) SNAPSHOT the result on the done/converged edge and HOLD it; (b) arm/re-arm that snapshot on the RISING edge of start/done ONLY — ignoring a start/done level that stays high or re-fires mid-run, so a second pass cannot overwrite the previously-held last sample before the checker reads it; and (c) re-SYNC the FSM to its initial state on a start RISING edge OR a mode-select change, so a fresh pass begins clean instead of continuing the prior run's state.
@@ -2819,8 +2706,6 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 **What to do**: Detect start/done as a registered edge (`start & ~start_q`); load the result snapshot and reset the run FSM on that rising edge (or on a mode-select change); keep the held snapshot stable while start stays high so a continued / re-pulsed level cannot corrupt it; only re-arm on the next clean rising edge.
 
 **Why this is GENERAL**: edge-triggered (not level-triggered) re-arm, hold-the-last-result, and re-init-on-restart are standard re-runnable-FSM hygiene for any block a testbench exercises repeatedly. *`why_not_bucket_a`*: a program cannot tell that the harness re-runs the module, that its start stays high across the run, or which edge the checker samples — that requires reading the TB's multi-pass drive sequence. (Complements the declared-input indexing/polarity/cadence lesson and "a value a later consumer reads must be HELD through the consume window".)
-
-_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2 — official full-objective)._
 
 ### Skill: LFSR tap indices follow the spec's stated shift DIRECTION + insertion end, not textbook x^k polynomial numbering
 
@@ -2843,8 +2728,6 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP Tier-3 hard-tier lif
 **What to do**: partition the RTL into per-clock always blocks, clocking each block on the clock its spec sentence binds to that side (and resetting it with that side's named reset); for a single-cycle event or attribute crossing between the two domains, pass it through a synchronizer / held level rather than letting it be sampled directly on the far clock.
 
 **Why this is GENERAL**: assigning each block to the clock the spec names for it, and synchronizing the crossings, is baseline multi-clock discipline applicable to any bridge with named per-side clocks. *`why_not_bucket_a`*: a program can count clock inputs but cannot decide WHICH logic belongs to WHICH clock — the binding lives only in the prose description of each clock ("this clock is for that side"), so partitioning the design across the named clocks requires reading and matching those sentences, a semantic judgment, not a structural rule.
-
-_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP Tier-3 hard-tier lift)._
 
 <!-- NEW ic-expert-agent skill sections distilled from the 39 class-A TB-diff clues.
      12 NEW sections. 9 of 39 clues were DEDUPED against existing sections (see report).
@@ -2873,8 +2756,6 @@ _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-inp
 
 **Why this is GENERAL**: cross-checking against a worked example and inferring an implied lookup when the arithmetic doesn't close is basic spec-comprehension plus datapath reasoning — not a memorized answer. *`why_not_bucket_a`*: a program cannot notice that `output != naive(input)` implies a hidden indirection, nor reverse-engineer WHICH table/offset reconciles the numbers — that is numeric detective work and semantic inference over the example, beyond any structural check. (Complements the worked-example-is-ground-truth skill — here the example reveals a missing indirection rather than a field convention.)
 
-_Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
-
 ### Skill: for every named *_valid / status flag, author BOTH polarities — the =0 idle/reset/ack/spurious cases are checked too
 
 **Pattern**: A flag specified only in the positive ("`x_valid` is asserted when a valid request is ready for servicing") carries an equally-checked negative obligation: the TB verifies it reads 0 in EVERY case the precondition does not hold — during reset, while its acknowledge is high, when nothing is pending, and on a SPURIOUS ack (an ack pulsed with nothing outstanding). A complete design drives the flag two-sidedly; a draft that only raises it on the happy path passes the positive assertions and fails the idle/ack/spurious ones.
@@ -2884,8 +2765,6 @@ _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-inp
 **What to do**: write the flag `=1` exactly when its stated precondition holds AND enumerate and drive `=0` for each idle / reset / acknowledged / nothing-pending / spurious-ack case; author the TB (and the RTL) to cover the negative cases, not only the assertion.
 
 **Why this is GENERAL**: "a flag's positive spec implies its negative" is standard control-signal completeness — a status bit that floats or sticks high in idle is a real defect against any consumer. *`why_not_bucket_a`*: a program cannot enumerate, from a one-line positive spec, the full set of negative conditions (reset, ack-high, empty, spurious-ack) the flag must read low in — recognizing the implied negative obligations is a reading judgment about the signal's role.
-
-_Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
 
 ### Skill: an explicit reset/initial OUTPUT value is a MULTI-CYCLE assertion across the whole reset window — drive it on the OUTPUT, and enumerate each status register
 
@@ -2897,8 +2776,6 @@ _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-inp
 
 **Why this is GENERAL**: enumerating every reset-pinned output and holding its value for the full reset window is standard reset-domain discipline. *`why_not_bucket_a`*: a program cannot decide that "resets all states" enumerates a SET of outputs each needing its own multi-cycle assertion, nor that a value must appear on the OUTPUT rather than only internal state — that is reading the reset spec as a set of per-output, full-window obligations. (Deduped vs the reset-aware-register and first-post-reset-edge skills — those govern HOW to drive a reset value; this is the TB-completeness reading that the OUTPUT's value is sampled across the ENTIRE window and per status register.)
 
-_Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
-
 ### Skill: an optimize/refactor-with-equivalence (or fix/complete) task — the GIVEN RTL is the reference; preserve ports, register-map, latency, and every internal register name
 
 **Pattern**: When a task says "refactor / optimize / reduce area while retaining functional equivalence" or "fix / complete this RTL", the reference behavior IS the supplied RTL: the equivalence harness re-encodes the original's interface, register map, latencies, sequential state, and duty/response rules, and it WHITE-BOX probes internal registers by name. Scope every edit to exactly what the prompt names (e.g. "modify only the combinational logic") and NEVER rename or delete an existing internal register, or the harness throws an attribute error before any value is compared. Any behavior already present in the given RTL that the prompt does not contradict — including incidental error-case SENTINEL constants — is part of the contract and will be checked. For an area-reduction gate, the percentage thresholds are stated in the PROMPT (a relative cut); the absolute baseline lives only in the harness `.env` and you do not need it.
@@ -2908,8 +2785,6 @@ _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-inp
 **What to do**: keep ports/register-map/latency/sequential-state bit-identical; confine edits to the named scope; preserve every internal register/signal name (it is probed); carry forward error-sentinel and corner behaviors the prompt doesn't override; for an area floor, measure the RELATIVE wire/cell reduction against the original and trust the prompt's threshold rather than hunting for the harness baseline.
 
 **Why this is GENERAL**: "the existing design is the golden reference; change only what you were asked to" is universal equivalence/refactor discipline — a renamed internal or a dropped corner behavior is a real regression. *`why_not_bucket_a`*: a program cannot tell that a particular internal register is white-box-probed (so must not be renamed), or that an undocumented sentinel in the given RTL is part of the contract — distinguishing "preserve" from "free to change" requires reading the equivalence intent and the signal's role. (Deduped vs the MODIFY-task-unchanged-path and area-reduction-structural-transform skills — this adds the white-box internal-name preservation, the given-RTL-as-contract reading, and the prompt-threshold-vs-harness-baseline split.)
-
-_Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
 
 ### Skill: a loadable counter — widen the output to the loaded RANGE, name it after its paired input, per-field clamp out-of-range loads, and treat "asynchronous/immediate" load as level-sensitive
 
@@ -2921,8 +2796,6 @@ _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-inp
 
 **Why this is GENERAL**: representability of a loaded range, per-field saturation, and async-load semantics are standard datapath conventions a designer applies by reading the load spec. *`why_not_bucket_a`*: a program cannot decide that "retain interface" yields to a wider output for a newly-loadable range, that an "exceeds range → max" sentence is a per-field clamp, or that "asynchronous + immediate" means sample-before-edge — each is a reading of the load spec's intent, not a structural rule.
 
-_Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
-
 ### Skill: a parameterized clock-divider / tick generator — the tick period equals exactly the PARAM in clocks (never a real Hz), and a pausable divider retains its partial-interval count
 
 **Pattern**: When a divider's period is parameterized (a "1 Hz pulse from a parameterized frequency", `COUNTER_MAX = CLK_FREQ - 1`), the TB scales the test by setting the parameter to TINY values (3, 50, 63…) and counting exactly PARAM clock edges per tick — so the tick period must be exactly the parameter value in CLOCKS; hardcoding a real-world frequency fails immediately. Separately, when the spec says the internal divider must "retain progress" / "pause and resume seamlessly", the TB pauses mid-interval and verifies that resume consumes only the LEFTOVER ticks (it needs `counter_max − elapsed` more before the next decrement) — so the sub-count state must be preserved across the pause, not restarted.
@@ -2932,8 +2805,6 @@ _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-inp
 **What to do**: derive the tick period as exactly the parameter (in clocks) and let the TB shrink it; on pause, freeze and hold the sub-interval counter and resume from the retained value so only the remaining ticks elapse before the next event.
 
 **Why this is GENERAL**: parameter-relative timing and pause-with-retained-phase are standard divider conventions — a hardcoded frequency or an interval-restarting pause are real timing defects. *`why_not_bucket_a`*: a program cannot infer that a parameterized divider will be exercised at tiny parameter values (so the period must be parameter-relative) or that "retain progress" means preserve the sub-count across a pause — both are readings of the timing spec's intent. (Deduped vs the dual-edge/50%-duty divider skill — that governs duty/odd-ratio structure; this governs parameter-relative period and pause-phase retention.)
-
-_Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
 
 ### Skill: transcribe an explicitly-spelled bit-level predicate / transform / per-mode datapath LITERALLY — a spelled-out Boolean is the spec, not a hint toward a "standard" function
 
@@ -2945,8 +2816,6 @@ _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-inp
 
 **Why this is GENERAL**: faithfully transcribing a spelled-out Boolean and fully gating mode-inactive inputs are basic spec-fidelity — substituting a "close" standard function is a real functional mismatch. *`why_not_bucket_a`*: a program cannot tell that a spelled-out bit predicate must be transcribed verbatim rather than generalized, nor that a mode-tied input must be gated out — recognizing the literal operation as the contract is a reading judgment over the prose. (Deduped vs the EXACT-structural-convention and LFSR-tap skills — those cover topology/edge/tap conventions; this covers spelled-out combinational bit predicates, masks, and per-mode gating.)
 
-_Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
-
 ### Skill: parallel direction/role subsections each get their OWN status output — and any NEW port inherits the module's existing _i/_o suffix convention
 
 **Pattern**: When a prompt splits behavior into parallel, labeled subsections by direction or role (a "Read Transactions" section and a "Write Transactions" section, each ending "the timeout flag is triggered"), emit ONE status output per subsection (`read_timeout_o` + `write_timeout_o`), NOT a single merged flag — even if an earlier sentence says "a timeout flag" in the singular. The per-subsection multiplicity is the real interface. And any new port must inherit the module's established naming convention (every input ends `_i`, every output `_o`; or a fixed prefix style), because the TB references new ports by the convention-consistent name, not the bare prose word.
@@ -2956,8 +2825,6 @@ _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-inp
 **What to do**: create one output per parallel subsection and name each by the module's `_i`/`_o` (or prefix) convention; do not collapse two role-specific flags into one because a summary sentence used the singular.
 
 **Why this is GENERAL**: matching output multiplicity to the spec's parallel structure and inheriting a module's naming convention are standard interface-design reading. *`why_not_bucket_a`*: a program cannot decide that two parallel subsections each demand a distinct output (vs one shared flag) or that a new port must adopt the `_i`/`_o` convention the TB expects — both are readings of the spec's structure and the module's naming intent.
-
-_Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
 
 ### Skill: interrupt service lifecycle — preemption is spec-controlled, ACK identity is latched, and held levels do not requeue
 
@@ -2969,8 +2836,6 @@ _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-inp
 
 **Why this is GENERAL**: policy-controlled preemption, delayed ACK identity, edge-versus-level capture, and legal singleton parameterization recur in interrupt controllers and acknowledged arbiters. *`why_not_bucket_a`*: an input-only program can deterministically demand these invariants and scenarios, but it cannot infer from arbitrary prose whether service is preemptive, whether a vector lookup is live, or what recovery schedule is intended; those remain expert semantic judgments. (Extends the pending/selected/active identity skill with held-request and parameter-tail coverage.)
 
-_Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
-
 ### Skill: protocol byte-LANE verbs (endian-convert / address-fix using a select) collapse to IDENTITY for an aligned full-width transfer — and honor a STATED reset polarity over the bare name
 
 **Pattern**: Bridge/protocol prose verbs like "perform endian conversion" and "derive / fix the address using the byte-select" are byte-LANE operations: they only reposition bytes for SUB-WORD accesses. For an aligned full-width transfer (all byte-enables set), they collapse to IDENTITY — write data and address pass through unchanged — and that aligned case is typically the only one the TB checks. Applying an UNCONDITIONAL full-word byte-reversal or address-mangle breaks the word case. Separately, honor a STATED reset polarity even when the bare signal name conventionally implies the opposite (a name like `rst_i` declared active-LOW in the prose): an active-high implementation would sit in perpetual reset during a test that holds the line at its released level and fail every check.
@@ -2980,8 +2845,6 @@ _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-inp
 **What to do**: gate any byte-swap / lane-realign on sub-word select patterns so the aligned full-word case stays pass-through on both read and write paths; declare reset to the EXPLICITLY-STATED polarity (active-low when stated), not the polarity the bare name suggests.
 
 **Why this is GENERAL**: lane operations being identity for aligned full-width transfers, and an explicit polarity overriding a naming convention, are standard protocol/bus reading. *`why_not_bucket_a`*: a program cannot decide that "endian conversion" is a NO-OP for the full-word case (vs a real swap) or that a conventionally-active-high name is declared active-low here — both require reading the lane semantics and the explicit polarity statement. (Complements the don't-over-build / identity-transform skill and extends active-low-naming beyond reset_n/rst_n equivalence to an explicit-polarity-over-bare-name override.)
-
-_Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
 
 ### Skill: a Gray-coded async FIFO's DEPTH must default to a power of two
 
@@ -2993,8 +2856,6 @@ _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-inp
 
 **Why this is GENERAL**: power-of-two depth is a hard requirement of the Gray-pointer wrap-bit scheme — a textbook async-FIFO fact, not a hidden answer. *`why_not_bucket_a`*: a program cannot decide that an unstated depth default must be a power of two BECAUSE the chosen full-detection scheme demands it — that ties the parameter choice to the pointer architecture, a design-experience judgment. (Complements the async-FIFO Gray-pointer-lag / full-compare skill with the depth-default requirement.)
 
-_Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
-
 ### Skill: a value wider than the data bus is read back as bus-width words, low word at the lower offset — and a read-only result register lands at the first free aligned offset
 
 **Pattern**: When a result is wider than the register/data bus, the verification reads it back as multiple bus-width words at CONSECUTIVE offsets, **low word at the lower offset** (little-endian word order). A read-only result/status register that the prompt adds but doesn't place is conventionally mapped at the first free aligned offset ABOVE the documented config/CSR block — a "Reserved" label in the prompt's map is overridden by the convention when a result must be exposed.
@@ -3004,8 +2865,6 @@ _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-inp
 **What to do**: split the wide value low-word-first across consecutive offsets; place an unplaced read-only result at the first free aligned slot past the config block; drive RESP=OKAY on those reads.
 
 **Why this is GENERAL**: little-endian word-split and "result lands after the config block" are standard memory-mapped-register conventions a seasoned designer applies without being told. *`why_not_bucket_a`*: choosing the offset + word order from convention (and overriding a "Reserved" label) is a reading/experience judgment, not a regex.
-
-_Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
 
 ### Skill: a word-mapped register file treats a non-word-aligned address as invalid — no write, read returns 0 — and you must TEST it even when the prompt is silent
 
@@ -3017,8 +2876,6 @@ _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-inp
 
 **Why this is GENERAL**: word-granular decode rejecting unaligned access is a universal bus convention. *`why_not_bucket_a`*: inferring "the map is word-granular so odd addresses are invalid" from the interface is a domain-experience read, not a deterministic rule.
 
-_Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
-
 ### Skill: naming a standard protocol imports its ENTIRE contract — the full mandatory signal set + defined reset/idle/response defaults — even when the prompt's table lists only a subset
 
 **Pattern**: When a spec names a standard protocol (AXI4 / AXI-Lite / APB / AHB / Wishbone / Avalon / …), it imports the WHOLE protocol contract, not just the signals the prompt's table happens to list: every mandatory channel/handshake signal must exist, and the protocol's defined reset/idle/response behavior holds (e.g. AXI `*READY` low out of reset, `*RESP`=OKAY on success, a valid stays asserted until its ready). The verification drives and checks the full protocol, so a subset interface fails even with correct datapath logic.
@@ -3028,8 +2885,6 @@ _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-inp
 **What to do**: implement the complete mandatory signal set for the named protocol with its standard handshake + reset/idle/response defaults; do not stop at the ports the prompt enumerates.
 
 **Why this is GENERAL**: "name a protocol → owe its full contract" is exactly how an experienced designer reads a spec; the standard defines the rest. *`why_not_bucket_a`*: knowing which signals + defaults a named protocol mandates is domain knowledge a regex cannot supply.
-
-_Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
 
 ### Skill: an `input` / `inout` port is a NET — never declare it `reg`; only `output` ports may be `reg`
 
@@ -3069,8 +2924,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 **Why this is GENERAL**: Burst-pointer advancement, whole-bus CDC synchronization, and gated address decode are structural requirements of any multi-clock-domain bus bridge, independent of the specific protocol or datapath behind it.
 
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
-
 ### Skill: phase-checkpoint DUT must key its own phase advance off the same event the testbench uses to sequence stimulus
 
 **Pattern**: When a design has distinct sequential phases (e.g. train-then-test) driven by a testbench that samples outputs at fixed checkpoints rather than via an explicit handshake, the DUT must advance its internal phase using the SAME signal/event the testbench uses to pace stimulus (e.g. input-change detection via registered comparators plus a fixed-length tick counter) — not an independently-derived timing source. Otherwise phase-N results can land on the wrong checkpoint depending on how long each stimulus vector is held.
@@ -3082,8 +2935,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 **Worked pattern** (anonymized): A two-phase (train/test) numeric datapath whose internal phase counter free-ran independent of stimulus timing produced correct results only when stimulus happened to be held for exactly the assumed duration; tying phase advance to registered input-change detection plus the testbench's known slot length made results checkpoint-accurate regardless of hold duration.
 
 **Why this is GENERAL**: Any DUT tested via fixed-checkpoint sampling (rather than handshake) must track the testbench's implicit timing model explicitly in its own state machine; this applies across any multi-phase pipeline/datapath class, not one specific circuit.
-
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
 
 ### Skill: parallelized per-lane stateful encoders — independent replicated state, and emit-and-restart-at-1 termination
 
@@ -3097,8 +2948,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 **Why this is GENERAL**: Per-lane state isolation and the emit-then-restart-at-1 rule are structural correctness requirements for any parallelized or max-length-bounded run/counter encoder, independent of data width or lane count.
 
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
-
 ### Skill: Moore transaction FSM — default-clear one-cycle strobes, sequence multi-pulse outputs across states, latch decisions on entry
 
 **Pattern**: For a Moore/registered-output transaction FSM (e.g. dispense, return-change, error, cancel signals), every one-cycle output strobe must be driven by a per-cycle default-clear at the top of the sequential block, then set only in the state that owns that event — this guarantees exactly-one-cycle pulses with no stale/stuck outputs. When a transaction produces multiple distinct pulses, sequence them across separate states (e.g. a dedicated wait state) so they never overlap and are cleanly one edge apart. Level-based inputs (buttons, cancel) must be edge-detected via a registered "previous" sample so only the rising edge triggers action, and decision inputs (selection, price) should be latched into registers on entry rather than re-read combinationally later.
@@ -3111,8 +2960,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 **Why this is GENERAL**: Default-clear-then-set strobe generation, state-sequenced multi-pulse outputs, and edge-detected level inputs are universal patterns for any registered-output controller FSM producing discrete transaction events, regardless of the specific transaction domain.
 
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
-
 ### Skill: counting-sort FSM — cumulative-sum placement direction determines stability, shadow next-state arrays avoid latches
 
 **Pattern**: For a multi-cycle counting-sort FSM, correctness hinges on two coupled details: build the cumulative/prefix sum so `count[v]` holds the count of elements `<= v`, then scan the INPUT array from LAST element to FIRST, placing `out[count[val]-1] = val` and decrementing `count[val]` — this last-to-first scan direction is what makes the sort stable; scanning first-to-last silently corrupts the relative order of equal keys. Additionally, every register/array updated in the combinational next-state logic needs a shadow "next_*" copy with a default assignment (to avoid inferred latches), committed to the real registers in a single clocked block.
@@ -3124,8 +2971,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 **Worked pattern** (anonymized): A counting-sort FSM that scanned the input first-to-last during placement produced a numerically-sorted but not stably-ordered output for duplicate keys; reversing the scan direction to last-to-first fixed stability without changing the histogram/cumulative-sum logic.
 
 **Why this is GENERAL**: The last-to-first placement rule for stability is a textbook counting-sort property applicable to any such algorithm regardless of data width or element count; the shadow-next-state-with-default pattern is a general latch-avoidance technique for any FSM with array-valued state.
-
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
 
 ### Skill: glitch-free clock mux — cross-coupled break-before-make enables, never a combinational sel decode
 
@@ -3140,8 +2985,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 **Why this is GENERAL**: The cross-coupled break-before-make enable structure is the canonical glitch-free clock-mux topology, applicable to any two (or more, cascaded) asynchronous clock sources regardless of frequency or use case.
 
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
-
 ### Skill: stream width downsizer — capture-then-drain FSM emitting from a held register, not the live input
 
 **Pattern**: A width downsizer (wide word → several narrower beats) must be a phase-counting state machine that captures the wide input word into a holding register on the accepting cycle, then emits the sub-words across subsequent beats in a fixed, spec-defined order (e.g. high sub-word first), deasserting the upstream ready signal during the multi-beat drain so the source cannot overwrite the word mid-split. Each emitted sub-word must come from the CAPTURED register, never the live input port (which may have already changed), and the valid output must remain asserted for every beat of the split.
@@ -3153,8 +2996,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 **Worked pattern** (anonymized): A downsizer that combinationally passed through slices of the live input word lost the second beat whenever the upstream advanced its data before the split finished; capturing the wide word once and emitting from the captured register across the beat count fixed the data corruption.
 
 **Why this is GENERAL**: Capture-then-drain from a held register, with upstream backpressure during the drain, is the general structural requirement for any stream width-downsizing adapter regardless of the specific width ratio or byte order.
-
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
 
 ### Skill: cross-clock interval monitor — sampled-edge detection, complete-interval-only comparison, warm-up suppression
 
@@ -3168,8 +3009,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 **Why this is GENERAL**: Sampled edge-detection, compare-then-restart-at-1 interval measurement, and warm-up suppression are structural requirements for any cross-clock-domain interval/frequency monitor, independent of the specific signal being measured.
 
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
-
 ### Skill: command-strobe FSM — default-deassert registered strobes, decode polarity literally from the spec's truth table
 
 **Pattern**: For a command-driven controller FSM producing multiple protocol strobe outputs (e.g. chip-select, address-strobe, write-enable style signals), drive them as registered outputs with an explicit default-deassert at the top of the clocked block each cycle, letting only the currently active state override specific bits. This guarantees each command is asserted for exactly one cycle and auto-clears without needing explicit clear logic in every state. Critically, decode the strobe polarity LITERALLY from the spec's per-command truth table rather than assuming a conventional (e.g. standard-protocol active-low) polarity, since a checker compares exact bit patterns per state against the spec, not against convention.
@@ -3181,8 +3020,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 **Worked pattern** (anonymized): A memory-controller-style FSM that assumed standard active-low strobe conventions produced strobes with inverted polarity relative to the spec's stated truth table, causing every command to read as its logical opposite to the checker; reading the polarity bit-for-bit from the spec's table (rather than assuming convention) fixed all commands simultaneously.
 
 **Why this is GENERAL**: Default-deassert registered strobe generation is a universal technique for any one-cycle command-pulse FSM; literal truth-table polarity decoding (rather than assumed convention) applies to any spec that defines its own bit-level command encoding.
-
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
 
 ### Skill: single-transfer bus-protocol bridge — combinational address-phase passthrough with double byte-enable decode
 
@@ -3196,8 +3033,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 **Why this is GENERAL**: Combinational address-phase forwarding and dual byte-enable decoding (size + address-bit patch) are structural requirements of any bus-protocol bridge handling single transfers with sub-word granularity, independent of the specific source/destination protocols.
 
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
-
 ### Skill: stream width upsizer with format/sign-extension — single register stage, carry bit replaces original MSB
 
 **Pattern**: For a stream (AXI-Stream style) width upsizer that also performs format conversion or sign-extension, the widening logic itself should be purely combinational, with exactly ONE register stage placed on the payload+valid path so the output valid/data appear the cycle AFTER the input valid (a clean one-cycle latency). The input-ready signal should pass straight through combinationally from the output-ready, so an input transfer is accepted only in cycles the downstream can absorb the pipelined result. The subtle correctness trap is bit assembly when the format/sign option is enabled: a carried/sign bit REPLACES the original most-significant bit of the source word and drives the upper fill, giving an output layout of `{fill, carry_bit, data[MSB-1:0]}` — NOT a blind zero-extend or straight concatenation of the full source word onto the wider field.
@@ -3209,8 +3044,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 **Worked pattern** (anonymized): A width upsizer with an optional sign-extend mode that simply zero-extended the source word (ignoring the sign-fill requirement) produced numerically wrong widened values whenever the mode was enabled and the source's top bit was set; replacing the top bit with the dedicated carry/sign bit and filling above it fixed the output for all signed test vectors.
 
 **Why this is GENERAL**: The single-register-stage pipeline structure and the "carry/sign bit replaces original MSB" bit-assembly rule apply to any width-upsizing stream adapter offering a signed/format-aware mode, independent of the specific width ratio.
-
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
 
 ### Skill: command-sequencer FSM — snapshot configuration on accept, exempt only a continuously-monitored abort input
 
@@ -3224,8 +3057,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 **Why this is GENERAL**: Configuration-snapshot-on-accept with a continuously-live abort exception is a general pattern for any timed, parameter-driven sequencer FSM, independent of the specific operation being sequenced.
 
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
-
 ### Skill: mode-configurable MAC/dot-product — per-mode operand signedness, not a global signed/unsigned assumption
 
 **Pattern**: In a mode-configurable MAC or dot-product unit that supports multiple data interpretations (e.g. complex vs real-only operation), operand signedness is PER-MODE, not global. One mode's fields may be genuinely signed (requiring `signed` extraction/sign-extension), while another mode's operands may span the FULL unsigned range and must be treated as unsigned — zero-extending and multiplying as unsigned, since treating them as signed silently negates values at or above the sign-bit boundary. Accumulators and products must be sized to avoid overflow across the maximum accumulation count, and output packing (which fields occupy which bits) differs by mode and must follow the spec exactly for each mode separately.
@@ -3237,8 +3068,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 **Worked pattern** (anonymized): A dot-product unit that treated all operands as signed regardless of mode produced negative results for a real-only mode's full-range unsigned inputs whenever the top bit was set; switching that mode's extraction to unsigned (while keeping the complex mode's extraction signed) fixed the discrepancy without touching shared accumulation logic.
 
 **Why this is GENERAL**: Per-mode signedness (rather than a single global assumption) is a structural requirement for any multi-mode arithmetic datapath where different modes interpret the same bit-width fields differently.
-
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
 
 ### Skill: streaming MAC accumulator — exact width sizing, valid-gapped stage freeze, and in-flight reload at window boundaries
 
@@ -3252,8 +3081,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 **Why this is GENERAL**: Exact accumulator width sizing, per-stage valid gating for gap-tolerant pipelines, and load-not-zero at window boundaries are structural requirements for any streaming multi-tap accumulation datapath, independent of the specific operand width or window length.
 
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
-
 ### Skill: time-base generators — derive strobe enables from a down-counter, never gate the clock
 
 **Pattern**: A clock-domain time-based generator (millisecond/microsecond tickers, delay/duration blocks) must derive its slow time bases as single-cycle strobe pulses from a down-counter loaded with `(CLOCK_HZ / 1_000_000) * PERIOD_US` cycles, and use those strobes purely as clock-ENABLES gating register updates on the one system clock. The clock itself must never be divided or gated.
@@ -3265,8 +3092,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 **Worked pattern** (anonymized): a tone/timer block needed a 1ms tick and, nested inside it, a slower square-wave toggle. The us-tick down-counter strobes every N cycles; the ms duration counter only decrements on the us strobe; the square wave only toggles on the ms strobe. `busy` is `duration_cnt != 0`; `done` is the registered-busy falling edge, giving a clean one-cycle pulse at the exact stop cycle.
 
 **Why this is GENERAL**: Every multi-rate synchronous design (timers, baud generators, PWM, sequencers) needs this same strobe-as-enable idiom to stay single-clock-domain and glitch-free; it is not specific to one peripheral.
-
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
 
 ### Skill: change/edge detectors — compare against a registered previous sample, count flop stages for stated latency
 
@@ -3281,8 +3106,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 **Why this is GENERAL**: The registered-compare idiom is the only correct way to build any edge/change detector in synchronous logic; counting flop stages to match a stated latency generalizes to any spec that gives an exact cycle offset for an output.
 
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
-
 ### Skill: mode-selected multi-variant encoders — keep every variant always-running, mux combinationally at the output
 
 **Pattern**: In a mode-selected block where several stateful variants (e.g. different line-code encodings, each with running state like an alternating-invert toggle or running parity) share one output, every variant's internal state must be computed and registered EVERY cycle regardless of which mode is currently selected. The mode selector is a purely combinational mux applied AFTER all variants update, never a gate on the variants' own update logic.
@@ -3294,8 +3117,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 **Worked pattern** (anonymized): a serial line encoder supports several line codes selected by a mode input; one code needs a running invert-toggle, another a running parity bit. Both toggle/parity registers update every clock regardless of the selected mode; a combinational case-mux on `mode` picks which encoder's bit drives `serial_out`, with `serial_out` forced to 0 when disabled. Input validity is checked with `if (serial_in === 1'bx || serial_in === 1'bz)`.
 
 **Why this is GENERAL**: Any hardware multiplexed among multiple stateful algorithms needs "always update, mux at output" to avoid losing history on temporary deselection; the X/Z case-equality trap applies to any validity check on external inputs.
-
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
 
 ### Skill: interruptible-halt FSMs — checkpoint the pre-interrupt state exactly once, guard against overwrite
 
@@ -3309,8 +3130,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 **Why this is GENERAL**: Any preemptive/interrupt-and-resume FSM pattern (fault handling, pause/resume, emergency stop) needs the same "checkpoint once, guarded" idiom regardless of the specific states involved.
 
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
-
 ### Skill: event-triggered accumulators — detect distinct events with registered-previous comparators, not every clock
 
 **Pattern**: An accumulator that must update "once per distinct input event" (not once per clock) has to detect the event by comparing each relevant input against its own registered previous value (`a != a_prev`, `sel != sel_prev`). Accumulating on every clock edge regardless of whether the input actually changed causes identical held inputs to be counted repeatedly, which is the dominant bug in this class.
@@ -3322,8 +3141,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 **Worked pattern** (anonymized): an accumulator sums a signed step value only when a `data` input changes, but resets and reseeds when a `select`/`control` input changes first. `sel_prev <= sel; data_prev <= data;` every cycle; `if (sel != sel_prev) acc <= seed_from(data); else if (data != data_prev) acc <= acc + step;`.
 
 **Why this is GENERAL**: The "registered-previous, unconditional update, priority-ordered event branches" pattern is the standard idiom for any edge-triggered-by-value-change accumulator, independent of what is being accumulated.
-
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
 
 ### Skill: microcoded datapath sequencers — follow the spec's literal polarity and enable-combination table
 
@@ -3337,8 +3154,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 **Why this is GENERAL**: Any microcoded/bit-sliced control datapath built from a spec's control table has this same failure mode of "look-alike but distinct" enable equations; the discipline of transcribing the literal table (not inferring uniformity) generalizes across all such designs.
 
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
-
 ### Skill: word-wide LFSR/PRBS generators — unroll the bit recurrence combinationally, use an independent reference LFSR for checking
 
 **Pattern**: A word-wide (multiple bits per clock) LFSR must be built by UNROLLING the single-bit shift/feedback recurrence WIDTH times inside a combinational block using a temporary copy of the register, then clocking only the FINAL unrolled state into the real register once per cycle. Clocking the register WIDTH times per cycle is wrong and produces only one output bit per clock instead of WIDTH bits. For a matching PRBS checker, the correct structure is an INDEPENDENT local LFSR that free-runs with the same seed/tap evolution as the transmitter, XORed against the received data to detect errors — loading the received data into the shift register itself corrupts the reference sequence and creates a startup transient.
@@ -3350,8 +3165,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 **Worked pattern** (anonymized): a WIDTH-bit-per-clock PRBS generator loops WIDTH times per cycle over a temp copy of an LFSR register to produce WIDTH new bits, then commits once; the matching checker keeps its own free-running reference LFSR and XORs it against `data_in` for the error flag, never loading `data_in` into the reference state.
 
 **Why this is GENERAL**: The unroll-then-commit-once idiom is required for any parallelized LFSR regardless of width or polynomial; the independent-reference-LFSR-for-checking idiom is the standard architecture for any PRBS checker.
-
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
 
 ### Skill: LFSR-style CRC/RS shift encoders — GF(2) feedback via blocking assign, taps via non-blocking
 
@@ -3365,8 +3178,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 **Why this is GENERAL**: The blocking-feedback/non-blocking-taps mixed idiom is the standard, well-known correct construction for any LFSR-based polynomial encoder in Verilog/`SystemVerilog`, independent of the specific generator polynomial or width.
 
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
-
 ### Skill: chained registered pipeline stages — align data latency to the downstream consumer's own register depth
 
 **Pattern**: When a registered producer stage (e.g. a serial-to-parallel shift register that signals completion via a "done" pulse) feeds a registered consumer stage (e.g. a CRC/checksum generator with its own internal register latency), the producer's output must be delayed by exactly the consumer's own latency before being presented to the consumer, so the consumer's output validity coincides with the producer's "done" signal. Wiring the live/unregistered producer output straight into the consumer makes the downstream checker sample a stale or partial word, because the consumer's own pipeline adds extra delta cycles the producer's "done" timing doesn't account for.
@@ -3378,8 +3189,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 **Worked pattern** (anonymized): a shift register completes a parallel word and asserts `done`; a CRC generator downstream needs 2 cycles of internal latency before its checksum is valid. The parallel word is piped through two extra delay registers (`parallel_out_q1`, `parallel_out_q2`) before being fed to the CRC generator, so the CRC's valid output lines up with `done` rather than lagging or leading it.
 
 **Why this is GENERAL**: Any multi-stage registered datapath composed of independently-designed sub-blocks needs this pipeline-alignment discipline; it is a general consequence of composing register-latency stages, not specific to shift-registers or CRC.
-
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
 
 ### Skill: APB-attached peripherals — drive PREADY/PSLVERR only in the ACCESS phase, cross clock domains with a glitch-free mux
 
@@ -3394,8 +3203,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 **Why this is GENERAL**: PREADY/PSLVERR access-phase timing is a fixed requirement of the AMBA APB protocol for any compliant peripheral; the glitch-free clock-mux requirement applies to any multi-clock-domain hardware selecting between live clock sources, not just APB peripherals.
 
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
-
 ### Skill: cardinality-changing streaming stages — decouple with a full-frame buffer and separate receive/emit FSM phases
 
 **Pattern**: When a streaming (e.g. AXI-Stream) processing stage changes the number of elements between input and output (a resize that drops samples, a border/padding operation that adds a ring so the frame grows), the stage must NOT attempt to pass data through combinationally in lockstep. Instead it must decouple input and output with a full buffer (RAM sized for the larger of the two frames) and two separate FSM phases: a RECEIVE phase that accepts and stores the whole input frame, and a separate EMIT phase that reads the buffer and produces the output frame at its own pace.
@@ -3407,8 +3214,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 **Worked pattern** (anonymized): a frame stage adds a 1-pixel border, growing a WxH frame to (W+2)x(H+2). It buffers the full incoming frame during a RECEIVE phase (ready only while filling), then in an EMIT phase walks output coordinates (ox, oy) from 0 to W+1/H+1, advancing only on downstream handshake; interior coordinates index the stored buffer at `(oy-1, ox-1)` while border coordinates emit a fixed border color, with row/frame boundary side-signals derived from the output coordinate counters.
 
 **Why this is GENERAL**: Any element-count-changing streaming transform (resize, crop, pad, reshape) requires this buffer-plus-two-phase decoupling; it is a structural consequence of input and output frame sizes differing, independent of the specific transform.
-
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
 
 ### Skill: register files with BIST — one synchronous write driver muxing BIST and normal writes on the primary clock
 
@@ -3422,8 +3227,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 **Why this is GENERAL**: The single-synchronous-driver-with-muxed-source rule is a basic requirement for any memory array with more than one write source (BIST, redundancy repair, multiple write ports), independent of array size or BIST algorithm details.
 
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
-
 ### Skill: LIFO stacks — one shared top-of-stack pointer, read from ptr-1 not ptr, register status flags
 
 **Pattern**: A LIFO/stack uses a SINGLE shared top-of-stack pointer, unlike a FIFO's separate head/tail pointers. A write stores at `memory[ptr]` and then increments `ptr`; a read must fetch from `memory[ptr-1]` and then decrement `ptr` — the top element to read is always one below the current write pointer, not at the pointer itself. Every mutation must be guarded by full/empty flags so an overflow or underflow attempt leaves both memory and pointer completely untouched.
@@ -3435,8 +3238,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 **Worked pattern** (anonymized): a stack's read logic is `data_out <= memory[ptr-1]; valid <= (pop_req && !empty);` while `error <= (push_req && full) || (pop_req && empty);`, and `ptr` updates by +1 on a guarded push or -1 on a guarded pop, never both in the same cycle.
 
 **Why this is GENERAL**: The single-shared-pointer, read-at-ptr-minus-one structure is the defining property of any LIFO regardless of width or depth; the registered-flag timing discipline applies to any stack exposing status/valid signals to a checker.
-
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
 
 ### Skill: iterative pointer-tree traversal in hardware — explicit stack, one-bit-wider null encoding, fixed per-node cycle cost
 
@@ -3451,8 +3252,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 **Why this is GENERAL**: The one-bit-wider-null-encoding requirement is a basic hardware-pointer necessity for any structure needing a "no such node" sentinel; the fixed-per-node-cost FSM discipline applies whenever a spec gives a closed-form total-latency formula for a data-structure traversal.
 
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
-
 ### Skill: packed-bus DSP reduction blocks — exact sub-sample indexing, signed extremum, and registered-input latency discipline
 
 **Pattern**: Packed-bus DSP blocks that reduce N sub-samples per cycle (decimation, peak/min detection, downsampling) fail in three specific, recurring ways: (1) wrong sub-sample indexing — slot `s` of a packed bus lives at bits `[DATA_WIDTH*s +: DATA_WIDTH]` with slot 0 at the LSB end, so a decimated output slot `q` must map to input slot `q*DEC_FACTOR`, and the exact packing convention must follow the supplied bit-index contract; if input is silent or ambiguous, KEEP the slot-0-at-LSB DEFAULT and record it as an assumption; an explicit supplied mapping overrides it; (2) unsigned comparison of signed data — peak/min extremum logic must apply `$signed()` to each extracted slice and use a signed accumulator, or negative samples compare as spuriously-large unsigned values; (3) latency mismatch — a stated "1 cycle latency" means the input bus AND its `valid` must be registered TOGETHER (with async reset clearing both), with all decimation/peak/packing computed purely combinationally from that registered data, so the data and any derived value become valid on the exact same cycle `valid_out` asserts.
@@ -3464,8 +3263,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 **Worked pattern** (anonymized): a peak-detector-with-decimation block over N packed signed samples per cycle: `reg_in <= data_in; reg_valid <= valid_in;` (registered, async-reset cleared) each cycle; combinationally, `peak = $signed(reg_in[...]) > $signed(peak) ? reg_in_slice : peak` across all N slots, and `dec_out[q] = reg_in[(q*DEC):(q*DEC+W-1)]`; `valid_out <= reg_valid` matching the same registered-and-then-combinational structure.
 
 **Why this is GENERAL**: Sub-sample bit-slice indexing conventions, signed-vs-unsigned comparison bugs, and register-then-combine latency discipline are recurring, class-wide failure modes for any packed-bus DSP reduction block, independent of the specific reduction function (decimate, peak, min, sum).
-
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
 
 ### Skill: iterative fixed-point accumulators — wide intermediate math, implicit narrow-target truncation on store
 
@@ -3479,8 +3276,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 **Why this is GENERAL**: The wide-intermediate/narrow-implicit-truncate-on-store pattern is the standard way fixed-point iterative accumulators match a wrap-style reference model in any language with natural narrowing assignment semantics; it generalizes across any datapath computing intermediate products/deltas wider than its persistent state register.
 
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
-
 ### Skill: streaming-source-to-AXI-Stream bridge — latch after fixed read latency, hold on stall
 
 **Pattern**: A bridge from a strobed source buffer (read-enable pulse → data valid N cycles later) into an AXI-Stream-style interface must be a single FSM that (1) never samples the source word in the same cycle it pulses the read strobe — it must wait the source's fixed read latency before latching, and (2) once the output valid is asserted, must hold data/tlast/tuser and valid stable, advancing only on the downstream handshake (valid && ready). If the sink is not ready, the bridge stalls in place rather than dropping or re-fetching a beat.
@@ -3492,8 +3287,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 **Worked pattern** (anonymized): a source memory/FIFO with a one-pulse read-enable and a fixed N-cycle read latency feeding a downstream valid/ready consumer. Naive code latched data on the same cycle as the strobe (reading stale/undefined data) or let valid drop mid-beat under backpressure (dropping data). Adding an explicit wait-state counter for the latency, and gating all state advance on `valid && ready`, produced bit-exact streaming behavior under both idle and back-pressured downstream.
 
 **Why this is GENERAL**: Any bridge between a latency-delayed strobe-style memory/peripheral interface and a modern streaming handshake interface has this exact two-part hazard (early sampling, and back-pressure data loss); the fix pattern (explicit latency wait + handshake-gated hold) is protocol-agnostic.
-
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
 
 ### Skill: FSM-gated register file — key side effects off registered current state, one-hot status pulses
 
@@ -3507,8 +3300,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 **Worked pattern** (anonymized): a command-driven register file where "valid" and a XOR-transform were originally computed from next_state, causing effects to appear one cycle before the tester expected them. Re-deriving effects from the registered current state (and making the valid flag one-hot per state) aligned the timing exactly and resolved the read/write collision.
 
 **Why this is GENERAL**: The next_state-vs-state timing-off-by-one is one of the most common FSM authoring bugs across any command/register-driven digital block; the one-hot-status-pulse-on-current-state fix generalizes to any design with tester-checked cycle latency.
-
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
 
 ### Skill: named-state protocol outputs — state owns the full observable cycle
 
@@ -3551,8 +3342,6 @@ _Refined by benchmark-enhancement-capture 2026-08-31 (Issue #1950; generated-str
 
 **Why this is GENERAL**: Any serial protocol with an end-of-frame integrity check faces this same settle-before-sample race and delay-vs-counter gating choice; the fix (sticky flag + counter-gated validation) is protocol-agnostic.
 
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
-
 ### Skill: APB-style register-file peripheral — phase-qualified write strobe, ungated control/disable register, synchronized inout
 
 **Pattern**: For APB and similar memory-mapped register-file peripherals, the write strobe must be qualified with the correct bus phase — write should fire on `psel & pwrite` gated to a single phase (the SETUP edge, i.e. `~penable`) so each register updates exactly once per transaction, not every cycle penable happens to be held. `prdata` must be driven only during an actual read (else it should read 0 when idle). A subtle gating trap: when a global power-down/soft-disable bit masks normal register writes and interrupts, the control register that OWNS that disable bit (and any related interrupt-status bit) must itself remain ungated by the disable — otherwise the block latches permanently off with no software path to re-enable it. Bidirectional inout pins need per-bit tri-state control (`dir ? dout : 1'bz`) with the pin read back through a 2-flop synchronizer before it feeds any edge/level interrupt logic, and read data should pass through one register stage to match a stated single-cycle read latency.
@@ -3564,8 +3353,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 **Worked pattern** (anonymized): an MMIO peripheral with a global soft-disable bit gating all register writes, where the disable bit's own control register was accidentally included in the gated set — once disabled, software had no path to re-enable it. Moving the disable-owning register outside the gate, and phase-qualifying the write strobe to the SETUP edge, fixed both the deadlock and a double-write bug.
 
 **Why this is GENERAL**: The phase-qualified-write and self-locking-disable-register traps recur in every APB/memory-mapped peripheral design with a global enable bit; the GPIO synchronizer requirement is universal to any peripheral exposing bidirectional pins.
-
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
 
 ### Skill: BST in-order-rank search — count left-subtree sizes on right turns via explicit sub-traversal
 
@@ -3580,8 +3367,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 **Why this is GENERAL**: In-order rank computation from raw child-pointer arrays is a standard BST/order-statistics problem whenever subtree size is not maintained as auxiliary state; the sub-traversal-on-right-turn technique applies to any tree shape or size.
 
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
-
 ### Skill: parameterized generate-loop array — named begin block, no accidental else on hold-state flop
 
 **Pattern**: A parameterized array of identical submodules should be instantiated with a `genvar`-driven `generate for` loop, instantiating the child inside a named `begin:label` block and indexing an unpacked wire/reg array for per-instance outputs; the top-level output should be wired from the CORRECT boundary index (e.g. the last element), not index 0 or an arbitrary one. A distinct register-update trap lives inside the leaf cell: a "hold previous value unless enabled" flop must have NO `else` clause after its `else if (enable)` branch — adding one (even to explicitly hold or clear) silently breaks the "retain state when disabled" semantics that an implicit latch-hold relies on.
@@ -3593,8 +3378,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 **Worked pattern** (anonymized): a generate-for array of identical processing elements where the leaf enable-gated register had an added else-clear branch, which silently zeroed the register every disabled cycle instead of holding state — breaking the intended pipeline/accumulator behavior. Removing the else branch restored correct hold-on-disable behavior.
 
 **Why this is GENERAL**: Generate-for arrays of repeated leaf cells are ubiquitous (systolic arrays, neuron arrays, lane-replicated datapaths); the implicit-latch-via-omitted-else pattern for hold-on-disable registers is a fundamental Verilog idiom independent of what the leaf cell computes.
-
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
 
 ### Skill: directed rounding unit — round-up decision purely from guard/sticky/sign/LSB, never remainder magnitude
 
@@ -3608,8 +3391,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 **Why this is GENERAL**: Guard-sticky-round decision logic is the standard IEEE-754-style rounding formulation used across any FP/fixed-point unit; deriving it from bit flags rather than remainder magnitude is the textbook-correct, synthesizable approach.
 
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
-
 ### Skill: skid buffer — combinational pass-through ready, registered stall-only capture
 
 **Pattern**: A skid buffer must decouple the combinational ready/valid pass-through path from the registered stall path: `o_ready = ~buffer_full` (a pure function of the buffer's own occupancy, never of downstream ready), and `o_data`/`o_valid` are a mux — held beat when the skid buffer is full, else the input passed through combinationally. The skid register is captured ONLY on a stall event (input valid and not ready while the pass-through was otherwise empty) and released once downstream becomes ready. The naive trap is either registering the entire datapath (adding unwanted latency) or making upstream-ready depend combinationally on downstream-ready (creating a ready→valid→ready combinational loop across pipeline stages).
@@ -3621,8 +3402,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 **Worked pattern** (anonymized): a pipeline decoupling stage where `ready` was computed as a function of the downstream stage's `ready` signal, creating a combinational loop across two chained stages that timing tools flagged. Rewriting `ready` to depend only on local buffer occupancy, with a genuinely-single-register skid path, broke the loop while preserving zero-bubble throughput.
 
 **Why this is GENERAL**: The skid-buffer pattern (one register absorbing exactly one beat of back-pressure with purely local ready generation) is the canonical solution for combinational-loop-free valid/ready pipelining, applicable to any streaming or bus protocol.
-
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
 
 ### Skill: parallel-prefix adder — half-sum propagate, carry vector one bit wider than operands
 
@@ -3636,8 +3415,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 **Why this is GENERAL**: Every parallel-prefix adder topology reduces to the same flat carry recurrence for correctness verification; the width/off-by-one traps recur regardless of which specific prefix tree (Kogge-Stone, Brent-Kung, etc.) is chosen.
 
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
-
 ### Skill: AXI4-Lite register slave — independent self-clearing per-channel handshake FSMs, decode on latched address
 
 **Pattern**: An AXI4-Lite slave register file must implement each channel (write-address, write-data, write-response, read-address, read-data) as an INDEPENDENT, self-clearing handshake FSM: assert the channel's `*ready` only until the corresponding `*valid` fires (one-shot, then de-assert), latch the address into a holding register at accept time, and hold `bvalid`/`rvalid` asserted until the master's `bready`/`rready` acknowledges before dropping it — dropping early loses the response or causes the bus to double-fire. Register-file decode must use the LATCHED address, never the live bus signal (which may have already changed). Write-strobe semantics must be honored: a full write-strobe updates the register, a partial or missing strobe should acknowledge without modifying data. Writes to read-only or undefined offsets must always return an error response (SLVERR), never silently complete OKAY.
@@ -3649,8 +3426,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 **Worked pattern** (anonymized): an AXI4-Lite register slave that decoded the write address combinationally from the live bus (which changed as soon as awready deasserted) and dropped bvalid the same cycle it was asserted rather than waiting for bready — causing writes to occasionally land in the wrong register and responses to be missed by the master. Latching the address at accept time and holding bvalid until bready fixed both defects.
 
 **Why this is GENERAL**: The five-channel independent-handshake structure, latched-address decode, and mandatory SLVERR-on-illegal-access are universal AXI4-Lite slave requirements independent of what registers the particular slave implements.
-
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
 
 ### Skill: APB master FSM — stable signals across SETUP+ACCESS, PENABLE only in ACCESS, timeout on stuck slave
 
@@ -3665,8 +3440,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 **Why this is GENERAL**: The IDLE/SETUP/ACCESS timing and PENABLE-only-in-ACCESS rule are protocol-mandated for every APB master regardless of the peripheral behind it; the timeout-recovery and fixed-priority-arbitration patterns generalize to any master facing an unreliable or multi-source request environment.
 
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
-
 ### Skill: pipelined GF-matrix cipher stage — match valid pipeline depth to data pipeline depth exactly
 
 **Verification tier**: Tier 2 — VERIFIED converge-aid (zero-oracle blind A/B: lesson injection produced a directionally-correct improvement — closer latency, progressed past an earlier failure stage — but did not reach a full PASS alone).
@@ -3680,8 +3453,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 **Why this is GENERAL**: Valid/data pipeline-depth mismatch is a universal bug class in any fixed-latency pipelined datapath; the GF(2^8) xtime-and-key-order asymmetry between encrypt/decrypt is a standard invariant across any block-cipher-style linear-transform stage.
 
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
-
 ### Skill: run-length encoder — emit-on-event only, restart run count at 1, phase-align via registered prev-sample
 
 **Pattern**: A streaming run-length counter must emit `valid` for exactly one cycle on either of two distinct events — a value transition (current sample differs from the previous registered sample) OR the run counter saturating at its configured maximum — and must hold `valid` low otherwise (never emit continuously while a run continues). On either triggering event, the just-completed run length must be latched into the output register while the counter restarts at 1 (not 0), since the current sample already belongs to the start of the next run. All of valid/run-value/data-out must be phase-aligned to the same clock edge, which is achieved by using a single registered "previous sample" value for both the edge-detection comparison and the emitted data-out.
@@ -3694,8 +3465,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 **Why this is GENERAL**: Emit-on-event-not-continuously and restart-count-at-1-not-0 are universal correctness rules for any streaming run-length / delta encoder, independent of the specific data width or maximum run length parameter.
 
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
-
 ### Skill: MMIO timer with level interrupt — edge-detect the match with a sticky flag, write-clear wins ties
 
 **Pattern**: For an MMIO timer/counter that raises a level interrupt on a count-match, the interrupt must be EDGE-detected — pulsed/set only on a NEW match transition (tracked via a sticky "already-matched" flag) — rather than asserted continuously for as long as `count == match` holds; otherwise a held match condition perpetually re-triggers the interrupt. A software write to the status/clear register must take PRIORITY over the match-set path in the same cycle, so that a clear issued the same cycle a new match would otherwise set the flag correctly wins — otherwise the write-to-clear can never actually clear a persistently-matching timer.
@@ -3707,8 +3476,6 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 **Worked pattern** (anonymized): an MMIO timer where the interrupt-status bit was set combinationally whenever `count == match`, so it stayed asserted (and immediately re-asserted after any clear) for the entire duration the counter held at the match value. Adding a sticky "already matched" flag to edge-detect the transition, and giving the clear-write path same-cycle priority over the set path, made the interrupt correctly pulse once and stay clearable.
 
 **Why this is GENERAL**: Level-vs-edge interrupt confusion and write-clear-priority races are a universal MMIO peripheral bug class, applicable to any counter, timer, or status-flag register with a software-clear path.
-
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
 
 ### Skill: async FIFO Gray pointer — register the current binary position by default
 The DEFAULT registers Gray for the current binary position after this source edge's accepted operation.
@@ -3939,10 +3706,10 @@ confirm the assertion fails again. Also rerun the original public interface
 sequence. A tool difference alone does not establish a fork bug, and switching
 the canonical simulator or suppressing its failure does not repair the RTL.
 
-### Step3 reset-role authoring
+### Native reset-role authoring
 
 Follow `skills/rtl-review/SKILL.md` when ordinary RDC emits
-`RESET_ROLE_UNRESOLVED`. Use the canonical Step3 request/answer CLI in
+`RESET_ROLE_UNRESOLVED`. Use the native reset-role request/answer CLI in
 `programs/ai_signed_judgement.py`, cite the actual design input and exact current
 source context for every state/Q/selector candidate, and leave unsupported or
 conflicting roles unresolved. Read all current input, not only the selected
@@ -3950,10 +3717,10 @@ quote, and explain how each state/branch/selector follows from that input.
 Supported inference may use any input language; the program does not classify
 meaning with English keywords or detect a dishonest review. Do not manufacture
 facts in Phase1 documents.
-The signature attributes reviewed bytes; it does not prove intent, erase native
-reset cycles or replace the deterministic ordinary consumer. A valid current
-graph is reused: role adoption and consumer-only continuation must not rebuild
-its producer, mutate its manifest/log or invalidate unrelated signed subjects.
+Role data records the expert's interpretation of the cited input. It does not
+prove intent, erase native reset cycles or replace the ordinary native consumer.
+Read the produced graph and its actual source context. Publishing role facts
+must not rebuild that graph or alter the native tool results.
 
 ### Skill: Preserve the kind of correctness the input requests
 

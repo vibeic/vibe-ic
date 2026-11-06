@@ -11,7 +11,6 @@ if str(PROGRAMS) not in sys.path:
 
 import _tapeout_declaration as TD  # noqa: E402
 import flow_compliance_check as F  # noqa: E402
-import phase1_one_shot_runner as R  # noqa: E402
 import tapeout_declaration_check as CHECK  # noqa: E402
 import tapeout_declaration_gen as GEN  # noqa: E402
 import test_issue2277_hardmacro_owes_no_die_steps as BASE  # noqa: E402
@@ -60,22 +59,6 @@ def test_four_routes_share_one_predicate_and_refuse_the_contradiction(tmp_path):
         assert TD.die_outputs_owed(project) is owed
 
 
-def test_step_0_5ic_refuses_before_any_producer(tmp_path, monkeypatch, capsys):
-    project = _case(tmp_path, bought=True)
-    dispatched = []
-
-    def no_producer(*_args, **_kwargs):
-        dispatched.append(True)
-        raise RuntimeError("producer dispatched")
-
-    monkeypatch.setattr(R._wd, "run_host_supervised", no_producer)
-    try:
-        rc = R._run_step_0_5ic(project)
-    except RuntimeError:
-        rc = None
-    assert dispatched == []
-    assert rc == 1
-    assert MESSAGE in capsys.readouterr().err
 
 
 def test_direct_route_producer_and_gate_refuse_by_name(tmp_path, capsys):

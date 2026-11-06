@@ -27,9 +27,7 @@ Verifies, with NO benchmark-keyword/SKU overfit (pure structural fixtures):
 import ast
 import os
 import re
-import subprocess
 import sys
-import tempfile
 
 # the module lives in the plugin's benchmark/ dir (../../benchmark relative to
 # programs/tests/) — mirror the existing cvdp_gate test convention.
@@ -38,7 +36,6 @@ sys.path.insert(
                     "..", "..", "benchmark"))
 import tb_toplevel_alias as A  # noqa: E402
 import cvdp_gate as G  # noqa: E402
-import _outcome_states as states  # noqa: E402
 
 
 def _mods(src):
@@ -134,34 +131,6 @@ def test_submodule_name_mismatch_wraps():
     _alias_and_check(comp, "hebb_gates")
 
 
-def test_aliased_completion_compiles():
-    """The wrapper compiles under iverilog -g2012 -s <toplevel>."""
-    # It used to `return` here, so a host without the tool PASSED it having
-    # verified nothing. Absent tool -> NOT_VERIFIED naming the host (R-0927);
-    # present -> runs exactly as before.
-    states.require_tools("iverilog")
-    comp = ("module FindFasterClock (\n"
-            "    input  wire clk_A,\n"
-            "    input  wire clk_B,\n"
-            "    input  wire rst_n,\n"
-            "    output reg  A_faster_than_B,\n"
-            "    output reg  valid\n"
-            ");\n"
-            "  always @(posedge clk_A or negedge rst_n)\n"
-            "    if (!rst_n) begin A_faster_than_B<=0; valid<=0; end\n"
-            "    else begin A_faster_than_B<=clk_B; valid<=1; end\n"
-            "endmodule\n")
-    out = A.maybe_alias_completion(comp, "findfasterclock", _mods)
-    with tempfile.NamedTemporaryFile("w", suffix=".sv", delete=False) as f:
-        f.write(out)
-        path = f.name
-    try:
-        r = subprocess.run(
-            ["iverilog", "-g2012", "-s", "findfasterclock", "-o", os.devnull, path],
-            capture_output=True, text=True)
-        assert r.returncode == 0, f"compile failed: {r.stderr}"
-    finally:
-        os.unlink(path)
 
 
 if __name__ == "__main__":

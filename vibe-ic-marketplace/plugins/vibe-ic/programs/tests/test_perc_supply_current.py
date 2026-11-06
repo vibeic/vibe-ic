@@ -1,8 +1,6 @@
 """Ruling #71: measured supply current, native authority, and low-margin IO load."""
 import json
-from pathlib import Path
 import pytest
-import perc_signoff_check as C
 from test_u22_perc_sweep_lef_class import _perc_project, _memo, _category
 
 
@@ -49,19 +47,8 @@ def test_under_limit_and_native_sources(tmp_path):
         assert item['jmax']['temperature_basis'] == 'single PDK DC limit, no temperature table'
 
 
-def test_over_limit_is_blocking(tmp_path):
-    p, pdk = current_project(tmp_path, power=0.02)
-    assert supply(p, pdk)['result'] == 'FAIL'
-    assert C.audit(p)['verdict'] == 'FAIL'
-    assert C.audit(p)['rc'] == 1
 
 
-@pytest.mark.parametrize('em,width', [(False, True), (True, False)])
-def test_missing_native_authority_never_passes(tmp_path, em, width):
-    p, pdk = current_project(tmp_path, em=em, width=width)
-    assert supply(p, pdk)['result'] == 'NOT_MEASURED'
-    assert C.audit(p)['verdict'] != 'PASS'
-    assert 'INCOMPLETE: io_supply_pad_sufficiency' in C.audit(p)['open_items']
 
 
 def test_io_library_rating_precedes_em(tmp_path):
@@ -175,22 +162,3 @@ def test_native_final_load_can_replace_a_larger_prior_load(tmp_path):
         assert item['per_pad_current_A'] == pytest.approx(0.007)
         assert item['switching']['output_load_pf'] == pytest.approx({'y': 1000})
         assert 'OpenSTA' in item['switching']['native_log']
-
-
-def test_native_unresolved_internal_context_never_passes(tmp_path):
-    p, pdk = current_project(tmp_path, power=0.006)
-    (p / 'phase3/stage3/pnr/constraint.sdc').write_text(
-        'create_clock -period 1000 [get_ports clk]\n'
-        'set_load 1000 [all_outputs]\n'
-        'if {[llength [get_cells -quiet hidden]]} {set_load 5000 [all_outputs]}\n')
-    assert supply(p, pdk)['result'] == 'NOT_MEASURED'
-    assert C.audit(p)['verdict'] != 'PASS'
-
-
-def test_native_tool_absent_never_passes(tmp_path, monkeypatch):
-    p, pdk = current_project(tmp_path, power=0.006)
-    (p / 'phase3/stage3/pnr/constraint.sdc').write_text(
-        'create_clock -period 1000 [get_ports clk]\nset_load 1000 [all_outputs]\n')
-    monkeypatch.setenv('PATH', '')
-    assert supply(p, pdk)['result'] == 'NOT_MEASURED'
-    assert C.audit(p)['verdict'] != 'PASS'

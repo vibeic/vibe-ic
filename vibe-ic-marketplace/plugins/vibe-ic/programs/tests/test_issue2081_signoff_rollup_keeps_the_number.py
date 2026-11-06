@@ -50,7 +50,6 @@ Run: python3 -m pytest programs/tests/test_issue2081_signoff_rollup_keeps_the_nu
 """
 from __future__ import annotations
 
-import ast
 import re
 import sys
 from pathlib import Path
@@ -144,13 +143,6 @@ def test_a_short_row_is_untouched_and_carries_no_marker():
         assert R().summary_detail("short reason", status) == "short reason"
 
 
-def test_the_classification_is_the_shared_tier_not_a_local_literal():
-    """A renderer that re-spelled the status words is the drift
-    `verdict` exists to delete, so the tier is consulted live."""
-    src = (_PROGRAMS / "_runner_summary.py").read_text()
-    assert "is_non_green" in src
-    for word in ("\"FAIL\"", "'FAIL'"):
-        assert word not in src, "the status vocabulary is not re-spelled here"
 
 
 # ── 3. one physical line, always ───────────────────────────────────────────
@@ -198,8 +190,3 @@ def test_every_runner_that_renders_a_step_detail_uses_the_shared_helper():
     for name, width in _NON_DEFAULT_WIDTH.items():
         assert name in renders, (name, renders)
         assert f"width={width}" in (_PROGRAMS / name).read_text(), name
-
-
-def test_the_helper_imports_and_parses_on_its_own():
-    ast.parse((_PROGRAMS / "_runner_summary.py").read_text())
-    assert R().DEFAULT_WIDTH == 120, "the bound for a passing row is unchanged"

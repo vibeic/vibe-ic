@@ -20,8 +20,8 @@ benchmark_dispatch.py <bench> --solve
   -> task_nature_route                     (input-only advisory proposal)
   -> needs_ai_routing.jsonl                (AI judges task nature before runner)
   -> benchmark_dispatch.py <bench> --resume (hash-bound AI route validation)
-  -> vibe_ic_one_shot_runner --flow 109 --flow109-manifest ...
-       --entry-step <stable-ID> --exit-step <stable-ID>
+  -> vibe_ic_one_shot_runner
+       --entry-step <Router entry> --exit-step <Router exit>
        --execution-mode default             (normal product runner)
   -> Program candidate or declared AI backup
   -> independent hash-bound AI review
@@ -31,12 +31,11 @@ benchmark_dispatch.py <bench> --solve
   -> official host scorer
 ```
 
-For whole-IC `benchmark_clean`, use `/vibe-ic-all` only when its saved argv
-enters `vibe_ic_one_shot_runner.py` with `--flow 109`, an explicit feature
-manifest, stable-ID window, and `--execution-mode default`; then use the
-`benchmark-verify` skill. A benchmark IC must not select another solver because
-of its IC name. D09/17, D11/19, D13/21, D22/34, D23/35, D30/42 and D50/72 are
-current ID/position pairs; position is never an entry argument.
+For whole-IC `benchmark_clean`, use `/vibe-ic-all` through
+`vibe_ic_one_shot_runner.py`, then use `benchmark-verify`. The public entry
+always executes `flow_engine.py` against `flow/steps.json`; the Router controls
+its evidence window. A benchmark name never selects a solver. Report canonical
+YAML positions and step names; historical IDs remain execution details.
 
 Forbidden alternatives include:
 
@@ -264,7 +263,7 @@ plugin change is measured only in a new clean-room run.
 
 ```bash
 python3 programs/benchmark_dispatch.py <bench> \
-  --solve --dataset <DATASET> --run <FRESH_RUN> --flow109-manifest <EXPLICIT_FEATURE_INPUT.json>
+  --solve --dataset <DATASET> --run <FRESH_RUN>
 
 # Complete needs_ai_routing.jsonl from the visible input only. Then --resume
 # validates ALL issued route records and starts the normal Program runner.
@@ -415,10 +414,7 @@ Do not delete a journal or overwrite owner edits to make resume advance.
 Before invoking any official host scorer, run the deterministic cwd guard over
 the exact design and scorer working directory (and testbench when applicable):
 
-```bash
-python3 programs/benchmark_score_cwd_guard.py \
-  --design <DESIGN_DIR> --cwd <SCORER_CWD> [--tb <TESTBENCH>]
-```
+Run the existing official scorer from its documented working directory and preserve actor isolation. A separate working-directory receipt is not a scoring result.
 
 A non-zero guard verdict blocks scoring; do not treat it as advisory.
 
@@ -490,10 +486,9 @@ number. Never infer a floor merely because one attempt failed.
 After writing the per-problem triage record, validate both its internal
 consistency and whether every general recovery was absorbed into the product:
 
-```bash
-python3 programs/triage_record_check.py <TRIAGE_RECORDS.json>
-python3 programs/benchmark_triage_absorption_audit.py <TRIAGE_RECORDS.json>
-```
+Retain the failed case, native evidence, diagnosed cause, fix location and verification scope in the benchmark report. An unresolved case remains visible in the result population.
+
+Review every triage entry against its actual failed input, tool output and implemented fix. Do not let a record schema or status label replace that evidence.
 
 Either non-zero verdict blocks the result handoff.
 
@@ -626,73 +621,22 @@ three beliefs that justified it are each impossible:
 Yielding does not pause your turn; it ENDS it, and the "then write the result"
 step never runs. The rule above is not a preference about style — it is the
 only way the deliverable gets written.
-
-## Compliance gate (mandatory)
-
-Save the final result and run the skill compliance check:
-
-```bash
-python3 programs/benchmark_result_md_lint.py <RESULT.md>
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-  --requirements plugins/vibe-ic/skills/open-benchmark-methodology/compliance.yaml \
-  <RESULT.md>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in this skill directory enumerates every required
-element of your output: section headers, handoff lines, summary blocks.
-
-**Your task is not complete until the audit returns PASS.** Missing
-elements are the single largest source of skill-execution non-determinism
-across different agents.
-
 ## Handoff
 
 End with `## Summary` or `## Verdict`, followed by a clear `Next:` statement.
 
-### Current common-product feature input
+### Common product input
 
-`benchmark_dispatch.py --solve` and `--resume` accept
-`--flow109-manifest <explicit-feature-input.json>`. An ordinary bounded RTL
-request does not require the user to author that file or answer an IC/IP
-configuration question. `flow109.resolve_task_manifest` selects the shipped
-`RTL-only` profile from the general visible-source delivery and requested-evidence
-contract and retains it in the routed project's ordinary input. The normal
-public runner uses the same resolver. Proceed with this profile when the scope
-is clear; an absent optional manifest is not a reason to ask for confirmation.
-Later invocations revalidate the same profile against current sources and the
-requested window while preserving the retained input bytes.
-
-When the operator supplies a manifest, the dispatcher validates the existing
-registry, retains those exact bytes as run input, and forwards them unchanged.
-It never fills missing feature Booleans or chooses a profile from a dataset
-name, problem ID or expected answer. Physical, unbounded or conflicting scope
-still needs its normal feature/delivery resolution; malformed explicit inputs
-remain refusals. Profile selection does not approve a route or qualify tools.
-
-The confirmed task-nature receipt still controls the native entry and evidence
-exit. The bridge translates that window through current registry owner mappings
-to stable flow IDs; supplied RTL resumes at validation and cannot expand a
-lint task into physical design. Structured completion retains its normal D1
-prerequisite and semantic admission before the RTL-owner window. Existing AI
-routing, candidate review, challenge and official-score requirements are
-unchanged. Infrastructure controls and reaching an owner boundary are not a
-benchmark score or whole-product PASS.
-
-For an ordinary RTL evaluation, start without an optional feature file:
+Stage visible design documents and supplied RTL through the thin IO adapter.
+The unchanged Router decides the task's native entry and evidence exit. A
+supplied-RTL continuation resumes at validation within that same evidence
+window. The public entry always executes the native step table.
 
 ```bash
 python3 programs/benchmark_dispatch.py BENCH --solve --dataset VISIBLE_INPUTS --run FRESH_RUN
 python3 programs/benchmark_dispatch.py BENCH --resume --dataset VISIBLE_INPUTS --run FRESH_RUN
 ```
 
-Use `--flow109-manifest EXPLICIT_FEATURE_INPUT.json` when the operator has
-actually supplied feature choices that must be retained.
-
-The same run retains that feature input; `--resume` does not require another
-per-task approval or feature file. Existing input-only AI routing still must be
-confirmed before the normal Program author executes. Authoring is the current
-RTL-author producer, not structural preflight merely sharing its native start
-number. Its existing owner verification closure remains mandatory, and a
-functional-evidence request additionally retains the functional-verification
-responsibility.
+Confirm input-only AI routing before Program authoring. Preserve independent
+blind review, prompt-derived challenges, AI backup, and official scoring.
+Native measurements and reaching a boundary alone are not a benchmark score.

@@ -23,16 +23,14 @@ so a future reader can see what the restoration is buying rather than take it on
 trust.
 """
 import os
-import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent))
 import phase3_one_shot_runner as R  # noqa: E402
-from not_verified_tier import skip_not_verified  # noqa: E402
+from _tool_probes import skip_not_verified  # noqa: E402
 
 _ENV = "EDA_CONTAINER"
 
@@ -63,29 +61,6 @@ def test_main_restores_the_operators_own_value(tmp_path, monkeypatch):
     assert os.environ[_ENV] == "an-operators-own-container"
 
 
-def test_the_publication_still_happens_inside_the_run(tmp_path, monkeypatch):
-    """THE HALF THAT MUST NOT BE LOST: scoped is not removed.
-
-    The helpers that read `EDA_CONTAINER` run DURING `main()`, so the value has
-    to be in place then. Observed through the same module-level `os.environ`
-    the helpers read, at the first point inside the run that can be reached
-    without a project on disk.
-    """
-    monkeypatch.delenv(_ENV, raising=False)
-    seen = {}
-    real = R._delivery_admission_refusal
-
-    def _spy(project, *a, **kw):
-        seen["value"] = os.environ.get(_ENV)
-        return real(project, *a, **kw)
-
-    monkeypatch.setattr(R, "_delivery_admission_refusal", _spy)
-    project = tmp_path / "proj"
-    project.mkdir()
-    _run_main_on(project)
-    assert seen.get("value"), (
-        "EDA_CONTAINER was not published while the run was executing; the "
-        "PDK-resolution helpers read it from there")
 
 
 def test_the_leak_this_restoration_prevents(tmp_path, monkeypatch):

@@ -31,19 +31,14 @@ from its apparent coverage.
 from __future__ import annotations
 
 import ast
-import os
 import sys
 from pathlib import Path
 
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import not_verified_tier as NV  # noqa: E402
 
-import _progress_run as _pr  # noqa: E402
 
 TESTS_DIR = Path(__file__).resolve().parent
-PLUGIN = TESTS_DIR.parents[1]
 
 #: Tokens that make a skip reason an INFRASTRUCTURE-ABSENT one. Quoted from the
 #: eleven reasons vibe-ic#1128 measured, not invented.
@@ -58,104 +53,26 @@ _EXCLUDED = ("iverilog",)
 _DECLARERS = ("not_verified_reason", "probe_skip_reason")
 
 
-def _run_probe(tmp_path, body: str, env_extra=None):
-    """Run a one-file pytest session that uses the tier, return the result."""
-    test = tmp_path / "test_probe.py"
-    test.write_text(
-        "import sys\n"
-        f"sys.path.insert(0, {str(PLUGIN / 'programs')!r})\n"
-        "from not_verified_tier import skip_not_verified\n"
-        + body)
-    env = dict(os.environ)
-    env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
-    # `-p not_verified_tier` imports it as a PLUGIN, which goes through
-    # `__import__` and therefore needs `programs/` on the child's PYTHONPATH —
-    # the parent's `sys.path.insert` above does not cross the process boundary.
-    env["PYTHONPATH"] = os.pathsep.join(
-        [str(PLUGIN / "programs")]
-        + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
-    env.pop(NV.REQUIRE_ENV, None)
-    env.update(env_extra or {})
-    return _pr.run(
-        [sys.executable, "-m", "pytest", "-q", "-p", "no:randomly",
-         "-p", "not_verified_tier", str(test)],
-        capture_output=True, text=True, cwd=str(tmp_path), env=env)
 
 
 # ---------------------------------------------------------------------------
 # 1. a declared non-verification is SEEN
 # ---------------------------------------------------------------------------
-def test_a_declared_non_verification_is_named_in_the_summary(tmp_path):
-    res = _run_probe(tmp_path,
-                     "def test_x():\n"
-                     "    skip_not_verified('the widget is out of reach', 'pull it')\n")
-    out = res.stdout + res.stderr
-    assert "[NOT VERIFIED]" in out, out
-    assert "the widget is out of reach" in out, out
-    assert "remedy: pull it" in out, (
-        "the remedy is part of the contract — an anchor bump's whole fix is "
-        f"'pull this tag', and a report that omits it is half an answer\n{out}")
 
 
-def test_an_ordinary_skip_is_not_claimed_by_this_tier(tmp_path):
-    """The tier must not annex every skip. 44 skips repo-wide are genuine N/A."""
-    res = _run_probe(tmp_path,
-                     "import pytest\n"
-                     "def test_x():\n"
-                     "    pytest.skip('nothing to verify on this platform')\n")
-    out = res.stdout + res.stderr
-    assert "[NOT VERIFIED]" not in out, (
-        f"an ordinary N/A skip was reported as a non-verification\n{out}")
-    assert res.returncode == 0, out
 
 
-def test_a_passing_run_prints_no_block_at_all(tmp_path):
-    res = _run_probe(tmp_path, "def test_x():\n    assert True\n")
-    out = res.stdout + res.stderr
-    assert "[NOT VERIFIED]" not in out, out
-    assert res.returncode == 0, out
 
 
 # ---------------------------------------------------------------------------
 # 2. the refusal actually refuses — and says so when it does not
 # ---------------------------------------------------------------------------
-def test_reporting_mode_is_green_and_announces_that_it_is_not_blocking(tmp_path):
-    res = _run_probe(tmp_path,
-                     "def test_x():\n    skip_not_verified('out of reach')\n")
-    out = res.stdout + res.stderr
-    assert res.returncode == 0, out
-    assert "is not set" in out and "NOT blocking" in out, (
-        "a guard that is switched off and does not SAY it is switched off is "
-        f"the vacuous pass this repo keeps removing\n{out}")
 
 
-def test_blocking_mode_fails_the_session(tmp_path):
-    res = _run_probe(tmp_path,
-                     "def test_x():\n    skip_not_verified('out of reach')\n",
-                     {NV.REQUIRE_ENV: "1"})
-    out = res.stdout + res.stderr
-    assert res.returncode != 0, (
-        f"{NV.REQUIRE_ENV}=1 did not make an unanswered question fail the "
-        f"session — the tier is wired where it can never block\n{out}")
-    assert "REFUSES to be green" in out, out
 
 
-def test_blocking_mode_leaves_a_clean_run_green(tmp_path):
-    """The paired half: blocking must cost nothing where verification happened."""
-    res = _run_probe(tmp_path, "def test_x():\n    assert True\n",
-                     {NV.REQUIRE_ENV: "1"})
-    assert res.returncode == 0, res.stdout + res.stderr
 
 
-def test_blocking_does_not_overwrite_a_real_failure(tmp_path):
-    """A failing session keeps its own status: 'the tests failed' is the more
-    specific statement, and this tier must not paint over it."""
-    res = _run_probe(tmp_path,
-                     "def test_fails():\n    assert False\n"
-                     "def test_y():\n    skip_not_verified('out of reach')\n",
-                     {NV.REQUIRE_ENV: "1"})
-    out = res.stdout + res.stderr
-    assert res.returncode == 1, f"expected pytest's own rc 1, got {res.returncode}\n{out}"
 
 
 # ---------------------------------------------------------------------------

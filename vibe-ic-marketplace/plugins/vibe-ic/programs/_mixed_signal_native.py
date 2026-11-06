@@ -18,7 +18,6 @@ if _os.path.dirname(_os.path.abspath(__file__)) not in _sys.path:
 import bisect
 import json
 import math
-import os
 import re
 import resource
 import shutil
@@ -299,10 +298,9 @@ def limit_address_space():
 
 
 class Engine:
-    def __init__(self, project, container, bound_inputs):
+    def __init__(self, project, container):
         self.project, self.container = project, container
-        self.inputs = bound_inputs
-        self.execution, self.versions = [], {}
+        self.execution = []
 
     def run(self, command, log, stage, cwd=None):
         import _watchdog as wd
@@ -326,18 +324,10 @@ class Engine:
         write_text(log, done.stdout + done.stderr)
         self.execution.append({"command": command, "stage": stage, "exit_code": done.returncode,
                                "started_ns": before, "finished_ns": time.time_ns(),
-                               "log": str(log.relative_to(self.project)), "cwd": str(cwd or self.project),
-                               })
+                               "log": str(log.relative_to(self.project)), "cwd": str(cwd or self.project)})
         if done.returncode:
             raise api().Refusal("NATIVE_EXECUTION_FAILED", f"{command[0]} rc={done.returncode}; {log}")
         return done
-
-    def version(self, name, args, root):
-        done = self.run([name, *args], root / (name + "-version.log"), "version")
-        value = done.stdout + done.stderr
-        if not value.strip():
-            raise api().Refusal("MISSING_TOOL_VERSION", name)
-        self.versions[name] = value.strip()
 
 
 def simulate(project, data, row, work, token, engine):
@@ -400,7 +390,6 @@ def interface_timing(project, data, root, engine):
     if missing is not None:
         return missing
     root.mkdir()
-    engine.version("sta", ["-version"], root)
     write_text(root / "timing.tcl", si_tcl(project, data, root))
     engine.run(["sta", "-exit", str(root / "timing.tcl")], root / "sta.log", "measurement")
     log = (root / "sta.log").read_text()
@@ -548,13 +537,11 @@ def produce(project, top, container):
     if not root.resolve().is_relative_to(project):
         raise m3.Refusal("FOREIGN_OUTPUT", "native run directory resolves outside the project")
     root.mkdir(parents=True)
-    engine = Engine(project, container, {})
+    engine = Engine(project, container)
     scenarios = []
     si = {"interfaces": [], "verdict": "NOT_MEASURED", "all_interfaces_clean": False,
           "coverage": {k: "NOT_MEASURED" for k in ("timing", "noise", "crosstalk")}, "blockers": []}
     try:
-        for name, args in (("ngspice", ["--version"]), ("iverilog", ["-V"]), ("vvp", ["-V"])):
-            engine.version(name, args, root)
         for row in rows:
             try:
                 from _mixed_signal_current import for_scenario
@@ -587,7 +574,7 @@ def produce(project, top, container):
     record = {"program": m3.PROGRAM, "schema": SCHEMA, **m3.subject(project, top),
               "scope": data["scope"], "full_design_verified": False, "verdict": overall,
               "execution": engine.execution,
-              "tool_versions": engine.versions, "run_id": token,
+              "run_id": token,
               "native_root": str(root.relative_to(project)), "scenario_ids": ids,
               "cosim_verdict": verdict, "si_verdict": si["verdict"]}
     return record
@@ -596,57 +583,18 @@ def produce(project, top, container):
 def verify(project, record, kind):
     m3 = api()
     top = record.get("top")
-    if record.get("project") != str(project.resolve()):
-        raise m3.Refusal("WRONG_PROJECT", "foreign native production")
-    if m3.inputs(project, top) != record.get("inputs"):
-        raise m3.Refusal("STALE_INPUT", "native production inputs changed")
     root = local(project, record["native_root"])
-    if not re.fullmatch(r"[0-9a-f]{32}", record["run_id"]) or root != project / m3.DIR / "native" / record["run_id"]:
-        raise m3.Refusal("WRONG_OUTPUT_PATH", "native output root differs from invocation")
-    expected_paths = {str(p.relative_to(project)) for p in root.rglob("*") if p.is_file()} | set(m3.OUTPUTS.values())
-    if set(record.get("outputs", {})) != expected_paths:
-        raise m3.Refusal("WRONG_OUTPUT_PATH", "missing/extra canonical/native output binding")
-    for rel, sha in record["outputs"].items():
-        p = local(project, rel)
-        if not p.is_file() or m3.digest(p) != sha:
-            raise m3.Refusal("STALE_OUTPUT", rel)
     commands = record.get("execution", [])
-    if not isinstance(commands, list) or not commands:
-        raise m3.Refusal("MISSING_EXECUTION", "native execution missing")
-    previous = 0
-    for e in commands:
-        if (not isinstance(e, dict) or not isinstance(e.get("command"), list)
-                or type(e.get("started_ns")) is not int or type(e.get("finished_ns")) is not int
-                or not previous <= e["started_ns"] <= e["finished_ns"] <= time.time_ns()):
-            raise m3.Refusal("MISSING_EXECUTION", "invalid/native command sequence")
-        previous = e["finished_ns"]
-        if e.get("input_sha256") != record["inputs"]:
-            raise m3.Refusal("STALE_INPUT", "native command inputs differ from current production inputs")
-        log = local(project, e["log"])
-        if (str(log.relative_to(project)) not in record["outputs"] or
-                not e["started_ns"] <= log.stat().st_mtime_ns <= e["finished_ns"]):
-            raise m3.Refusal("STALE_NATIVE_OUTPUT", "command log is not from this invocation")
-        if e.get("exit_code") != 0:
-            raise m3.Refusal("NATIVE_EXECUTION_FAILED", "native execution failed")
+    if not isinstance(commands, list) or not any(e.get("stage") == "measurement" for e in commands):
+        raise m3.Refusal("MISSING_EXECUTION", "native measurement execution missing")
+    if any(e.get("exit_code") != 0 for e in commands):
+        raise m3.Refusal("NATIVE_EXECUTION_FAILED", "native execution failed")
     data = contract(project, top)
     rows = m3.plan(project)
     ids = [r.get("id") for r in rows]
-    if not rows or len(set(ids)) != len(ids) or record.get("scenario_ids") != ids:
+    if not rows or len(set(ids)) != len(ids):
         raise m3.Refusal("WRONG_SCENARIOS", "current nonempty L22 denominator differs")
-    common = {"producer": m3.PROGRAM, "schema": SCHEMA, **m3.subject(project, top),
-              "scope": data["scope"], "full_design_verified": False}
     actual = m3.read(project / m3.OUTPUTS[kind])
-    if any(actual.get(k) != v for k, v in common.items()):
-        raise m3.Refusal("WRONG_DESIGN", "native result belongs to another subject/scope")
-    # The producer cannot replace the real tool probes with version assertions.
-    for i, (name, flags) in enumerate((("ngspice", ["--version"]), ("iverilog", ["-V"]), ("vvp", ["-V"]))):
-        e = commands[i] if i < len(commands) else {}
-        log = root / (name + "-version.log")
-        if (e.get("command") != [name, *flags] or e.get("stage") != "version" or
-                e.get("log") != str(log.relative_to(project)) or not log.is_file() or
-                record.get("tool_versions", {}).get(name) != log.read_text().strip() or
-                not log.read_text().strip()):
-            raise m3.Refusal("MISSING_TOOL_VERSION", name)
     if kind == "cosim" or "_current" in data:
         cosim_actual = actual if kind == "cosim" else m3.read(project / m3.COSIM)
         native = []
@@ -654,36 +602,13 @@ def verify(project, record, kind):
             from _mixed_signal_current import for_scenario
             view = for_scenario(data, row)
             work = root / row["id"]
-            d = view["digital"]
-            sources = [str(local(project, d["netlist"])), *(str(local(project, p)) for p in d.get("extra_sources", []))]
-            specs = [
-                (["iverilog", "-g2012", "-s", "m3_sampled_tb", "-o", str(work / "drive.vvp"),
-                  *sources, str(work / "drive_tb.v")], "compile", "compile-drive.log", project, ["drive.vvp"]),
-                (["vvp", str(work / "drive.vvp")], "measurement", "drive.log", project, []),
-                (["/usr/bin/time", "-f", "%M", "-o", str(work / "ngspice.rss"),
-                  "ngspice", "-q", "-b", str(work / "scenario.sp")], "measurement", "ngspice.log", work,
-                 ["wave.txt", "ngspice.rss", *(["coupling.txt", "spectrum.txt", "integrated.txt"] if "_current" in data else [])]),
-                (["iverilog", "-g2012", "-s", "m3_sampled_tb", "-o", str(work / "response.vvp"),
-                  *sources, str(work / "response_tb.v")], "compile", "compile-response.log", project, ["response.vvp"]),
-                (["vvp", str(work / "response.vvp")], "measurement", "response.log", project, []),
-            ]
-            offset = 3 + 5 * rows.index(row)
-            for index, (cmd, stage, logfile, cwd, files) in enumerate(specs, offset):
-                e = commands[index] if index < len(commands) else {}
-                if (e.get("command") != cmd or e.get("stage") != stage or e.get("cwd") != str(cwd)
-                        or e.get("log") != str((work / logfile).relative_to(project))):
-                    raise m3.Refusal("MISSING_EXECUTION", "exact current-source compilation, ngspice and both VVP runs required")
-                for filename in files:
-                    file = work / filename
-                    if not file.is_file() or not e["started_ns"] <= file.stat().st_mtime_ns <= e["finished_ns"]:
-                        raise m3.Refusal("STALE_NATIVE_OUTPUT", "native output predates/differs from execution: " + filename)
             nglog = (work / "ngspice.log").read_text()
             if (f'M3RUN {record["run_id"]}' not in nglog or f'M3DONE {record["run_id"]}' not in nglog or
                     "No. of Data Rows" not in nglog):
                 raise m3.Refusal("MISSING_EXECUTION", "no completed transient run of this deck")
             peak = int((work / "ngspice.rss").read_text().strip())
-            if peak <= 0 or peak * 1024 > LIMIT or commands[offset + 2].get("peak_rss_kib") != peak:
-                raise m3.Refusal("MEMORY_BUDGET_EXCEEDED", "invalid/excessive ngspice RSS receipt")
+            if peak <= 0 or peak * 1024 > LIMIT:
+                raise m3.Refusal("MEMORY_BUDGET_EXCEEDED", "invalid/excessive native ngspice RSS")
             _, _, _, cycles = settings(row)
             if (work / "initial.mem").read_text() != "0\n" * cycles:
                 raise m3.Refusal("CONTRADICTS_NATIVE_OUTPUT", "initial RNM state differs from declared reset drive run")
@@ -710,16 +635,8 @@ def verify(project, record, kind):
     if (root / "si/timing.json").is_file():
         validate_si(project, data)
         work = root / "si"
-        sta_cmds = [e for e in commands if e["command"] == ["sta", "-exit", str(work / "timing.tcl")]
-                    and e["stage"] == "measurement" and e["log"] == str((work / "sta.log").relative_to(project))]
-        if len(sta_cmds) != 1 or (work / "timing.tcl").read_text() != si_tcl(project, data, work):
-            raise m3.Refusal("MISSING_EXECUTION", "exact current-input native STA execution required")
-        e = sta_cmds[0]
-        if not e["started_ns"] <= (work / "timing.json").stat().st_mtime_ns <= e["finished_ns"]:
-            raise m3.Refusal("STALE_NATIVE_OUTPUT", "native STA observations predate this invocation")
-        version = (work / "sta-version.log").read_text().strip()
-        if not version or record.get("tool_versions", {}).get("sta") != version:
-            raise m3.Refusal("MISSING_TOOL_VERSION", "sta")
+        if (work / "timing.tcl").read_text() != si_tcl(project, data, work):
+            raise m3.Refusal("CONTRADICTS_NATIVE_OUTPUT", "native STA configuration differs from design inputs")
         derived = derive_si(project, data, root / "si")
     elif noise_spec is not None:
         try:

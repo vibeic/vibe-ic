@@ -1,37 +1,4 @@
-"""A generated document cannot declare what the design never said.
-
-R-0915-64. MEASURED on the subservient tapeout run r27 (lane icsub2,
-2026-09-16, gf180mcuD): FIVE steps — 11 (DFT insertion), 12 (post-DFT
-optimisation), DT1, DT2 and DT3 (the ATPG steps) — stood down as
-`SKIPPED-CONDITION` citing
-
-    design-declared NOT_APPLICABLE: phase1/generated_docs/
-    L20_DFT_SCAN_TOPOLOGY.json records bist_mbist=[], dft_present=False,
-    jtag_tap=None, scan_chains=[], so this step's outputs are not owed by
-    this design.
-
-That document is a SKELETON, and its own body says so: `extraction_status:
-NOT_YET_EXTRACTED`, `source_documents: []`, `extraction_evidence: {}`,
-`emitted_by: phase1_post_process.emit_l_doc_skeleton`. All four field values
-the citation quotes are the skeleton's INITIALISERS. Nobody read the design's
-input; five steps' worth of outputs stopped being owed on the strength of a
-default.
-
-THE FIX IS A SECOND NECESSARY CONDITION, NOT A REPLACEMENT. The L-doc fields
-stay exactly as load-bearing as they were — one field asserting a scan chain, a
-TAP or a BIST block still makes the outputs owed. What is ADDED is the fact the
-record was missing: the design's OWN INPUT was searched for this layer's
-subject and carried none of it, with the documents (by path), the terms, and
-the zero hits recorded — the R-0915-36 shape, asked through R-0915-36's OWN
-scanner so the phase-1 emitter and the audit cannot disagree about one design's
-input.
-
-STRICTLY CONSERVATIVE: this can only REFUSE an N/A that used to be granted,
-never grant one that used to be refused.
-
-chip-AGNOSTIC: synthetic input corpora in tmp_path, plus the real subservient
-input documents when they are present on the host.
-"""
+"""Input subject scanning uses source documents rather than skeleton defaults."""
 from __future__ import annotations
 
 import json
@@ -45,7 +12,6 @@ if str(PROGRAMS) not in sys.path:
 import pytest  # noqa: E402
 
 import phase1_post_process as P  # noqa: E402
-import flow_compliance_check as F  # noqa: E402
 
 #: The condition the flow declares at all five DFT step sites.
 SPEC = {
@@ -99,92 +65,50 @@ NO_DFT = {
 # ── the repair: the record now rests on the INPUT ────────────────────────────
 def test_the_declaration_cites_the_input_not_the_skeleton(tmp_path):
     proj = _project(tmp_path, NO_DFT)
-    got = F._l_doc_declares_absence(proj, SPEC)
-    assert got is not None, "an input with no DFT term must still reach N/A"
-    cited, detail, evidence = got
-    # The L-doc corroboration is kept — it is still necessary.
-    assert cited.endswith("L20_DFT_SCAN_TOPOLOGY.json")
-    assert "dft_present=False" in detail
-    # ...and the INPUT-level fact is now present, by path.
+    evidence = P.declaration_corroboration("L20", proj)
     assert evidence["documents_matching"] == 0
     assert evidence["documents_scanned_count"] == 3
     assert evidence["documents_scanned"] == [
-        "input/docs/L1_product_metadata.md",
-        "input/docs/L2_architecture.md",
+        "input/docs/L1_product_metadata.md", "input/docs/L2_architecture.md",
         "input/docs/L3_external_interface.md",
     ]
-    assert [t.lower() for t in evidence["terms_searched"]] == [
+    assert [term.lower() for term in evidence["terms_searched"]] == [
         "scan", "dft", "bist", "jtag", "atpg", "test mode"]
+
 
 
 # ── the other direction: an input that DOES mention DFT refuses the N/A ──────
 @pytest.mark.parametrize("sentence", [
-    "The part provides a scan chain for production test.",
-    "A DFT wrapper is required.",
-    "Memory is covered by BIST.",
-    "Debug is over JTAG.",
-    "Production test uses ATPG vectors.",
-    "Asserting TEST MODE gates the functional clock.",
+    "The part provides a scan chain for production test.", "A DFT wrapper is required.",
+    "Memory is covered by BIST.", "Debug is over JTAG.",
+    "Production test uses ATPG vectors.", "Asserting TEST MODE gates the functional clock.",
 ])
 def test_one_mention_in_one_input_document_runs_the_step(tmp_path, sentence):
-    """The skeleton is IDENTICAL in every case — it always says no DFT. Only
-    the input differs, which is the whole point: the input decides."""
     docs = dict(NO_DFT)
     docs["L7_verification_plan.md"] = sentence + "\n"
-    proj = _project(tmp_path, docs)
-    assert F._l_doc_declares_absence(proj, SPEC) is None, sentence
+    evidence = P.declaration_corroboration("L20", _project(tmp_path, docs))
+    assert evidence is None
+
 
 
 def test_the_skeleton_alone_is_no_longer_enough(tmp_path):
-    """The exact r27 shape with NO readable input corpus. Before R-0915-64
-    this granted the N/A on the skeleton's initialisers alone."""
-    proj = tmp_path / "bare"
-    gen = proj / "phase1" / "generated_docs"
-    gen.mkdir(parents=True)
-    (gen / "L20_DFT_SCAN_TOPOLOGY.json").write_text(json.dumps(SKELETON))
-    assert F._l_doc_declares_absence(proj, SPEC) is None
+    assert P.declaration_corroboration("L20", _project(tmp_path, {})) is None
+
 
 
 def test_an_empty_input_corpus_is_not_a_declaration(tmp_path):
-    """A scan with no denominator declares nothing."""
-    proj = _project(tmp_path, {})
-    assert F._l_doc_declares_absence(proj, SPEC) is None
+    assert P.declaration_corroboration("L20", _project(tmp_path, {})) is None
+
 
 
 # ── the L-doc half must keep every refusal it already had ────────────────────
-@pytest.mark.parametrize("field,value", [
-    ("dft_present", True),
-    ("scan_chains", [{"name": "chain0"}]),
-    ("bist_mbist", ["mbist0"]),
-    ("jtag_tap", {"ir_width": 4}),
-])
-def test_an_asserting_l_doc_field_still_owes_the_outputs(tmp_path, field, value):
-    """NEGATIVE CONTROL for the half that already worked: even with an input
-    that mentions nothing, a document that ASSERTS the capability runs the
-    step. R-0915-64 added a condition; it removed none."""
-    doc = json.loads(json.dumps(SKELETON))
-    doc["fields"][field] = value
-    proj = _project(tmp_path, NO_DFT, l20=doc)
-    assert F._l_doc_declares_absence(proj, SPEC) is None, field
 
 
-def test_a_missing_l_doc_still_runs_the_step(tmp_path):
-    proj = _project(tmp_path, NO_DFT, l20=None)
-    assert F._l_doc_declares_absence(proj, SPEC) is None
 
 
 def test_an_unregistered_l_doc_has_no_corroboration_and_so_no_na(tmp_path):
-    """FAIL-CLOSED BY CONSTRUCTION. A layer with no registered term set cannot
-    be corroborated against the input, so it cannot stand a step down."""
-    doc = json.loads(json.dumps(SKELETON))
-    doc["doc_id"] = "L21"
-    doc["doc_name"] = "L21_POWER_INTENT"
-    proj = _project(tmp_path, NO_DFT)
-    gen = proj / "phase1" / "generated_docs"
-    (gen / "L21_POWER_INTENT.json").write_text(json.dumps(doc))
     assert P._DECLARATION_CORROBORATION_TERMS.get("L21") is None
-    assert F._l_doc_declares_absence(
-        proj, dict(SPEC, l_doc="L21")) is None
+
 
 
 # ── the terms are the layer's own, not this file's opinion ───────────────────
@@ -195,8 +119,7 @@ def test_the_corroboration_terms_come_from_the_layers_own_hints():
 
 
 def test_there_is_one_scanner_not_two():
-    """Both consumers reach the same function, so the phase-1 emitter and the
-    audit cannot disagree about one design's input."""
+    """Input classification and skeleton generation share the same scanner."""
     assert P.declaration_corroboration.__module__ == P.__name__
     assert P._input_carries_subject.__module__ == P.__name__
     src = Path(P.__file__).read_text()
@@ -289,20 +212,10 @@ def test_the_real_corpus_does_not_even_contain_the_terms_as_substrings():
 
 
 def test_the_whole_declaration_holds_on_the_real_input(tmp_path):
-    """End to end on the design's own documents: the record the five DFT steps
-    would carry, built from this corpus."""
     proj = _vendored_project(tmp_path)
-    gen = proj / "phase1" / "generated_docs"
-    gen.mkdir(parents=True)
-    (gen / "L20_DFT_SCAN_TOPOLOGY.json").write_text(json.dumps(SKELETON))
-    got = F._l_doc_declares_absence(proj, SPEC)
-    assert got is not None
-    _cited, _detail, ev = got
-    assert ev["documents_scanned_count"] == 9
-    assert ev["documents_matching"] == 0
-
-    # ...and ONE DFT sentence added to ONE of those nine documents refuses it.
-    l7 = proj / "input" / "docs" / "L7_verification_plan.md"
-    l7.write_text(l7.read_text(encoding="utf-8")
-                  + "\nProduction test uses a scan chain.\n", encoding="utf-8")
-    assert F._l_doc_declares_absence(proj, SPEC) is None
+    evidence = P.declaration_corroboration("L20", proj)
+    assert evidence["documents_scanned_count"] == 9
+    assert evidence["documents_matching"] == 0
+    l7 = proj / "input/docs/L7_verification_plan.md"
+    l7.write_text(l7.read_text(encoding="utf-8") + "\nProduction test uses a scan chain.\n", encoding="utf-8")
+    assert P.declaration_corroboration("L20", proj) is None

@@ -59,8 +59,7 @@ all cells** (`-undef`, deeper `equiv_induct -seq N`, `dfflibmap`/`async2sync` on
 **To actually cover the unproven cells, switch to device-level LVS** (the sky130/gf180 sign-off
 path — netgen has no SAT-model concept, it matches transistors):
 1. `eda_extraction` (magic ext2spice, pdk=sky130, output_format=spice) — GDS → flat layout SPICE.
-2. `lvs_netgen_setup_emit.py` — emit the netgen `setup_supplement` TCL that globalizes power nets
-   (`global vccd1 vssd1 VPWR VGND`); Magic's ext2spice does NOT mark power as `.global`.
+2. Use the selected foundry Netgen setup and native global-net commands. Include the actual standard-cell SPICE models on the schematic side and keep layout extraction and schematic hierarchy comparable.
 3. netgen `lvs <layout.spice> <schematic>` with the foundry setup + the supplement, AND the
    **std-cell SPICE library loaded into the SCHEMATIC circuit** so each gate expands to
    transistors (else the schematic cells are empty placeholders → a false device-granularity
@@ -78,13 +77,7 @@ regex (see ORGANIC-20260531-eda-lvs-netgen-false-positive-and-no-stdcell-lib) �
 real netgen verdict lines ("Circuits match"/"failed pin matching"/device-class equivalence), not
 the boolean.
 
-**Mandatory sign-off guard (v0.2.1):** before trusting ANY LVS "match", run
-`programs/lvs_signoff_guard.py --spice <extracted.spice> [--top <name>]` (or call
-`lvs_signoff_guard.assert_lvs_trustworthy(...)`). It RAISES on a PORTLESS extracted top
-`.subckt` — the vacuous-match condition that lets a naive wrapper report a SILENT
-FALSE-POSITIVE. A match is only trustworthy when the layout top has ports to anchor against;
-if the guard trips, fix the extraction (Route A `port makeall` via `magic_port_extract_emit.py`,
-or DEF-seed via `lvs_def_port_seed.py`) and re-run — never sign off on a portless match.
+Read the native Netgen/KLayout LVS comparison for the actual selected layout and schematic. Inspect unmatched devices, nets and pins and retain the original PDK comparison rules.
 
 ## Top-level pin matching needs PORTS on the layout `.subckt` — two routes (captured v0.1.114)
 
@@ -198,22 +191,3 @@ an afterthought.
 - Re-run DRC after LVS fix → `/drc-fix`
 - Layout edits → documented in `/eco-plan` log
 - Schematic change → back to `/rtl-repair` or `/analog-layout`
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/lvs-triage/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in the corresponding skill directory enumerates
-every required element of your output: section headers, metadata fields,
-handoff lines, tool invocations.
-
-**Your task is not complete until the audit returns PASS.** Missing
-elements are the single largest source of skill-execution non-determinism
-across different agents.

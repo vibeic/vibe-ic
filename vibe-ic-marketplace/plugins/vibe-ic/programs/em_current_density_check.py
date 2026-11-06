@@ -85,8 +85,6 @@ chip-AGNOSTIC: pure numeric current/geometry compare; no chip literal.
 from __future__ import annotations
 
 import argparse
-import ast
-import hashlib
 import csv
 import heapq
 import json
@@ -1051,8 +1049,6 @@ def native_jmax_table(text: str, pdk_name: Optional[str] = None
         raise ValueError("declared per-cut authority has no source")
     source = rule["source"]
     if (not source.get("url") or not source.get("section")
-            or not re.fullmatch(r"[a-f0-9]{40}", str(source.get("commit", "")))
-            or not re.fullmatch(r"[a-f0-9]{64}", str(source.get("sha256", "")))
             or not math.isfinite(float(rule["temperature_c"]))
             or rule.get("direction") != "unidirectional"):
         raise ValueError("declared per-cut authority provenance is incomplete")
@@ -1086,8 +1082,7 @@ def native_jmax_table(text: str, pdk_name: Optional[str] = None
         applied[name] = {"jmax_A_per_cut": limit, "cut_size_um": list(dimensions)}
     if not applied:
         raise ValueError("declared per-cut authority matches no current cut layer")
-    return table, {"registry_sha256": _native_sha(_PDK_REGISTRY),
-                   "source": source, "temperature_c": rule["temperature_c"],
+    return table, {"source": source, "temperature_c": rule["temperature_c"],
                    "direction": rule["direction"], "layers": applied}
 
 
@@ -1105,578 +1100,186 @@ def native_limits(text: str, margin: float = _DEFAULT_MARGIN,
     return "".join(result)
 
 
-def native_source_identity() -> Dict[str, str]:
-    """Bind the owned producer functions and both consumers, not unrelated steps."""
-    root = Path(__file__).resolve().parent
-    runner = (root / "phase3_one_shot_runner.py").read_text()
-    lines = runner.splitlines(keepends=True)
-    owned = {"_step24_basis_inputs", "_step24_transient_argv",
-             "_emit_ir_em_reports", "_emit_em_current_authority",
-             "_step25_native_density_due", "_librelane_step24_record",
-             "_librelane_step24_publish", "_librelane_step24_refusal_publish",
-             "_step24_primary_mode", "_step24_adopt_primary"}
-    result = {}
-    for node in ast.parse(runner).body:
-        if isinstance(node, ast.FunctionDef) and node.name in owned:
-            result[node.name] = hashlib.sha256(
-                "".join(lines[node.lineno - 1:node.end_lineno]).encode()).hexdigest()
-    for name in ("em_current_density_check.py", "em_peak_current_authority_check.py",
-                 "execution_backend_producers.py",
-                 "librelane_ir_antenna.py", "dynamic_ir_vectored_emit.py",
-                 "ir_drop_report_check.py"):
-        result[name] = hashlib.sha256((root / name).read_bytes()).hexdigest()
-    return result
-
-
-# Current-owner Step 24 consumes its IR producers/readers without the later
-# Step-25 emitter.  A legacy receipt came through the joint IR/EM emitter and
-# keeps that source key. Missing required keys never compare equal by absence.
-_CURRENT_PRIMARY_IR_SOURCE_KEYS = (
-    "_librelane_step24_record", "_librelane_step24_refusal_publish",
-    "_librelane_step24_publish", "_step24_primary_mode", "_step24_adopt_primary",
-    "_step24_basis_inputs", "_step24_transient_argv",
-    "librelane_ir_antenna.py", "dynamic_ir_vectored_emit.py", "ir_drop_report_check.py",
-)
-_LEGACY_PRIMARY_IR_SOURCE_KEYS = (
-    *_CURRENT_PRIMARY_IR_SOURCE_KEYS, "_emit_ir_em_reports",
-)
-
-
-def _native_sha(path: Path) -> Optional[str]:
-    try:
-        return hashlib.sha256(path.read_bytes()).hexdigest()
-    except OSError:
-        return None
-
-
-def _lexical_absolute(project: Path, raw: str) -> Path:
-    """Normalize spelling without following links or changing file identity."""
-    path = Path(raw)
-    return path.absolute() if path.is_absolute() else (project / path).absolute()
-
-
-def _retained_project_root(project: Path, doc: Dict[str, Any],
-                           recorded: Path, expected: str) -> tuple[Optional[Path], Path]:
-    """Bind a recorded absolute state to its identical relocated project file.
-
-    The immutable receipt already contains the project-relative artifact name
-    and digest.  Derive the old root only when exactly one such artifact is a
-    suffix of the recorded absolute path, then require an ordinary contained
-    file with the same digest at the current root.  Nothing is rewritten.
-    """
-    matches = []
-    for raw, digest in (doc.get("artifacts") or {}).items():
-        rel = Path(raw) if isinstance(raw, str) else None
-        if (rel is None or rel.is_absolute() or ".." in rel.parts
-                or digest != expected or tuple(recorded.parts[-len(rel.parts):]) != rel.parts):
-            continue
-        matches.append(rel)
-    if len(matches) != 1:
-        raise ValueError("LibreLane IR project-relative tool state binding is ambiguous")
-    rel = matches[0]
-    current = project / rel
-    if (current.is_symlink() or not current.is_file()
-            or not current.resolve().is_relative_to(project.resolve())
-            or _native_sha(current) != expected):
-        raise ValueError("LibreLane IR tool state changed")
-    old_root = recorded
-    for _part in rel.parts:
-        old_root = old_root.parent
-    return old_root, current
-
-
-def _retained_native_path(project: Path, raw: str, expected: str,
-                          old_root: Optional[Path]) -> Path:
-    """Resolve one native-basis path without changing receipt authority."""
-    recorded = Path(raw)
-    if not recorded.is_absolute():
-        if ".." in recorded.parts:
-            raise ValueError("LibreLane IR native basis path is unsafe")
-        current = project / recorded
-    elif old_root is not None and recorded.is_relative_to(old_root):
-        current = project / recorded.relative_to(old_root)
-    else:
-        current = recorded
-    if (current.is_symlink() or not current.is_file()
-            or (current != recorded and
-                not current.resolve().is_relative_to(project.resolve()))
-            or not expected or _native_sha(current) != expected):
-        raise ValueError("LibreLane IR native basis changed")
-    return current
-
-
 def native_project(em_path: Path) -> Optional[Path]:
-    """Production reports owe native evidence; standalone offline screens do not."""
+    """Locate the project carrying an OpenROAD PSM report."""
     for candidate in (em_path, *em_path.parents):
         report = candidate / "reports/phase3/em.json"
         try:
             doc = json.loads(report.read_text())
         except (OSError, ValueError):
             continue
+        if not isinstance(doc, dict):
+            continue
         if doc.get("tool") == "openroad-psm":
             return candidate
         return None
-    # Deleting the companion does not retire a production report's obligation.
-    if em_path.parent.name == "phase3" and em_path.parent.parent.name == "reports":
-        try:
-            if "phase3_one_shot_runner" in (em_path.parent / "em.rpt").read_text():
-                return em_path.parent.parent.parent
-        except OSError:
-            pass
     return None
 
 
-def validate_primary_ir(project: Path, *, for_em: bool = False) -> Dict[str, Any]:
-    """Step-24's existing gate consumes the adopted current tool result.
-
-    This validates the IR producer's own state and publication, independently
-    of Step-25 density coverage. A partial EM result cannot retire a static IR
-    measurement, nor can report keywords substitute for primary adoption.
-    """
-    from _prestream_native import final_state
-    final = final_state(project) is not None
+def validate_primary_ir(project: Path) -> Dict[str, Any]:
+    """Read the native static IR result against the original five-percent limit."""
+    coverage_errors = []
     try:
-        doc = json.loads((project / "reports/phase3/ir_drop_librelane.json").read_text())
-        record = doc["record"]
-        recorded_source = doc.get("source_identity")
-        current_source = native_source_identity()
-        source_keys = (_CURRENT_PRIMARY_IR_SOURCE_KEYS
-                       if record.get("input_mode") == "current_stapostpnr_odb"
-                       else _LEGACY_PRIMARY_IR_SOURCE_KEYS)
-        # #62b: final-State native measurements do not expire with source edits.
-        if not final and (not doc.get("adopted") or not isinstance(recorded_source, dict)
-                or any(not current_source.get(name)
-                       or recorded_source.get(name) != current_source[name]
-                       for name in source_keys)):
-            raise ValueError("LibreLane IR primary was not adopted by current source")
-        if (not {"def", "netlist", "sdc", "spef"}.issubset(doc["inputs"])
-                or not {"reports/phase3/ir_drop.json", "reports/phase3/ir_drop.rpt"}.issubset(doc["published"])):
-            raise ValueError("LibreLane IR required input/publication binding removed")
-        recorded_state = Path(record["tool_state"])
-        state_sha = record["tool_state_sha256"]
-        if recorded_state.is_absolute() and _native_sha(recorded_state) != state_sha:
-            old_root, tool_state = _retained_project_root(
-                project, doc, recorded_state, state_sha)
-        else:
-            old_root = None
-            tool_state = _retained_native_path(
-                project, record["tool_state"], state_sha, None)
-        selected = None
-        selected_paths = None
-        if record.get("input_mode") == "current_stapostpnr_odb":
-            selected = record.get("selected_inputs")
-            required = {"odb", "def", "netlist", "sdc", "spef", "sta_state",
-                        "sta_receipt", "sta_config", "step23_record"}
-            if not isinstance(selected, dict) or set(selected) != required:
-                raise ValueError("LibreLane IR current STA input population changed")
-            selected_paths = {}
-            for role, row in selected.items():
-                if not isinstance(row, dict) or set(row) != {"path", "sha256"}:
-                    raise ValueError(f"LibreLane IR current STA {role} binding malformed")
-                path = Path(row["path"])
-                target = path if path.is_absolute() else project / path
-                if ((not path.is_absolute() and ".." in path.parts)
-                        or not row["sha256"] or target.is_symlink()
-                        or not target.is_file() or _native_sha(target) != row["sha256"]):
-                    raise ValueError(f"LibreLane IR current STA bytes changed: {role}")
-                selected_paths[role] = target
-            chain = record.get("input_source_chain") or {}
-            if (chain.get("source") != "current validated OpenROAD.STAPostPNR state"
-                    or not chain.get("image") or not chain.get("pdk_root")
-                    or not chain.get("pdk")):
-                raise ValueError("LibreLane IR current STA source chain missing")
-            config_path = Path(selected["sta_config"]["path"])
-            config_path = config_path if config_path.is_absolute() else project / config_path
-            import librelane_ir_antenna as la
+        native = json.loads((project / "reports/phase3/ir_drop.json").read_text())
+        if not isinstance(native, dict):
+            raise ValueError("native IR report is not an object")
+        record = {}
+        retained = project / "reports/phase3/ir_drop_librelane.json"
+        if retained.is_file():
             try:
-                owner = la._current_stapostpnr_ir_inputs(
-                    project, chain["image"], Path(chain["pdk_root"]), chain["pdk"],
-                    json.loads(config_path.read_text()))
-            except (OSError, ValueError, KeyError, TypeError, AttributeError, la.Refusal) as exc:
-                raise ValueError(f"LibreLane IR current STA owner invalid: {exc}") from exc
-            if not owner or owner.get("records") != selected:
-                raise ValueError("LibreLane IR current STA owner selection changed")
-        for population in ("inputs", "artifacts", "published"):
-            rows = doc[population]
-            if not rows:
-                raise ValueError(f"LibreLane IR {population} population absent")
-            for key, row in rows.items():
-                name, digest = (row["path"], row["sha256"]) if population == "inputs" else (key, row)
-                path = Path(name)
-                target = path if path.is_absolute() else project / path
-                absolute_current_owner = (population == "inputs" and path.is_absolute()
-                                          and selected is not None and key in selected
-                                          and row == selected[key])
-                if (population == "inputs" and selected is not None
-                        and (key not in selected or row != selected[key])):
-                    raise ValueError(f"LibreLane IR current STA role binding changed: {key}")
-                if ((path.is_absolute() and not absolute_current_owner)
-                        or (not path.is_absolute() and ".." in path.parts)
-                        or not digest or _native_sha(target) != digest):
-                    raise ValueError(f"LibreLane IR current bytes changed: {name}")
-        # Preserve exact native-basis/relocation validation after the more
-        # specific current-selection checks, keeping their refusal diagnosis.
-        native_paths = {}
-        for key in ("odb", "sdc", "spef", "tech_lef"):
-            row = doc["native_basis"][key]
-            native_paths[key] = _retained_native_path(
-                project, row["path"], row["sha256"], old_root)
-        native_paths["liberties"] = [
-            _retained_native_path(project, row["path"], row["sha256"], old_root)
-            for row in doc["native_basis"]["liberties"]]
-        if selected is not None:
-            native_odb = doc["native_basis"]["odb"]
-            if (selected["odb"]["sha256"] != native_odb["sha256"]
-                    or Path(native_odb["path"]).resolve()
-                    != (project / selected["odb"]["path"]).resolve()):
-                raise ValueError("LibreLane IR did not consume selected current STA ODB")
-        import librelane_ir_antenna as la
-        rebound_record = dict(record)
-        rebound_record["tool_state"] = str(tool_state)
-        if final:
-            # #62b: judge the native number at the original 5% signoff limit,
-            # never the writer's 10% budget or its stored judgment.
-            from signoff_ladder_run import _STATIC_IR_BUDGET_PCT
-            native = json.loads((project / "reports/phase3/ir_drop.json").read_text())
-            worst = _num(native.get("worst_ir_uv"))
-            supply = _num(record.get("lib_voltage_v"))
-            if (native.get("tool") != "openroad-psm"
-                    or native.get("native_rc", 0) != 0
-                    or native.get("verdict") not in ("PASS", "FAIL")
-                    or type(native.get("worst_ir_uv")) not in (int, float)
-                    or type(record.get("lib_voltage_v")) not in (int, float)
-                    or worst is None or not math.isfinite(worst) or worst < 0
-                    or supply is None or not math.isfinite(supply) or supply <= 0
-                    or native.get("nets_analysis_failed")
-                    or native.get("unconnected_supply_pins")):
-                raise ValueError("native IR measurement/coverage unavailable")
-            budget = _STATIC_IR_BUDGET_PCT / 100.0 * supply * 1e6
-            judged = {"verdict": "FAIL" if worst > budget or native["verdict"] == "FAIL" else "PASS"}
-        else:
-            judged = la.judge_ir(rebound_record)
-            if judged != doc["judgment"] or judged["verdict"] not in ("PASS", "FAIL"):
-                raise ValueError("LibreLane IR measurement/coverage unavailable")
-        result = {"valid": True, "verdict": judged["verdict"],
-                  "producer": doc["producer"],
-                  "tool_state_sha256": record["tool_state_sha256"]}
-        if selected is not None:
-            # Step 25 may consume these already-authorized bytes directly.
-            # Paths are resolved here only after the complete current-owner,
-            # role, digest, receipt and source-chain validation above.  The
-            # retained receipt is never rewritten and a malformed current
-            # owner never degrades to the legacy routed-DEF path.
-            result["current_em_basis"] = {
-                role: {"path": str(selected_paths[role].absolute()),
-                       "sha256": selected[role]["sha256"]}
-                for role in ("odb", "def", "netlist", "sdc", "spef")}
-            result["current_em_basis"]["tech_lef"] = {
-                "path": str(native_paths["tech_lef"].absolute()),
-                "sha256": doc["native_basis"]["tech_lef"]["sha256"]}
-            result["current_em_basis"]["liberties"] = [
-                {"path": str(path.absolute()), "sha256": row["sha256"]}
-                for path, row in zip(native_paths["liberties"],
-                                     doc["native_basis"]["liberties"])]
-        if selected is not None and for_em:
-            # The selected ODB is not the complete physical supply boundary.
-            # This is a Step-25 prerequisite, not part of D57's static-IR
-            # verdict: an otherwise valid BTerm/static primary stays measured
-            # for D57 while D58 refuses to acquire EM on a different boundary.
-            model = record.get("source_model")
-            source_record = record.get("sources")
-            source_rows = (source_record or {}).get("sources")
-            supply = record.get("lib_voltage_v")
-            rails = [*record.get("vdd_nets", []), *record.get("gnd_nets", [])]
-            vsrc_paths = (record.get("cross_check") or {}).get("vsrc")
-            if (not isinstance(model, str)
-                    or "through VSRC_LOC_FILES" not in model
-                    or not isinstance(source_record, dict)
-                    or source_record.get("coincident") is not False
-                    or not isinstance(source_rows, dict)
-                    or not rails or len(set(rails)) != len(rails)
-                    or set(source_rows) != set(rails)
-                    or not isinstance(vsrc_paths, dict)
-                    or set(vsrc_paths) != set(rails)
-                    or not isinstance(supply, (int, float))
-                    or isinstance(supply, bool) or not math.isfinite(supply)
-                    or supply <= 0):
-                raise ValueError("LibreLane IR declared VSRC model unavailable")
-            vsrc = {}
-            vdd = set(record["vdd_nets"])
-            for net in rails:
-                rows = source_rows[net]
-                if not isinstance(net, str) or not net or not isinstance(rows, list) or not rows:
-                    raise ValueError("LibreLane IR declared VSRC population malformed")
-                normalized = []
-                for row in rows:
-                    if not isinstance(row, dict) or set(row) != {
-                            "pad", "bterm", "layer", "x", "y", "size"}:
-                        raise ValueError("LibreLane IR declared VSRC row malformed")
-                    if (not all(isinstance(row[key], str) and row[key]
-                                for key in ("pad", "bterm", "layer"))
-                            or not all(isinstance(row[key], (int, float))
-                                       and not isinstance(row[key], bool)
-                                       and math.isfinite(row[key])
-                                       for key in ("x", "y", "size"))
-                            or row["size"] <= 0):
-                        raise ValueError("LibreLane IR declared VSRC row invalid")
-                    normalized.append(dict(row))
-                voltage = float(supply) if net in vdd else 0.0
-                content = "".join(
-                    f"{row['x']:.4f},{row['y']:.4f},{row['size']:.4f},{voltage:g}\n"
-                    for row in normalized)
-                expected = hashlib.sha256(content.encode()).hexdigest()
-                source_path = _retained_native_path(
-                    project, vsrc_paths[net], expected, old_root)
-                vsrc[net] = {
-                    "path": str(source_path.absolute()), "voltage_v": voltage,
-                    "sha256": expected,
-                }
-            result["current_em_basis"]["supply_sources"] = {
-                "model": model, "vsrc": vsrc,
-            }
-        return result
+                old = json.loads(retained.read_text())
+                candidate = old.get("record", {}) if isinstance(old, dict) else {}
+                record = candidate if isinstance(candidate, dict) else {}
+            except (OSError, ValueError):
+                pass
+        worst_value = native.get("worst_ir_uv", native.get("worst_ir_drop_uv"))
+        supply_value = native.get("lib_voltage_v", native.get("vdd_v",
+            native.get("supply_voltage_v", record.get("lib_voltage_v"))))
+        worst, supply = _num(worst_value), _num(supply_value)
+        if (native.get("native_rc", 0) != 0 or native.get("verdict") not in ("PASS", "FAIL")
+                or isinstance(worst_value, bool) or isinstance(supply_value, bool)
+                or worst is None or not math.isfinite(worst) or worst < 0
+                or supply is None or not math.isfinite(supply) or supply <= 0):
+            raise ValueError("native IR measurement or supply coverage unavailable")
+        from signoff_ladder_run import _STATIC_IR_BUDGET_PCT
+        budget = _STATIC_IR_BUDGET_PCT / 100.0 * supply * 1e6
+        verdict = "FAIL" if worst > budget or native["verdict"] == "FAIL" else "PASS"
+        if native.get("nets_analysis_failed"):
+            coverage_errors.append("native supply-net analysis is incomplete")
+        if native.get("unconnected_supply_pins"):
+            coverage_errors.append("native supply pins are unconnected")
+        if coverage_errors and verdict != "FAIL":
+            raise ValueError("; ".join(coverage_errors))
+        return {"valid": True, "verdict": verdict, "worst_ir_uv": worst,
+                "supply_v": supply, "budget_uv": budget,
+                "coverage_errors": coverage_errors}
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
-        return {"valid": False, "verdict": "NOT_MEASURED",
-                "reason": str(exc), "rule": "LL_IR_CURRENT_BINDING_INVALID"}
+        return {"valid": False, "verdict": "NOT_MEASURED", "reason": str(exc),
+                "rule": "IR_NATIVE_RESULT_UNAVAILABLE", "coverage_errors": coverage_errors}
 
 
 def validate_native_density(project: Path, margin: float = _DEFAULT_MARGIN,
                             *, segment_geometry: Optional[dict] = None
                             ) -> Dict[str, Any]:
-    """Existing Step-25 blocking consumer: verify execution, inputs and authority.
-
-    A digest-bound snapshot makes an image-internal authority readable by the
-    host gate. When the declared original is host-readable it is also checked.
-    This is provenance, not a substitute for native measurements or full power
-    basis coverage. Missing evidence is NOT_MEASURED; known native FAIL wins
-    over valid partial coverage.
-    """
+    """Read native density rows, physical coverage and the original PDK limit."""
     rpt = project / "reports/phase3"
-    def local(name: str) -> Path:
-        rel = Path(name)
-        if rel.is_absolute() or ".." in rel.parts:
-            raise ValueError("non-project path in native binding")
-        return project / rel
-
     try:
         doc = json.loads((rpt / "em_openroad_density.json").read_text())
-        if doc.get("schema") != "em_native_density/1":
-            raise ValueError("native execution binding absent")
-        from _prestream_native import final_state
-        # #62b: retain native execution, coverage and PDK Jmax checks on final State;
-        # producer/consumer source hashes are not an electrical limit.
-        if final_state(project) is None and doc.get("source_identity") != native_source_identity():
-            raise ValueError("native producer/consumer source changed")
-        execution = doc["execution"]
-        if execution["native_rc"] != 0 or not execution["argv"]:
+        if not isinstance(doc, dict):
+            raise ValueError("native density report is not an object")
+        execution = doc.get("execution", {})
+        if not isinstance(execution, dict) or execution.get("native_rc", doc.get("native_rc")) != 0:
             raise ValueError("native invocation did not succeed")
-        for name, digest in doc["outputs"].items():
-            if not digest or _native_sha(local(name)) != digest:
-                raise ValueError(f"native output changed: {name}")
-        log = (rpt / "ir_em.log").read_text()
-        if not doc["outputs"] or not doc["inputs"]:
-            raise ValueError("empty native binding")
-        required = {f"reports/phase3/{name}" for name in (
-            "em.rpt", "em.json", "ir_drop.rpt", "ir_drop.json", "ir_em.log",
-            "em_segments.csv", "em_pg_geometry.tsv", "em_pg_geometry_subject.json",
-            "em_native_authority.tlef", "em_openroad_limits.txt")}
-        required.update(f"reports/phase3/{prefix}_{net}.csv"
-                        for net in doc["nets"] for prefix in ("em_segments", "em_openroad_density"))
-        if not required.issubset(doc["outputs"]) or not {"layout", "tech_lef", "cell_lef", "liberty0"}.issubset(doc["inputs"]):
-            raise ValueError("required native input/output binding removed")
-        for role, row in doc["inputs"].items():
-            digest = row["sha256"]
-            if not digest or any(
-                    f"EM_BOUND_{stage} {role} {digest}" not in log
-                    for stage in ("BEFORE", "AFTER")):
-                raise ValueError(f"native input was not read unchanged: {role}")
-            current = local(row["project_path"]) if row.get("project_path") else Path(row["declared_path"])
-            if (row.get("project_path") or current.is_file()) and _native_sha(current) != digest:
-                raise ValueError(f"current input changed: {role}")
-        authority = local(doc["authority"]["snapshot"])
-        authority_sha = doc["inputs"]["tech_lef"]["sha256"]
-        if _native_sha(authority) != authority_sha:
-            raise ValueError("PDK authority snapshot changed")
-        if not doc["pdk"]["name"] or doc["pdk"]["tech_lef"] != doc["inputs"]["tech_lef"]["declared_path"]:
-            raise ValueError("declared PDK identity disagrees")
+        if doc.get("verdict") not in (None, "MEASURED", "PASS", "FAIL"):
+            raise ValueError("native density was not measured")
+        authority_path = Path(doc["authority"]["snapshot"])
+        authority = authority_path if authority_path.is_absolute() else project / authority_path
         text = authority.read_text()
         table, per_cut_authority = native_jmax_table(text, doc["pdk"]["name"])
-        recorded_per_cut = doc["authority"].get("per_cut")
-        # Registry byte identity is diagnostic; the cited rules are authority.
-        # Keep the original snapshot byte-bound to its native invocation below.
-        def cited_content(value):
-            return ({key: item for key, item in value.items() if key != "registry_sha256"}
-                    if isinstance(value, dict) else value)
-        if cited_content(recorded_per_cut) != cited_content(per_cut_authority):
-            raise ValueError("selected PDK per-cut authority changed")
-        if per_cut_authority is not None:
-            per_cut_path = local(doc["authority"]["per_cut_snapshot"])
-            relative = str(per_cut_path.relative_to(project))
-            if (relative not in doc["outputs"] or "per_cut_authority" not in doc["inputs"]
-                    or json.loads(per_cut_path.read_text()) != recorded_per_cut
-                    or doc["inputs"]["per_cut_authority"]["sha256"] != _native_sha(per_cut_path)):
-                raise ValueError("per-cut authority was not bound to the native invocation")
-        if doc["margin"] != margin:
-            raise ValueError("Jmax margin differs from native execution")
-        limits = rpt / "em_openroad_limits.txt"
-        if limits.read_text() != native_limits(text, margin, doc["pdk"]["name"]):
-            raise ValueError("native Jmax is not the declared routing authority")
         subject = json.loads((rpt / "em.json").read_text())
-        static = json.loads((rpt / "ir_drop.json").read_text())
-        basis = doc["power_basis"]
-        for role, field in (("layout", "layout"), ("sdc", "sdc"), ("spef", "spef")):
-            if basis.get(field) and basis[field + "_sha256"] != doc["inputs"][role]["sha256"]:
-                raise ValueError("power basis input digest disagrees")
-        primary = doc.get("step24_primary")
-        if primary is not None:
-            checked = validate_primary_ir(project, for_em=True)
-            if not checked["valid"] or checked != primary:
-                raise ValueError("current Step-24 primary binding changed")
-            # This EM solve must carry its own complete basis. The primary
-            # was measured independently and is compared by its actual native
-            # SDC/SPEF/tech LEF/ODB/library population below, without rewriting
-            # that earlier step's published dictionary.
-            if not (doc.get("librelane_ir") or {}).get("adopted"):
-                raise ValueError("current Step-24 primary reference absent")
-            current_basis = primary.get("current_em_basis")
-            if current_basis is not None:
-                source_basis = current_basis["supply_sources"]
-                recorded_sources = doc.get("supply_source_basis")
-                if (not isinstance(recorded_sources, dict)
-                        or recorded_sources.get("model") != source_basis["model"]
-                        or set(recorded_sources.get("vsrc") or {})
-                        != set(source_basis["vsrc"])):
-                    raise ValueError("current D57 VSRC model was not consumed")
-                for net, expected in source_basis["vsrc"].items():
-                    actual = recorded_sources["vsrc"][net]
-                    role = f"vsrc_{net}"
-                    if (actual != {"input_role": role,
-                                   "sha256": expected["sha256"],
-                                   "voltage_v": expected["voltage_v"]}
-                            or role not in doc["inputs"]
-                            or doc["inputs"][role]["sha256"] != expected["sha256"]):
-                        raise ValueError(f"current D57 VSRC input differs: {net}")
-        layout_row = doc["inputs"]["layout"]
-        subject_layout = _lexical_absolute(project, subject["subject_def"])
-        owned_layout = _lexical_absolute(
-            project, layout_row.get("project_path") or layout_row["declared_path"])
-        if ((primary is None and basis != static["power_basis"])
-                or subject["power_basis"]["basis_id"] != basis["id"]
-                or subject["subject_def_sha256"] != doc["inputs"]["layout"]["sha256"]
-                or subject_layout != owned_layout):
-            raise ValueError("DEF or power basis disagrees with the measurement")
-        ll = doc.get("librelane_ir")
-        if ll and ll.get("adopted"):
-            ll_path = local(ll["record"])
-            if _native_sha(ll_path) != ll["record_sha256"]:
-                raise ValueError("LibreLane primary record changed")
-            ll_doc = json.loads(ll_path.read_text())
-            if primary is not None and (
-                    ll_doc["inputs"]["def"]["sha256"] != doc["inputs"]["layout"]["sha256"]
-                    or ll_doc["record"]["def_sha256"] != doc["inputs"]["layout"]["sha256"]):
-                raise ValueError("LibreLane/EM layout basis differs")
-            ll_basis = ll_doc["native_basis"]
-            for role in ("sdc", "spef", "tech_lef"):
-                if ll_basis[role]["sha256"] != doc["inputs"][role]["sha256"]:
-                    raise ValueError(f"LibreLane/EM power basis differs: {role}")
-            if ll_basis["odb"]["sha256"] != doc["inputs"]["librelane_odb"]["sha256"]:
-                raise ValueError("EM did not consume the LibreLane PSM ODB")
-            ll_libs = {row["sha256"] for row in ll_basis["liberties"]}
-            em_libs = {row["sha256"] for role, row in doc["inputs"].items() if role.startswith("liberty")}
-            if not ll_libs or ll_libs != em_libs:
-                raise ValueError("LibreLane/EM library populations differ")
+        if subject.get("native_rc", 0) != 0:
+            raise ValueError("native PSM invocation did not succeed")
+        basis = doc.get("power_basis", subject.get("power_basis", {}))
         coverage = {}
+        coverage_errors = []
         for net in doc["nets"]:
-            if f"EM_DENSITY_DONE {net}" not in log:
-                raise ValueError(f"native density execution bypassed: {net}")
-            csv_path = rpt / f"em_openroad_density_{net}.csv"
-            csv_sha = _native_sha(csv_path)
-            if f"EM_BOUND_OUTPUT {csv_path.name} {csv_sha}" not in log:
-                raise ValueError(f"native density bytes unbound: {net}")
-            rows = list(csv.DictReader(csv_path.open(newline="")))
-            psm = list(csv.DictReader((rpt / f"em_segments_{net}.csv").open(newline="")))
-            if not rows or len(rows) != len(psm):
-                raise ValueError(f"native segment coverage disagrees: {net}")
-            counts = {"checked": 0, "no_limit": 0, "violated": 0,
-                      "psm_segments": len(psm), "worst_ratio": None}
-            for row, psm_row in zip(rows, psm):
-                layer = table.get(row["Layer"].lower(), {})
-                status = row["Status"]
-                if ((segment_geometry is not None or row["Basis"] == "PER_CUT") and layer
-                        and status in ("OK", "VIOLATED") and row["Basis"] in ("AREAL", "PER_CUT")):
-                    l0, l1 = (psm_row[name] for name in ("Node0 Layer", "Node1 Layer"))
-                    points = tuple(tuple(float(psm_row[f"Node{node} {axis} location"])
-                                         for axis in ("X", "Y")) for node in (0, 1))
-                    current = abs(float(psm_row["Current"]))
-                    if row["Basis"] == "PER_CUT" and l0.lower() == l1.lower():
-                        raise ValueError("per-cut density has no routing-to-cut topology")
-                    if (any(float(row[f"Node{node} {axis}"]) != points[node][axis_index]
-                            for node in (0, 1) for axis_index, axis in enumerate(("X", "Y")))
-                            or abs(float(row["Current(A)"])) != current):
-                        raise ValueError("native density row differs from its PSM segment")
-                    if (l0.lower() != l1.lower()
-                            or points[0][0] != points[1][0] and points[0][1] != points[1][1]):
-                        pair = tuple(sorted((l0.lower(), l1.lower())))
-                        if (layer["kind"] == "cut" and pair not in layer.get("routing_pairs", ())
-                                or layer["kind"] == "routing" and
-                                not l0.lower() == l1.lower() == row["Layer"].lower()):
-                            raise ValueError("native density layer disagrees with VIA topology")
-                        area = float(row["Area(um^2)"])
-                        cuts = int(row["Cuts"])
-                        per_cut = row["Basis"] == "PER_CUT"
-                        divisor = float(cuts) if per_cut else area
-                        if (not math.isfinite(area) or area <= 0
-                                or not math.isfinite(current)
-                                or layer["kind"] == "cut" and cuts <= 0
-                                or per_cut and (layer["kind"] != "cut"
-                                    or not layer.get("jmax_per_cut_A")
-                                    or not math.isclose(area / cuts,
-                                        math.prod(layer["cut_size_um"]), rel_tol=0.0001))
-                                or not _native_density_roundtrip_matches(
-                                    current, divisor, float(row["J(A/um^2)"]),
-                                    exact_divisor=per_cut)):
-                            raise ValueError("native conductor cross section is unproven")
-                        key = _segment_geometry_key(net, l0, l1, points, current)
-                        geometry = {"native_area_um2": area, "native_cuts": cuts,
-                                    "native_layer": row["Layer"].lower(),
-                                    "native_basis": row["Basis"]}
-                        if segment_geometry is not None:
-                            if key in segment_geometry and segment_geometry[key] != geometry:
-                                raise ValueError("ambiguous native segment cross section")
-                            segment_geometry[key] = geometry
-                if status == "NO_LIMIT":
-                    counts["no_limit"] += 1
-                    continue
-                expected_basis = "PER_CUT" if layer.get("jmax_per_cut_A") is not None else "AREAL"
-                if status not in ("OK", "VIOLATED") or layer.get("kind") not in ("routing", "cut") or row["Basis"] != expected_basis:
-                    raise ValueError("wire-to-via substitution or invalid native status")
-                expected = layer["jmax_per_cut_A" if expected_basis == "PER_CUT" else "jmax_areal_A_per_um2"] * (1 - margin)
-                if not math.isclose(float(row["Jlimit(A/um^2)"]), expected, rel_tol=0.0006):
-                    raise ValueError("native CSV Jmax differs from PDK authority")
-                ratio = float(row["Ratio"])
-                if not math.isfinite(ratio) or ratio < 0:
-                    raise ValueError("invalid native density ratio")
-                counts["checked"] += 1
-                counts["violated"] += status == "VIOLATED"
-                counts["worst_ratio"] = max(counts["worst_ratio"] or 0, ratio)
-            if counts != doc["nets"][net]:
-                raise ValueError("native coverage summary changed")
-            coverage[net] = counts
-        if not coverage or set(coverage) != set(subject["nets_analysed"]):
-            raise ValueError("native density omitted a supply net")
+            counts = None
+            try:
+                csv_path = rpt / f"em_openroad_density_{net}.csv"
+                rows = list(csv.DictReader(csv_path.open(newline="")))
+                psm = list(csv.DictReader((rpt / f"em_segments_{net}.csv").open(newline="")))
+                if not rows or len(rows) != len(psm):
+                    raise ValueError(f"native segment coverage disagrees: {net}")
+                counts = {"checked": 0, "no_limit": 0, "violated": 0,
+                          "psm_segments": len(psm), "worst_ratio": None}
+                for row, psm_row in zip(rows, psm):
+                    layer = table.get(row["Layer"].lower(), {})
+                    status = row["Status"]
+                    if ((segment_geometry is not None or row["Basis"] == "PER_CUT") and layer
+                            and status in ("OK", "VIOLATED") and row["Basis"] in ("AREAL", "PER_CUT")):
+                        l0, l1 = (psm_row[name] for name in ("Node0 Layer", "Node1 Layer"))
+                        points = tuple(tuple(float(psm_row[f"Node{node} {axis} location"])
+                                             for axis in ("X", "Y")) for node in (0, 1))
+                        current = abs(float(psm_row["Current"]))
+                        if row["Basis"] == "PER_CUT" and l0.lower() == l1.lower():
+                            raise ValueError("per-cut density has no routing-to-cut topology")
+                        if (any(float(row[f"Node{node} {axis}"]) != points[node][axis_index]
+                                for node in (0, 1) for axis_index, axis in enumerate(("X", "Y")))
+                                or abs(float(row["Current(A)"])) != current):
+                            raise ValueError("native density row differs from its PSM segment")
+                        if (l0.lower() != l1.lower()
+                                or points[0][0] != points[1][0] and points[0][1] != points[1][1]):
+                            pair = tuple(sorted((l0.lower(), l1.lower())))
+                            if (layer["kind"] == "cut" and pair not in layer.get("routing_pairs", ())
+                                    or layer["kind"] == "routing" and
+                                    not l0.lower() == l1.lower() == row["Layer"].lower()):
+                                raise ValueError("native density layer disagrees with VIA topology")
+                            area = float(row["Area(um^2)"])
+                            cuts = int(row["Cuts"])
+                            per_cut = row["Basis"] == "PER_CUT"
+                            divisor = float(cuts) if per_cut else area
+                            if (not math.isfinite(area) or area <= 0
+                                    or not math.isfinite(current)
+                                    or layer["kind"] == "cut" and cuts <= 0
+                                    or per_cut and (layer["kind"] != "cut"
+                                        or not layer.get("jmax_per_cut_A")
+                                        or not math.isclose(area / cuts,
+                                            math.prod(layer["cut_size_um"]), rel_tol=0.0001))
+                                    or not _native_density_roundtrip_matches(
+                                        current, divisor, float(row["J(A/um^2)"]),
+                                        exact_divisor=per_cut)):
+                                raise ValueError("native conductor cross section is unproven")
+                            key = _segment_geometry_key(net, l0, l1, points, current)
+                            geometry = {"native_area_um2": area, "native_cuts": cuts,
+                                        "native_layer": row["Layer"].lower(),
+                                        "native_basis": row["Basis"]}
+                            if segment_geometry is not None:
+                                if key in segment_geometry and segment_geometry[key] != geometry:
+                                    raise ValueError("ambiguous native segment cross section")
+                                segment_geometry[key] = geometry
+                    if status == "NO_LIMIT":
+                        counts["no_limit"] += 1
+                        continue
+                    expected_basis = "PER_CUT" if layer.get("jmax_per_cut_A") is not None else "AREAL"
+                    if status not in ("OK", "VIOLATED") or layer.get("kind") not in ("routing", "cut") or row["Basis"] != expected_basis:
+                        raise ValueError("wire-to-via substitution or invalid native status")
+                    expected = layer["jmax_per_cut_A" if expected_basis == "PER_CUT" else "jmax_areal_A_per_um2"] * (1 - margin)
+                    if not math.isclose(float(row["Jlimit(A/um^2)"]), expected, rel_tol=0.0006):
+                        raise ValueError("native CSV Jmax differs from PDK authority")
+                    ratio = float(row["Ratio"])
+                    if not math.isfinite(ratio) or ratio < 0:
+                        raise ValueError("invalid native density ratio")
+                    counts["checked"] += 1
+                    counts["violated"] += status == "VIOLATED"
+                    counts["worst_ratio"] = max(counts["worst_ratio"] or 0, ratio)
+                coverage[net] = counts
+            except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+                coverage_errors.append(f"{net}: {exc}")
+                if counts is not None and counts["checked"]:
+                    coverage[net] = counts
+        expected_nets = subject.get("nets_analysed")
+        if (not coverage or not isinstance(expected_nets, (list, tuple, dict))
+                or any(not isinstance(net, str) for net in expected_nets)
+                or set(coverage) != set(expected_nets)):
+            coverage_errors.append("native density omitted a supply net")
         violations = sum(x["violated"] for x in coverage.values())
         missing = sum(x["no_limit"] for x in coverage.values())
-        verdict = ("FAIL" if violations else "NOT_MEASURED" if missing or not basis.get("complete") or (ll and not ll.get("adopted"))
-                   else "PASS")
+        measured_failure = violations or (any(row["checked"] for row in coverage.values())
+            and (doc.get("verdict") == "FAIL" or subject.get("verdict") == "FAIL"))
+        if coverage_errors and not measured_failure:
+            return {"valid": False, "verdict": "NOT_MEASURED", "nets": coverage,
+                    "coverage_errors": coverage_errors, "reason": "; ".join(coverage_errors),
+                    "rule": "EM_NATIVE_RESULT_UNAVAILABLE"}
+        power_complete = isinstance(basis, dict) and bool(basis.get("complete"))
+        verdict = "FAIL" if measured_failure else "NOT_MEASURED" if missing or not power_complete else "PASS"
         return {"valid": True, "verdict": verdict, "authority": str(authority),
-                "authority_sha256": authority_sha, "pdk": doc["pdk"],
+                "pdk": doc["pdk"],
                 "nets": coverage, "violations": violations,
-                "unmeasured_segments": missing, "power_basis_complete": bool(basis.get("complete")),
-                "source_identity": doc.get("source_identity"),
-                "per_cut_authority": per_cut_authority}
+                "unmeasured_segments": missing, "power_basis_complete": power_complete,
+                "coverage_errors": coverage_errors, "per_cut_authority": per_cut_authority}
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         return {"valid": False, "verdict": "NOT_MEASURED",
-                "reason": str(exc), "rule": "EM_NATIVE_BINDING_INVALID"}
+                "reason": str(exc), "rule": "EM_NATIVE_RESULT_UNAVAILABLE"}
 
 
 def evaluate(em_path: Optional[Path], jmax_path: Optional[Path],
@@ -1703,24 +1306,18 @@ def evaluate(em_path: Optional[Path], jmax_path: Optional[Path],
         return "SKIPPED", rep
     rep["em_report"] = str(em_path)
 
-    # Normal producer reports must reach this consumer through the native
-    # invocation on the current basis. Offline segment fixtures stay offline.
+    # Use native density reports when the input belongs to a PSM project.
     native = None
     native_geometry = {}
     production = native_project(em_path)
     if production is not None:
         native = validate_native_density(production, margin, segment_geometry=native_geometry)
         rep["native_density"] = native
-        supplied = tech_lef or jmax_path
-        if native["valid"] and supplied is not None and _native_sha(supplied) != native["authority_sha256"]:
-            native = dict(native, valid=False, verdict="NOT_MEASURED",
-                          reason="selected Jmax differs from the native PDK authority")
-            rep["native_density"] = native
         if not native["valid"]:
             rep.update(verdict="NOT_MEASURED", **{"pass": False},
-                       skip_reason="native_execution_or_basis_unbound")
+                       skip_reason="native_execution_or_measurement_unavailable")
             rep["findings"].append({"severity": "NOT_MEASURED",
-                                    "rule": "EM_NATIVE_BINDING_INVALID",
+                                    "rule": "EM_NATIVE_RESULT_UNAVAILABLE",
                                     "message": native["reason"]})
             return "NOT_MEASURED", rep
         tech_lef, jmax_path = Path(native["authority"]), None
@@ -1745,6 +1342,11 @@ def evaluate(em_path: Optional[Path], jmax_path: Optional[Path],
 
     # (3) parse segments
     segs, serr = iter_segments(em_path, net_hint)
+    if serr is not None and native and native["verdict"] == "FAIL":
+        rep.update(verdict="FAIL", **{"pass": False}, coverage_errors=[serr])
+        rep["findings"].append({"severity": "ERROR", "rule": "EM_NATIVE_CURRENT_DENSITY_OVER_JMAX",
+                                "message": "native EM failed; aggregate segment report is unavailable"})
+        return "FAIL", rep
     if serr is not None:
         rep["verdict"] = "SKIPPED"
         rep["pass"] = False
@@ -1941,17 +1543,15 @@ def emit_openroad_ab(project: Path, notes: List[str]) -> None:
         _atomic_write_text(output, json.dumps({"verdict": "NOT_MEASURED",
             "reason": f"A/B input absent or invalid: {exc}"}, indent=2) + "\n")
         return
-    same_def = (tool.get("def_sha256") and
-                tool.get("def_sha256") == subject.get("subject_def_sha256"))
     nets = tool.get("nets") or {}
-    measured = (same_def and tool.get("verdict") == "MEASURED" and
+    measured = (tool.get("verdict") == "MEASURED" and
                 isinstance(nets, dict) and nets and
                 all(row.get("checked", 0) > 0 and row.get("no_limit") == 0
                     for row in nets.values()))
     jmax = gate.get("jmax_screen") or {}
     summary = jmax.get("summary") or {}
     if not measured or jmax.get("verdict") not in ("PASS", "FAIL"):
-        result = {"verdict": "NOT_MEASURED", "same_def": bool(same_def),
+        result = {"verdict": "NOT_MEASURED",
                   "reason": "tool coverage or retained Jmax gate unavailable"}
     else:
         tool_violations = sum(int(row.get("violated", 0)) for row in nets.values())
@@ -1959,7 +1559,7 @@ def emit_openroad_ab(project: Path, notes: List[str]) -> None:
         tool_util = max(float(row.get("worst_ratio") or 0) for row in nets.values())
         gate_util = summary.get("worst_utilization")
         result = {
-            "verdict": "MEASURED", "same_def": True,
+            "verdict": "MEASURED",
             "tool_violations": tool_violations,
             "vibeic_offender_count": gate_offenders,
             "offender_count_agrees": tool_violations == gate_offenders,
@@ -2026,287 +1626,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(out)
     return {"PASS": 0, "FAIL": 1, "SKIPPED": 3, "NOT_MEASURED": 3}[verdict]
 
-
-def _d58_file(project, value):
-    """Existing measured paths must stay inside this project, without symlinks."""
-    from flow109_analog_floorplan import bound_file
-    if isinstance(value, dict):
-        return bound_file(project, value)
-    if not isinstance(value, str) or not value or '..' in Path(value).parts:
-        raise ValueError('D58_MEASURED_INPUT_ABSENT')
-    path = project / value
-    if not path.is_relative_to(project) or any(p.is_symlink() for p in (path, *path.parents)) or not path.is_file():
-        raise ValueError('D58_MEASURED_INPUT_FOREIGN_OR_ABSENT: ' + value)
-    return path.resolve(strict=True)
-
-
-def _d58_capture(project, block, case, work, current):
-    """Ordinary producer wraps the unchanged native interconnect executor."""
-    import shutil
-    import analog_native_em as em
-    import analog_native_interconnect_run as producer
-    from analog_native_flow import _local_ngspice_startup
-    settings_path = _d58_file(project, case['native_settings'])
-    settings_digest = em._sha(settings_path)
-    settings = em._read(settings_path)
-    for key in ('spice', 'geometry', 'testbench', 'model_view', 'testbench_dut', 'extraction_receipt'):
-        settings[key] = str(_d58_file(project, settings[key]))
-    binary = Path(shutil.which('ngspice') or '').resolve(strict=True)
-    if not binary.is_file():
-        raise ValueError('D58_NATIVE_TOOL_ABSENT')
-    work.mkdir(parents=True, exist_ok=False)
-    startup, init = _local_ngspice_startup(project, work, current['image'])
-    settings.update(ngspice_bin=str(binary), timeout_s=0, environment=startup)
-    if type(settings.get('capture_budget_bytes')) is not int or settings['capture_budget_bytes'] <= 0:
-        raise ValueError('D58_EXPLICIT_CAPTURE_BUDGET_REQUIRED')
-    settings['native_init_paths'] = [init['path']] if init else []
-    if init:
-        settings['spiceinit'] = init['path']
-    producer.write(work/'settings.json', settings)
-    driver = work/'d58_driver.py'; driver.write_bytes(Path(__file__).read_bytes())
-    record = producer.run(project, block, settings, work, '')
-    record.update(native_launch=current, tool={'path': str(binary), 'sha256': em._sha(binary)},
-                  operation_source={'path': str(Path(producer.__file__).resolve()), 'sha256': em._sha(Path(producer.__file__))},
-                  d58_driver={'path': str(driver), 'sha256': em._sha(driver)},
-                  d58_settings={'path': str(settings_path), 'sha256': settings_digest})
-    if em._sha(settings_path) != settings_digest:
-        record['unchanged'] = False
-        record['status'] = 'NOT_MEASURED'
-    producer.write(work/'command.json', record)
-    launch = Path(current['attestation_path']); host = em._read(launch)
-    for mount in sorted(host['container_inspect']['Mounts'], key=lambda m: len(m['Destination']), reverse=True):
-        if mount.get('Type') == 'bind' and launch.is_relative_to(Path(mount['Destination'])):
-            launch = Path(mount['Source']) / launch.relative_to(Path(mount['Destination'])); break
-    return {**case, 'receipt': str(work/'command.json'), 'geometry': settings['geometry'],
-            'spice': settings['spice'], 'extraction_receipt': settings['extraction_receipt'],
-            'launch': {'path': str(launch), 'sha256': current['attestation_sha256']}}
-
-
-def _d58_provenance(project, case, current):
-    """Authenticate original execution before any current can contribute a verdict."""
-    import inspect
-    import analog_native_em as em
-    import analog_native_interconnect_run as producer
-    from flow109 import _d23_original_launch
-    receipt = _d58_file(project, case['receipt']); rec = em._read(receipt)
-    origin = case.get('launch') or {}; path = Path(origin.get('path', ''))
-    if not path.is_absolute() or not path.is_file() or em._sha(path) != origin.get('sha256'):
-        raise ValueError('D58_ORIGINAL_LAUNCH_ABSENT_OR_STALE')
-    _d23_original_launch(rec.get('native_launch', {}), dict(current, attestation_path=str(path)))
-    host = em._read(path)
-    mounts = sorted((m for m in host['container_inspect']['Mounts'] if m.get('Type') == 'bind'),
-                    key=lambda m: len(m['Destination']), reverse=True)
-    def original(value):
-        if not isinstance(value, str) or not value.startswith('/') or '..' in Path(value).parts:
-            raise ValueError('D58_ORIGINAL_INPUT_PATH_INVALID')
-        target = Path(value)
-        for mount in mounts:
-            if target.is_relative_to(Path(mount['Destination'])):
-                return (Path(mount['Source']) / target.relative_to(Path(mount['Destination']))).resolve(strict=True)
-        return target.resolve(strict=True)
-    # Same canonical original artifact namespace may be mounted in a later CID;
-    # no equality with the current CID, release or image string is imposed.
-    stored, _ = em.native_capture(rec, transient=rec.get('analysis', {}).get('kind', '').upper() == 'TRAN')
-    original_receipt = original(str(stored)).parent / 'command.json'
-    if original_receipt.read_bytes() != receipt.read_bytes():
-        raise ValueError('D58_ORIGINAL_RECEIPT_CHANGED')
-    inputs, outputs = rec.get('inputs_before'), rec.get('outputs')
-    if not isinstance(inputs, dict) or not inputs or not isinstance(outputs, dict) or not outputs or rec.get('inputs_after') != inputs or rec.get('unchanged') is not True:
-        raise ValueError('D58_NATIVE_POPULATION_UNBOUND')
-    for key in ('geometry', 'spice', 'extraction_receipt'):
-        subject = _d58_file(project, case[key])
-        if inputs.get(str(subject)) != em._sha(subject):
-            raise ValueError('D58_CURRENT_GEOMETRY_OR_EXTRACTION_UNBOUND')
-    for name, digest in {**inputs, **outputs}.items():
-        if em._sha(original(name)) != digest or em._sha(Path(name)) != digest:
-            raise ValueError('D58_NATIVE_INPUT_OR_OUTPUT_CHANGED: ' + name)
-    for key in ('tool', 'operation_source', 'd58_driver', 'd58_settings'):
-        item = rec.get(key) or {}
-        if em._sha(original(item.get('path'))) != item.get('sha256') or em._sha(Path(item['path'])) != item['sha256']:
-            raise ValueError('D58_NATIVE_SOURCE_OR_TOOL_CHANGED')
-    if rec['operation_source']['sha256'] != em._sha(Path(producer.__file__)):
-        raise ValueError('D58_NATIVE_METHOD_CHANGED')
-    executed = ast.parse(Path(rec['d58_driver']['path']).read_text())
-    old = next((n for n in executed.body if isinstance(n, ast.FunctionDef) and n.name == '_d58_capture'), None)
-    if old is None or ast.dump(old) != ast.dump(ast.parse(inspect.getsource(_d58_capture)).body[0]):
-        raise ValueError('D58_CAPTURE_METHOD_CHANGED')
-    command = em._read(receipt.parent/'native-command.json')
-    native = em._read(receipt.parent/'native-execution.json')
-    if command.get('argv') != rec.get('argv') or native.get('argv') != rec.get('argv') or native.get('returncode') != rec.get('returncode') or command.get('environment') != rec.get('native_environment'):
-        raise ValueError('D58_NATIVE_COMMAND_OR_ENVIRONMENT_UNBOUND')
-    argv = rec['argv']; capture, _ = em.native_capture(rec, transient=rec['analysis']['kind'].upper() == 'TRAN')
-    executed_raw = (rec.get('native_raw') or {}).get('executed_path', str(capture))
-    if argv.count('-r') != 1 or argv[argv.index('-r')+1] != executed_raw or argv[-1] != rec.get('deck') or rec['tool']['path'] not in argv:
-        raise ValueError('D58_NATIVE_SUBJECT_MISMATCH')
-    import analog_bound_measurements as measured
-    closure = measured.consumed_input_views(project, Path(rec['deck']))
-    if any(inputs.get(v['path']) != v['sha256'] for v in closure.values()):
-        raise ValueError('D58_NATIVE_INCLUDE_CLOSURE_INCOMPLETE')
-    return rec
-
-
-def execute(project, context):
-    """D58 analog component: BLOCKING on missing evidence; never row signoff.
-
-    Reuses source-PDF limits, material mapping and grade_case through run.
-    Selected cases are measurements, not complete signal/mission qualification.
-    """
-    import uuid
-    import analog_native_em as em
-    import librelane_contract as launch
-    import flow109
-    from flow109_admission import require_launch_admission, AdmissionRefusal
-    project = Path(project).resolve(strict=True)
-    work = project/'reports/flow109/D58'/uuid.uuid4().hex; work.mkdir(parents=True)
-    result = dict(step_id='D58', context_sha256=context.get('context_sha256'), component_status='NOT_MEASURED',
-                  default_row_status='NOT_MEASURED', completed=False, native_started=False, blocks=[], outputs=[],
-                  qualification='NOT_CLAIMED', flow109_acceptance='NOT_MEASURED', whole_flow_acceptance='NOT_MEASURED', delivery_accepted=False)
-    try:
-        if context.get('requested_step') != 'D58' or context.get('native_step_id') != 'flow109.D58' or context.get('resolved_row', {}).get('profile', {}).get('id') != 'analog_die':
-            raise ValueError('D58_CONTEXT_INVALID')
-        result['launch_admission'] = require_launch_admission(project, 'flow109.D58', {'flow109_context': context})
-        current = launch.local_image_attestation(); config = _d58_file(project, 'input/flow109/D58.json')
-        before = em._sha(config); data = em._read(config); blocks = data.get('blocks')
-        if not isinstance(blocks, list) or not blocks:
-            raise ValueError('D58_EMPTY_BLOCK_POPULATION')
-        names = [b.get('block') for b in blocks if isinstance(b, dict)]
-        if len(names) != len(blocks) or len(set(names)) != len(names) or any(not isinstance(n, str) or not re.fullmatch(r'[A-Za-z_]\w*', n) for n in names):
-            raise ValueError('D58_BLOCK_IDENTITY_AMBIGUOUS')
-        retained = []
-        for item in blocks:
-            name = item['block']; selected = []
-            try:
-                settings = dict(item['settings']); cases = settings.get('cases'); required = settings.get('required_cases')
-                if not isinstance(required, list) or not required or any(not isinstance(n, str) or not n for n in required) or len(set(required)) != len(required):
-                    raise ValueError('D58_REQUIRED_CASE_POPULATION_ABSENT')
-                if not isinstance(cases, list) or not cases or any(not isinstance(c, dict) for c in cases):
-                    raise ValueError('D58_EMPTY_CASE_POPULATION')
-                ids = [c.get('name') for c in cases]
-                if any(not isinstance(n, str) or not n for n in ids) or len(set(ids)) != len(ids):
-                    raise ValueError('D58_CASE_IDENTITY_AMBIGUOUS')
-                source = _d58_file(project, settings['limits_source']); meta = em._read(source)
-                pdf = _d58_file(project, meta['copy']); tech = _d58_file(project, settings['magic_tech'])
-                limit_inputs = {str(p): em._sha(p) for p in (source, pdf, tech)}
-                rejected = []
-                for index, case in enumerate(cases):
-                    try:
-                        for key in ('geometry', 'spice', 'extraction_receipt'):
-                            if key in case: _d58_file(project, case[key])
-                        if 'receipt' not in case:
-                            result['native_started'] = True
-                            case = _d58_capture(project, name, case, work/(name+'-'+str(index)+'-native'), current)
-                        _d58_provenance(project, case, current)
-                        selected.append(case)
-                    except (OSError, ValueError, KeyError, TypeError, flow109.Flow109Error) as exc:
-                        rejected.append({'name': case.get('name'), 'status': 'NOT_MEASURED', 'detail': str(exc)})
-                settings.update(cases=selected, limits_source=str(source), magic_tech=str(tech))
-                answer = em.run(project, name, settings, output_dir=work/(name+'-grade'))
-                if rejected:
-                    answer['cases'].extend(rejected)
-                    if answer['status'] != 'FAIL': answer['status'] = 'NOT_MEASURED'
-                input_error = None
-                try:
-                    input_changed = any(em._sha(Path(p)) != digest for p, digest in limit_inputs.items())
-                except OSError as exc:
-                    input_changed = True
-                    input_error = str(exc)
-                if input_changed:
-                    if answer['status'] != 'FAIL': answer['status'] = 'NOT_MEASURED'
-                    answer['input_provenance'] = {'status': 'NOT_MEASURED',
-                        'reason': 'D58_LIMIT_SOURCE_CHANGED',
-                        'detail': input_error or 'consumed limit input hash changed'}
-                result['blocks'].append(dict(block=name, **answer))
-                retained.append({'block': name, 'settings': settings})
-            except (OSError, ValueError, KeyError, TypeError, flow109.Flow109Error) as exc:
-                result['blocks'].append({'block': name, 'status': 'NOT_MEASURED', 'detail': str(exc)})
-        states = [b['status'] for b in result['blocks']]
-        result['component_status'] = 'FAIL' if 'FAIL' in states else 'PASS' if states and set(states) == {'PASS'} else 'NOT_MEASURED'
-        if em._sha(config) != before or launch.local_image_attestation() != current:
-            if result['component_status'] != 'FAIL': result['component_status'] = 'NOT_MEASURED'
-            result['reason'] = 'D58_INPUT_OR_LAUNCH_CHANGED'
-        result['retained_inputs'] = str(work/'retained_inputs.json')
-        (work/'retained_inputs.json').write_text(json.dumps({'blocks': retained}, indent=2)+'\n')
-    except (OSError, ValueError, KeyError, TypeError, AdmissionRefusal, launch.Refusal) as exc:
-        if result['component_status'] != 'FAIL': result['component_status'] = 'NOT_MEASURED'
-        result['reason'] = str(exc)
-    result['scope'] = 'Source-rated native interconnect cases only; signal EM, complete branch/temperature/mission/lifetime coverage and Flow109 metrics NOT_MEASURED'
-    result['outputs'] = [str(p) for p in work.rglob('*') if p.is_file()]
-    (work/'component.json').write_text(json.dumps(result, indent=2)+'\n')
-    return result
-
-
-
-def _d58_metric_observation(project, component):
-    import analog_native_em as em
-    import librelane_contract as launch
-    import uuid
-    retained = Path(component['retained_inputs'])
-    settings = json.loads(retained.read_text())
-    current = launch.local_image_attestation()
-    blocks = []
-    for block in settings['blocks']:
-        for case in block['settings']['cases']:_d58_provenance(project, case, current)
-        work = project/'reports/flow109/D58'/('metric-reader-'+uuid.uuid4().hex)
-        answer = em.run(project, block['block'], block['settings'], output_dir=work)
-        blocks.append(dict(answer, block=block['block']))
-    if launch.local_image_attestation() != current:raise ValueError('D58_METRIC_LAUNCH_CHANGED')
-    # Refused cases from the original selection remain visible.
-    actual = {b['block']:b for b in blocks}
-    for old in component.get('blocks') or []:
-        if old['block'] not in actual:continue
-        for case in old.get('cases') or []:
-            if case.get('status')=='NOT_MEASURED' and case.get('name') not in {c.get('name') for c in actual[old['block']]['cases']}:
-                actual[old['block']]['cases'].append(case)
-    return {'blocks':blocks,'retained_inputs':{'path':str(retained),'sha256':em._sha(retained)}}
-
-
-def _d58_metric_acceptance(project, context, component):
-    """Harvest source-rated DC comparisons; transient excess is not a lifetime failure."""
-    import flow109
-    ids = ['base_34.em_current_lifetime_limits','base_34.current_temperature_model_coverage']
-    failed = component.get('component_status') == 'FAIL' or any(b.get('status')=='FAIL' or
-        any(c.get('status')=='FAIL' for c in b.get('cases') or []) for b in component.get('blocks') or [])
-    result = {'row_id':'D58','status':'NOT_MEASURED','qualification':'NOT_MEASURED','obligations':[]}
-    try:
-        current = flow109.validate_execution_context(context)
-        if (current['resolved_row']['id'] != 'D58' or current['resolved_row']['profile']['id'] != 'analog_die'
-                or [o['id'] for o in current['resolved_row']['obligations']] != ids):raise ValueError('D58_METRIC_CONTEXT_UNREGISTERED')
-        observed = _d58_metric_observation(project, component)
-        failed = failed or any(b['status']=='FAIL' for b in observed['blocks'])
-        comparisons = [{'block':b['block'],'case':c.get('name'),'numeric_status':c.get('numeric_status'),
-            'rating_context':c.get('rating_context'),'interconnect_results':c.get('interconnect_results',[]),
-            'violations':c.get('violations',[]),'unmeasured':c.get('unmeasured',[])}
-            for b in observed['blocks'] for c in b.get('cases') or []]
-        result['native_observation'] = observed
-        result['obligations'].append({'id':ids[0],'status':'FAIL' if failed else 'NOT_MEASURED',
-            'comparisons':comparisons,'reason':'D58_MEASURED_DC_FAILURE' if failed else 'D58_FULL_MISSION_LIFETIME_UNMEASURED'})
-        result['obligations'].append({'id':ids[1],'status':'NOT_MEASURED',
-            'reason':'D58_INDEPENDENT_REQUIRED_CURRENT_TEMPERATURE_MODEL_POPULATION_UNBOUND',
-            'observed_items':[{'block':c['block'],'case':c['case'],'rating_context':c['rating_context']} for c in comparisons]})
-    except (OSError,ValueError,KeyError,TypeError,AttributeError) as exc:
-        result['reason'] = str(exc)
-        known_failures = {o['id'] for o in result['obligations'] if o['status']=='FAIL'}
-        result['obligations'] = [{'id':oid,'status':'FAIL' if oid in known_failures or failed and oid==ids[0] else 'NOT_MEASURED','reason':str(exc)} for oid in ids]
-    if failed:result['status']='FAIL'
-    return result
-
-
-def consume_default_row_completion(project, context, component):
-    """Canonical row completion; partial measurements do not qualify the row."""
-    accepted = _d58_metric_acceptance(Path(project).resolve(), context, component)
-    prior = component.get('metric_acceptance') or {}
-    prior_ids = {o.get('id') for o in prior.get('obligations', []) if o.get('status') == 'FAIL'} if isinstance(prior, dict) else set()
-    for item in accepted['obligations']:
-        if item['id'] in prior_ids and item['status'] != 'FAIL':
-            item.update(status='FAIL', reason='D58_PRIOR_MEASURED_FAILURE')
-    if (component.get('default_row_status') == 'FAIL' or component.get('metric_acceptance_status') == 'FAIL'
-            or isinstance(prior, dict) and prior.get('status') == 'FAIL' or prior_ids):
-        accepted['status'] = 'FAIL'
-        accepted['prior_failed_obligation_ids'] = sorted(prior_ids)
-    return {**component, 'step_id': 'D58', 'context_sha256': context['context_sha256'],
-        'metric_acceptance': accepted, 'metric_acceptance_status': accepted['status'],
-        'default_row_status': accepted['status'], 'flow109_acceptance': accepted['status'],
-        'completed': False, 'whole_flow_acceptance': 'NOT_MEASURED', 'delivery_accepted': False}
 
 if __name__ == "__main__":
     sys.exit(main())

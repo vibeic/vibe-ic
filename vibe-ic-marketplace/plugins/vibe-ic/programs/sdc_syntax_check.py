@@ -54,7 +54,6 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Optional, Tuple
 from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
-import _gate_authorship as _ga  # R-0915-152 (who invoked this writer)
 import _path_layout as _pl
 import sdc_constraints as _sdc
 
@@ -513,7 +512,7 @@ def main():
     if args.json is not None:
         # R-0915-152 -- the document states WHO INVOKED this writer, beside the verdict it
         # already composes. Unstated role == producer, so the run's own path is unchanged.
-        payload = json.dumps(_ga.stamp(asdict(result)), indent=2,
+        payload = json.dumps(asdict(result), indent=2,
                              ensure_ascii=False)
         if args.json == "-":
             print(payload)

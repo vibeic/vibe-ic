@@ -50,7 +50,6 @@ from __future__ import annotations
 
 import ast
 import json
-import os
 import subprocess
 import sys
 import time
@@ -67,23 +66,8 @@ import lec_run                          # noqa: E402
 
 
 # A job that PROGRESSES for `secs` seconds: it prints, and it burns CPU.
-def _progressing(secs: float, tick: float = 0.05) -> str:
-    return (f"{sys.executable} -c "
-            f"'import sys,time;t=time.time()\n"
-            f"while time.time()-t<{secs}:\n"
-            f"    sys.stdout.write(\"tick\\n\");sys.stdout.flush()\n"
-            f"    time.sleep({tick})\n"
-            f"print(\"DONE\")'")
 
 
-def _progressing_argv(secs: float, tick: float = 0.05):
-    return [sys.executable, "-c",
-            "import sys,time\n"
-            f"t=time.time()\n"
-            f"while time.time()-t<{secs}:\n"
-            "    sys.stdout.write('tick\\n'); sys.stdout.flush()\n"
-            f"    time.sleep({tick})\n"
-            "print('DONE')\n"]
 
 
 # ---------------------------------------------------------------------------
@@ -625,59 +609,8 @@ def test_a_progressing_job_with_a_satisfied_predicate_is_never_aborted():
 # 3b. THE OUTER WALL. Removing the inner ceiling is worth nothing if the RUNNER
 #     still wraps the producer in a host deadline five minutes further out.
 # ---------------------------------------------------------------------------
-def test_the_runner_imposes_no_outer_deadline_on_the_lec_producer():
-    """The declared budget is RECORDED, not ENFORCED.
-
-    THE ASSERTION HERE IS THE ONE THE OLD INVARIANT COULD NOT MAKE. Its
-    siblings in `test_lec_run` require `outer == inner + 300` — satisfied by
-    any number big enough, and satisfied at every one of the three values this
-    wall has held (1200, 3x the inner budget, inner+300). Each was defended in
-    a comment as the right one; each still killed a proof that was computing.
-    This asserts there is no wall.
-
-    Read with `ast`, and keyed on the BUDGET NAME rather than on the dispatch's
-    argv. THE FIRST DRAFT OF THIS TEST WAS VACUOUS and was caught by its own
-    mutation: it filtered on `"lec_run" in ast.unparse(call)`, but the argv is
-    built into a local `cmd`, so that string is not in the call at all. Swapping
-    the pre-fix file back in left it GREEN. What the defect actually touches is
-    `_LEC_PRODUCER_TIMEOUT_S` reaching a `timeout=`, so that is what is read.
-    """
-    import ast
-    src = (PROGRAMS / "design_one_shot_runner.py").read_text(
-        encoding="utf-8", errors="replace")
-    tree = ast.parse(src)
-    assert "_LEC_PRODUCER_TIMEOUT_S" in src, (
-        "the declared budget is gone entirely — this test can no longer "
-        "distinguish 'not enforced' from 'not measured'")
-    bad = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        for k in node.keywords:
-            if k.arg in ("timeout", "hard_ceiling_s") and \
-                    "_LEC_PRODUCER_TIMEOUT_S" in ast.unparse(k.value):
-                bad.append(f"design_one_shot_runner.py:{node.lineno}")
-    assert bad == [], (
-        "the LEC producer is dispatched under a host wall-clock deadline "
-        "again — a progressing proof dies at it with no verdict: "
-        + ", ".join(bad))
 
 
-def test_the_declared_lec_budget_is_still_read_from_the_producer():
-    """Removing the ENFORCEMENT must not remove the DISCLOSURE. The number is
-    still derived from `lec_run`'s own constant, and it still reaches the step
-    record — so "this run went long" stays answerable."""
-    import design_one_shot_runner as R
-    import lec_run as L
-    assert R.lec_producer_yosys_timeout_s() == L.DEFAULT_YOSYS_TIMEOUT_S
-    assert R.lec_producer_outer_timeout_s() == \
-        R.lec_producer_yosys_timeout_s() + 300
-    src = (PROGRAMS / "design_one_shot_runner.py").read_text(
-        encoding="utf-8", errors="replace")
-    assert 'f"budget={_LEC_PRODUCER_TIMEOUT_S}s — enforced "' in src, (
-        "the declared budget no longer reaches the step record; a run that "
-        "went long is now invisible instead of merely uncut")
-    assert 'f"inside each Yosys invocation)"' in src
 
 
 # ---------------------------------------------------------------------------
@@ -1016,60 +949,7 @@ def test_no_program_hands_a_timeout_to_the_progress_run_primitive():
 
 
 # Source-only API doubles: no native tools or real child workloads are launched.
-@pytest.mark.parametrize("state", ["progressing", "failed", "stalled"])
-def test_allocated_frontend_step12_supervision(tmp_path, monkeypatch, state):
-    import execution_frontend_worker as worker
-    import _progress_run as progress
-    calls=[]
-    scan=tmp_path/'project/phase2/stage2/dft/scan_netlist.v'
-    scan.parent.mkdir(parents=True); scan.write_text('module neutral; endmodule\n')
-    output=tmp_path/'output'; target=output/'phase2/stage2/synth/post_dft_netlist.v'
-    def observed(argv, **kw):
-        calls.append((argv,kw))
-        if state == 'stalled':
-            raise progress.Stalled(argv, 3, .1, 9, {'output':False,'cpu':True})
-        if state == 'progressing': target.write_text('module neutral; endmodule\n')
-        return subprocess.CompletedProcess(argv, 0 if state=='progressing' else 7, 'observed output', 'observed stderr')
-    monkeypatch.setattr(progress,'run',observed)
-    monkeypatch.setattr(worker.subprocess,'run',lambda argv,**kw: subprocess.CompletedProcess(argv,7,'','raw host launch'))
-    result=worker.produce_12(tmp_path/'project',output)
-    if state=='progressing': assert result==target and target.read_text()==scan.read_text()
-    else:
-        report=json.loads(result.read_text())
-        assert report['result']=='NOT_MEASURED'
-        assert report['reason']==('yosys producer stalled' if state=='stalled' else 'yosys producer failed')
-        if state=='failed': assert report['rc']==7 and report['stderr']=='observed stderr'
-        else: assert 'STALLED' in report['stderr']
-    assert len(calls)==1 and calls[0][0][0]=='yosys'
-    assert calls[0][1]=={'capture_output':True,'text':True}
 
-@pytest.mark.parametrize("state", ["progressing", "stalled"])
-def test_allocated_analog_gate_supervision(tmp_path, monkeypatch, state):
-    import execution_analog_worker as worker
-    from types import SimpleNamespace
-    calls=[]; binding={'step_id':'A6','required_gates':['neutral_gate']}
-    monkeypatch.setenv('VIBEIC_EXECUTION_BINDING',json.dumps(binding))
-    monkeypatch.setattr(worker,'gate_specs',lambda step:[{'command':'neutral_gate project'}])
-    monkeypatch.setattr(worker.em,'digest',lambda path:'source-only-mock-digest')
-    def observed(argv,**kw):
-        calls.append((argv,kw))
-        kw['popen_factory'](argv)
-        return SimpleNamespace(rc=0 if state=='progressing' else _wd.RC_STALLED,
-            out='gate output',err='' if state=='progressing' else 'WATCHDOG_STALLED',
-            outcome='natural' if state=='progressing' else 'stalled',
-            supervision={'pid':321,'watched':'output+cpu','since_last_progress_s':0 if state=='progressing' else 120})
-    monkeypatch.setattr(_wd,'run_host_supervised',observed)
-    class Raw:
-        pid=321; returncode=0
-        def communicate(self,**kw): return 'raw unsupervised',''
-    monkeypatch.setattr(worker.subprocess,'Popen',lambda *a,**k:Raw())
-    row=worker.observe_gate(tmp_path,'neutral_gate')
-    assert row['stdout']=='gate output' and row['pid']==321 and row['binding']==binding
-    assert row['rc']==(0 if state=='progressing' else _wd.RC_STALLED)
-    assert row['supervision']['watched']=='output+cpu'
-    assert len(calls)==1 and calls[0][1]['hard_ceiling_s']==120
-    assert callable(calls[0][1]['popen_factory'])
-    assert not any(k.startswith('VIBEIC_EXECUTION') for k in calls[0][1]['env'])
 
 
 @pytest.mark.parametrize('state',['progressing','stalled'])

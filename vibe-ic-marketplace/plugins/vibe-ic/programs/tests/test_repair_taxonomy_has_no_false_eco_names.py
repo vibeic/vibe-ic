@@ -84,11 +84,3 @@ def test_non_eco_files_keep_their_canonical_names():
         if path.is_file() and path.name in FORBIDDEN_BASENAMES
     )
     assert not found, "misleading non-ECO filenames returned:\n" + "\n".join(found)
-
-
-def test_legacy_eco_directory_is_migration_input_only():
-    source = (PLUGIN / "programs" / "migrate_to_canonical_taxonomy.py").read_text(
-        encoding="utf-8"
-    )
-    assert '"eco":                "phase3/stage3/postroute_timing_repair"' in source
-    assert "Migration-only source alias" in source

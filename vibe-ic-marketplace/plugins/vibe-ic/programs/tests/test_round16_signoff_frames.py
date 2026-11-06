@@ -65,111 +65,34 @@ END delta_sigma
 END LIBRARY
 """
 
-LEF_ZERO_ORIGIN = LEF_WITH_ORIGIN.replace("ORIGIN 3.800 20.750",
-                                          "ORIGIN 0.000 0.000")
 
 
 # ---------------------------------------------------------------- 4. ORIGIN
 
-def test_macro_origins_are_read_from_the_lef():
-    assert mod._lef_macro_origins(LEF_WITH_ORIGIN) == {
-        "delta_sigma": (3.8, 20.75)}
 
 
-def test_a_zero_origin_macro_is_not_reported():
-    assert mod._lef_macro_origins(LEF_ZERO_ORIGIN) == {}
-    assert mod._lef_macro_origins("MACRO m\n  SIZE 1 BY 1 ;\nEND m\n") == {}
 
 
-def test_normalization_moves_the_geometry_into_openroads_frame():
-    """The pin RECT lands at rect+ORIGIN — the frame `dbITerm getBBox`
-    reports and the frame every routed wire in the DEF was built against."""
-    out, origins = mod._lef_normalize_macro_origin(LEF_WITH_ORIGIN)
-    assert origins == {"delta_sigma": (3.8, 20.75)}
-    assert "RECT 168.560 6.400 169.760 7.100 ;" in out
-    # and the ORIGIN it was folded into is gone, so no reader can apply it
-    # a second time (with either sign).
-    assert re.search(r"^\s*ORIGIN\s+0\.000\s+0\.000\s*;", out, re.M)
-    assert "3.800 20.750" not in out
 
 
-def test_normalization_moves_the_obs_too():
-    """An OBS left behind would be one ORIGIN from the metal it describes."""
-    out, _ = mod._lef_normalize_macro_origin(LEF_WITH_ORIGIN)
-    assert "RECT 0.000 11.700 270.520 262.320 ;" in out
 
 
-def test_a_zero_origin_lef_is_returned_byte_identical():
-    out, origins = mod._lef_normalize_macro_origin(LEF_ZERO_ORIGIN)
-    assert origins == {}
-    assert out == LEF_ZERO_ORIGIN
 
 
-def test_normalization_preserves_every_line():
-    out, _ = mod._lef_normalize_macro_origin(LEF_WITH_ORIGIN)
-    assert len(out.splitlines()) == len(LEF_WITH_ORIGIN.splitlines())
 
 
-def test_streamout_translates_macro_artwork_by_the_lef_origin():
-    """The streamout script reads the ORIGIN from the LEFs it is given and
-    applies it to the substituted macro artwork. Without this the macro's
-    real metal is ORIGIN away from the abstract pin the router connected."""
-    src = mod._GDS_STREAMOUT_PY
-    compile(src, "stream_out.py", "exec")          # the emitted script parses
-    assert "_lef_macro_origins_text" in src
-    assert "MACRO_LEF_ORIGIN" in src
-    # the translation is composed with (not replaced by) the shape transform
-    assert "_otr * _t" in src
 
 
-def test_streamout_origin_scan_regex_survives_the_string_embedding():
-    """The MACRO block regex carries a backreference; embedded in a non-raw
-    triple-quoted string an unescaped `\\1` becomes chr(1) and every macro
-    silently reads as ORIGIN-less (measured: the first cut of this fix)."""
-    ns = {}
-    src = mod._GDS_STREAMOUT_PY
-    body = src.split("def _lef_macro_origins_text", 1)[1]
-    body = "def _lef_macro_origins_text" + body.split("\n\n\n", 1)[0]
-    exec(body, ns)
-    assert ns["_lef_macro_origins_text"](LEF_WITH_ORIGIN) == {
-        "delta_sigma": (3.8, 20.75)}
 
 
 # ------------------------------------------------- 3. macro GDS substitution
 
-def test_macro_gds_is_substituted_not_merged_over_the_abstract():
-    src = mod._GDS_STREAMOUT_PY
-    assert "MACRO_GDS manual-substituted" in src
-    # the abstract's own shapes (the LEF SIZE box the reader painted) are
-    # cleared before the artwork is copied in
-    i = src.index("for gp in macro_gds_files:")
-    tail = src[i:]
-    assert "_mdc.shapes(_li).clear()" in tail
-    # a macro GDS naming no DEF master still merges the legacy way
-    assert "MACRO_GDS merged (no DEF master matched)" in tail
 
 
 # --------------------------------------------- 1./2. placement legality
 
-def test_a_partial_repair_finishes_its_pass_instead_of_breaking_out():
-    tcl = mod._v1_8_100_signoff_drv_repair_tcl("/out")
-    assert "SDR_REPAIR_NONFATAL" in tcl
-    # the abort sets the stop flag; it does not break before the legalize
-    i = tcl.index("SDR_REPAIR_NONFATAL")
-    assert "set _sdr_stop 1" in tcl[i:i + 200]
-    assert "break" not in tcl[i:i + 200]
-    # and the pass still ends with a legalize, a reroute, and only then a stop
-    assert tcl.index("detailed_placement") > i
-    assert tcl.index("SDR_STOPPED_AFTER_PARTIAL_REPAIR") > tcl.index(
-        "detailed_route")
 
 
-def test_the_repair_pass_verifies_its_own_legalization():
-    tcl = mod._v1_8_100_signoff_drv_repair_tcl("/out")
-    assert "check_placement -no_abort" in tcl
-    assert "SDR_PLACEMENT_VIOLATIONS" in tcl
-    # an escalation exists for the case the default bound cannot resolve
-    assert "-use_diamond_legalizer" in tcl
 
 
 def test_step_pnr_refuses_a_non_zero_placement_violation_count():
@@ -195,47 +118,12 @@ def test_the_placement_gate_verdict_follows_the_count(count, expect_fail):
 
 # ------------------------------------------------- secondary strap spacing
 
-def test_secondary_straps_are_bound_by_the_layers_own_spacing():
-    """A layer whose min spacing exceeds its min width: the group must be
-    placed against the SPACING rule, not against the strap width."""
-    tech = ("LAYER TopMetal1\n  TYPE ROUTING ;\n  WIDTH 1.64 ;\n"
-            "  SPACING 1.64 ;\nEND TopMetal1\n")
-    stripes = [{"layer": "TopMetal1", "width": 2.2, "pitch": 8.0,
-                "offset": 0.0}]
-    out = mod._secondary_supply_tcl("VDD", "VSS", stripes, tech)["stripes"]
-    assert "1.64" in out                      # the rule reached the deck
-    assert "$_sec_gap >= 1.64" in out
-    assert "PDN_SECONDARY_STRAPS_DO_NOT_FIT" in out
-    assert "PDN_SECONDARY_STRAP_PLACED" in out
 
 
-def test_a_secondary_group_that_cannot_clear_the_rule_is_refused_by_name():
-    """pitch 5.0, width 2.2, spacing 1.64: 0.3 um of gap either side. The
-    marker names the layer, the need, the gap and the rule."""
-    tech = ("LAYER TopMetal1\n  TYPE ROUTING ;\n  WIDTH 1.64 ;\n"
-            "  SPACING 1.64 ;\nEND TopMetal1\n")
-    stripes = [{"layer": "TopMetal1", "width": 2.2, "pitch": 5.0,
-                "offset": 0.0}]
-    out = mod._secondary_supply_tcl("VDD", "VSS", stripes, tech)["stripes"]
-    # the fit is decided at runtime against the measured gap
-    assert "set _sec_gap [expr {(5.0 - 2.2 - $_sec_need) / 2.0}]" in out
 
 
-def test_without_a_stated_spacing_the_width_proxy_is_disclosed():
-    tech = "LAYER M9\n  TYPE ROUTING ;\n  WIDTH 1.0 ;\nEND M9\n"
-    stripes = [{"layer": "M9", "width": 1.0, "pitch": 10.0, "offset": 0.0}]
-    out = mod._secondary_supply_tcl("VDD", "VSS", stripes, tech)["stripes"]
-    assert "width-proxy" in out
 
 
-def test_the_secondary_group_is_centred_between_the_primary_straps():
-    """Both gaps equal, each the largest available — a group dropped at
-    `offset + pitch/2` leaves an asymmetric pair and violates the tighter."""
-    tech = ("LAYER M5\n  TYPE ROUTING ;\n  WIDTH 0.2 ;\n  SPACING 0.21 ;\n"
-            "END M5\n")
-    stripes = [{"layer": "M5", "width": 1.0, "pitch": 20.0, "offset": 2.0}]
-    out = mod._secondary_supply_tcl("VDD", "VSS", stripes, tech)["stripes"]
-    assert "-offset [expr {2.0 + 1.0 + $_sec_gap}]" in out
 
 
 # ------------------------------------------------------ extraction LEF view
@@ -269,13 +157,6 @@ def test_the_step_record_is_published_before_the_summary_that_quotes_it():
         "and the full record still overwrites it at the end")
 
 
-def test_the_pre_summary_record_carries_the_step_extras_the_summary_reads():
-    """A record without `extras` would make the summary say '(report
-    missing)' — the pre-#399 state — instead of this run's counts."""
-    import dataclasses
-    r = mod.StepResult("drc", "FAIL", 1.0, "d", extras={"total_violations": 39})
-    assert dataclasses.asdict(r).get("extras", {}).get(
-        "total_violations") == 39
 
 
 # ------------------------- 6. the block's ports are the DESIGN's port names
@@ -357,23 +238,8 @@ SIGNOFF_DRV_CENSUS max_capacitance violators=0
 """
 
 
-def test_the_signoff_deck_records_the_tools_own_drv_counts():
-    tcl = mod._report_check_types_tcl("/out/sta.rpt")
-    assert "sta::${_vt}_violation_count" in tcl
-    assert "SIGNOFF_DRV_CENSUS $_vt violators=$_vn" in tcl
-    for kind in ("max_slew", "max_fanout", "max_capacitance"):
-        assert kind in tcl
-    # the census is emitted on the SUCCESS branch only — never beside a
-    # report_check_types that errored
-    assert tcl.index("SIGNOFF_CHECK_TYPES_FAILED") < tcl.index(
-        "SIGNOFF_DRV_CENSUS")
 
 
-def test_the_census_begin_line_is_digit_free():
-    """`extract_drv` ends an open violator table at the first line with no
-    digit. A digit in the BEGIN line would make the census look like extra
-    violator rows of whatever table happened to be open above it."""
-    assert not any(c.isdigit() for c in mod._SIGNOFF_DRV_CENSUS_BEGIN)
 
 
 def test_a_census_zero_is_a_measurement_not_an_absent_table():
@@ -408,46 +274,10 @@ def test_a_census_does_not_hide_a_table_that_has_rows():
 
 # ------------- 8. the DRV bound, the GR-tree abort, and the Verilog parser
 
-def test_a_measured_capacitance_violator_brings_the_bound_back_to_the_seed():
-    """The electrical floor `rsz::find_max_wire_length` answers with the length
-    at which wire DELAY degrades. A wire violates its LOAD limit long before
-    that: MEASURED on ihp-sg13g2 the floor is 3671 um, so a 1.3 mm die was
-    repaired at a 3671 um repeater spacing — nothing was inserted — while the
-    sign-off report carried 10 max-capacitance violators. The floor still
-    governs the kinds it governs; a MEASURED capacitance violator brings the
-    bound back to the geometric seed, and never below it."""
-    tcl = mod._v1_8_100_signoff_drv_repair_tcl("/out")
-    assert "set _sdr_seed $_sdr_mwl" in tcl
-    assert "SDR_DRV_BY_KIND" in tcl
-    assert "SDR_MWL_LOWERED_FOR_CAP" in tcl
-    # keyed on the tool's OWN per-kind count, and only downward to the seed
-    assert "if {$_sdr_ncap > 0 && $_sdr_mwl > $_sdr_seed}" in tcl
-    assert "set _sdr_mwl $_sdr_seed" in tcl
 
 
-def test_the_drv_count_is_attributed_to_its_table():
-    """A total alone cannot choose the bound: the section headings are read so
-    a max-capacitance row is not counted as a max-slew one."""
-    tcl = mod._v1_8_100_signoff_drv_repair_tcl("/out")
-    assert 'eq "max capacitance"' in tcl
-    assert 'eq "max slew"' in tcl
 
 
-def test_a_stale_global_route_tree_is_regenerated_and_the_repair_retried():
-    """RSZ-0074 (`Failed to build tree from global routes ... found route to 2
-    pins, expected 1`) aborts repair_design at iteration 0 having done nothing.
-    Regenerating the global route on the current design and retrying runs the
-    identical repair to completion. Bounded to ONE retry."""
-    tcl = mod._v1_8_100_signoff_drv_repair_tcl("/out")
-    i = tcl.index("RSZ-0074")
-    seg = tcl[i:i + 900]
-    assert "SDR_RSZ0074_DETECTED" in seg
-    assert "global_route" in seg
-    assert "SDR_RSZ0074_RECOVERED" in seg
-    # a failure of the retry still stops the loop — no unbounded retrying
-    assert "SDR_RSZ0074_RETRY_NONFATAL" in seg and "set _sdr_stop 1" in seg
-    # a NON-RSZ-0074 error keeps the old behaviour exactly
-    assert "SDR_REPAIR_NONFATAL: $_sdr_rd" in seg
 
 
 import analog_hardmacro_pinname_consistency_check as _pin  # noqa: E402

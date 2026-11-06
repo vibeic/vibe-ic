@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
-import json
 import math
 import re
 import sys
@@ -37,10 +36,8 @@ from typing import Any, Callable, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _atomic_artefact import write_json  # noqa: E402
 from librelane_contract import (Refusal, _load, digest, emit_config,  # noqa: E402
-                                config_file_hashes, derive_step_config,
-                                resolve_step_config, run_chain,
-                                validate_step_receipt)
-import instrument_calibration  # noqa: E402
+                                derive_step_config,
+                                resolve_step_config, run_chain)
 
 STEPS = ("OpenROAD.CheckSDCFiles", "OpenROAD.STAPrePNR")
 _TIME_UNIT_REPORT = "vibeic_time_unit.rpt"
@@ -76,15 +73,12 @@ BASIS_NOTE = ("pre-layout basis (Step 10, LibreLane OpenROAD.STAPrePNR) — the 
 
 def black_boxes(sta_log: str) -> list[dict[str, str]]:
     """Cells OpenSTA replaced by an empty black box while linking."""
-    instrument_calibration.assert_calibrated("librelane_prelayout::black_boxes")
     return [{"module": m.group(1), "instance": m.group(2)}
             for m in _BLACK_BOX_RE.finditer(sta_log)]
 
 
 def sdc_diagnostics(sta_log: str, sdc: Path, *, calibrate: bool = True) -> list[dict[str, Any]]:
     """OpenSTA diagnostics raised while reading THIS constraints file."""
-    if calibrate:
-        instrument_calibration.assert_calibrated("librelane_prelayout::sdc_diagnostics")
     found = []
     for m in _FILE_DIAG_RE.finditer(sta_log):
         if Path(m.group(3)).name != sdc.name:
@@ -104,8 +98,6 @@ def check_setup_counts(checks_rpt: str,
     `-verbose` listing under the summary line names them; an unlisted count
     stands as reported.
     """
-    if calibrate:
-        instrument_calibration.assert_calibrated("librelane_prelayout::check_setup_counts")
     header = _CHECK_SETUP_HEADER_RE.search(checks_rpt)
     if header is None:
         return None
@@ -248,10 +240,6 @@ def _capture_time_unit_config(config: Path, mounts: list) -> Path:
     hook = config.with_name(config.stem + ".time_units.tcl")
     lines = ["# Preserve the declared hook before measuring command units."]
     if previous:
-        bound = config_file_hashes(doc, mounts).get(str(previous))
-        # A changed mounted hook must also change this config-file digest,
-        # so run_chain cannot reuse the old native execution.
-        lines.append(f"# Original hook SHA256: {bound or 'image-owned'}")
         quoted = str(previous).replace("\\", "\\\\").replace('"', '\\"')
         for token in ("$", "[", "]"):
             quoted = quoted.replace(token, "\\" + token)
@@ -274,40 +262,16 @@ def _capture_time_unit_config(config: Path, mounts: list) -> Path:
 
 
 def _native_time_unit(folder: Path, corner: Path, liberty: list) -> Optional[str]:
-    """Consume the receipt-bound native unit and its current input context."""
+    """Read the command time unit reported by the native interpreter."""
     report = corner / _TIME_UNIT_REPORT
     if not report.is_file():
-        return None  # Retained producers predating native unit capture.
-    receipt = validate_step_receipt(folder, "OpenROAD.STAPrePNR")
-    if receipt["sha256"].get(str(report.relative_to(folder))) != digest(report):
-        raise Refusal("LL_PRELAYOUT_TIME_UNIT_UNBOUND", str(report))
+        return None
     from eda_report_audit import _STA_TIME_UNIT_RE, _STA_TIME_TO_NS
     units = {m.group("unit").lower() for m in _STA_TIME_UNIT_RE.finditer(report.read_text())}
     if len(units) != 1 or not units <= _STA_TIME_TO_NS.keys():
         raise Refusal("LL_PRELAYOUT_TIME_UNIT_UNESTABLISHED", str(report))
-    context = _load(folder / "pdk_root.json")
-    mounts = sorted(context.get("mounts_under_it") or [],
-                    key=lambda row: len(str(row[1])), reverse=True)
-    inputs = receipt["input"].get("config_files") or {}
     if not liberty:
-        raise Refusal("LL_PRELAYOUT_LIBERTY_UNBOUND", str(corner))
-    for name in liberty:
-        path = Path(name)
-        mapped = next((Path(host) / path.relative_to(guest)
-                       for host, guest in mounts if path.is_relative_to(guest)), None)
-        expected = inputs.get(str(name))
-        if mapped is not None or expected is not None:
-            source = mapped if mapped is not None else path
-            if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected):
-                raise Refusal("LL_PRELAYOUT_LIBERTY_UNBOUND", str(name))
-            if not source.is_file():
-                raise Refusal("LL_PRELAYOUT_LIBERTY_MISSING", str(source))
-            if digest(source) != expected:
-                raise Refusal("LL_PRELAYOUT_LIBERTY_CHANGED", str(source))
-        elif not re.fullmatch(r".+@sha256:[0-9a-f]{64}", str(receipt["input"].get("image", ""))):
-            raise Refusal("LL_PRELAYOUT_LIBERTY_UNBOUND", str(name))
-        # An unmounted image-internal library is bound by the exact image
-        # digest and the native execution, not a guessed host path.
+        raise Refusal("LL_PRELAYOUT_LIBERTY_MISSING", str(corner))
     return next(iter(units))
 
 

@@ -21,71 +21,21 @@ a string.
 from __future__ import annotations
 
 import ast
-import os
 import pathlib
-import subprocess
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import phase3_one_shot_runner as P                            # noqa: E402
 
 
-def _run_preamble(tmp_path, dirs):
-    """Execute the real shell fragment against a fabricated /foss/tools."""
-    root = tmp_path / "foss" / "tools"
-    for d in dirs:
-        (root / d).mkdir(parents=True)
-        exe = root / d / "klayout"
-        exe.write_text("#!/bin/sh\n")
-        exe.chmod(0o755)
-    frag = P.KLAYOUT_PREFER_FORK_SH.replace("/foss/tools/", f"{root}/")
-    out = subprocess.run(
-        ["bash", "-c", frag + 'echo "$PATH|$LD_LIBRARY_PATH|$KLAYOUT_PYMOD"'],
-        capture_output=True, text=True, env={**os.environ, "LD_LIBRARY_PATH": ""})
-    path, ldp, pymod = out.stdout.strip().split("|")
-    return path.split(":")[0], ldp.split(":")[0], pymod
 
 
-def test_the_fork_wins_when_the_image_has_one(tmp_path):
-    first_path, first_lib, pymod = _run_preamble(
-        tmp_path, ["klayout", "klayout-vibeic"])
-    assert first_path.endswith("klayout-vibeic")
-    assert first_lib.endswith("klayout-vibeic"), \
-        "PATH alone is not enough — the libraries decide the geometry"
-    assert pymod.endswith("klayout-vibeic/pymod")
 
 
-def test_the_base_is_used_when_there_is_no_fork(tmp_path):
-    """A stock iic-osic-tools image must still work."""
-    first_path, first_lib, pymod = _run_preamble(tmp_path, ["klayout"])
-    assert first_path.endswith("/klayout")
-    assert first_lib.endswith("/klayout")
-    assert pymod.endswith("/klayout/pymod")
 
 
-def test_the_python_half_follows_the_shell_half(tmp_path):
-    """One resolution, not two: a binary and its libraries from one build.
-
-    The Python fragment reads what the shell already chose. Two independent
-    resolutions is how you end up running our binary against the base's
-    libraries — which measures as the base.
-    """
-    chosen = tmp_path / "chosen-pymod"
-    chosen.mkdir()
-    out = subprocess.run(
-        [sys.executable, "-c", P.KLAYOUT_PYMOD_PY + "print(sys.path[0])"],
-        capture_output=True, text=True,
-        env={**os.environ, "KLAYOUT_PYMOD": str(chosen)})
-    assert out.stdout.strip() == str(chosen), out.stderr[-300:]
 
 
-def test_the_python_half_still_resolves_with_no_shell_hint():
-    """Fall back rather than crash when the fragment is used on its own."""
-    out = subprocess.run(
-        [sys.executable, "-c", P.KLAYOUT_PYMOD_PY + "print('ok')"],
-        capture_output=True, text=True,
-        env={k: v for k, v in os.environ.items() if k != "KLAYOUT_PYMOD"})
-    assert out.returncode == 0 and "ok" in out.stdout
 
 
 def _docstring_ids(tree):

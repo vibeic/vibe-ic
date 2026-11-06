@@ -27,7 +27,6 @@ the producer subprocess are planted. chip-AGNOSTIC: generic block names.
 from __future__ import annotations
 
 import ast
-import inspect
 import json
 import sys
 from pathlib import Path
@@ -156,54 +155,10 @@ REASON = ("class 'data_converter' is analog-applicable and has no digital "
           "datapath to author")
 
 
-def _fs1(project: Path, reason, monkeypatch):
-    """Call FS1 the way `main` does. Only a tree that ACCEPTS the reason is
-    handed it (`inspect.signature`), so the old tree answers rather than
-    raising TypeError. The producer subprocess is planted: it records the call
-    and writes the FAIL the real producer writes on an absent rtl/."""
-    ran = []
-
-    def _run(argv, **kw):
-        ran.append(argv)
-        out = project / argv[list(argv).index("--json") + 1]
-        _write(out, {"verdict": "FAIL"})
-        import subprocess
-        return subprocess.CompletedProcess(argv, 1, "FAIL — --rtl-dir "
-                                           "'phase2/stage1/rtl' does not "
-                                           "exist", "")
-
-    monkeypatch.setattr(D._pr, "run", _run)
-    kw = ({"not_applicable": reason}
-          if "not_applicable" in inspect.signature(
-              D.step_fmeda_fault_injection).parameters else {})
-    return D.step_fmeda_fault_injection(project, **kw), ran
 
 
-def test_fs1_is_not_applicable_for_a_design_with_no_digital_rtl(
-        tmp_path, monkeypatch):
-    project = tmp_path / "proj"
-    project.mkdir()
-    row, ran = _fs1(project, REASON, monkeypatch)
-    assert row.status == "NOT_APPLICABLE", (row.status, row.detail)
-    assert row.declared_by == REASON
-    assert ran == [], "the producer ran against the by-design-absent rtl/"
 
 
-def test_fs1_still_runs_its_producer_for_a_digital_design(tmp_path,
-                                                          monkeypatch):
-    """CONTROL: no reason (a digital design) -> the producer runs and its
-    verdict stands, exactly as before."""
-    project = tmp_path / "proj"
-    project.mkdir()
-    row, ran = _fs1(project, None, monkeypatch)
-    # The current FS1 contract runs the flow-declared injection producer and
-    # then the independent coverage checker before the canonical consumer.
-    # Pin both calls and their order; counting only one was the old API shape.
-    assert [Path(argv[1]).name for argv in ran] == [
-        "fmeda_fault_injection_coverage.py",
-        "fmeda_coverage_check.py",
-    ]
-    assert row.status == "FAIL", (row.status, row.detail)
 
 
 def test_main_hands_fs1_the_same_analog_reason_it_hands_dft_lec_chain():

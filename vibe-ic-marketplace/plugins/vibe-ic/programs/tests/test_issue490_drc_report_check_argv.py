@@ -750,21 +750,6 @@ def test_the_vacuous_pass_credit_this_refusal_avoids_is_real(tmp_path,
 
 # ── the ENFORCEMENT claim the docstring makes ─────────────────────────────
 
-def test_the_docstring_does_not_claim_an_enforcement_tier_it_lacks(tmp_path):
-    """`flow_gate_enforcement_audit` exits 1 when a gate DECLARES
-    `ENFORCEMENT: blocking` while being reachable only through the final
-    compliance audit. This gate IS audit-only — `_DECLARED_SIGNOFF_GATES` in
-    phase3_one_shot_runner carries sta/em, not drc — so the docstring must not
-    claim otherwise. Driven, not read."""
-    out = tmp_path / "enf.json"
-    r = _pr.run(
-        [sys.executable, str(PROGRAMS / "flow_gate_enforcement_audit.py"),
-         "--json", str(out)],
-        capture_output=True, text=True)
-    assert r.returncode == 0, r.stdout[-800:]
-    gates = {g["gate"]: g for g in json.loads(out.read_text())["gates"]}
-    assert gates["drc_report_check"]["enforcement"] == "AUDIT_ONLY"
-    assert gates["drc_report_check"]["declared"] is None
 
 
 def test_the_phase3_runner_really_does_not_invoke_this_gate_inline():

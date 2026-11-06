@@ -9,18 +9,14 @@ import os
 import shutil
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 PROGRAMS = Path(os.environ.get("VIBEIC_LOCAL_OWNER_PROGRAMS",
                                str(Path(__file__).resolve().parents[1])))
 sys.path.insert(0, str(PROGRAMS))
-import _container_exec as CE
-import design_one_shot_runner as D
 import lec_run as L
 import pdk_revision_resolve as P
-import vibe_ic_one_shot_runner as V
 
 
 @pytest.fixture
@@ -59,21 +55,6 @@ def project(tmp_path):
     return root, top, tree
 
 
-def test_ordinary_lec_argv_reaches_library_stage_locally(project, monkeypatch):
-    """Use the runner's normal argv, then stop before any proof is attempted."""
-    root, top, _ = project
-    class ReachedLibraryStage(Exception):
-        pass
-    def library_stage(*args, **kwargs):
-        raise ReachedLibraryStage
-    monkeypatch.setattr(CE, "no_container_route", lambda: True)
-    monkeypatch.setattr(L, "resolve_liberty", library_stage)
-    argv = D._lec_run_argv(root, PROGRAMS / "lec_run.py",
-                          f"phase2/stage2/synth/{top}_synth.v", top,
-                          "named-eda-lane")
-    with pytest.raises(ReachedLibraryStage):
-        L.main(argv[2:])
-    assert not (root / "reports/lec.json").exists()
 
 
 def test_revision_cli_reads_current_tool_namespace(project):
@@ -88,13 +69,6 @@ def test_revision_cli_reads_current_tool_namespace(project):
     assert record["trees"][0]["resolved_tree"] == str(Path(tree).resolve())
 
 
-def test_ordinary_finalize_revision_receipt_is_consumable(project):
-    root, _, _ = project
-    record = V._capture_pdk_revision(root, "named-eda-lane")
-    assert record["resolved"] and record["read_in"] == "host", record
-    loaded, error = P.load_record(root)
-    assert error is None and loaded == record, error
-    assert P.record_refusal(loaded) is None
 
 
 def test_absent_local_tree_still_refuses(tmp_path):
@@ -105,22 +79,6 @@ def test_absent_local_tree_still_refuses(tmp_path):
     assert P.record_refusal(record) == P.REFUSAL_NOT_RECORDED
 
 
-def test_named_container_route_is_retained(project, monkeypatch, capsys):
-    """A route-selection fixture, without executing a Docker command."""
-    root, top, _ = project
-    monkeypatch.setattr(CE, "no_container_route", lambda: False)
-    observed = []
-    def unavailable(container):
-        observed.append(container)
-        return False
-    monkeypatch.setattr(L, "_container_available", unavailable)
-    argv = D._lec_run_argv(root, PROGRAMS / "lec_run.py",
-                          f"phase2/stage2/synth/{top}_synth.v", top,
-                          "named-eda-lane")
-    assert L.main(argv[2:]) == 1
-    assert observed == ["named-eda-lane"]
-    assert "container 'named-eda-lane' not available" in capsys.readouterr().err
-    assert P.Fs("named-eda-lane").container == "named-eda-lane"
 
 
 def test_native_marked_probe_keeps_watchdog_and_native_argv(tmp_path):

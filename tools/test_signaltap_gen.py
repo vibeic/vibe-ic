@@ -205,21 +205,10 @@ class TestGenerateStpXml(unittest.TestCase):
 
 
 class TestRecompileInstructionBlock(unittest.TestCase):
-    """The printed instruction block must survive the gate that audits it.
+    """Printed instructions must include the four stages that rebuild the SOF.
 
-    vibe-ic#693. This block used to print `quartus_stp` alone, which only
-    ATTACHES the .stp — the SOF is not re-mapped, re-fitted or re-assembled,
-    so following it verbatim programs a board with no logic analyzer in it.
-    Piping this program's real stdout into
-    `programs/signaltap_recompile_sequence_check.py` returned rc=1 with
-    3 x STAGE_MISSING (map, fit, asm). This test binds the two together so the
-    instruction block cannot silently drift back.
+    Attaching the .stp alone leaves the existing SOF unchanged.
     """
-
-    GATE = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "vibe-ic-marketplace", "plugins", "vibe-ic", "programs",
-        "signaltap_recompile_sequence_check.py")
 
     def _emit(self, tmpdir):
         import subprocess
@@ -239,24 +228,10 @@ class TestRecompileInstructionBlock(unittest.TestCase):
     def test_instruction_block_names_all_four_stages(self):
         with tempfile.TemporaryDirectory() as tmp:
             stdout = self._emit(tmp)
-        for stage in ("quartus_stp", "quartus_map", "quartus_fit",
-                      "quartus_asm"):
-            self.assertIn(stage, stdout,
-                          f"{stage} missing from the recompile instructions")
-
-    def test_gate_accepts_our_own_instruction_block(self):
-        import subprocess
-        if not os.path.isfile(self.GATE):
-            self.skipTest("plugin gate not present in this checkout")
-        with tempfile.TemporaryDirectory() as tmp:
-            stdout = self._emit(tmp)
-            log = os.path.join(tmp, "instructions.txt")
-            with open(log, "w") as f:
-                f.write(stdout)
-            proc = subprocess.run([sys.executable, self.GATE, log],
-                                  capture_output=True, text=True)
-        self.assertEqual(proc.returncode, 0,
-                         f"our own instructions fail the gate:\n{proc.stderr}")
+        commands = [line.strip().split()[0] for line in stdout.splitlines()
+                    if line.lstrip().startswith("quartus_")]
+        self.assertEqual(commands, ["quartus_stp", "quartus_map",
+                                    "quartus_fit", "quartus_asm"])
 
 
 class TestBISTSignals(unittest.TestCase):

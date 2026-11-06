@@ -1,86 +1,5 @@
 #!/usr/bin/env python3
-"""The ONE place the plugin says WHICH EDA image, and WHICH container holds it.
-
-WHY THIS MODULE EXISTS
-======================
-Two facts were being answered in two different places, and they disagreed.
-
-MEASURED 2026-09-07 on 8hd-3, with `VIBEIC_EDA_IMAGE_REPO` exported and the
-pinned image present::
-
-    $ python3 -c 'import _eda_image as E; print(E.judged_image().ref)'
-    ghcr.io/vibeic/vibeic-eda@sha256:f6b09c1388c6…      # the 0.3.16 LOCAL TAG
-
-while the pin every landing site names is
-``sha256:8da785a8d3275884ad0d0ee0fb10f7e90d8b7bf11a08d38e9559b0764112480f``,
-which was on that host, pulled, under the configured repository. A
-verdict-bearing gate judged 0.3.16 while the operator believed it had pinned
-0.3.47. Nothing warned, because nothing on the RUN path had ever read the pin:
-``VIBEIC_EDA_IMAGE_REPO`` was read by exactly one shipped file
-(``landing_pytest_runtime_preflight``) and by nothing that runs a tool.
-
-THE PIN IS THE DIGEST. THE REPOSITORY IS DEPLOYMENT CONFIGURATION.
-==================================================================
-Stated first by ``tools/ci/hermetic_candidate_runner.py``, and this module is
-the plugin-side half of the SAME statement, spelled with the same constant
-names so the two cannot drift without a test noticing. The digest names the
-bytes and is the identity — it is what every check here actually asserts. The
-repository names a place those bytes can be fetched from, and which place a
-given host can reach is a fact about the network, not about the runtime: the
-same image, distributed to five hosts, carries the same repo digest on every
-host that pulled it, while its image Id differs by storage driver.
-
-So a deployment that serves the same bytes from elsewhere sets one env. It does
-NOT edit this file, and it CANNOT change which bytes are demanded.
-
-A DIGEST IS NOT A VERSION, AND THAT DISTINCTION IS THE WHOLE POINT
-==================================================================
-``_eda_image``'s own guards forbid a pinned *version* — ``vibeic-eda:0.3.16`` —
-in any shipped program, and they are right: a version literal freezes silently
-and keeps running an older toolchain than everything around it, and it costs a
-cross-repo check-in per release. None of that is true of a digest. A version is
-a NAME its publisher can re-point at other bytes; a digest IS the bytes. The
-guard regex (``vibeic-eda:\\d+\\.\\d+\\.\\d+``) draws exactly this line, and
-this module stays on the right side of it.
-
-WHAT REFUSAL LOOKS LIKE
-=======================
-Never a fallback to another tag or another version. A host that does not hold
-the pinned bytes is a host that cannot answer, and it says so by name:
-
-    IMAGE_NOT_PRESENT: <repo>@sha256:<digest>
-
-"I could not open the pinned image" and "I opened it and it was bad" must never
-reach a reader as the same verdict — the same rule every other input in this
-repo is held to.
-
-A CONTAINER NAME IS NOT A CONTAINER IDENTITY
-============================================
-The second half, and the second measured defect. Every ``--container`` in this
-plugin defaulted to the SHARED name ``vibeic-eda``, and no override could move
-it apart from ``VIBEIC_EDA_CONTAINER``. MEASURED 2026-09-07 on 8hd-3: the
-container actually named ``vibeic-eda`` on that host was running image
-``sha256:06537f7e…`` (0.3.46) while the pin demanded ``sha256:8da785a8…``. A run
-that attached to it recorded image provenance PASS about the WRONG image — the
-report named a digest, so it looked reproducible, and it was reproducibly wrong.
-
-A name is not a measurement. So:
-
-  * the DEFAULT container name is DERIVED from the required digest
-    (``vibeic-eda-<first 12 hex>``), which makes two different pins two
-    different containers by construction, and makes the collision above
-    impossible to reach by default rather than merely unlikely;
-  * attaching to an EXISTING container is allowed only when that container's
-    image digest IS the required one. Otherwise ``CONTAINER_IMAGE_MISMATCH``,
-    naming BOTH digests, because a refusal that does not say what it found is a
-    refusal the reader cannot act on;
-  * "the container is gone" and "the container is the wrong image" are
-    different answers and are returned as different codes.
-
-chip-AGNOSTIC: image and container identity only. No design, PDK, vendor, IC or
-host-address literal appears here — the fleet's registry is CONFIGURATION and
-is never written into this tree.
-"""
+"""Resolve configured EDA image references and inspect selected containers."""
 from __future__ import annotations
 
 import json
@@ -101,7 +20,6 @@ __all__ = [
     "DIGEST_RE",
     "IMAGE_NOT_PRESENT",
     "IMAGE_ID_NOT_A_REFERENCE",
-    "CONTAINER_IMAGE_MISMATCH",
     "CONTAINER_ABSENT",
     "image_repo",
     "image_reference",
@@ -114,9 +32,6 @@ __all__ = [
     "pinned_image_present",
     "default_container_name",
     "container_image_digest",
-    "container_matches_pin",
-    "container_attach_refusal",
-    "container_pin_state",
 ]
 
 #: THE IDENTITY IS RESOLVED, NOT REMEMBERED.
@@ -170,9 +85,7 @@ class ImageNotResolvable(RuntimeError):
 IMAGE_REPO_DEFAULT = "ghcr.io/vibeic/vibeic-eda"
 IMAGE_REPO_ENV = "VIBEIC_EDA_IMAGE_REPO"
 
-#: The one env that names a container explicitly. It OVERRIDES the derived name;
-#: it does NOT override the digest requirement, and `container_matches_pin`
-#: still has to agree before anything is run in it.
+#: Environment override for the selected container.
 CONTAINER_NAME_ENV = "VIBEIC_EDA_CONTAINER"
 
 #: The prefix a derived container name carries, so an operator reading
@@ -195,7 +108,6 @@ _IMAGE_ID_RE = re.compile(r"^sha256:[0-9a-f]+$")
 #: Refusal codes. Machine-readable, and each one says a DIFFERENT thing.
 IMAGE_NOT_PRESENT = "IMAGE_NOT_PRESENT"
 IMAGE_ID_NOT_A_REFERENCE = "IMAGE_ID_NOT_A_REFERENCE"
-CONTAINER_IMAGE_MISMATCH = "CONTAINER_IMAGE_MISMATCH"
 CONTAINER_ABSENT = "CONTAINER_ABSENT"
 
 _TIMEOUT_S = 20
@@ -692,27 +604,7 @@ def pinned_image_present(env=None) -> Tuple[Optional[str], str]:
 
 
 def default_container_name(env=None) -> str:
-    """The container name a run uses when the operator names none.
-
-    THE SHARED NAME, which is also what `.mcp.json` sets as `EDA_CONTAINER`, so
-    the MCP tools and the programs address ONE container instead of two.
-
-    This was a digest-derived name while the digest was a literal: with a pin
-    that never moved, the shared name was guaranteed to hold the wrong bytes,
-    and deriving the name from the pin was the way to avoid attaching to it.
-    That reasoning does not survive the pin's removal — the identity is now
-    whatever this host actually has, so the shared container IS the right one by
-    construction, and the two paths were only ever split because the pin had
-    gone stale.
-
-    THE SAFETY THAT MATTERS IS UNCHANGED, and it never lived in the name:
-    `container_matches_pin` still measures the container's image digest and
-    still refuses a container holding different bytes. A name cannot make that
-    check weaker; it only decides which container gets asked.
-
-    `VIBEIC_EDA_CONTAINER` still names one explicitly, for an operator running
-    lanes side by side that must not share a container.
-    """
+    """Use the configured container, or the shared EDA container by default."""
     env = os.environ if env is None else env
     named = (env.get(CONTAINER_NAME_ENV) or "").strip()
     return named or CONTAINER_NAME_PREFIX
@@ -821,70 +713,3 @@ def container_image_reference(container: str) -> Tuple[Optional[str], str]:
     return None, (f"{container} runs an image carrying no registry digest, so "
                   f"it cannot be named by a reference any other host resolves"
                   + (f" ({why})" if why else ""))
-
-
-def container_pin_state(container: str, env=None) -> Tuple[str, str]:
-    """`(state, detail)` — THREE answers, because there are three facts.
-
-    THE ATTACH CHECK. `docker exec <name>` addresses a container by NAME, and a
-    name is a label whichever process got there first is holding. Requiring the
-    digest to match turns "there is something here called vibeic-eda" into "the
-    bytes I pinned are here", which is the only one of the two a verdict may
-    rest on.
-
-    The third state is the one this module got WRONG on its first cut, and the
-    repo's own suite caught it: `MATCH` and `MISMATCH` were returned, and
-    everything else — an absent container, a docker that will not run, an image
-    built locally and carrying no registry digest — was folded into the refusal.
-    That makes "I could not read it" and "I read it and it was the wrong image"
-    the same verdict, which is the one thing this repo holds every input to.
-    They are separated here, and the two callers want different halves:
-
-      * a VERDICT may be PASS only on ``MATCH`` — `container_matches_pin`;
-      * an ATTACH may be refused only on ``MISMATCH`` — `run_in_container`.
-        Refusing on ``UNREADABLE`` would turn "docker cannot describe this" into
-        a claim about the image, and would stop a legitimately locally-built
-        container from being used at all. Docker reports its own failure there,
-        as it always did.
-    """
-    got, why = container_image_digest(container)
-    if got is None:
-        return "UNREADABLE", (why or f"{CONTAINER_ABSENT}: {container}")
-    try:
-        required = resolved_image_digest(env)
-    except ImageNotResolvable as exc:
-        # Both identities must be readable to measure a disagreement. Keep
-        # resolution failure in the same third state as an unreadable container:
-        # attach may proceed, but container_matches_pin cannot certify it.
-        return "UNREADABLE", str(exc)
-    if got == required:
-        return "MATCH", ""
-    return "MISMATCH", (
-        f"{CONTAINER_IMAGE_MISMATCH}: container {container} runs {got}, "
-        f"but the pinned runtime is {image_repo(env)}@{required}; "
-        f"required {required}, found {got}")
-
-
-def container_matches_pin(container: str, env=None) -> str:
-    """The empty string when `container` PROVABLY runs the pinned bytes.
-
-    THE VERDICT-BEARING HALF. Anything short of proof is a reason, so a
-    provenance verdict cannot be PASS about a container whose image nobody could
-    read — the same rule as every other input in this repo.
-
-    The refusal names BOTH digests deliberately. A reader who is told only that
-    something mismatched cannot tell a stale container from a mis-set
-    `VIBEIC_EDA_IMAGE_REPO`, and will re-run it.
-    """
-    state, detail = container_pin_state(container, env)
-    return "" if state == "MATCH" else detail
-
-
-def container_attach_refusal(container: str, env=None) -> str:
-    """The empty string unless `container` is PROVABLY the WRONG image.
-
-    THE ATTACH HALF. Only a measured disagreement stops a command running; a
-    digest that could not be read is not one, and is left to docker to report.
-    """
-    state, detail = container_pin_state(container, env)
-    return detail if state == "MISMATCH" else ""

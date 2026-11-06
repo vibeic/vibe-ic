@@ -26,7 +26,7 @@ sys.path.insert(0, str(PROGRAMS))
 
 import formal_structural_check as fsc  # noqa: E402
 from _hostpaths import require_repo  # noqa: E402
-from not_verified_tier import skip_not_verified  # noqa: E402
+from _tool_probes import skip_not_verified  # noqa: E402
 
 SYNC = """module m(input clk, input rst, input [3:0] d, output reg [3:0] q);
   always @(posedge clk) if (rst) q <= 4'd0; else q <= d;

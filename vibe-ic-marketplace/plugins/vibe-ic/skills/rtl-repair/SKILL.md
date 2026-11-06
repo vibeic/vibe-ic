@@ -174,37 +174,7 @@ program flags only the zero-false-positive self-breaking sub-case.
 
 ## ⛔ ECO spare-cell preservation (mandatory)
 
-> ⛔ **ECO spare-cell preservation:** cells/gates/pads carrying the `dont_touch` /
-> `keep` attribute (or otherwise tagged spare/ECO) are RESERVED for a future
-> metal-only ECO. NEVER delete, resize, re-purpose, or optimize them away. RTL
-> repair edits source HDL, but if a fix touches the gate netlist or adds
-> `(* keep *)` removal / dead-code elimination, it must NOT strip the spare-cell
-> instantiations or their keep attributes (no `opt_clean` / `clean -purge` /
-> `remove_buffers` on keep-marked instances). After any repair,
-> `spare_cell_preservation_check.py` MUST still PASS (spare set + keep attrs
-> intact, 0 removed); if your repair drops a spare it is a regression — restore
-> it and re-run the checker. See the `design-for-eco` skill.
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/rtl-repair/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in the corresponding skill directory enumerates
-every required element of your output: section headers, metadata fields,
-handoff lines, tool invocations.
-
-**Your task is not complete until the audit returns PASS.** Missing
-elements are the single largest source of skill-execution non-determinism
-across different agents.
-
-## Completion flags and source waveform timing
+> Compare the native netlist or implementation database before and after optimization. Preserve every unused ECO spare, its keep attributes and the reserved pads; an unintentionally removed spare must be restored.
 
 Before repairing a receive or packet FSM, separate three events: accepting the
 last payload item, updating the payload registers, and exposing the completion

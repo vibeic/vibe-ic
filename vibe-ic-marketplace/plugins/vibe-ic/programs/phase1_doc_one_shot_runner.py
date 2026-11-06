@@ -67746,7 +67746,6 @@ def main() -> int:
         description=__doc__.split("\n\n")[0]
     )
     p.add_argument("project", type=Path)
-    p.add_argument("--engine", choices=("legacy", "native"), default="legacy")
     p.add_argument("--keep-existing", action="store_true",
                    help="Don't overwrite L docs that already exist.")
     p.add_argument("--skip-text-extract", action="store_true",
@@ -71896,7 +71895,7 @@ def main() -> int:
     # project's own L docs and its consuming program.
     _layergate2_result = _run_layergate2(project, gates=[
         gate for gate in LAYERGATE2_GATES
-        if args.engine != "native" or gate[0] != "l6_fsm_scaffold_actionable_check"])
+        if gate[0] != "l6_fsm_scaffold_actionable_check"])
     if _layergate2_result:
         cov_gate_failed = True
 

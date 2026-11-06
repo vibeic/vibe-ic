@@ -1178,6 +1178,24 @@ def channels_for(step_id) -> Channels:
 # predicate. It is IMPORTED and its `audit()` is called; nothing about how it
 # decides is re-implemented here, because two copies drift.
 # ──────────────────────────────────────────────────────────────────────
+REACH_CHECK = "every_declared_step_reaches_the_evaluator_check"
+
+
+@lru_cache(maxsize=1)
+def reach_module():
+    """The program that owns the "declared step reaches the tally" predicate."""
+    if str(PROGRAMS_DIR) not in sys.path:
+        sys.path.insert(0, str(PROGRAMS_DIR))
+    mod = importlib.import_module(REACH_CHECK)
+    assert Path(mod.__file__).resolve().parent == PROGRAMS_DIR.resolve(), (
+        f"channel (d) imported {mod.__file__}, which is not the shipped "
+        f"{PROGRAMS_DIR}/{REACH_CHECK}.py"
+    )
+    return mod
+
+
+
+
 
 
 @dataclass(frozen=True)
@@ -1191,6 +1209,51 @@ class ReachAudit:
     harness_error: Optional[str] = None
 
 
+@lru_cache(maxsize=1)
+def reach_audit() -> ReachAudit:
+    """Run the owning program's predicate ONCE for the whole module.
+
+    An audit that cannot run is an ERROR carried to every cell, never a quiet
+    empty result: `unreached=()` from an audit that never ran is
+    indistinguishable from a clean tree, and that equivalence is the disease
+    this campaign exists to remove.
+    """
+    try:
+            # NAME WHAT WE HOLD; DO NOT RECONSTRUCT IT. `F.FLOW_YAML` is the
+            # document this module is parametrized from, including when the
+            # harness substitutes it via VIBE_IC_MATRIX_FLOW_YAML, and
+            # `compliance_module().__file__` is the evaluator every other
+            # channel drives. Passing them removes the repo-shaped prefix this
+            # test used to build -- which reddened 70 cells against a
+            # BYTE-IDENTICAL copy of the flow yaml, because the shim asserted
+            # the on-disk yaml IS F.FLOW_YAML and under substitution it is not.
+            report = reach_module().audit(
+                F.PLUGIN_ROOT,
+                flow=Path(F.FLOW_YAML),
+                checker=Path(compliance_module().__file__),
+            )
+    except Exception as exc:                      # noqa: BLE001 - reported, not swallowed
+        return ReachAudit(harness_error=f"{type(exc).__name__}: {exc}")
+    declared = int(report.get("declared", 0))
+    evaluated = int(report.get("evaluated", 0))
+    if declared <= 0 or evaluated <= 0:
+        return ReachAudit(
+            declared=declared,
+            evaluated=evaluated,
+            harness_error=(
+                f"the reach audit measured declared={declared} "
+                f"evaluated={evaluated} under {F.PLUGIN_ROOT}; a census of "
+                f"nothing reports no unreached step and would read as clean"
+            ),
+        )
+    return ReachAudit(
+        declared=declared,
+        evaluated=evaluated,
+        unreached=tuple(str(s) for s in report.get("unreached") or ()),
+        uninvited=tuple(str(s) for s in report.get("uninvited") or ()),
+    )
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Parametrization
 # ──────────────────────────────────────────────────────────────────────
@@ -1202,18 +1265,42 @@ def _params():
     return out
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Instrument self-checks
-#
-# Not matrix cells. They guard the three measuring devices above against the
-# failure mode that produced this campaign: an instrument that quietly returns
-# nothing and is read as a clean bill of health.
-# ──────────────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("cell", _params(), ids=lambda c: f"step{c.step_id}")
 def test_d1_gate_is_wired_in(cell):
     """The step's gate must be reachable through >= 1 live channel."""
     sid = cell.step_id
     ch = channels_for(sid)
+
+    # ── Channel (d): does THIS step reach the evaluator at all? ───────
+    # Asked before anything else, and asked of EVERY step including the
+    # umbrella: a gate whose step never arrives is not "weakly wired", it is
+    # unreachable, and the three channels below cannot see that because they
+    # are handed the gate directly. Verdict imported from the program that
+    # owns it, never re-derived here.
+    reach = reach_audit()
+    # THE WORD `step` IS DELIBERATELY ABSENT FROM THIS MESSAGE.
+    # `matrix_mutation_ledger` proves a mutation was caught by finding the
+    # entry's `red_signal` in the failure text, and both dimension-1 FLOW_YAML
+    # entries declare `red_signal="step"`. A harness error that opened with
+    # "step 21: ..." would therefore carry the token that certifies a catch,
+    # and the D1 locks would be unable to tell "the mutation reddened its
+    # witness" from "this module could not run" -- which is the precise
+    # equivalence this dimension exists to destroy.
+    assert reach.harness_error is None, (
+        # The reach program's own NAME contains the token too, so it is
+        # referred to by role here rather than interpolated.
+        f"CANNOT MEASURE cell {sid!r}: the reach audit did not complete "
+        f"against {F.PLUGIN_ROOT}: {reach.harness_error}"
+    )
+    assert F.normalize_id(sid) not in reach.unreached, (
+        f"step {sid}: declared by the flow and NEVER handed to "
+        f"{compliance_module().__name__} — of {reach.declared} declared "
+        f"step(s) only {reach.evaluated} reached the tally "
+        f"(unreached: {list(reach.unreached)}). A step nobody evaluates "
+        f"contributes no failure: it drops out of the tally, out of the "
+        f"per-step listing and out of the blocker list, and the flow reads "
+        f"BETTER for having lost it. Its gate wiring below is moot"
+    )
 
     # ── The umbrella has its own dispatch, even when it also has a gate. ──
     if F.normalize_id(sid) == umbrella_step_id():
@@ -1321,6 +1408,13 @@ def test_d1_gate_is_wired_in(cell):
     )
 
 
+# ──────────────────────────────────────────────────────────────────────
+# Instrument self-checks
+#
+# Not matrix cells. They guard the three measuring devices above against the
+# failure mode that produced this campaign: an instrument that quietly returns
+# nothing and is read as a clean bill of health.
+# ──────────────────────────────────────────────────────────────────────
 def test_probe_channel_a_actually_executes_the_real_walker():
     """The channel-(a) probe must run the shipped executor, not a copy."""
     mod = compliance_module()
@@ -1633,75 +1727,12 @@ ORPHAN_DECLARED_PROGRAMS: Tuple[Tuple[str, str], ...] = (
 )
 
 
-def _declared_program_orphans(invoked: Optional[frozenset] = None):
-    registry = umbrella_gate_names()
-    invoked = runner_invoked() if invoked is None else invoked
-    orphans = []
-    for sid in F.step_ids():
-        gated = set(F.gate_program_tokens(sid))
-        for prog in F.declared_programs(sid):
-            if F.program_path(prog) is None:
-                continue
-            if prog in gated or prog in registry or prog in invoked:
-                continue
-            orphans.append((F.normalize_id(sid), prog))
-    return tuple(sorted(orphans))
 
 
-def test_probe_declared_programs_array_orphans_are_pinned():
-    """The ``programs:`` array is OUT of this dimension's cell scope — pinned.
-
-    Dimension 1 as briefed asks about a step's GATE, so every cell is
-    correctly green on the steps below: their gates are wired. But the step's
-    ``programs:`` array is a second, independent wiring claim, and measured
-    live on this tree some of its entries resolve to a real
-    ``programs/<name>.py`` while being named by no gate, registered in no
-    umbrella registry, and dispatched by none of the one-shot runners.
-
-    No cell of the 63x8 matrix owns that question. Widening the D1 predicate to
-    cover it would have needed four new waivers and would have been the same
-    substitution this campaign exists to stop — changing a predicate so a
-    finding lands. So the finding is recorded HERE, pinned, outside the cell
-    grid: a new orphan appearing reddens this test, and a pinned orphan
-    getting wired also reddens it, so the population cannot drift in either
-    direction unnoticed. It is reported as an open gap, not as coverage.
-    """
-    measured = _declared_program_orphans()
-    assert measured == tuple(sorted(ORPHAN_DECLARED_PROGRAMS)), (
-        f"the set of `programs:` entries wired through NONE of the three "
-        f"channels changed: measured {list(measured)!r}, pinned "
-        f"{list(sorted(ORPHAN_DECLARED_PROGRAMS))!r}.\n"
-        f"Newly orphaned: {sorted(set(measured) - set(ORPHAN_DECLARED_PROGRAMS))} "
-        f"— a step now advertises a program nothing runs.\n"
-        f"Newly wired: {sorted(set(ORPHAN_DECLARED_PROGRAMS) - set(measured))} "
-        f"— good news; remove it from the pin in the same change."
-    )
 
 
-def test_step_0_5ic_producers_left_the_orphan_pin_only_because_a_runner_dispatches_them():
-    """Forward/reverse control for the two 2026-08-26 pin removals.
-
-    The pin can only be read as "these got wired" if removing the dispatch
-    channel puts them straight back. Both directions are driven here, so a pin
-    edit that was not backed by real wiring reddens.
-    """
-    invoked = runner_invoked()
-    for prog in ("submission_template_ingest", "tapeout_declaration_gen"):
-        pair = ("0.5ic", prog)
-        assert pair not in ORPHAN_DECLARED_PROGRAMS
-        assert prog in invoked, runners_invoking(prog)
-        assert pair not in _declared_program_orphans(invoked)
-        assert pair in _declared_program_orphans(invoked - {prog})
 
 
-def test_pad_ring_left_the_orphan_pin_only_because_the_runner_dispatches_it():
-    """Forward/reverse control for the one Batch73 pin removal."""
-    pair = ("15.5ic", "pad_ring_gen")
-    invoked = runner_invoked()
-    assert pair not in ORPHAN_DECLARED_PROGRAMS
-    assert "pad_ring_gen" in invoked, runners_invoking("pad_ring_gen")
-    assert pair not in _declared_program_orphans(invoked)
-    assert pair in _declared_program_orphans(invoked - {"pad_ring_gen"})
 
 
 def test_probe_umbrella_dispatch_is_recorded_from_the_real_runner():
@@ -2052,6 +2083,45 @@ def test_probe_umbrella_step_id_is_a_declared_flow_step():
     assert "flow_step_output_content_check" in F.gate_programs(sid)
 
 
+def test_probe_channel_d_measured_this_worktree_and_the_whole_flow():
+    """The reach audit must be the shipped program, aimed at THIS tree.
+
+    Three ways channel (d) could go quiet and be read as clean: import a
+    stale copy, judge some other checkout, or judge a flow smaller than the
+    one every other cell is drawn from. All three end in `unreached=()`.
+    """
+    reach = reach_audit()
+    assert reach.harness_error is None, reach.harness_error
+    mod = reach_module()
+    assert Path(mod.__file__).resolve() == (PROGRAMS_DIR / f"{REACH_CHECK}.py").resolve()
+    assert callable(getattr(mod, "audit", None)), (
+        f"{REACH_CHECK} exposes no callable audit(); channel (d) has no "
+        f"predicate to import and would have to re-implement one"
+    )
+    assert reach.declared == len(F.step_ids()), (
+        f"the reach audit counted {reach.declared} declared step(s) but the "
+        f"flow this module parametrizes over declares {len(F.step_ids())}; "
+        f"channel (d) is judging a different flow and its silence means "
+        f"nothing"
+    )
+
+
+def test_probe_the_evaluator_tally_invents_no_steps():
+    """The mirrored half of the predicate, which owns no cell.
+
+    An id the evaluator reports that the flow does not declare cannot redden
+    a cell — there is no cell for it. It is the same defect seen from the
+    other side (a tally out of step with the flow) and is asserted here so it
+    is not silently unowned.
+    """
+    reach = reach_audit()
+    assert reach.harness_error is None, reach.harness_error
+    assert not reach.uninvited, (
+        f"{compliance_module().__name__} reported {len(reach.uninvited)} step "
+        f"id(s) the flow does not declare: {list(reach.uninvited)}"
+    )
+
+
 def test_probe_every_cell_is_accounted_for():
     """Every flow step gets exactly one cell, and every cell one parameter.
 
@@ -2126,25 +2196,8 @@ def test_probe_waiver_plumbing_yields_a_STRICT_xfail(monkeypatch):
 # from the current tree on every call, so a cell that changes state changes its
 # answer here without anyone editing a table.
 # ══════════════════════════════════════════════════════════════════════
-def matrix_na_precondition(step_id):
-    """Why this cell is NA, re-derived LIVE, or ``None`` when it is answerable."""
-    # Dimension 1 has no NA cell: EVERY step is either gated (channels a/b/c)
-    # or IS the umbrella (P0), and both are answerable. There is no "nothing to
-    # ask" shape here, so this returns None unconditionally — and that is
-    # checked, not assumed: the cell test's umbrella branch asserts P0 is the
-    # umbrella step, so a second gate-less step reddens rather than becoming a
-    # silent NA.
-    del step_id
-    return None
 
 
-def matrix_cell_state(step_id) -> str:
-    """``"ENFORCED"`` / ``"WAIVED"`` / ``"NA"`` for one cell of this dimension."""
-    if matrix_na_precondition(step_id) is not None:
-        return "NA"
-    if waivers.waiver_for(step_id, DIM) is not None:
-        return "WAIVED"
-    return "ENFORCED"
 
 
 def test_the_owned_set_still_covers_every_dispatched_gate():

@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from programs.phase1_one_shot_runner import gen_l4_regmap
+from programs.phase1_doc_one_shot_runner import gen_l4_regmap
 from flow_compliance_check import _p0_zero_population_evidence
 from ic_class_profile import _l4_has_otp
 from l4_register_map_claim import reconcile_register_map_claims

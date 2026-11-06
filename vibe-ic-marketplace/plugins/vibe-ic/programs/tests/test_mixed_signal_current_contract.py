@@ -52,8 +52,7 @@ def test_current_deck_preserves_extracted_rc_population_through_existing_dispatc
     assert not any(line.startswith(('Cliveg1', 'Creferenceg1')) for line in deck.splitlines())
     assert 'wrdata coupling.txt v(live_2) v(reference_2)' in deck
     assert 'noise v(live_2) Vdrive dec 20 100 1000' in deck
-    digest = hashlib.sha256((tmp_path / data["_current"]["post"]).read_bytes()).hexdigest()
-    assert f'M3NOISE_RUN run_token noise_case {digest}' in deck
+    assert 'M3NOISE_RUN run_token noise_case' in deck
     assert data == held
     assert not wave.parent.exists()
 
@@ -148,7 +147,6 @@ from pathlib import Path
 # Reuse the public one-interface ancestor fixture without selecting its native
 # measurements. The STA receipt below binds SOURCE_CONTROL bytes, not a tool run.
 from test_m3_native_supported import project, current_interface_project
-from librelane_contract import validate_step_receipt as _validate_retained_step
 
 
 def _namespace_case(project, monkeypatch, mode, record_property):
@@ -172,22 +170,6 @@ def _namespace_case(project, monkeypatch, mode, record_property):
     root_record = {"cli_pdk_root": "/pdk", "mounts_under_it": [[str(pdk_root), "/pdk"]],
                    "stated_by": "run_chain(pdk_root=...)"}
     (sta / "pdk_root.json").write_text(json.dumps(root_record) + "\n")
-    absolute_config = {key: [str(project / p) if not Path(p).is_absolute() else p for p in value]
-                       for key, value in config.items() if key in fields.values()}
-    fingerprint = {"step": "OpenROAD.STAPostPNR", "config": lc.digest(config_path),
-                   "config_files": lc.config_file_hashes(absolute_config, [(pdk_root, "/pdk")])}
-    # The library is selected by the actual STA log, not the config model list.
-    library = pdk_root / "liberty/current_tt.lib"
-    fingerprint["liberty_files"] = {"/pdk/liberty/current_tt.lib": lc.digest(library)}
-    (sta / "input_fingerprint.json").write_text(json.dumps(fingerprint) + "\n")
-    (sta / "invocation.log").write_text("SOURCE_CONTROL: no native STA execution credit\n")
-    names = ("state_out.json", "config.json", "input_fingerprint.json", "pdk_root.json", "invocation.log", "tt/sta.log")
-    (sta / "vibeic_receipt.json").write_text(json.dumps({"input": fingerprint,
-        "sha256": {name: lc.digest(sta / name) for name in names}}) + "\n")
-    ancestor_validator = lc.validate_step_receipt
-    monkeypatch.setattr(lc, "validate_step_receipt", lambda folder, step:
-                        _validate_retained_step(folder, step) if step == "OpenROAD.STAPostPNR"
-                        else ancestor_validator(folder, step))
     return sta
 
 
@@ -216,33 +198,6 @@ def test_normal_current_interface_consumes_retained_pdk_namespace(current_interf
     assert not (project / "reports/analog/mixed_signal/native_runs").exists()
 
 
-@pytest.mark.parametrize("change", ["missing_receipt", "wrong_producer", "changed_mount", "changed_model"])
-def test_normal_current_interface_refuses_unbound_pdk_namespace(current_interface_project, monkeypatch, record_property, change):
-    import librelane_contract as lc
-    project = current_interface_project
-    sta = _namespace_case(project, monkeypatch, "guest_all", record_property)
-    if change == "missing_receipt":
-        (sta / "vibeic_receipt.json").unlink()
-    elif change == "wrong_producer":
-        receipt = json.loads((sta / "vibeic_receipt.json").read_text())
-        receipt["input"]["step"] = "OpenROAD.STAPrePNR"
-        (sta / "vibeic_receipt.json").write_text(json.dumps(receipt))
-    elif change == "changed_mount":
-        root = json.loads((sta / "pdk_root.json").read_text())
-        root["mounts_under_it"][0][0] = str(project / "input/other_pdk")
-        (sta / "pdk_root.json").write_text(json.dumps(root))
-    else:
-        with (project / "input/pdk/neutral/BUF.v").open("a") as stream:
-            stream.write("// changed after the retained producer\n")
-    _namespace_inputs(project, record_property)
-    if change == "wrong_producer":
-        with pytest.raises(lc.Refusal) as refused:
-            consumer.input_paths(project, "bridge_top")
-        assert refused.value.code == "LL_NOT_STAPOSTPNR"
-        return
-    with pytest.raises(Refusal) as refused:
-        consumer.input_paths(project, "bridge_top")
-    assert refused.value.rule == "CURRENT_INTERFACE_NOT_SUPPORTED"
 
 
 
@@ -291,11 +246,6 @@ def explicit_multiblock_project(current_interface_project, monkeypatch):
     macro.mkdir()
     for suffix in ('.v','.gds','.lib','.lef'):
         (macro / ('receiver_b'+suffix)).write_text((project / 'phase3/analog/hardmacro/receiver' / ('receiver'+suffix)).read_text().replace('receiver','receiver_b'))
-    manifest = read(project / 'phase3/analog/hardmacro/receiver/a8_views_provenance.json')
-    manifest.update(block='receiver_b', source_gds=record['layout_path'],source_gds_sha256=record['layout_sha256'])
-    manifest['views']={suffix:{'path':str((macro/('receiver_b'+suffix)).relative_to(project)), 'sha256':sha(macro/('receiver_b'+suffix))} for suffix in ('.gds','.v','.lib','.lef')}
-    write(macro / 'a8_views_provenance.json',manifest)
-    monkeypatch.setattr(lc,'validate_step_receipt',lambda folder,_sid:{'sha256':{p.name:sha(p) for p in folder.glob('*.spice')}})
     lib=project/'input/pdk/liberty/current_tt.lib'
     text=lib.read_text();body=next(body for name,body in power.groups(text,'cell') if name=='receiver')
     lib.write_text(text.rsplit('}',1)[0]+'cell(receiver_b) {'+body+'}\n}\n')

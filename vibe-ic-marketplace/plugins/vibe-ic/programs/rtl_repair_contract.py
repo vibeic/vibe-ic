@@ -664,21 +664,43 @@ def run_elaboration_matrix(
     return report
 
 
-def _docker_image_id(image: str, timeout: int) -> Tuple[Optional[str], Optional[str]]:
+def _structural_image(location: Path, timeout: int) -> Tuple[Optional[str], Optional[str]]:
+    """Select tool configuration from the operator, outside the AI declaration."""
     docker = shutil.which("docker")
     if docker is None:
         return None, "docker is unavailable"
+    container = os.environ.get("VIBEIC_EDA_CONTAINER", "").strip()
+    if not container:
+        location = Path(location).resolve()
+        for parent in (location, *location.parents):
+            config_path = parent / ".bench_config.json"
+            if not config_path.is_file():
+                continue
+            try:
+                config = json.loads(config_path.read_text())
+                container = str(config.get("tool_container") or "").strip()
+            except (OSError, ValueError, AttributeError) as exc:
+                return None, f"native runtime configuration is unreadable: {exc}"
+            break
+    if container:
+        try:
+            completed = subprocess.run(
+                [docker, "inspect", "--format", "{{.Config.Image}}", container],
+                capture_output=True, text=True, timeout=min(max(timeout, 1), 30))
+        except (OSError, subprocess.SubprocessError) as exc:
+            return None, str(exc)
+        if completed.returncode != 0 or not completed.stdout.strip():
+            return None, (completed.stderr or completed.stdout or
+                          "selected native container is unavailable").strip()
+        return completed.stdout.strip(), None
+    for name in ("VIBEIC_EDA_IMAGE", "IIC_EDA_IMAGE"):
+        if os.environ.get(name, "").strip():
+            return os.environ[name].strip(), None
     try:
-        completed = subprocess.run(
-            [docker, "image", "inspect", image, "--format", "{{.Id}}"],
-            capture_output=True, text=True, timeout=min(timeout, 30))
-    except (OSError, subprocess.SubprocessError) as exc:
+        import _eda_pin
+        return _eda_pin.image_reference(), None
+    except (OSError, ValueError, RuntimeError) as exc:
         return None, str(exc)
-    image_id = completed.stdout.strip()
-    if completed.returncode != 0 or not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
-        return None, (completed.stderr or completed.stdout or
-                      "docker image identity is unavailable").strip()
-    return image_id, None
 
 
 def prompt_rtl_source_facts(prompt: str) -> Dict[str, Any]:
@@ -883,6 +905,7 @@ def run_structural_contract(
     requirement_sources: Optional[Mapping[str, str]] = None,
     timeout: int = 300,
     require_header_preservation: bool = False,
+    runtime_root: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Replay a source-bound structural observation with a fixed Yosys recipe.
 
@@ -1052,24 +1075,10 @@ def run_structural_contract(
         return finish("REFUSED", "STRUCTURAL_EXPECTATION_CONTRADICTORY",
                       "a cell type cannot be both required and forbidden")
 
-    backend = declaration.get("backend")
-    if not isinstance(backend, Mapping) or backend.get("kind") != "docker":
-        return finish("NOT_MEASURED", "STRUCTURAL_BACKEND_AMBIGUOUS",
-                      "native structural proof requires a declared docker backend")
-    image = backend.get("image")
-    image_id = backend.get("image_id")
-    if (not isinstance(image, str)
-            or not re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", image)
-            or not isinstance(image_id, str)
-            or not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id)):
-        return finish("REFUSED", "STRUCTURAL_TOOL_IDENTITY_INVALID",
-                      "backend must pin an immutable image digest and image id")
-    actual_image_id, identity_error = _docker_image_id(image, timeout)
-    if identity_error:
-        return finish("NOT_MEASURED", "STRUCTURAL_TOOL_UNAVAILABLE", identity_error)
-    if actual_image_id != image_id:
-        return finish("REFUSED", "STRUCTURAL_TOOL_IDENTITY_MISMATCH",
-                      f"declared image id {image_id} differs from local {actual_image_id}")
+    image, unavailable = _structural_image(runtime_root or candidate_path, timeout)
+    if image is None:
+        return finish("NOT_MEASURED", "STRUCTURAL_TOOL_UNAVAILABLE",
+                      unavailable or "native structural runtime is unavailable")
 
     docker = str(Path(shutil.which("docker") or "docker").resolve())
     script = (f"read_verilog -sv /work/candidate.sv; "
@@ -1092,7 +1101,7 @@ def run_structural_contract(
             header_mount = ["-v", f"{frozen_header}:/work/prompt_header.sv:ro"]
         memory = "2g" if port_scope else "4g"
         command = [
-            docker, "run", "--rm", "--user", f"{os.getuid()}:{os.getgid()}",
+            docker, "run", "--rm", "--pull=never", "--user", f"{os.getuid()}:{os.getgid()}",
             "--cpus=2", f"--memory={memory}",
             "--pids-limit=128", "--network=none", "--read-only",
             "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m",
@@ -1101,8 +1110,7 @@ def run_structural_contract(
             "--skip", "yosys", "-Q", "-p", script,
         ]
         try:
-            # Share the admitted native/legacy entrypoint normalization. Keep
-            # this proof's own pinned image, caller UID and resource limits.
+            # Keep the selected image's tool environment and this job's limits.
             import librelane_contract as launch
             command = launch._image_tool_argv(command, image=image)
             completed = subprocess.run(
@@ -1120,7 +1128,6 @@ def run_structural_contract(
             "stdout": completed.stdout, "stderr": completed.stderr,
             "script": script, "script_sha256": sha256_text(script),
             "candidate_sha256": candidate_hash, "image": image,
-            "image_id": actual_image_id,
             "limits": {"cpus": 2, "memory": memory,
                        "timeout_seconds": min(max(timeout, 1), 300),
                        "network": "none"},
@@ -1213,6 +1220,7 @@ def validate_normal_repair_contract(
     top: Optional[str] = None,
     requirement_sources: Optional[Mapping[str, str]] = None,
     require: bool = True,
+    runtime_root: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Single blocking consumer binding declared proofs before an emit is accepted.
 
@@ -1270,7 +1278,8 @@ def validate_normal_repair_contract(
         else:
             result["structural"] = run_structural_contract(
                 candidate_path, structural, original_source=original_source,
-                requirement_sources=requirement_sources, require_header_preservation=True)
+                requirement_sources=requirement_sources, require_header_preservation=True,
+                runtime_root=runtime_root)
         if result["structural"]["verdict"] != "PASS" and result["verdict"] == "PASS":
             result["verdict"] = result["structural"]["verdict"]
         result["findings"].extend(result["structural"].get("findings", []))

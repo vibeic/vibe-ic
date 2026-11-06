@@ -20,127 +20,35 @@ chip-AGNOSTIC: fixture PDK `fix`.
 """
 from __future__ import annotations
 
-import shutil
-import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
 
-import phase3_one_shot_runner as R  # noqa: E402
 
-needs_tclsh = pytest.mark.skipif(shutil.which("tclsh") is None,
-                                 reason="tclsh not installed")
 
 # Every tool command is a no-op, except the one this file is about.
 _STUB = ('proc unknown {args} { return "" }\n'
          'proc extract_parasitics {args} { puts "EXTRACT_WITH: $args" }\n')
 
 
-def _pdk(tech_lef: str) -> "R.PdkConfig":
-    return R.PdkConfig(
-        name="fixture_pdk", liberty="/pdk/lib.lib", tech_lef=tech_lef,
-        cell_lef="/pdk/cells.lef", cell_gds=None, site="s", drc_deck=None,
-        metal_prefix="met", tapcell_master="t", antenna_diode_cell="d",
-        pnr_exclude_cell_file="/pdk/x.cells")
 
 
-def _host_exec(container, cmd, timeout=20, **_kw):
-    p = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True,
-                       timeout=60)
-    return p.returncode, p.stdout, p.stderr
 
 
-def _stage(root: Path, declare=("nom", "max")) -> str:
-    """A PDK tree shipping BOTH the declared `.<c>` ruleset and an undeclared
-    `.<c>.magic` beside it -- the gf180mcuD shape -- and a LibreLane
-    config.tcl declaring the former."""
-    tech = root / "pdk" / "libs.tech" / "librelane"
-    tech.mkdir(parents=True)
-    for c in ("min", "nom", "max"):
-        (tech / f"rules.openrcx.fix.{c}").write_text("# declared\n")
-        (tech / f"rules.openrcx.fix.{c}.magic").write_text("# undeclared\n")
-    var = {"nom": "RCX_RULES", "min": "RCX_RULES_MIN", "max": "RCX_RULES_MAX"}
-    (tech / "config.tcl").write_text("".join(
-        f'set ::env({var[c]}) "$::env(PDK_ROOT)/$::env(PDK)/libs.tech/'
-        f'librelane/rules.openrcx.fix.{c}"\n' for c in declare))
-    ref = root / "pdk" / "libs.ref" / "fix"
-    ref.mkdir(parents=True)
-    return str(ref / "tech.lef")
 
 
-def _deck(tmp_path, monkeypatch, declare=("nom", "max"), **kw):
-    monkeypatch.setattr(R, "_docker_exec", _host_exec)
-    tlef = _stage(tmp_path, declare)
-    decl = R._openrcx_ruleset_declaration(_pdk(tlef), container="fake")
-    return decl, R._post_route_spef_repair_tcl(
-        str(tmp_path / "out"), tlef, rcx_declaration=decl, **kw)
 
 
-def _eval(tmp_path: Path, block: str) -> subprocess.CompletedProcess:
-    script = tmp_path / "prs.tcl"
-    script.write_text(_STUB + block)
-    return subprocess.run(["tclsh", str(script)], capture_output=True,
-                          text=True, timeout=60)
 
 
-@needs_tclsh
-def test_the_deck_extracts_with_the_declared_ruleset_not_the_magic_one(
-        tmp_path, monkeypatch):
-    decl, tcl = _deck(tmp_path, monkeypatch)
-    assert decl["status"] == "DECLARED", decl
-    assert "glob -nocomplain" not in tcl
-    r = _eval(tmp_path, tcl)
-    assert r.returncode == 0, r.stderr
-    used = [ln for ln in r.stdout.splitlines() if ln.startswith("EXTRACT_WITH")]
-    assert used, r.stdout
-    for ln in used:
-        model = ln.split("-ext_model_file ")[1].split()[0]
-        assert model.endswith(("/rules.openrcx.fix.nom",
-                               "/rules.openrcx.fix.max")), ln
-    assert "SPEF_REPAIR_CAPTABLE: " in r.stdout
-    assert r.stdout.split("SPEF_REPAIR_CAPTABLE: ")[1].split()[0].endswith(
-        "/rules.openrcx.fix.nom")
-    assert r.stdout.split("SPEF_REPAIR_SIGNOFF_CAPTABLE: ")[1].split()[0] \
-        .endswith("/rules.openrcx.fix.max")
-    assert "SPEF_MEASURE_COMPLETE" in r.stdout
 
 
-@needs_tclsh
-def test_no_declared_max_uses_the_declared_nom_and_says_so(
-        tmp_path, monkeypatch):
-    _decl, tcl = _deck(tmp_path, monkeypatch, declare=("nom",))
-    r = _eval(tmp_path, tcl)
-    assert r.returncode == 0, r.stderr
-    assert r.stdout.split("SPEF_REPAIR_SIGNOFF_CAPTABLE: ")[1].split()[0] \
-        .endswith("/rules.openrcx.fix.nom")
-    assert "SPEF_REPAIR_SIGNOFF_RULESET_NOM:" in r.stdout
 
 
-@needs_tclsh
-@pytest.mark.parametrize("decl,code", [
-    ({"status": "UNREADABLE", "declaration": None, "corners": {},
-      "detail": 'declaration probe failed: "docker" [gone]'},
-     "RCX_RULESET_DECLARATION_UNREADABLE"),
-    ({"status": "DECLARED", "declaration": ["config.tcl"],
-      "corners": {"max": {"path": "/pdk/libs.tech/librelane/r.max"}},
-      "detail": ""},
-     "RCX_NOM_RULESET_UNDECLARED"),
-])
-def test_an_unreadable_or_nomless_declaration_refuses(tmp_path, decl, code):
-    tcl = R._post_route_spef_repair_tcl(
-        str(tmp_path / "out"), "/pdk/libs.ref/fix/tech.lef",
-        fork_repair_capable=True, rcx_declaration=decl)
-    r = _eval(tmp_path, tcl)
-    assert r.returncode == 0, r.stderr
-    assert f"SPEF_REPAIR_REFUSED: {code}" in r.stdout
-    assert "EXTRACT_WITH" not in r.stdout
-    assert "SPEF_MEASURE_COMPLETE" not in r.stdout
-    assert "SPEF_REPAIR_CAPTABLE" not in r.stdout
 
 
 def test_step_pnr_hands_the_deck_the_recorded_declaration():

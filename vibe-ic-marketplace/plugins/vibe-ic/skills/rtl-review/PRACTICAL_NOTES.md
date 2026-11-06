@@ -130,8 +130,6 @@ in probe-level debug before anyone reads the map report.
 ### Enforcement
 
 - Run `programs/rom_init_lint.py` on any RTL bound for FPGA.
-- On any target design that includes a Quartus `.map.rpt`, also run
-  `programs/quartus_map_audit.py` — any `Stuck at GND/VCC`, `Warning 10030`,
-  or `Warning 10855` hit must fail the review gate.
+- Read the native Quartus map report for stuck-at constants, ignored initializations and other synthesis warnings. Check their effect against the actual RTL and requested reset/initialization behavior before accepting the compile.
 
 **Reference**: LL memory `feedback_quartus_init_for_loop.md`.

@@ -136,25 +136,3 @@ def test_module_names_lists_all_three(tmp_path):
 
 
 # ── end-to-end: emitted TB instantiates the REAL module, not the phantom ───
-
-def test_emitted_tb_instantiates_real_module_not_phantom(tmp_path):
-    proj = _scaffold(tmp_path)
-    res = R.step_full_stack_tb_gen(proj, "chip_top")
-    # R-0915-85 — the step emits `NOT_MEASURED(no_population)` where it used
-    # to emit `SKIP`: a CONNECTIVITY-ONLY skeleton golden-compares NOTHING, so
-    # functional correctness was not measured. The detail said so already; the
-    # word says it now. This test's subject is the EMITTED TB, so what it
-    # needs is that the step did not FAIL.
-    assert res.status in ("PASS", "NOT_MEASURED"), res.detail
-    assert res.status != "FAIL", res.detail
-    sim = _pl.sim_full_stack_dir(proj)
-    tbs = sorted(sim.glob("tb_*_full.v"))
-    assert tbs, "a full-stack TB must be emitted"
-    # the TB filename + the u_dut instantiation must reference the REAL module.
-    tb = next((t for t in tbs if "proj_wrapper" in t.name), None)
-    assert tb is not None, [t.name for t in tbs]
-    txt = tb.read_text()
-    assert "proj_wrapper u_dut" in txt
-    # NO-LEAK: the phantom ic_name must NEVER be instantiated as the DUT.
-    assert "acme_product u_dut" not in txt
-    assert "module acme_product" not in txt

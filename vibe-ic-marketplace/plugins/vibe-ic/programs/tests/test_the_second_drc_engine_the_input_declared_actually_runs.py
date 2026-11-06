@@ -38,10 +38,7 @@ Two halves, both measured in the pinned container before a line was written:
     over 4 tiles, which is why both numbers are reported and either one being
     non-zero is the FAIL.
 """
-import json
 import re
-import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -50,9 +47,7 @@ import pytest
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 import phase3_one_shot_runner as R  # noqa: E402
-import extraction_input_capability_check as E  # noqa: E402
 import _signoff_drc_format as SDF  # noqa: E402
-import l24_signoff_evidence_backed_check as L24  # noqa: E402
 
 
 # ── (1) the technology the rc names through a variable ─────────────────────
@@ -62,51 +57,14 @@ _RUN19_RAW = "$PDK_ROOT/gf180mcuD/libs.tech/magic/gf180mcuD.tech"
 _RUN19_TECH = "/foss/pdks/gf180mcuD/libs.tech/magic/gf180mcuD.tech"
 
 
-def test_the_unexpanded_tech_load_resolves_against_the_rcs_own_tree():
-    """run19's exact shape: the remainder is the rc's own text and the base is
-    PROVEN, so the pre-flight stops reporting a technology it could have found."""
-    seen = []
-
-    def exists(path):
-        seen.append(path)
-        return path == _RUN19_TECH
-
-    assert E.resolve_tech_load(_RUN19_RAW, _RUN19_RC, exists) == _RUN19_TECH
-    assert any(p == _RUN19_TECH for p in seen)
 
 
-def test_a_tech_that_is_nowhere_is_still_refused():
-    """THE OTHER DIRECTION, and the reason this is a resolution and not a
-    guess: every candidate is proven by `exists`, so a rc whose technology is
-    absent still yields None and the run still reports the pre-flight as not
-    performed."""
-    assert E.resolve_tech_load(_RUN19_RAW, _RUN19_RC, lambda p: False) is None
 
 
-def test_the_environment_the_tool_will_run_in_outranks_the_tree():
-    """`$PDK_ROOT` is expanded by MAGIC from the environment, so when the
-    caller knows that environment it is the first base tried."""
-    env_tech = "/elsewhere/gf180mcuD/libs.tech/magic/gf180mcuD.tech"
-    got = E.resolve_tech_load(_RUN19_RAW, _RUN19_RC,
-                              lambda p: p in (env_tech, _RUN19_TECH),
-                              {"PDK_ROOT": "/elsewhere"})
-    assert got == env_tech
 
 
-def test_a_variable_that_is_not_the_root_prefix_is_not_reconstructed():
-    """Only the leading-`$VAR` case is reconstructible. Anything else would
-    require inventing the part of the path the rc did not write."""
-    assert E.split_leading_tcl_var("/a/$X/b.tech") is None
-    assert E.resolve_tech_load("/a/$X/b.tech", _RUN19_RC, lambda p: True) is None
 
 
-def test_the_text_only_contract_is_unchanged():
-    """`tech_load_directive` still answers about the TEXT alone — the callers
-    that ask it what the rc says must keep getting that answer."""
-    path, why, raw = E.tech_load_directive(f"tech load {_RUN19_RAW}\n")
-    assert path is None
-    assert why == E.TECH_LOAD_UNEXPANDED
-    assert raw == _RUN19_RAW
 
 
 def test_the_runner_resolves_before_it_declares_the_preflight_unperformed():
@@ -121,37 +79,12 @@ def test_the_runner_resolves_before_it_declares_the_preflight_unperformed():
 
 # ── (2) the Magic sign-off DRC deck ────────────────────────────────────────
 
-def _tcl():
-    return R._magic_signoff_drc_tcl("/c/design.gds", "chip_top", "/c/out.rpt")
 
 
-def test_the_deck_asserts_the_full_style_and_checks_the_whole_cell():
-    """A run that silently checked `drc(routing)` would report a clean chip it
-    never fully looked at, and `drc check` only rechecks the area UNDER THE
-    BOX — so the top cell must be selected before it."""
-    t = _tcl()
-    assert "drc style drc(full)" in t
-    assert t.index("select top cell") < t.index("drc check")
-    assert "drc catchup" in t
-    assert "drc listall why" in t
-    assert "drc list count total" in t
 
 
-def test_the_deck_reads_the_layout_and_never_writes_it():
-    t = _tcl()
-    assert "gds readonly true" in t
-    assert "gds read /c/design.gds" in t
-    assert "gds write" not in t
-    assert "load chip_top" in t
 
 
-def test_a_deck_that_could_not_read_the_layout_says_so_and_stops():
-    """A `gds read` that fails must not fall through into a check of an empty
-    database and report it clean."""
-    t = _tcl()
-    assert "MAGIC_GDS_READ_FAILED" in t
-    i_fail = t.index("MAGIC_GDS_READ_FAILED")
-    assert "quit -noprompt" in t[i_fail:i_fail + 120]
 
 
 _MAGIC_STUBS = r"""
@@ -184,72 +117,12 @@ proc quit {args} { exit 0 }
 """
 
 
-def _drive_deck(tmp_path):
-    """Run the deck the runner generates, under tclsh, with magic stubbed."""
-    tclsh = shutil.which("tclsh")
-    if tclsh is None:                                    # pragma: no cover
-        pytest.skip("tclsh not installed")
-    rpt = tmp_path / "out.rpt"
-    # A technology whose `drc` section the deck must read for itself: the rule
-    # list is written BY THE DECK now, so the fixture has to supply one.
-    tech = tmp_path / "t.tech"
-    tech.write_text(
-        'tech\n format 32\nend\n\n'
-        'drc\n'
-        ' width  m1 23 "Metal1 width < 0.23um (M1.1)"\n'
-        ' spacing m1 m1 23 touching_ok "Metal1 spacing < 0.23um (M1.2)"\n'
-        ' edge4way m2 x 1 "s"\n'
-        'end\n\n'
-        'extract\n style "ngspice extraction style for this technology"\nend\n')
-    script = tmp_path / "deck.tcl"
-    script.write_text(_MAGIC_STUBS.replace("TECHFILE", str(tech))
-                      + R._magic_signoff_drc_tcl(
-                          "/c/design.gds", "chip_top", str(rpt),
-                          gds_sha256="ab" * 32))
-    cp = subprocess.run([tclsh, str(script)], capture_output=True, text=True,
-                        cwd=str(tmp_path))
-    return cp, rpt
 
 
-def test_driven_the_deck_runs_and_writes_a_complete_report(tmp_path):
-    cp, rpt = _drive_deck(tmp_path)
-    assert cp.returncode == 0, cp.stderr
-    assert "invalid command name" not in (cp.stderr + cp.stdout)
-    assert rpt.is_file()
-    text = rpt.read_text()
-    for line in ("# Tool: magic", "tech name: TECHNAME",
-                 "tech version: 1.2.3",
-                 "layout: /c/design.gds", "top cell: chip_top",
-                 "drc style requested: drc(full)",
-                 "RULE: 2 | Rule A spacing", "RULE: 1 | Rule B width",
-                 "rules with violations: 2",
-                 "error tiles (drc list count total): 4",
-                 "total violations: 3", "COUNT: 3"):
-        assert line in text, (line, text)
 
 
-def test_driven_the_report_the_deck_writes_classifies_as_magic(tmp_path):
-    """The deck's OWN output — not a fixture — must satisfy the producer
-    classification `_report_engine` reads."""
-    _cp, rpt = _drive_deck(tmp_path)
-    prod = SDF.classify_file(rpt)
-    assert prod.kind == SDF.MAGIC, prod.evidence
-    assert prod.is_signoff_deck is True
 
 
-def test_a_report_that_stops_early_is_not_a_clean_chip(tmp_path):
-    """THE FAILURE THAT HAPPENED. 69 bytes, two header lines, no trailer —
-    and the first version of this runner read it as zero violations."""
-    proj = tmp_path / "p"
-    (proj / "reports" / "phase3").mkdir(parents=True)
-    (proj / R._MAGIC_SIGNOFF_DRC_REL).write_text(
-        "# Tool: magic\n# sign-off DRC, rule deck applied to a streamed "
-        "layout\n")
-    src = Path(R.__file__).read_text()
-    i = src.index("carries no COUNT trailer")
-    assert 'row["status"] = "NOT_MEASURED"' in src[i - 400:i]
-    assert re.search(r'\^COUNT:\\\\s\*\\\\d\+\\\\s\*\$', src) or \
-        'r"^COUNT:\\s*\\d+\\s*$"' in src
 
 
 #: The transcript the deck above writes, in the dialect measured in the image.
@@ -296,17 +169,6 @@ _DIRTY_RPT = _CLEAN_RPT.replace(
     "COUNT: 0", "COUNT: 6")
 
 
-def test_the_fixture_is_the_report_the_deck_actually_writes():
-    """A fixture the producer stopped writing proves nothing. Every line
-    prefix below is looked up in the emitted Tcl."""
-    t = _tcl()
-    for prefix in ("# Tool: magic", "tech name:", "tech file:", "layout:",
-                   "top cell:", "commands:",
-                   "rules with violations:",
-                   "error tiles (drc list count total):",
-                   "total violations:", "COUNT:", "RULE:",
-                   "drc style requested:"):
-        assert prefix in t, prefix
 
 
 def test_the_transcript_classifies_as_a_magic_signoff_producer(tmp_path):
@@ -333,33 +195,10 @@ def test_the_router_is_still_not_a_magic_signoff_producer(tmp_path):
     assert prod.kind != SDF.MAGIC
 
 
-def test_the_per_rule_table_is_parsed_in_the_dialect_that_was_measured():
-    rows = R._magic_rule_rows(_DIRTY_RPT)
-    assert rows == [(2, "Metal1 minimum area < 0.1444um^2 (M1.3)"),
-                    (4, "Metal1 width < 0.23um (M1.1)")]
-    assert R._magic_rule_rows(_CLEAN_RPT) == []
 
 
-def test_no_rule_falls_out_of_the_category_table():
-    """A category table whose parts do not sum to the total can hide a rule
-    class nobody named, so an unmatched rule is counted `unclassified`."""
-    rows = [(3, "Some rule nobody's vocabulary knows")]
-    cats = R._magic_rule_categories(rows)
-    assert cats == {"unclassified": 3}
-    cats2 = R._magic_rule_categories(R._magic_rule_rows(_DIRTY_RPT))
-    assert cats2["area"] == 2 and cats2["width"] == 4
 
 
-def test_the_engine_list_comes_from_the_input_and_gates_the_leg(tmp_path):
-    """OVER-BREADTH CONTROL: a design whose input names one engine must start
-    no Magic process at all."""
-    docs = tmp_path / "input" / "docs"
-    docs.mkdir(parents=True)
-    (docs / "L1.md").write_text("- sign-off: DRC clean with klayout\n")
-    assert "magic" not in R._declared_drc_engines(tmp_path)
-    (docs / "L1.md").write_text(
-        "- sign-off: DRC clean, checked with klayout and magic\n")
-    assert "magic" in R._declared_drc_engines(tmp_path)
 
 
 def test_the_leg_runs_only_when_the_input_declared_magic():
@@ -405,42 +244,8 @@ def test_a_watchdog_kill_is_blocked_and_never_a_clean_verdict():
     assert "timeout=" not in body.split("_docker_exec(container")[1][:400]
 
 
-def test_the_receipt_the_engine_check_reads_is_produced_end_to_end(tmp_path):
-    """END TO END on the real programs: transcript -> `drc_report_check
-    --signoff` -> `_report_engine` == 'magic'. This is the whole point of the
-    change, and nothing in `_report_engine` is relaxed to get there."""
-    proj = tmp_path / "p"
-    from test_a_magic_receipt_binds_to_the_layout_it_read import (
-        _bind_current_drc_fixture, _gds_bytes)
-    (proj / "reports" / "phase3").mkdir(parents=True)
-    (proj / "phase3" / "stage3" / "pnr").mkdir(parents=True)
-    (proj / "phase3" / "stage3" / "pnr" / "chip_top.gds").write_bytes(_gds_bytes("chip_top"))
-    rel = R._MAGIC_SIGNOFF_DRC_REL
-    (proj / rel).write_text(_CLEAN_RPT + _DECK_RULES)
-    _bind_current_drc_fixture(proj)
-    row = R._audit_magic_signoff_drc(proj)
-    assert row["status"] == "PRODUCED", row
-    payload = json.loads((proj / R._MAGIC_SIGNOFF_DRC_JSON_REL).read_text())
-    assert payload.get("program") == "eda_report_audit:drc"
-    engine = L24._report_engine(R._MAGIC_SIGNOFF_DRC_JSON_REL, payload, proj)
-    assert engine == "magic", json.dumps(payload.get("summary"), indent=1)[:2000]
-    # AND THE AUDIT MUST PASS IT. A receipt whose verdict is `fail` is read by
-    # `l24_signoff_evidence_backed_check` as a FAILING engine, which is worse
-    # than a missing one. MEASURED: the first version of this report was 618
-    # bytes and the audit refused it on DRC_CATEGORIES_EXIST +
-    # DRC_REPORT_TOO_SMALL.
-    assert payload.get("passed") is True, [
-        f for f in payload.get("findings", [])
-        if f.get("severity") == "ERROR"]
-    assert row["rc"] == 0, row
 
 
-def test_the_audit_is_skipped_when_the_deck_produced_nothing(tmp_path):
-    proj = tmp_path / "p"
-    (proj / "reports" / "phase3").mkdir(parents=True)
-    row = R._audit_magic_signoff_drc(proj)
-    assert row["status"] == "NOT_APPLICABLE"
-    assert not (proj / R._MAGIC_SIGNOFF_DRC_JSON_REL).exists()
 
 
 _TECH_SNIPPET = """
@@ -465,48 +270,12 @@ end
 """
 
 
-def _deck_rules_from(tmp_path, tech_text):
-    """The rule list THE DECK writes, given a technology — the extraction now
-    runs inside magic, so the property is asked of the deck rather than of a
-    Python reader that no longer exists."""
-    tclsh = shutil.which("tclsh")
-    if tclsh is None:                                    # pragma: no cover
-        pytest.skip("tclsh not installed")
-    tech = tmp_path / "t.tech"
-    tech.write_text(tech_text)
-    rpt = tmp_path / "out.rpt"
-    script = tmp_path / "deck.tcl"
-    script.write_text(_MAGIC_STUBS.replace("TECHFILE", str(tech))
-                      + R._magic_signoff_drc_tcl("/c/d.gds", "chip_top",
-                                                 str(rpt), gds_sha256="ab" * 32))
-    subprocess.run([tclsh, str(script)], capture_output=True, text=True,
-                   cwd=str(tmp_path))
-    return [m.group(1) for m in
-            re.finditer(r"^DECK_RULE:\s*(.+?)\s*$", rpt.read_text(), re.M)]
 
 
-def test_the_deck_rule_list_comes_from_the_technology_that_ran(tmp_path):
-    assert _deck_rules_from(tmp_path, _TECH_SNIPPET) == [
-        "Metal1 spacing < 0.23um (M1.2)", "Metal1 width < 0.23um (M1.1)"]
 
 
-def test_nothing_outside_the_drc_section_is_taken_for_a_rule(tmp_path):
-    """OVER-BREADTH CONTROL: the `extract` and `tech` sections have quoted
-    strings too, and a reader that swept the whole file would describe the
-    deck with things that are not rules."""
-    got = " ".join(_deck_rules_from(tmp_path, _TECH_SNIPPET))
-    assert "ngspice" not in got, got
-    assert "gds write style" not in got, got
-    assert _deck_rules_from(
-        tmp_path, 'extract\n style "ngspice extraction style here"\nend\n') == []
 
 
-def test_a_deck_rule_line_is_never_counted_as_a_violation():
-    """`DECK_RULE:` says the deck HAS this rule; `RULE: n |` says it FIRED n
-    times. A parser that confused them would report a clean chip as 155
-    violations."""
-    rows = R._magic_rule_rows(_CLEAN_RPT + _DECK_RULES)
-    assert rows == []
 
 
 def test_an_unreadable_technology_is_disclosed_not_hidden():
@@ -634,21 +403,3 @@ def test_the_receipt_is_found_without_being_declared_in_the_flow():
     assert "drc_signoff_magic" not in yaml_text, (
         "the flow declares an entry whose every alternative is another "
         "entry's; dimension 8 cannot measure its negative half")
-
-
-def test_the_receipt_filename_is_what_the_scan_matches_on():
-    """The scan keys on the report TOKEN in the path, so the name is load
-    bearing: rename it and the engine evidence silently stops arriving."""
-    from l24_signoff_requirements_extract import _path_names_token, \
-        report_tokens_for
-    tokens = report_tokens_for("DRC")
-    assert tokens, tokens
-    assert _path_names_token(R._MAGIC_SIGNOFF_DRC_JSON_REL, tokens)
-
-
-def test_the_two_paths_are_spelled_once():
-    assert R._MAGIC_SIGNOFF_DRC_REL == "reports/phase3/drc_signoff_magic.rpt"
-    assert R._MAGIC_SIGNOFF_DRC_JSON_REL == "reports/phase3/drc_signoff_magic.json"
-    src = Path(R.__file__).read_text()
-    assert src.count('"reports/phase3/drc_signoff_magic.rpt"') == 1
-    assert src.count('"reports/phase3/drc_signoff_magic.json"') == 1

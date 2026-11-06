@@ -10,7 +10,6 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import flow_compliance_check as fc
 import phase1_expert_parse_track as track
-import phase1_one_shot_runner as phase1
 from test_issue2204_expert_second_pass_is_reachable import _project, _report, _answer_path, _ANSWER
 
 
@@ -64,15 +63,6 @@ def test_pending_answer_is_not_consumed_by_the_real_d1_clause(tmp_path):
     assert json.loads(_report(p).read_text())['ai_subtrack']['status'] == track.AI_HANDOFF_EMITTED
 
 
-def test_phase1_produced_findings_remain_advisory_and_record_the_invocation(tmp_path):
-    p = _project(tmp_path, 'consumed', answer=True, report=False)
-    assert phase1.run_phase1_second_track(p, 0) == 0
-    rep = json.loads(_report(p).read_text())
-    assert rep['findings']
-    assert rep['producer']['invoked_by'] == 'phase1_one_shot_runner'
-    assert rep['producer']['returncode'] == 0
-    result = _audit_unchanged(p)
-    assert result.status == 'PASS', result
 
 
 @pytest.mark.parametrize('change', ['missing', 'malformed', 'answer', 'layer', 'false_complete'])

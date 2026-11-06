@@ -337,3 +337,12 @@ def test_public_clock_row_reads_the_native_plan_without_adoption(tmp_path, nativ
     completed = flow109._selected_step_result(tmp_path, context, result, clock)
     assert completed["default_row_status"] == expected
     assert completed["completed"] is (expected == "PASS")
+
+
+def test_native_liberty_pin_roles_keep_the_declared_directions():
+    from _cdc_netlist import liberty_pin_roles
+    roles = liberty_pin_roles(LIBERTY)
+    assert {key: roles["PADIN"]["PAD"][key] for key in ("direction", "clock", "is_pad")} == {
+        "direction": "input", "clock": False, "is_pad": True}
+    assert roles["BUF"]["A"]["direction"] == "input"
+    assert roles["BUF"]["Z"]["direction"] == "output"

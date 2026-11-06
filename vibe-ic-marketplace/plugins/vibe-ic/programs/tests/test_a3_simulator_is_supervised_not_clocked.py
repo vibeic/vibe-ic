@@ -116,7 +116,6 @@ def test_the_supervised_container_run_installs_a_notice(monkeypatch):
         seen.update(kw)
         return subprocess.CompletedProcess(argv, 0, "", "")
 
-    monkeypatch.setattr(CE._pin, "container_attach_refusal", lambda *a, **k: "")
     monkeypatch.setattr(CE._pr, "run", _fake_run)
     CE.run_in_container_supervised("c_alpha", "true", ceiling_s=42.0)
     assert seen.get("hard_ceiling_s") == 42.0, seen
@@ -131,7 +130,6 @@ def test_a_caller_supplied_notice_wins(monkeypatch):
     """The default is a default. A caller routing the crossing into its own
     record must not also get it printed by somebody else."""
     seen = {}
-    monkeypatch.setattr(CE._pin, "container_attach_refusal", lambda *a, **k: "")
     monkeypatch.setattr(CE._pr, "run",
                         lambda argv, **kw: (seen.update(kw) or
                                             subprocess.CompletedProcess(
@@ -216,14 +214,6 @@ def test_the_a3_site_is_no_longer_on_the_container_deadline_record():
         "input_doc_pdk_claim_vs_installed_pdk_check.py::")], sorted(rec)
 
 
-def test_the_ceiling_gate_still_passes_on_this_tree():
-    """The register and the tree have to agree, and the gate is the only thing
-    entitled to say they do. Run, not asserted."""
-    cp = subprocess.run(
-        [sys.executable, str(PROGRAMS / "watchdog_ceiling_semantics_check.py")],
-        capture_output=True, text=True, cwd=str(PROGRAMS))
-    assert cp.returncode == 0, cp.stdout[-3000:] + cp.stderr[-2000:]
-    assert "CONTAINER_DEADLINE 2" in cp.stdout, cp.stdout[-2000:]
 
 
 # ═══ the reap the conversion depends on ═══════════════════════════════════

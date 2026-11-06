@@ -15,15 +15,9 @@ pragmas / directives and hands off to `/rtl-review`.
 
 ## Mandatory Deterministic Preflight
 
-```bash
-# 1. After HLS emits RTL, the standard plugin gates apply IMMEDIATELY:
-python3 plugins/vibe-ic/programs/rtl_review_aggregate.py \
-    --rtl-dir <hls-output-dir>     # see skills/rtl-review for backing
-python3 plugins/vibe-ic/programs/rtl_hygiene_lint.py \
-    <hls-output-dir>/*.v
-python3 plugins/vibe-ic/programs/reset_discipline_check.py \
-    --rtl-dir <hls-output-dir>
-```
+Review clock/reset domains and use native elaboration, simulation and CDC/RDC results to check the specified reset polarity, assertion and release behavior.
+
+Run the selected native RTL lint/elaboration tools and read their diagnostics, then review unresolved semantic requirements independently. A review score or receipt is not a native result.
 
 HLS-emitted RTL is NOT exempt from plugin gates — many HLS tools emit
 RTL with subtle latch / reset-discipline issues that downstream
@@ -78,22 +72,3 @@ HLS is a mature commercial flow. XLS is Google's open-source DSL-based HLS. Key 
 - Generated RTL → `/rtl-review` then `/testbench-gen`
 - Golden C model → reuse as reference in `/testbench-gen`
 - PPA → `/ppa-predict` for cross-check
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/hls-c2rtl/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in the corresponding skill directory enumerates
-every required element of your output: section headers, metadata fields,
-handoff lines, tool invocations.
-
-**Your task is not complete until the audit returns PASS.** Missing
-elements are the single largest source of skill-execution non-determinism
-across different agents.

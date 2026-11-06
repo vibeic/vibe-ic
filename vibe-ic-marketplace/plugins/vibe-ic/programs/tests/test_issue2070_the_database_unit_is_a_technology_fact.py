@@ -49,7 +49,6 @@ if str(_PROGRAMS) not in sys.path:
 import _tapeout_declaration as TD                             # noqa: E402
 import _owner_declared as _OD                              # noqa: E402
 import submission_template_fetch as STF                       # noqa: E402
-import phase1_one_shot_runner as P1                           # noqa: E402
 
 #: Synthetic authority records for precedence tests, not measurements of the
 #: named PDKs. Actual stream-vs-LEF transcription is exercised below.
@@ -239,24 +238,8 @@ def test_a_design_that_names_no_family_is_not_refused_for_naming_none(tmp_path):
 
 
 # ── the run's --pdk reaches step 0.5ic ────────────────────────────────
-@pytest.mark.parametrize("extras,want", [
-    ([], ""),
-    (["--pdk", "sky130A"], "sky130A"),
-    (["--pdk=gf180mcuD"], "gf180mcuD"),
-    (["--mode", "docs", "--pdk", "sky130A"], "sky130A"),
-    (["--pdk", "auto"], ""),          # `auto` is a request, not a process
-    (["--pdk"], ""),                  # a flag with no value invents nothing
-])
-def test_the_runs_pdk_is_read_out_of_extras(extras, want):
-    assert P1._pdk_of_this_run(extras) == want
 
 
-def test_reading_the_pdk_does_not_consume_it():
-    """It stays in `extras`, which the docs-mode delegate is handed. An
-    argparse option here would silently stop that forwarding."""
-    extras = ["--mode", "docs", "--pdk", "sky130A"]
-    P1._pdk_of_this_run(extras)
-    assert extras == ["--mode", "docs", "--pdk", "sky130A"]
 
 
 def test_the_dispatcher_hands_step_0_5ic_the_runs_own_pdk():
@@ -296,12 +279,6 @@ def test_step_0_5ic_forwards_the_pdk_to_the_fetch():
     assert "pdk" in names
 
 
-def test_the_answers_producer_is_handed_the_fetchs_own_report():
-    """One reader of the tech LEF, not two: the value in the declaration is
-    the value a named program read at a named line."""
-    src = (_PROGRAMS / "phase1_one_shot_runner.py").read_text(errors="replace")
-    assert "--technology-json" in src
-    assert P1._ST_FETCH_REPORT_REL == STF.REPORT_REL
 
 
 # ── the polarity claim, falsifiable ───────────────────────────────────

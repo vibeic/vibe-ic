@@ -87,7 +87,7 @@ The unification is of the **REVIEW DISCIPLINE**, not of the machine gate:
 - **PER-REPO (the machine gate — different because each tool builds/tests differently):**
   | repo | machine gate (build + test) |
   |---|---|
-  | vibeic/vibe-ic (plugin) | pytest (existing `gatekeeper_review.py`) |
+  | vibeic/vibe-ic (plugin) | the current plugin test suite |
   | vibeic/OpenROAD | cmake build + ctest (C++) |
   | vibeic/yosys | make + test (C++) |
   | vibeic/magic | build + test (C) |
@@ -96,7 +96,7 @@ The unification is of the **REVIEW DISCIPLINE**, not of the machine gate:
   | vibeic/ngspice | configure + make check (C) |
   | vibeic/iverilog | build + ivtest (C++) |
 
-  The vibe-ic `gatekeeper_review.py` (pytest) does NOT apply to a fork — a fork's gate is
+  The plugin test suite does NOT apply to a fork — a fork's gate is
   its own CI (build+test), declared per-repo. The gatekeeper runs *that repo's* gate.
 
 **Flow for an inbound PR to `vibeic/<tool>`:** poll → run *that repo's* CI gate (machine) +

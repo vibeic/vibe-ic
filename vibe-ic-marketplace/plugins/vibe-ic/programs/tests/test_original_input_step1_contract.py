@@ -18,8 +18,6 @@ import benchmark_io_adapter as bio
 import benchmark_dispatch as dispatch
 import design_one_shot_runner as runner
 import flow_phase_attribution as fpa
-import lesson_consumption_check as lessons
-import step_preflight as preflight
 import step_required_inputs_check as sri
 
 
@@ -40,56 +38,8 @@ def project(tmp_path, context=None, prompt=PROMPT):
     return root
 
 
-def test_shared_projection_keeps_default_and_physical_dependencies(tmp_path):
-    root = project(tmp_path)
-    rows = {str(row["id"]): row for row in fy.load()["steps"]}
-    assert any(str(item["from"]) == "D1" for item in rows["1"]["required_inputs"])
-    assert any(str(item["from"]) == "D1" for item in rows["2"]["required_inputs"])
-    pl.select_rtl_input(root, "original", "1", "2")
-    raw = {str(row["id"]): row for row in fy.load()["steps"]}
-    assert raw["1"]["blocks_on"] == []
-    assert raw["2"]["blocks_on"] == [1]
-    assert raw["4"] == rows["4"]
-    by_id = rows
-    assert sri.check_one(root, rows["1"], by_id, {}, None)["verdict"] == "READY"
-    decision = preflight.entry_admission(root, "design_one_shot_runner", "1")
-    assert decision["admitted"], decision
-    assert decision["span"] == ("1",)
-    other = tmp_path / "other"
-    (other / "input").mkdir(parents=True)
-    (other / "input/phase1_prompt.md").write_text("A different structured project.\n")
-    assert pl.rtl_input(other) == "structured"
-    assert not preflight.entry_admission(other, "design_one_shot_runner", "1")["admitted"]
-    assert sri.input_contract(raw["1"], "structured") == rows["1"]
 
 
-def test_raw_reader_and_handoff_preserve_complete_prompt_and_context(tmp_path):
-    root = project(tmp_path, {"requirements.txt": "每五筆一組。\r\nNo sliding window.\r\n"})
-    # Stale generated prose must never complete a raw deterministic recognizer.
-    generated = root / "phase1/generated_docs"
-    generated.mkdir(parents=True)
-    (generated / "L1_OLD.json").write_text('{"ic_name":"stale_owner"}')
-    pl.select_rtl_input(root, "original", "1", "1")
-    gathered = runner._gather_phase1_plain_spec_text(root)
-    assert gathered.refusal is None
-    assert gathered.text.startswith(PROMPT)
-    assert "每五筆一組。\r\nNo sliding window.\r\n" in gathered.text
-    assert "stale_owner" not in pl.gather_spec_text(root, gathered.text)
-    assert runner.detect_ic_class(root)[0] == "unknown"
-    assert runner._try_deterministic_rtl_dispatch(root, 0) is None
-    hint, extras = runner._stage_author_knowledge_digests(root)
-    assert extras["input_authority"] == "original"
-    assert extras["read_prompt_from"] == str(root / "input/phase1_prompt.md")
-    assert extras["original_prompt_sha256"] == hashlib.sha256(PROMPT.encode()).hexdigest()
-    assert extras["original_prompt_bytes"] == len(PROMPT.encode())
-    assert len(extras["read_context_from"]) == 1
-    context = extras["read_context_from"][0]
-    assert Path(context["path"]).read_bytes() == "每五筆一組。\r\nNo sliding window.\r\n".encode()
-    assert "COMPLETE original prompt" in hint
-    assert "declaration_contract" not in extras
-    assert pl.gather_spec_text(root).startswith(PROMPT)
-    assert lessons.main(["--project", str(root), "--rtl-input", "original",
-                         "--digest", extras["lessons_digest"]]) == 0
 
 
 @pytest.mark.parametrize("scope", [("D1", "2"), ("1", "4"), ("1", None), (None, None)])
@@ -242,26 +192,6 @@ def test_original_catalog_consumer_reads_the_selected_complete_source(tmp_path):
     assert "declaration missing" in reverse["reason"]
 
 
-def test_original_consumer_projection_preserves_native_rtl_obligations(tmp_path):
-    from _hostpaths import require_repo
-    import execution_backend_gates as gates
-    # Read the shipped artifact; the test does not reconstruct either contract.
-    source = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic", "flow",
-                          "phase1_phase2_phase3.yaml")
-    root = project(tmp_path)
-    structured = {str(r["id"]): r for r in fy.load(source)["steps"]}
-    pl.select_rtl_input(root, "original", "1", "2")
-    original = {str(r["id"]): r for r in fy.load(source)["steps"]}
-    commands = gates.required_commands(original["2"])
-    assert any(c.startswith("rtl_hygiene_lint --project . --define SYNTHESIS --severity ERROR")
-               and "--rtl-input original" in c for c in commands)
-    assert any(c.startswith("rom_init_lint ") for c in commands)
-    assert any(c.startswith("crosslayer_rewrite_equivalence_check ") for c in commands)
-    assert not any(c.startswith("slot_pad_budget_check ") for c in commands)
-    assert "--rtl-input original" in gates.required_commands(original["1"])[-1]
-    for step in ("1", "2"):
-        assert sri.input_contract(original[step], "structured") == structured[step]
-    assert original["4"] == structured["4"]
 
 
 def test_original_native_top_cannot_be_replaced_by_a_different_sole_module(tmp_path):

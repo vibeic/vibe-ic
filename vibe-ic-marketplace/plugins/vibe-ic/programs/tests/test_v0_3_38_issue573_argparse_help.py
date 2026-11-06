@@ -10,7 +10,6 @@ from pathlib import Path
 
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
-import argparse_help_format_check as AH  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
@@ -29,53 +28,12 @@ def test_phase1_doc_runner_help_exits_zero():
 
 # ── the class pin: static checker semantics ─────────────────────────────────
 
-def test_checker_flags_bare_percent_help(tmp_path):
-    """The issue's exact shape: help text ending `< 80%.` must FAIL."""
-    (tmp_path / "bad.py").write_text(
-        "import argparse\n"
-        "p = argparse.ArgumentParser()\n"
-        "p.add_argument('--strict', action='store_true',\n"
-        "               help='Exit 1 on TODO stubs OR coverage < 80%.')\n"
-    )
-    rc = AH.main([str(tmp_path)])
-    assert rc == 1
 
 
-def test_checker_passes_escaped_and_expansion_forms(tmp_path):
-    (tmp_path / "good.py").write_text(
-        "import argparse\n"
-        "p = argparse.ArgumentParser()\n"
-        "p.add_argument('--strict', help='coverage < 80%% required')\n"
-        "p.add_argument('--tol', default=1.0, type=float,\n"
-        "               help='tolerance (default %(default)s)')\n"
-    )
-    rc = AH.main([str(tmp_path)])
-    assert rc == 0
 
 
-def test_checker_flags_bare_percent_in_fstring_literal_part(tmp_path):
-    (tmp_path / "fbad.py").write_text(
-        "import argparse\n"
-        "X = 5\n"
-        "p = argparse.ArgumentParser()\n"
-        "p.add_argument('--t', help=f'max delta % (default {X})')\n"
-    )
-    rc = AH.main([str(tmp_path)])
-    assert rc == 1
 
 
-def test_checker_flags_trailing_percent(tmp_path):
-    (tmp_path / "tail.py").write_text(
-        "import argparse\n"
-        "p = argparse.ArgumentParser()\n"
-        "p.add_argument('--c', help='coverage %')\n"
-    )
-    rc = AH.main([str(tmp_path)])
-    assert rc == 1
 
 
 # ── the live sweep: the shipped programs/ tree must stay clean ──────────────
-
-def test_programs_tree_has_no_bare_percent_help():
-    violations = AH.audit(str(PROG))
-    assert violations == [], "\n".join(violations)

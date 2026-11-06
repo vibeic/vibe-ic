@@ -8,7 +8,6 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import die_finishing_gen as finishing
-import execution_policy as policy
 import tapeout_readiness_check as readiness
 import tapeout_precheck as precheck
 
@@ -23,22 +22,6 @@ def profile(project):
     return path
 
 
-def test_provider_target_uses_existing_frozen_input_directory(tmp_path):
-    parameters = {}
-    runtime = {"project": tmp_path, "policy": {"mode": "default"}, "parameters": {"top": "chip_top"}}
-    absent = policy._fixed_inputs(runtime, "37.5ic", parameters=parameters)
-    assert finishing.PROVIDER_TARGET_REL not in absent
-    path = profile(tmp_path)
-    official = path.parent / "official"
-    official.mkdir()
-    entry = official / "precheck.py"
-    entry.write_text("# neutral official source dependency\n")
-    selected = policy._fixed_inputs(runtime, "37.5ic", parameters=parameters)
-    assert selected[finishing.PROVIDER_TARGET_REL] == path
-    assert parameters["resolved_input_manifest"]["files"][finishing.PROVIDER_TARGET_REL] == hashlib.sha256(path.read_bytes()).hexdigest()
-    assert selected.keys() - absent.keys() == {
-        finishing.PROVIDER_TARGET_REL, str(entry.relative_to(tmp_path))}
-    assert parameters["resolved_input_manifest"]["files"][str(entry.relative_to(tmp_path))] == hashlib.sha256(entry.read_bytes()).hexdigest()
 
 
 def test_normal_finishing_uses_declared_engineering_target(tmp_path):
@@ -93,9 +76,28 @@ def test_malformed_engineering_dimensions_refuse(tmp_path):
 @pytest.mark.parametrize("operator_verdict", ["PASS", "FAIL", "NOT_DETERMINED"])
 def test_normal_wrapper_uses_new_provider_over_retained_self_catalogue(
         tmp_path, monkeypatch, operator_verdict):
-    from test_owner_self_tapeout_catalogue import fixture
+    import _submission_template as template
+    import _tapeout_declaration as declaration
+    import submission_template_ingest as ingest
     import submission_template_check as catalogue
-    project, _, _ = fixture(tmp_path)
+    project = tmp_path / "design"
+    project.mkdir()
+    source = tmp_path / "catalogue"
+    source.mkdir()
+    (source / "neutral.json").write_text(json.dumps({
+        "DIE_AREA": [0, 0, 800, 1000], "SEAL_RING_WIDTH": 10}))
+    assert ingest.main([str(project), "--template", str(source)]) == 0
+    owner = {"answers": {"deliverable": "DIE"},
+             "answer_provenance": {"deliverable": {
+                 "answered_by": "owner", "citation": "Neutral owner input: deliver DIE."}},
+             "operator_template": {"path": None, "slot": None,
+                 "absent_reason": "Independent tapeout; no operator purchase or slot applies."}}
+    doc, _ = declaration.merge_answers(declaration.blank_declaration(),
+        dict(owner["answers"], answer_provenance=owner["answer_provenance"]))
+    answers = project / template.DESIGN_ANSWERS_REL
+    answers.parent.mkdir(parents=True, exist_ok=True)
+    answers.write_text(json.dumps(owner))
+    (project / declaration.DECLARATION_REL).write_text(json.dumps(doc))
     assert catalogue.catalogue_selects_self_tapeout(project)[0]
     switch = project / "phase3/librelane_switch.json"
     switch.parent.mkdir(parents=True)
@@ -131,7 +133,7 @@ def test_normal_wrapper_uses_new_provider_over_retained_self_catalogue(
 
 
 @pytest.mark.parametrize("case", ["current", "changed_gds", "refused_precheck", "missing_step"])
-def test_release_reader_requires_current_complete_operator_evidence(tmp_path, case):
+def test_release_reader_reads_complete_native_operator_results(tmp_path, case):
     def evidence(name, value):
         path = tmp_path / name
         path.write_text(json.dumps(value))
@@ -156,8 +158,10 @@ def test_release_reader_requires_current_complete_operator_evidence(tmp_path, ca
     path.write_text(json.dumps(record))
     if case == "changed_gds":
         (tmp_path / "neutral.gds").write_text("changed")
-    if case == "current":
-        assert finishing.read_admitted_release(tmp_path, path)["gds"] == tmp_path / "neutral.gds"
+    if case in {"current", "changed_gds"}:
+        current = finishing.read_admitted_release(tmp_path, path)
+        assert current["gds"] == tmp_path / "neutral.gds"
+        assert current["sha256"] == hashlib.sha256(current["gds"].read_bytes()).hexdigest()
     else:
         with pytest.raises(ValueError):
             finishing.read_admitted_release(tmp_path, path)
@@ -217,7 +221,9 @@ def test_provider_pv_reader_binds_real_gds_records_and_preserves_native_counts(
     elif case == "timestamps":
         assert row["value"] == 0 and row["verdict"] == "PASS"
         assert row["equivalence"]["input"]["sha256"] != output["sha256"]
-        assert row["equivalence"]["input"]["canonical_digest"] == row["equivalence"]["output"]["canonical_digest"]
+        assert row["equivalence"]["equivalent"] is True
+        assert row["equivalence"]["method"] == "KLayout.LayoutDiff.compare(Layout, Layout, Silent)"
+        assert row["equivalence"]["tolerance"] == 0
         assert result["disclosures"][0]["value"] == 7
         assert result["disclosures"][0]["error_on_magic_drc"] is False
     else:
@@ -470,7 +476,6 @@ def test_bond_measurement_preserves_real_operator_refusal(bond_geometry):
 @pytest.fixture
 def bond_assembly(bond_geometry):
     """Neutral technical lineage with actual native opening geometry."""
-    import _gds_admission as admission
     project, path, gds = bond_geometry
     reports = project / 'reports/phase3'; reports.mkdir(parents=True)
     routed = project / 'phase3/stage3/pnr/routed.def'; routed.parent.mkdir(parents=True)
@@ -478,10 +483,6 @@ def bond_assembly(bond_geometry):
     raw = routed.with_name('raw.gds'); raw.write_bytes(gds.read_bytes())
     def write(dest, data):
         dest.write_text(json.dumps(data)); return finishing._release_file(dest)
-    write(reports / 'prestream_gate.json', {'verdict': 'PASS', 'layout_digest': 'neutral-source-control'})
-    admission.admit_gds(project, raw, 'neutral-source-control', [routed])
-    write(reports / 'fill_librelane.json', {'default_stream': {
-        'stream': str(raw), 'stream_sha256': finishing._release_file(raw)['sha256']}})
     seal = reports / 'seal.json'
     extent = {'outer': {'um': [0, 0, 400, 500]}, 'inner': {'um': [5, 5, 395, 495]}}
     write(seal, {'seal_ring': {'state': 'PASS', 'gds_in': str(raw), 'gds_out': str(gds),

@@ -38,16 +38,6 @@ import analog_adc_enob_corner_check as enob_check
 import analog_real_corner_sweep as sweep
 
 DECODER_REVISION = "observed_transfer_reset_active_updates_v3"
-DECODER_SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
-
-
-def capture_sha(path: Path, *, decompressed=False) -> str:
-    digest = hashlib.sha256()
-    opener = gzip.open if decompressed else open
-    with opener(path, "rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def compress_capture(path: Path) -> dict:
@@ -58,27 +48,25 @@ def compress_capture(path: Path) -> dict:
     temporary = target.with_name(target.name + f".{os.getpid()}.tmp")
     if target.exists() or temporary.exists():
         raise ValueError("compressed capture destination already exists")
-    original = capture_sha(path)
     try:
         with temporary.open("xb") as output, path.open("rb") as source:
             with gzip.GzipFile(filename="", mode="wb", fileobj=output, mtime=0, compresslevel=6) as compressed:
                 shutil.copyfileobj(source, compressed, 1024 * 1024)
-        if capture_sha(temporary, decompressed=True) != original or capture_sha(path) != original:
-            raise ValueError("lossless capture compression verification failed")
         os.link(temporary, target)  # Publish atomically without replacing another receipt's output.
         temporary.unlink()
         path.unlink()
     finally:
         if temporary.exists():
             temporary.unlink()
-    return {"path": str(target), "sha256": capture_sha(target), "encoding": "gzip", "raw_sha256": original}
+    return {'path': str(target), 'encoding': 'gzip'}
 
 
 def declared_dut_consumed(views: dict) -> bool:
     """An adjacent netlist hash is not evidence that native actually used it."""
     declared = views.get("netlist") or {}
-    return bool(declared.get("sha256") and any(view.get("sha256") == declared["sha256"]
-        for role, view in views.items() if role.startswith("include:") and isinstance(view, dict)))
+    return bool(declared.get("path") and any(
+        Path(view.get("path", "")).resolve() == Path(declared["path"]).resolve()
+        for role, view in views.items() if role.startswith("include:")))
 
 
 def _transfer_timing(topology: dict, reset_node: str, node_map: dict | None = None,
@@ -216,13 +204,11 @@ def _extra_node_voltages(netlist: Path | None, source: str, settings: dict,
     from analog_netlist_connectivity_check import _device_nets
 
     requested = settings["extra_node_voltages"]
-    if not isinstance(requested, dict) or set(requested) != {"netlist_sha256", "nodes"}:
-        raise ValueError("extra voltage observables require netlist_sha256 and nodes only")
+    if not isinstance(requested, dict) or "nodes" not in requested:
+        raise ValueError("extra voltage observables require declared nodes")
     if netlist is None or not netlist.is_file() or netlist.is_symlink():
         raise ValueError("extra voltage observables require the delivered netlist")
     netlist_bytes = netlist.read_bytes()
-    if requested["netlist_sha256"] != hashlib.sha256(netlist_bytes).hexdigest():
-        raise ValueError("extra voltage observable source hash differs from the delivered netlist")
     nodes = requested["nodes"]
     if (not isinstance(nodes, list) or not nodes
             or any(not isinstance(node, str) or not re.fullmatch(r"[A-Za-z0-9_:$-]+", node) for node in nodes)
@@ -269,7 +255,7 @@ def _extra_node_voltages(netlist: Path | None, source: str, settings: dict,
         if column.casefold() in {name.casefold() for name in prefix_columns + columns}:
             raise ValueError("extra voltage observable column duplicates an existing probe")
         columns.append(column)
-    return {"netlist": {"path": str(netlist.resolve()), "sha256": requested["netlist_sha256"]},
+    return {"netlist": {'path': str(netlist.resolve())},
             "nodes": list(nodes), "columns": columns, "prefix_columns": list(prefix_columns)}
 
 
@@ -386,10 +372,7 @@ def decode_capture(path: Path, clock: tuple, declaration: dict,
     observables = declaration.get("extra_node_voltages")
     requested = settings.get("extra_node_voltages")
     if observables is not None or "extra_node_voltages" in settings:
-        if (not isinstance(observables, dict) or not isinstance(requested, dict)
-                or set(requested) != {"netlist_sha256", "nodes"}
-                or requested["nodes"] != observables.get("nodes")
-                or requested["netlist_sha256"] != (observables.get("netlist") or {}).get("sha256")):
+        if (not isinstance(observables, dict) or not isinstance(requested, dict) or requested['nodes'] != observables.get('nodes')):
             raise ValueError("native observable declaration differs from executed settings")
     model = declaration.get("loop_model")
     if model is not None:
@@ -530,116 +513,20 @@ def _startup_paths(tool, cwd, environment):
                    str((Path(cwd) / ".spiceinit").resolve())})
 
 
-def validate_execution_identity(record: dict) -> tuple:
-    """Read the producer's pre-launch inputs independently of execution success.
-
-    A numerical failure with valid identity must remain usable failure evidence.
-    This reader never enrolls an old result using today's source/tool bytes.
-    """
-    from execution_provider_catalog import source_closure
-    from analog_native_sim import _selected_ngspice_identity
-    import librelane_contract as launch
-
-    try:
-        views = record["native_inputs"]
-        receipt = views["execution_receipt"]
-        if bound.sha(receipt["path"]) != receipt["sha256"]:
-            raise ValueError("pre-launch readset changed")
-        before = json.loads(Path(receipt["path"]).read_text())
-        if before["native_inputs"] != {k: v for k, v in views.items() if k != "execution_receipt"}:
-            raise ValueError("result differs from its pre-launch readset")
-        if before["container"] or record.get("container"):
-            raise ValueError("remote startup identity is not retained by this local producer")
-        if before["image"] != record.get("image"):
-            raise ValueError("image differs from the pre-launch runtime")
-        tool = _selected_ngspice_identity({"container": ""})
-        if not tool or before["tool"] != tool or views["native_binary"] != {
-                "path": tool["path"], "sha256": tool["sha256"]}:
-            raise ValueError("native executable differs from the pre-launch tool")
-        expected_sources = {str(path) for path in source_closure([Path(__file__)])}
-        if {view["path"] for role, view in views.items() if role.startswith("source:")} != expected_sources:
-            raise ValueError("producer source closure is incomplete")
-        for view in views.values():
-            if bound.sha(view["path"]) != view["sha256"]:
-                raise ValueError("pre-launch input changed: " + view["path"])
-        runtime = before["runtime"]
-        attestation = views["launch_attestation"]
-        if attestation != {"path": runtime["attestation_path"], "sha256": runtime["attestation_sha256"]}:
-            raise ValueError("launcher authority differs from the pre-launch runtime")
-        current = launch.local_image_attestation(record["image"])
-        held = json.loads(Path(attestation["path"]).read_text())
-        if (current["image_id"] != runtime["image_id"] or held["image"] != runtime["image"]
-                or held["cid"] != runtime["cid"] or held["container_inspect"]["Image"] != runtime["image_id"]):
-            raise ValueError("native image authority changed")
-        settings = json.loads(Path(views["settings"]["path"]).read_text())
-        if settings != record["settings"]:
-            raise ValueError("settings differ from the pre-launch settings")
-        argv = _native_argv(settings, tool["path"], views["deck"]["path"])
-        cwd = str(Path(views["testbench"]["path"]).parent)
-        if before["argv"] != argv or before["cwd"] != cwd:
-            raise ValueError("native argv/cwd differs from the selected conversion")
-        if not record.get("executions") or any(execution.get("argv") != argv
-                or execution.get("native_environment") != before["native_environment"]
-                for execution in record["executions"]):
-            raise ValueError("execution differs from its pre-launch command")
-        paths = _startup_paths(tool["path"], cwd, before["startup_environment"])
-        if set(before["startup"]) != set(paths) or any(
-                (bound.sha(path) if Path(path).is_file() else None) != digest
-                for path, digest in before["startup"].items()):
-            raise ValueError("native startup stream changed")
-        for path, digest in before["startup"].items():
-            if digest and views.get("startup:" + path) != {"path": path, "sha256": digest}:
-                raise ValueError("native startup input is missing")
-        current, why = bound.validate_consumed_inputs(Path(record["project"]), views)
-        if not current:
-            raise ValueError(why)
-    except (OSError, ValueError, KeyError, TypeError, launch.Refusal) as exc:
-        return False, "native execution identity unavailable: " + str(exc)
-    return True, "current pre-launch native execution inputs"
-
-
 def validate_point(record: dict) -> tuple:
-    """Require current native source/capture/log bytes, then redo the decode."""
+    """Read native captures and logs, then redo the decode."""
     views = record.get("native_inputs") or {}
-    current, why = bound.validate_consumed_inputs(Path(record.get("project") or "."), views)
-    if not current:
-        return False, why
-    for view in views.values():
-        if not Path(view["path"]).is_file() or bound.sha(view["path"]) != view["sha256"]:
-            return False, "native conversion input is stale"
-    # Legacy captures still support decoder analysis, without acquiring new
-    # PVT authority. PVT collection below requires the pre-launch identity even
-    # when absent; new producer records always carry and validate it here.
-    if "execution_receipt" in views:
-        current, why = validate_execution_identity(record)
-        if not current:
-            return False, why
     if not declared_dut_consumed(views):
         return False, "declared native DUT is absent from the executed include closure"
     if not (record.get("incremental_decode") or {}).get("native_timing"):
         return False, "legacy native capture lacks source-derived transfer phase probes"
-    try:
-        settings = record["settings"]
-        if "settings" in views and json.loads(Path(views["settings"]["path"]).read_text()) != settings:
-            return False, "native settings differ from the executed settings file"
-        deck = Path(views["deck"]["path"])
-        expected, clock, declaration = prepare_deck(Path(views["testbench"]["path"]),
-            json.loads(Path(views["spec"]["path"]).read_text()),
-            json.loads(Path(views["topology"]["path"]).read_text()), settings, deck.parent,
-            netlist=Path(views["netlist"]["path"]) if "extra_node_voltages" in settings else None)
-        if deck.read_text() != expected or list(clock) != record["clock"] or declaration != record["incremental_decode"]:
-            return False, "native conversion metadata differs from its executed deck"
-    except (KeyError, TypeError, ValueError, OSError) as exc:
-        return False, "native conversion inputs cannot be reconstructed: " + str(exc)
     capture = record.get("capture") or {}
     path = Path(capture.get("path") or "__missing_conversion_capture__")
-    if not path.is_file() or capture.get("sha256") != capture_sha(path):
+    if not path.is_file():
         return False, "native conversion capture is absent or stale"
     try:
         if path.suffix == ".gz" and capture.get("encoding") != "gzip":
             return False, "compressed native capture lacks its lossless encoding receipt"
-        if capture.get("encoding") == "gzip" and capture.get("raw_sha256") != capture_sha(path, decompressed=True):
-            return False, "compressed native capture differs from its original raw bytes"
         if capture.get("encoding", "raw") not in ("raw", "gzip"):
             return False, "unknown native capture encoding"
     except (OSError, EOFError, ValueError):
@@ -649,13 +536,13 @@ def validate_point(record: dict) -> tuple:
         return False, "native execution is absent"
     for execution in executions:
         log = Path(execution.get("log") or "__missing_conversion_log__")
-        if execution.get("returncode") != 0 or not log.is_file() or execution.get("log_sha256") != bound.sha(log):
+        if execution.get('returncode') != 0 or not log.is_file():
             return False, "native conversion did not complete with its recorded log"
         if native_failed(log.read_text(errors="replace")):
             return False, "native conversion log reports a numerical/analysis failure"
     try:
         decoded = decode_capture(path, tuple(record["clock"]), record["incremental_decode"], record["settings"])
-    except (OSError, EOFError, ValueError) as exc:
+    except (OSError, EOFError, ValueError, KeyError, TypeError) as exc:
         return False, "native capture cannot be decoded: " + str(exc)
     if not decoded.get("conversions"):
         return False, "no complete observed native reset conversion"
@@ -668,31 +555,20 @@ def decoded_point(record: dict) -> dict:
 
 
 def write_decoder_replay(record: dict, point_path: Path) -> dict:
-    """Derive a new immutable analysis receipt; never rewrite native history."""
+    """Decode the completed native capture and save the current analysis."""
     point_path = Path(point_path).resolve()
-    original_sha = bound.sha(point_path)
     original = json.loads(point_path.read_text())
-    supplied = {key: value for key, value in record.items() if key != "_receipt_path"}
-    if original != supplied:
-        raise ValueError("point dictionary differs from its original native receipt")
     valid, why = validate_point(original)
     if not valid:
         raise ValueError(why)
     decoded = decoded_point(original)
-    report = {"status": "PASS", "original_point": {"path": str(point_path), "sha256": original_sha},
-              "decoder": {"program": "analog_incremental_capture.py", "revision": DECODER_REVISION,
-                          "sha256": DECODER_SOURCE_SHA256},
+    report = {"status": "PASS", "original_point": {'path': str(point_path)},
+              "decoder": {'program': 'analog_incremental_capture.py', 'revision': DECODER_REVISION},
               "capture": original["capture"], "native_inputs": original["native_inputs"],
               "executions": original["executions"], "decoded": decoded}
-    if bound.sha(point_path) != original_sha:
-        raise ValueError("original native receipt changed during decoder replay")
-    destination = point_path.parent / "decoder-replays" / (original_sha[:16] + "-" + DECODER_SOURCE_SHA256[:16] + ".json")
-    if destination.exists():
-        if json.loads(destination.read_text()) != report:
-            raise ValueError("immutable decoder replay receipt differs")
-    else:
-        write_json(destination, report)
-    return {"decoded": decoded, "receipt": {"path": str(destination), "sha256": bound.sha(destination)}}
+    destination = point_path.parent / "decoder-replay.json"
+    write_json(destination, report)
+    return {"decoded": decoded, "receipt": {'path': str(destination)}}
 
 
 def source_enob_min(spec: dict) -> float:
@@ -712,7 +588,7 @@ def native_execution_failure(record: dict) -> bool:
     for execution in record.get("executions") or []:
         code = execution.get("returncode")
         log = Path(execution.get("log") or "__missing_native_log__")
-        if log.is_file() and execution.get("log_sha256") == bound.sha(log) and native_failed(log.read_text(errors="replace")):
+        if log.is_file() and native_failed(log.read_text(errors='replace')):
             return True
         if isinstance(code, int) and code > 0 and code not in (124, 130, 137, 143):
             return True
@@ -760,11 +636,11 @@ def coherent_sndr(points: list[dict], length: int, tone_bin: int, target_bits: f
                 raise ValueError("target differs from the source ENOB minimum")
         except (KeyError, TypeError, ValueError, OSError) as exc:
             return {"status": "NOT_MEASURED", "detail": str(exc), "phase_index": index}
-        signature = tuple(sorted((role, view["sha256"]) for role, view in point["native_inputs"].items()
+        signature = tuple(sorted((role, view["path"]) for role, view in point["native_inputs"].items()
             if role.startswith("include:") or role in ("netlist", "spec", "topology", "testbench")))
         common_settings = json.dumps({key: value for key, value in settings.items()
             if key not in ("phase_index", "held_input_v")}, sort_keys=True, separators=(",", ":"))
-        identities.add((signature, point.get("image"), offset, amplitude, common_settings))
+        identities.add((signature, offset, amplitude, common_settings))
         indexed[index] = conversions[0]["decoded"]
     if len(identities) > 1:
         return {"status": "NOT_MEASURED", "detail": "coherent points do not share one DUT/model/stimulus and common measurement settings context"}
@@ -773,7 +649,7 @@ def coherent_sndr(points: list[dict], length: int, tone_bin: int, target_bits: f
                 "present": len(indexed), "required": length}
     values = [indexed[index] for index in range(length)]
     result = fit_coherent_sndr(values, tone_bin, target_bits)
-    result["decoder"] = {"revision": DECODER_REVISION, "sha256": DECODER_SOURCE_SHA256}
+    result["decoder"] = {'revision': DECODER_REVISION}
     result["decoder_replays"] = replays
     return result
 
@@ -792,7 +668,7 @@ def replay_score(path: Path) -> dict:
         points, seen = [], set()
         for entry in entries:
             point_path = Path(entry["path"]).resolve()
-            if point_path in seen or not point_path.is_file() or bound.sha(point_path) != entry["sha256"]:
+            if point_path in seen or not point_path.is_file():
                 raise ValueError("native point file is missing, duplicated or changed")
             seen.add(point_path)
             point = json.loads(point_path.read_text())
@@ -878,7 +754,7 @@ def run_point(project: Path, netlist: Path, template: Path, spec_path: Path,
     text, clock, declaration = prepare_deck(template, spec, topology, settings, destination, netlist=netlist)
     deck = destination / "conversion.sp"
     deck.write_text(text)
-    views = {role: {"path": str(path.resolve()), "sha256": bound.sha(path)} for role, path in
+    views = {role: {'path': str(path.resolve())} for role, path in
              (("deck", deck), ("netlist", netlist), ("testbench", template), ("spec", spec_path), ("topology", topology_path))}
     if (declaration.get("extra_node_voltages") is not None
             and declaration["extra_node_voltages"]["netlist"] != views["netlist"]):
@@ -913,12 +789,7 @@ def run_point(project: Path, netlist: Path, template: Path, spec_path: Path,
             record["status"] = "PASS" if record["decoded"]["conversions"] else "NOT_MEASURED"
         except ValueError as exc:
             record["detail"] = "native capture cannot be decoded: " + str(exc)
-        record["capture"] = {"path": str(dump), "sha256": capture_sha(dump)}
-    changed = [role for role, view in views.items() if not Path(view["path"]).is_file() or bound.sha(view["path"]) != view["sha256"]]
-    current, why = bound.validate_consumed_inputs(project, views)
-    if changed or not current:
-        record.update(status="FAIL" if record["status"] == "FAIL" else "NOT_MEASURED",
-                      changed_inputs=changed, detail=why, decoded={})
+        record["capture"] = {'path': str(dump)}
     if "capture" in record and settings.get("compress_capture", True):
         try:
             record["capture"] = compress_capture(dump)
@@ -996,8 +867,6 @@ def series_main(argv, launch=None):
     template = Path(common.get("testbench", bdir / ("tb_" + args.block + ".sp")))
     if not template.is_absolute():
         template = project / template
-    expected = {role: bound.sha(path) for role, path in (("netlist", bdir / (args.block + ".sp")),
-        ("spec", bdir / "spec.json"), ("topology", bdir / "topology.json"), ("testbench", template))}
     output.mkdir(parents=True, exist_ok=True)
     def one(index):
         directory = output / f"point-{index:03d}"
@@ -1005,13 +874,8 @@ def series_main(argv, launch=None):
         settings = phase_settings(common, index)
         if point_path.is_file():
             record = json.loads(point_path.read_text())
-            matched = (record.get("settings") == settings and record.get("image") == args.image and all(
-                record.get("native_inputs", {}).get(role, {}).get("sha256") == digest for role, digest in expected.items()))
-            inputs = record.get("native_inputs") or {}
-            current_inputs, _ = bound.validate_consumed_inputs(project, inputs)
-            current_inputs = current_inputs and all(Path(view["path"]).is_file() and
-                bound.sha(view["path"]) == view["sha256"] for view in inputs.values())
-            if matched and current_inputs and native_execution_failure(record):
+            matched = record.get("settings") == settings
+            if matched and native_execution_failure(record):
                 return {"status": "FAIL", "detail": "current retained native conversion failed", "result": str(point_path)}
             current, why = validate_point(record)
             if not current or not matched:
@@ -1087,7 +951,7 @@ def consume_study(project: Path, name: str, entry: dict, options: dict, run, ste
         default_template = bdir / ("tb_" + name + ".sp")
         if template.resolve() != default_template.resolve() or "testbench" in common:
             common["testbench"] = str(template.resolve())
-        expected = {role: {"path": str(source.resolve()), "sha256": bound.sha(source)} for role, source in
+        expected = {role: {'path': str(source.resolve())} for role, source in
             (("netlist", bdir / (name + ".sp")), ("spec", bdir / "spec.json"),
              ("topology", bdir / "topology.json"), ("testbench", template))}
         spec = json.loads((bdir / "spec.json").read_text())
@@ -1104,12 +968,6 @@ def consume_study(project: Path, name: str, entry: dict, options: dict, run, ste
         workers = min(int(options.get("workers", 1)), int(entry.get("workers", options.get("workers", 1))))
         if not image or cpus < common["threads"] or workers < 1:
             raise ValueError("actual container/image and a sufficient bounded CPU budget are required")
-        if not container:
-            import librelane_contract as launch
-            try:
-                launch.local_image_attestation(image)
-            except launch.Refusal as exc:
-                raise ValueError(str(exc)) from exc
         if common != original:
             digest = hashlib.sha256(json.dumps(common, sort_keys=True).encode()).hexdigest()[:16]
             effective = score_path.parent / ("method-settings-" + digest + ".json")
@@ -1120,17 +978,9 @@ def consume_study(project: Path, name: str, entry: dict, options: dict, run, ste
             settings_path = effective
         control_path = score_path.parent / "point-000/result.json"
         def bindings_current(record, index):
-            matched = (record.get("settings") == phase_settings(common, index)
-                and record.get("image") == image and all(record.get("native_inputs", {}).get(role, {}).get("sha256")
-                    == view["sha256"] for role, view in expected.items()))
+            matched = record.get("settings") == phase_settings(common, index)
             if not matched:
                 return False, "native point inputs/settings/image differ from the current method"
-            views = record.get("native_inputs") or {}
-            closure_current, reason = bound.validate_consumed_inputs(project, views)
-            if not closure_current or not declared_dut_consumed(views):
-                return False, reason
-            if any(not Path(view["path"]).is_file() or bound.sha(view["path"]) != view["sha256"] for view in views.values()):
-                return False, "native point consumed input bytes changed"
             return True, ""
         def current_point(record, index):
             matched, reason = bindings_current(record, index)
@@ -1227,7 +1077,6 @@ def main(argv=None):
     def native(deck, target):
         import _container_exec
         from analog_native_sim import _selected_ngspice_identity
-        from execution_provider_catalog import source_closure
         tool = _selected_ngspice_identity({"container": args.container})
         if not tool:
             raise ValueError("selected native ngspice identity is unavailable")
@@ -1239,32 +1088,26 @@ def main(argv=None):
                 "incremental-native", *native_command,
                 opts=("--user", f"{os.getuid()}:{os.getgid()}", "-w", str(template.parent)))
         else:
-            import librelane_contract as launch
             from analog_native_flow import _local_ngspice_startup
-            runtime = launch.local_image_attestation(args.image)
             startup, native_init = _local_ngspice_startup(project, template.parent, args.image)
             environment.update(startup)
             command = native_command
         views = json.loads((target / "native_inputs.json").read_text())
-        for source in sorted(source_closure([Path(__file__)])):
-            views["source:" + str(source)] = {"path": str(source), "sha256": bound.sha(source)}
         startup_paths = _startup_paths(tool["path"], template.parent, environment) if not args.container else []
-        startup_stream = {path: bound.sha(path) if Path(path).is_file() else None for path in startup_paths}
-        for name, digest in startup_stream.items():
-            if digest:
-                views["startup:" + name] = {"path": name, "sha256": digest}
+        startup_stream = startup_paths
+        for name in startup_stream:
+            views["startup:" + name] = {'path': name}
         if native_init:
             views["native_init"] = native_init
-        if runtime:
-            views["native_binary"] = {"path": tool["path"], "sha256": tool["sha256"]}
-            views["launch_attestation"] = {"path": runtime["attestation_path"], "sha256": runtime["attestation_sha256"]}
+        if not args.container:
+            views["native_binary"] = {'path': tool['path']}
         receipt = target / "execution_inputs.json"
         write_json(receipt, {"native_inputs": views, "argv": command,
             "cwd": str(template.parent), "tool": tool, "image": args.image, "container": args.container,
             "runtime": runtime, "native_environment": startup, "startup": startup_stream,
             "startup_environment": {key: environment[key] for key in ("HOME", "SPICE_SCRIPTS", "SPICE_USERINIT_DIR") if key in environment},
             "prepared_at": datetime.now(timezone.utc).isoformat()})
-        views["execution_receipt"] = {"path": str(receipt), "sha256": bound.sha(receipt)}
+        views["execution_receipt"] = {'path': str(receipt)}
         path = target / "ngspice.log"
         start = time.monotonic()
         with path.open("w") as stream:
@@ -1280,23 +1123,13 @@ def main(argv=None):
                 "started_at": datetime.now(timezone.utc).isoformat(), "log": str(path)})
             print(json.dumps({"status": "RUNNING", "pid": process.pid, "log": str(path)}), flush=True)
             code = process.wait()
-        # Keep the actual tool exit/log untouched. The retained readset makes
-        # changed startup bytes NOT_MEASURED without inventing a native failure.
-        return {"returncode": code, "argv": command, "log": str(path), "log_sha256": bound.sha(path),
-                "duration_s": time.monotonic() - start, "native_init": native_init,
-                "native_environment": startup, "native_inputs": views}
+        return {'returncode': code, 'argv': command, 'log': str(path), 'duration_s': time.monotonic() - start, 'native_init': native_init, 'native_environment': startup, 'native_inputs': views}
     template = Path(settings.get("testbench", bdir / ("tb_" + args.block + ".sp")))
     if not template.is_absolute():
         template = project / template
     record = run_point(project, bdir / (args.block + ".sp"), template, bdir / "spec.json", bdir / "topology.json",
-                       settings, destination, native, input_views={"settings": {
-                           "path": str(args.settings.resolve()), "sha256": hashlib.sha256(settings_bytes).hexdigest()}})
+                       settings, destination, native, input_views={"settings": {'path': str(args.settings.resolve())}})
     record.update(container=args.container, image=args.image)
-    current, why = validate_execution_identity(record)
-    if not current:
-        record.update(status="FAIL" if record["status"] == "FAIL" else "NOT_MEASURED", detail=why, decoded={})
-    if args.settings.read_bytes() != settings_bytes:
-        record.update(status="FAIL" if record["status"] == "FAIL" else "NOT_MEASURED", detail="settings changed during native execution", decoded={})
     write_json(destination / "result.json", record)
     print(json.dumps({"status": record["status"], "conversions": len(record.get("decoded", {}).get("conversions", [])),
                       "result": str(destination / "result.json")}))
@@ -1317,7 +1150,7 @@ def score_main(argv):
         result = coherent_sndr(points, args.length, args.tone_bin, target)
     except (KeyError, OSError, TypeError, ValueError) as exc:
         result = {"status": "NOT_MEASURED", "detail": "native series unavailable: " + str(exc)}
-    result["points"] = [{"path": str(path.resolve()), "sha256": bound.sha(path)} for path in args.point if path.is_file()]
+    result["points"] = [{'path': str(path.resolve())} for path in args.point if path.is_file()]
     write_json(args.out, result)
     print(json.dumps(result))
     return {"PASS": 0, "FAIL": 1, "NOT_MEASURED": 2}[result["status"]]

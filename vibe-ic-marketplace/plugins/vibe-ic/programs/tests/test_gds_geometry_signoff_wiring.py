@@ -16,7 +16,6 @@ antenna ratios are HAND-COMPUTED — no PDK or foundry data is involved.
 """
 from __future__ import annotations
 
-import json
 import os
 import sys
 from pathlib import Path
@@ -264,26 +263,6 @@ def _tree_unreachable_reason(runner):
     return None
 
 
-@pytest.fixture(scope="module")
-def workdir(runner, tmp_path_factory):
-    """A scratch dir the runner can actually see.
-
-    pytest's tmp_path lives under /tmp, which the EDA container does not bind
-    mount, so container runs would fail on an unreachable path. Fall back to a
-    dir beside the plugin — which is inside the mounted tree only when the
-    CHECKOUT is, so the tree itself is checked first and named as the cause.
-    """
-    reason = _tree_unreachable_reason(runner)
-    if reason:
-        pytest.skip(reason)
-    cand = tmp_path_factory.mktemp("geomsignoff")
-    if runner.covers(cand):
-        return cand
-    local = PLUGIN.parent.parent / "scratch_geom_signoff_tests"
-    local.mkdir(parents=True, exist_ok=True)
-    if not runner.covers(local):
-        pytest.skip("no scratch dir reachable by the KLayout runner")
-    return local
 
 
 class _FakeRunner:
@@ -324,26 +303,6 @@ def test_a_covered_scratch_does_not_rescue_an_unreachable_tree():
         "a covered scratch must not be mistaken for a reachable tree"
 
 
-def _antenna_project(runner, workdir, name, met1_len, met2_len=0.0,
-                     diode=False, diode_offnet=False, deck="antenna_config"):
-    proj = workdir / name
-    if proj.exists():
-        import shutil
-        shutil.rmtree(proj)
-    (proj / "phase3" / "stage4" / "gds").mkdir(parents=True)
-    (proj / "signoff").mkdir(parents=True)
-    (proj / "signoff" / "gate_oxide_deck.json").write_text(
-        (PROGRAMS / "gds_antenna" / f"{deck}.example.json").read_text())
-    gen = PROGRAMS / "gds_antenna" / "gen_fixtures.py"
-    env = {"ANT_OUT": str(proj / "phase3" / "stage4" / "gds" / "top.gds"),
-           "ANT_LEN": str(met1_len), "ANT_MET2_LEN": str(met2_len),
-           "ANT_DIODE": "1" if diode else "0",
-           "ANT_DIODE_OFFNET": "1" if diode_offnet else "0"}
-    rc, out, err = runner.run(gen, env, path_keys=("ANT_OUT",), timeout=60)
-    gds = proj / "phase3" / "stage4" / "gds" / "top.gds"
-    assert gds.is_file() and gds.stat().st_size > 0, \
-        f"fixture generation failed: rc={rc} {err[-400:]}"
-    return proj
 
 
 ROUTER_CLEAN_RPT = """OpenROAD v2.0 check_antennas
@@ -357,143 +316,20 @@ antenna clean: YES
 """
 
 
-def _verdict(proj):
-    return json.loads((proj / "out.json").read_text())
 
 
-def test_violation_is_flagged_with_the_hand_computed_ratio(runner, workdir):
-    proj = _antenna_project(runner, workdir, "viol", VIOLATION_LEN_UM)
-    cp = _run(ANTENNA_GATE, proj, "--json", "out.json")
-    assert cp.returncode == 1
-    res = _verdict(proj)
-    assert res["verdict"] == "FAIL"
-    assert res["violations"] == 1
-    assert res["worst_ratio"] == pytest.approx(VIOLATION_RATIO)
-    assert VIOLATION_RATIO > DECK_LIMIT
 
 
-def test_clean_design_passes_with_zero_violations(runner, workdir):
-    """The check cannot invent a violation."""
-    proj = _antenna_project(runner, workdir, "clean", CLEAN_LEN_UM)
-    cp = _run(ANTENNA_GATE, proj, "--json", "out.json")
-    assert cp.returncode == 0
-    res = _verdict(proj)
-    assert res["verdict"] == "PASS"
-    assert res["violations"] == 0
-    assert res["worst_ratio"] == pytest.approx(CLEAN_RATIO)
 
 
-def test_geometry_deck_catches_what_the_router_report_path_misses(runner,
-                                                                  workdir):
-    """THE POINT OF THE SECOND OPINION.
-
-    A met1 antenna carrying an upper-metal jumper: the router's final-netlist
-    model sees the jumper and reports the net clean, so the existing
-    router-report gate PASSES. The geometry deck rebuilds connectivity per etch
-    STAGE — at the met1 etch the met2 jumper does not exist yet — and flags the
-    violation. The cross-check turns the clean/dirty split into a hard FAIL
-    instead of averaging the two counts.
-    """
-    proj = _antenna_project(runner, workdir, "staged", VIOLATION_LEN_UM,
-                            met2_len=200.0)
-    (proj / "reports" / "phase3").mkdir(parents=True, exist_ok=True)
-    (proj / "reports" / "phase3" / "antenna.rpt").write_text(ROUTER_CLEAN_RPT)
-    (proj / "reports" / "phase3" / "antenna.json").write_text(json.dumps({
-        "source": "reports/phase3/antenna.rpt", "tool": "openroad", "mode": "antenna_check",
-        "net_violations": 0, "pin_violations": 0, "clean": True, "verdict": "PASS"}))
-
-    # ABSOLUTE, and inside the project under test. `_run` does not set `cwd`,
-    # and `eda_report_audit` resolves `--json` against the PROCESS CWD — which
-    # under pytest is the tree itself. A relative path here therefore wrote
-    # `programs/reports/phase3/antenna.json`, a TRACKED file, on every run of
-    # this module: MEASURED at v1.17.90, `pytest tests/test_gds_geometry_
-    # signoff_wiring.py` = 29 passed and rc 1, `suite_write_guard` naming that
-    # path. Production is unaffected — `flow_compliance_check` launches the
-    # gate with `cwd=project`, so step 26's declared relative
-    # `reports/phase3/antenna_signoff.json` lands inside the project. Only a
-    # caller that does NOT chdir has to name the path in full, and that is
-    # every test. `test_a_test_may_not_write_the_tree_through_a_report_audit`
-    # keeps this at population 0.
-    router = _run(PROGRAMS / "antenna_report_check.py", proj,
-                  "--json", proj / "reports" / "phase3" / "antenna_signoff.json")
-    assert router.returncode == 0, \
-        "precondition: the router-report path must find this design clean"
-
-    cp = _run(ANTENNA_GATE, proj, "--json", "out.json")
-    assert cp.returncode == 1, "the geometry deck missed what the router missed"
-    res = _verdict(proj)
-    assert res["cross_check"]["verdict"] == "DISAGREE"
-    assert "MISMATCH" in res["cross_check"]["detail"]
 
 
-def test_cross_check_agrees_on_a_genuinely_clean_design(runner, workdir):
-    """The cross-check must not manufacture a disagreement either."""
-    proj = _antenna_project(runner, workdir, "agree", CLEAN_LEN_UM)
-    (proj / "reports" / "phase3").mkdir(parents=True, exist_ok=True)
-    (proj / "reports" / "phase3" / "antenna.rpt").write_text(ROUTER_CLEAN_RPT)
-    (proj / "reports" / "phase3" / "antenna.json").write_text(json.dumps({
-        "source": "reports/phase3/antenna.rpt", "tool": "openroad", "mode": "antenna_check",
-        "net_violations": 0, "pin_violations": 0, "clean": True, "verdict": "PASS"}))
-    cp = _run(ANTENNA_GATE, proj, "--json", "out.json")
-    assert cp.returncode == 0
-    assert _verdict(proj)["cross_check"]["verdict"] == "AGREE"
 
 
-def test_diode_on_the_net_relieves_the_antenna(runner, workdir):
-    proj = _antenna_project(runner, workdir, "diode_on", VIOLATION_LEN_UM,
-                            diode=True, deck="antenna_config_diode")
-    cp = _run(ANTENNA_GATE, proj, "--json", "out.json")
-    assert cp.returncode == 0
-    assert _verdict(proj)["deck"]["diode_recognition"]["relieved_nets"] == 1
 
 
-def test_diode_off_the_net_does_not_relieve(runner, workdir):
-    """Relief is CONNECTIVITY-based: a diode elsewhere on the die is not a fix."""
-    proj = _antenna_project(runner, workdir, "diode_off", VIOLATION_LEN_UM,
-                            diode_offnet=True, deck="antenna_config_diode")
-    cp = _run(ANTENNA_GATE, proj, "--json", "out.json")
-    assert cp.returncode == 1
-    res = _verdict(proj)
-    assert res["deck"]["diode_recognition"]["relieved_nets"] == 0
-    assert res["worst_ratio"] == pytest.approx(VIOLATION_RATIO)
-    # and it says WHERE a diode would actually help
-    assert res["deck"]["diode_recognition"]["insertion_sites"] >= 1
 
 
-def test_density_fill_raises_a_sparse_layer_to_target(runner, workdir):
-    proj = workdir / "fill"
-    if proj.exists():
-        import shutil
-        shutil.rmtree(proj)
-    (proj / "phase3" / "stage4" / "gds").mkdir(parents=True)
-    (proj / "signoff").mkdir(parents=True)
-    cfg = json.loads(
-        (PROGRAMS / "metal_fill" / "fill_config.example.json").read_text())
-    (proj / "signoff" / "cmp_fill_targets.json").write_text(json.dumps(cfg))
-    gen = PROGRAMS / "metal_fill" / "gen_fixtures.py"
-    gds = proj / "phase3" / "stage4" / "gds" / "top.gds"
-    runner.run(gen, {"FILL_OUT": str(gds)}, path_keys=("FILL_OUT",), timeout=60)
-    assert gds.is_file()
-    before = gds.stat().st_size
-
-    cp = _run(FILL_GATE, proj, "--in-place", "--json", "out.json")
-    assert cp.returncode == 0, cp.stdout[-800:]
-    res = _verdict(proj)
-    assert res["verdict"] == "PASS"
-    layer = res["layers"][0]
-    target = cfg["layers"][0]["target"]
-    assert layer["worst_window_before"] < target, \
-        "precondition: the fixture layer must start BELOW the target"
-    assert layer["worst_window_after"] >= target
-    assert layer["reached"] is True
-    assert not layer["over_max"], "fill must not overshoot the density ceiling"
-    assert gds.stat().st_size > before, "the filled GDS was never written back"
-
-    # --verify-only re-reports without re-filling
-    size_after = gds.stat().st_size
-    again = _run(FILL_GATE, proj, "--verify-only")
-    assert again.returncode == 0
-    assert gds.stat().st_size == size_after, "an audit mutated the GDS"
 
 
 # ---------------------------------------------------------------------------

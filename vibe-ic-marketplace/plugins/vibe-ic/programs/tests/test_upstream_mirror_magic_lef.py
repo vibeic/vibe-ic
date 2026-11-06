@@ -22,7 +22,7 @@ from pathlib import Path
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
-from not_verified_tier import skip_not_verified  # noqa: E402
+from _tool_probes import skip_not_verified  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location(
     "_dhm_gen_pin", PROGRAMS / "digital_hardmacro_gen.py")

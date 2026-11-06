@@ -33,8 +33,6 @@ import readme_usage_sequence_extractor as RUSE          # noqa: E402
 import l12_sequences_in_consumed_layer_check as L12C    # noqa: E402
 import l12_sequence_implementation_check as L12I        # noqa: E402
 import testbench_gen as TBG                              # noqa: E402
-import design_one_shot_runner as DOSR                    # noqa: E402
-import _container_route as _route                        # noqa: E402
 
 
 README = (
@@ -179,74 +177,10 @@ def test_scaffold_still_carrying_the_marker_is_refreshed(tmp_path):
 # ---------------------------------------------------------------------------
 # 3. professional TB runs where the toolchain actually is
 # ---------------------------------------------------------------------------
-def test_exec_site_prefers_container_then_host(monkeypatch):
-    # THE SUBJECT IS THE ORDER (container first, then host) — which only
-    # exists when there IS a container route. `_professional_tb_exec_site`
-    # asks `_local_exec_mode()`, i.e. the MACHINE, so unpinned this test
-    # reported the host's docker client as a property of the tree: green
-    # where one is installed, red inside the image where none is.
-    _route.pin_container_route(monkeypatch)
-    monkeypatch.setattr(DOSR, "_tool_in_container", lambda c, t: True)
-    monkeypatch.setattr(DOSR, "_local_cocotb_toolchain_present", lambda: True)
-    assert DOSR._professional_tb_exec_site("eda") == "container"
-    monkeypatch.setattr(DOSR, "_tool_in_container", lambda c, t: False)
-    assert DOSR._professional_tb_exec_site("eda") == "host"
-    monkeypatch.setattr(DOSR, "_local_cocotb_toolchain_present", lambda: False)
-    assert DOSR._professional_tb_exec_site("eda") is None
-    # an empty container name never probes docker
-    monkeypatch.setattr(DOSR, "_tool_in_container",
-                        lambda c, t: (_ for _ in ()).throw(AssertionError("probed")))
-    assert DOSR._professional_tb_exec_site("") is None
 
 
-def test_step_runs_locally_when_container_is_unreachable(tmp_path, monkeypatch):
-    out = tmp_path / "phase2" / "stage1" / "sim_professional" / "dut"
-    out.mkdir(parents=True)
-    generated = {"status": "PASS", "dut_kind": "expert_reference",
-                 "out_dir": str(out), "reference_model_tier": "expert_filled",
-                 "files": []}
-    fake_ptb = type("ptb", (), {"generate": staticmethod(lambda p: generated)})
-    monkeypatch.setitem(sys.modules, "professional_tb_gen", fake_ptb)
-    monkeypatch.setattr(DOSR, "_tool_in_container", lambda c, t: False)
-    monkeypatch.setattr(DOSR, "_local_cocotb_toolchain_present", lambda: True)
-    calls: list = []
-
-    def fake_docker_exec(*a, **k):  # pragma: no cover — must not be reached
-        raise AssertionError("docker exec must not be attempted")
-
-    def fake_run(cmd, cwd=None, timeout=600, env=None):
-        calls.append((cmd, cwd))
-        (out / "results.xml").write_text(
-            "<testsuite tests='3' failures='0' errors='0' skipped='0'>"
-            "<testcase name='a'/><testcase name='b'/><testcase name='c'/>"
-            "</testsuite>")
-        return 0, "PROFESSIONAL_TB PASS\n", ""
-
-    monkeypatch.setattr(DOSR, "_docker_exec", fake_docker_exec)
-    monkeypatch.setattr(DOSR, "_run", fake_run)
-    res = DOSR.step_professional_tb_gen(tmp_path, "dut", "unreachable-eda")
-    assert res.status == "PASS", res.detail
-    assert calls and calls[0][1] == out
-    rec = json.loads((tmp_path / "reports" / "phase2" / "gates"
-                      / "professional_tb.json").read_text())
-    assert rec["status"] == "PASS" and rec["ran_cocotb"] is True
-    assert rec["cocotb_exec_site"] == "host"
-    assert (out / "cocotb_run.log").read_text().startswith("PROFESSIONAL_TB PASS")
 
 
-def test_step_still_reports_unreachable_when_no_toolchain_anywhere(tmp_path, monkeypatch):
-    out = tmp_path / "phase2" / "stage1" / "sim_professional" / "dut"
-    out.mkdir(parents=True)
-    generated = {"status": "PASS", "dut_kind": "expert_reference",
-                 "out_dir": str(out), "reference_model_tier": "expert_filled",
-                 "files": []}
-    fake_ptb = type("ptb", (), {"generate": staticmethod(lambda p: generated)})
-    monkeypatch.setitem(sys.modules, "professional_tb_gen", fake_ptb)
-    monkeypatch.setattr(DOSR, "_tool_in_container", lambda c, t: False)
-    monkeypatch.setattr(DOSR, "_local_cocotb_toolchain_present", lambda: False)
-    res = DOSR.step_professional_tb_gen(tmp_path, "dut", "eda")
-    assert res.status == "NOT_MEASURED"
-    assert "nor on the local PATH" in res.detail
 
 
 # ---------------------------------------------------------------------------

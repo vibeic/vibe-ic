@@ -118,10 +118,10 @@ Reasons fixes failed:
 
 ## 4. Known limitations
 
-1. **Cannot handle SystemVerilog interface/modport**: Yosys has limited SV interface support; synth_doctor cannot auto-fix
+1. **Cannot handle SystemVerilog interface/modport**: Yosys has limited SV interface support; this skill cannot infer a correct interface fix without native tool and design evidence
 2. **Slow log parsing on large designs (>50K cells)**: P&R logs can be hundreds of MB; parse time is significant
 3. **P&R doctor's DRT_POWER_NET pattern is not auto-fixable**: requires manual floorplan adjustment
-4. **Does not detect timing violations**: timing issues are handled by STA, out of synth_doctor scope
+4. **Does not detect timing violations**: timing issues are handled by STA, reviewed through native STA and the timing skills
 5. **MULTI_DRIVER merge order**: currently "first encountered always wins", which may not be the optimal priority
 
 ---
@@ -242,8 +242,7 @@ initial $readmemh("rom.hex", rom);
 
 ### Automation
 
-- **Post-synth**: run `programs/quartus_map_audit.py <design>.map.rpt`.
-  Any hit → FAIL the synth-doctor gate even when Quartus itself returned success.
+- Read the native Quartus map report for stuck-at constants, ignored initializations and other synthesis warnings. Check their effect against the actual RTL and requested reset/initialization behavior before accepting the compile.
 - **Pre-synth lint**: run `programs/rom_init_lint.py <rtl-files>`.
   Any hit → block the build before wasting compile time.
 

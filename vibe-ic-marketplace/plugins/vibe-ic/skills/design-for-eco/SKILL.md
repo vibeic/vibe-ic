@@ -103,17 +103,7 @@ CTS, Step 19); all later numeric steps shift +1 relative to the old 55-step flow
 
 ## The HARD preservation rule
 
-> ⛔ **ECO spare-cell preservation (chip-AGNOSTIC, non-negotiable):**
-> Any instance carrying the `dont_touch` / `keep` attribute, or otherwise tagged
-> as a spare/ECO cell, gate, or pad, is **RESERVED for a future metal-only ECO**.
-> No flow step — synthesis, PnR optimization, area recovery, timing repair,
-> hold fix, DRC fix, ECO, or any cleanup — may **delete, resize, re-purpose, or
-> optimize it away**. Specifically: no `opt_clean` / `clean -purge` /
-> `remove_buffers` / area-recovery acting on keep-marked instances. After ANY
-> optimization, `spare_cell_preservation_check.py` MUST still PASS (the spare
-> set is intact and all keep attributes are preserved, 0 removed). If a change
-> drops a spare, that is a **regression** — restore the spare and re-run the
-> checker before proceeding.
+> Compare the native netlist or implementation database before and after optimization. Preserve every unused ECO spare, its keep attributes and the reserved pads; an unintentionally removed spare must be restored.
 
 Every optimization skill (`synth-doctor`, `rtl-repair`, `hold-fix`, `eco-plan`,
 `ppa-predict`, `drc-fix`) carries a tailored copy of this block.
@@ -136,10 +126,7 @@ step (in the flow runner), not by this skill:
   density / distribution / tie-off targets → coverage PASS, and is the
   DECLARING PRODUCER of `reports/spare_cell_coverage.json`: it is the only
   writer of that path, and it does not read it back.
-- `spare_cell_preservation_check.py` (**preservation**) verifies that NO spare/
-  ECO cell/gate/pad was optimized away by any later step, and that all keep
-  attributes are intact → emits `reports/spare_preservation.json`
-  (`all_keep_attr_intact`, `removed` count).
+- Compare the native netlist or implementation database before and after optimization. Preserve every unused ECO spare, its keep attributes and the reserved pads; an unintentionally removed spare must be restored.
 
 ## Acceptance (Design-for-ECO readiness gate)
 
@@ -158,22 +145,3 @@ no DEF/GDS). A missing spare report is **PENDING**, never a silent PASS.
 - Do not leave spare inputs floating — untied spares fail ERC/LVS and are unusable.
 - Do not let metal fill lock the tracks over spares/pads — keep ECO routing reachable.
 - Do not allow any downstream optimization to remove a keep-marked spare.
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/design-for-eco/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in the corresponding skill directory enumerates
-every required element of your output: section headers, metadata fields,
-handoff lines, tool invocations.
-
-**Your task is not complete until the audit returns PASS.** Missing
-elements are the single largest source of skill-execution non-determinism
-across different agents.

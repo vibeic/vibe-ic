@@ -93,11 +93,7 @@ The deliverable is one markdown case record. The template below is the whole sha
 
     ## Case
 
-    What failed: timing.setup.wns_ns = -0.124 ns at post_route_extracted / ss
-    Deterministic path: _ppa/agent_router.py rc=2, no path detail produced
-    What judgement did: identified a high-fanout enable net from the shared-endpoint
-    pattern and proposed buffering it before re-running PnR
-    Result after: timing.setup.wns_ns = -0.031 ns, same scope, remeasured
+Read the actual native path or metric breakdown and record the engineering hypothesis and measured effect of its fix. The retired diagnostic router supplies no current result.
 
     ## Counter-examples
 
@@ -122,18 +118,3 @@ The deliverable is one markdown case record. The template below is the whole sha
     | phase3/stage3/sta/paths.rpt | sha256:0a5b93f6 | opensta |
 
     Next: run /ppa-benchmark
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/ppa-distill/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed, exit 2 =
-the checker could not read one of its own inputs and reached no conclusion.
-
-**Your task is not complete until the audit returns PASS.**

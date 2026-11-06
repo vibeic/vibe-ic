@@ -31,23 +31,7 @@ The tool returns `equiv_cells_total / proven / unproven` plus
 without built-in SAT models), and writes the result to `reports/lec.json`
 (+ optional `reports/lec.rpt`).
 
-**The PASS verdict is NOT decided in this prose — it is enforced by
-`programs/lec_equivalence_check.py`.** That deterministic substance gate
-independently re-parses the artefacts (alias-resilient across Yosys
-`equiv_*` / Cadence Conformal / Synopsys Formality field spellings) and
-returns rc=0 (PASS) iff `equivalent==true` AND compared-points > 0 (non-vacuous)
-AND non-equivalent points == 0 AND unproven/aborted points == 0 — with an
-anti-vacuous-claim guard so a bare `{"equivalent": true}` over 0 compared
-points is an HONEST FAIL, never a vacuous PASS. Missing/unparseable
-`reports/lec.json` is also an honest FAIL (`LEC_REPORT_MISSING` /
-`LEC_REPORT_UNPARSEABLE`), so absence of evidence can never be claimed PASS.
-
-```bash
-# Verdict gate (run AFTER eda_lvs / eda_equiv has written reports/lec.json):
-python3 programs/lec_equivalence_check.py <project_dir> --json reports/lec_gate.json
-# rc 0 = PASS, 1 = FAIL (NOT_EQUIVALENT / NONEQUIV / UNPROVEN / VACUOUS /
-#                        NO_POINT_EVIDENCE), 2 = bad-arg / not-a-dir.
-```
+Run the selected native equivalence tool and read its compared-point count, unmatched points and proven/unproven status. An empty or incomplete comparison is NOT_MEASURED, not equivalence.
 
 Refuse to claim PASS based on log inspection alone — the rc of the program
 above is the verdict.
@@ -98,22 +82,3 @@ Cone-of-logic equivalence checking with SAT / BDD back-ends is the industry stan
 
 - Mismatch → `/rtl-repair` or `/eco-plan`
 - Re-run after fix → re-invoke this skill
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/equivalence-check/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in the corresponding skill directory enumerates
-every required element of your output: section headers, metadata fields,
-handoff lines, tool invocations.
-
-**Your task is not complete until the audit returns PASS.** Missing
-elements are the single largest source of skill-execution non-determinism
-across different agents.

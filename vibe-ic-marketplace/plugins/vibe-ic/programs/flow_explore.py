@@ -54,7 +54,7 @@ def run_variant(project, output, variant, cores, flow_args):
         launcher = ("import os,sys; os.sched_setaffinity(0,map(int,sys.argv[1].split(','))); "
                     "os.execv(sys.executable,[sys.executable,*sys.argv[2:]])")
         command = [sys.executable, "-c", launcher, ",".join(map(str, cores)), str(ENTRY),
-                   str(destination), *flow_args, "--engine", "native"]
+                   str(destination), *flow_args]
         with (output / (name + ".log")).open("w") as log:
             completed = subprocess.run(command, cwd=destination, stdout=log, stderr=subprocess.STDOUT)
         report = _load(destination / "reports/flow_engine.json")

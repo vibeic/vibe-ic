@@ -144,7 +144,7 @@ def test_an_honest_report_is_not_caught():
         "# report\n\n"
         "Verdict authority: _ppa/feasibility.py - this report states no "
         "pass/fail of its own.\n\n"
-        "Program-first: _ppa/agent_router.py rc=2 - it reached no conclusion, "
+        "Program-first: programs/flow_engine.py rc=2 - it reached no conclusion, "
         "so the two remaining endpoints are carried as residual questions "
         "rather than assumed clean.\n"
     )

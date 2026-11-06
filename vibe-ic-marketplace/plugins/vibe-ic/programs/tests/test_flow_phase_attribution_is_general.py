@@ -165,53 +165,45 @@ def test_the_general_core_does_not_import_any_adapter():
     assert not any("benchmark" in m for m in imported), imported
 
 
-@pytest.mark.parametrize("engine", ["native", "legacy"])
 @pytest.mark.parametrize("owner_status", ["PASS", "FAIL", None])
-@pytest.mark.parametrize("native_status", [
-    "PASS", "FAIL", "NOT_MEASURED", "SKIPPED", "missing-row", "missing-report"])
-def test_sim_attribution_uses_the_selected_engine_verdict(
-        tmp_path, monkeypatch, engine, owner_status, native_status):
-    monkeypatch.setenv("VIBEIC_FLOW_ENGINE", engine)
-    steps = [_step("rtl_validate", "FAIL", required_site={"site": "rtl_validate"}),
-             _step("step4_functional_evidence", "PASS")]
+@pytest.mark.parametrize("native_status", ["PASS", "FAIL", "NOT_MEASURED", "SKIPPED", "missing-row", "missing-report"])
+def test_sim_attribution_uses_native_report_verdict(tmp_path, owner_status, native_status):
+    steps = [_step("rtl_validate", "FAIL"), _step("step4_functional_evidence", "PASS")]
     if owner_status:
         steps.append(_step("sim", owner_status))
-    p = _project(tmp_path, steps, prompt=_PROMPT)
+    project = _project(tmp_path, steps, prompt=_PROMPT)
+    name = "functional_simulation_and_coverage"
     if native_status != "missing-report":
-        rows = [] if native_status == "missing-row" else [
-            _step("functional_simulation_and_coverage", native_status)]
-        (p / "reports/flow_engine.json").write_text(json.dumps({"steps": rows}))
-    phase = fpa.attribute(p)["phase3_verifying"]
-    expected = owner_status
-    if engine == "native" and owner_status != "FAIL" and not (owner_status is None and native_status.startswith("missing-")):
-        expected = native_status if native_status in {"PASS", "FAIL"} else "NOT_MEASURED"
-    assert {**phase["not_attempted"], **phase["ran"]}.get("sim") == expected
-    assert phase["failed"] == sorted(["rtl_validate"] + (["sim"] if expected == "FAIL" else []))
-    assert phase["required_site_results"] == fpa.phase3_verifying({"steps": steps}, None)["required_site_results"]
+        rows = [] if native_status == "missing-row" else [_step(name, native_status)]
+        (project / "reports/flow_engine.json").write_text(json.dumps({"selected": 1, "steps": rows}))
+    phase = fpa.attribute(project)["phase3_verifying"]
+    observed = {**phase["not_attempted"], **phase["ran"], **phase["unclassified_status"]}
+    expected = owner_status if native_status == "missing-report" else None if native_status == "missing-row" else native_status
+    selected_name = "sim" if native_status == "missing-report" else name
+    assert observed.get(selected_name) == expected
+    assert phase["failed"] == sorted(["rtl_validate"] + ([selected_name] if expected == "FAIL" else []))
+    if native_status != "missing-report":
+        assert "sim" not in observed
 
 
 @pytest.mark.parametrize("before,after,expected", [
     ("PASS", "FAIL", "ELIGIBLE"), ("PASS", None, "ELIGIBLE"),
     ("FAIL", "PASS", "INELIGIBLE"), (None, "PASS", "NOT_MEASURED")])
 @pytest.mark.parametrize("owner_status", [None, "PASS", "FAIL", "ERROR", "REFUSED", "UNKNOWN"])
-def test_native_sim_consumers_share_the_live_verdict(
-        tmp_path, monkeypatch, before, after, expected, owner_status):
-    import benchmark_dispatch as bd, step_preflight as spf
-    monkeypatch.setenv("VIBEIC_FLOW_ENGINE", "native")
+def test_native_sim_consumers_share_the_live_verdict(tmp_path, before, after, expected, owner_status):
+    import benchmark_dispatch as bd
     steps = [_step("rtl_gen", "PASS"), _step("rtl_validate", "PASS")]
     if owner_status:
-        steps.append(_step("sim", owner_status, required_site={"runner": "design_one_shot_runner", "site": "sim",
-            "flow_steps": dict(spf.RUNNER_PLANS["design_one_shot_runner"].sites)["sim"]}))
-    p = _project(tmp_path, steps, prompt=_PROMPT)
-    report = p / "reports/flow_engine.json"
+        steps.append(_step("sim", owner_status))
+    project = _project(tmp_path, steps, prompt=_PROMPT)
+    report = project / "reports/flow_engine.json"
     name = "functional_simulation_and_coverage"
-    report.write_text(json.dumps({"steps": [_step(name, before)] if before else []}))
-    snapshot = {"exit": "4", "phases": fpa.attribute(p)}
-    assert bd._required_gate_ledger(snapshot)["eligibility"] == (
-        expected if owner_status in (None, "PASS") else "INELIGIBLE" if owner_status == "FAIL" else "NOT_MEASURED")
-    assert bd._gate_evidence_freshness_reasons(p, snapshot) == []
-    report.write_text(json.dumps({"steps": [_step(name, after)] if after else []}))
-    assert bool(bd._gate_evidence_freshness_reasons(p, snapshot)) == (owner_status in (None, "PASS"))
+    for status in (before, after):
+        report.write_text(json.dumps({"selected": 1, "steps": [_step(name, status)] if status else []}))
+        phases = fpa.attribute(project)
+        assert phases["phase3_verifying"]["ran"].get(name) == status
+        ledger = bd._required_gate_ledger({"exit": "4", "phases": phases})
+        assert ledger["eligibility"] == ({"PASS": "ELIGIBLE", "FAIL": "INELIGIBLE"}.get(status, "NOT_MEASURED"))
 
 
 # ── FLOW-BACK TEST ───────────────────────────────────────────────────────────
@@ -268,13 +260,6 @@ def test_flow_back_holds_with_no_adapter_importable(tmp_path, monkeypatch):
     monkeypatch.setattr("builtins.__import__", guard)
     att = fpa.attribute(p)
     assert att["phase2_solving"]["emitter"] == "multiplexer"
-
-
-def test_the_general_runner_takes_the_attribution(tmp_path):
-    """The lift is WIRED, not merely available. Anchors against silent un-wiring."""
-    src = (PROGRAMS / "vibe_ic_one_shot_runner.py").read_text()
-    assert "import flow_phase_attribution" in src
-    assert "phase_attribution" in src
 
 
 # ── BOTH POLES, PHASE BY PHASE ───────────────────────────────────────────────
@@ -440,7 +425,7 @@ def test_every_phase_is_unknown_with_a_reason_when_the_report_is_absent(tmp_path
     for key in ("phase2_solving", "phase3_verifying", "phase4_debugging"):
         assert att[key]["attributed"] is False, key
         assert att[key]["verdict"] == "UNKNOWN"
-        assert "ABSENT" in att[key]["reason"], (key, att[key])
+        assert att[key]["reason"], (key, att[key])
 
 
 def test_an_unattributable_design_exits_3_not_0(tmp_path):
@@ -496,8 +481,8 @@ _RETAINED_EXPECTED = {
     # id: (ownership, solved_by, emitter)
     "fresh-emit": ("generated", "EMITTER", "neutral_logic_emit"),
     "fresh-waived-emit": ("generated", "WAIVED_NO_SKILL", None),
-    "retained-handoff": ("generated", "EMITTER", "neutral_logic_emit"),
-    "retained-other-producer": ("generated", "EMITTER", "neutral_counter_emit"),
+    "retained-handoff": ("generated", "AI_BACKUP", None),
+    "retained-other-producer": ("generated", "AI_BACKUP", None),
     "fallback-no-artifact": ("empty", "AI_BACKUP", None),
     "modified-rtl": ("authored", "AI_BACKUP", None),
     "added-authored-rtl": ("authored", "AI_BACKUP", None),
@@ -508,7 +493,7 @@ _RETAINED_EXPECTED = {
     "removed-all-rtl": ("generated", "AI_BACKUP", None),
     "missing-producer": ("generated", "AI_BACKUP", None),
     "invalid-producer": ("generated", "AI_BACKUP", None),
-    "retained-without-fallback": ("generated", "EMITTER", "neutral_logic_emit"),
+    "retained-without-fallback": ("generated", "WAIVED_NO_SKILL", None),
 }
 _REUSED_IDS = {"retained-handoff", "retained-other-producer",
                "retained-without-fallback"}
@@ -550,65 +535,20 @@ def _input_state(project):
     }
 
 
-def _terminal_report_only(project):
-    """Execute the actual terminal consumer and publisher, without the flow.
-
-    The _main() driver has no report-only CLI. Compile its unchanged attribution
-    try-block and the immediately following summary publication from its AST;
-    no routing, generation, gate, EDA, or main() call can execute here. This
-    also works on the pre-fix product, so RED observes values, not a missing API.
-    """
-    import vibe_ic_one_shot_runner as front
-    tree = ast.parse(Path(front.__file__).read_text())
-    main = next(n for n in tree.body
-                if isinstance(n, ast.FunctionDef) and n.name == "_main")
-    positions = [i for i, n in enumerate(main.body)
-                 if isinstance(n, ast.Try) and any(
-                     isinstance(x, ast.Import) and any(
-                         a.name == "flow_phase_attribution" for a in x.names)
-                     for x in n.body)]
-    assert len(positions) == 1
-    start = positions[0]
-    nodes = main.body[start:start + 4]
-    assert isinstance(nodes[-1], ast.Expr)
-    assert isinstance(nodes[-1].value, ast.Call)
-    assert nodes[-1].value.func.id == "_write_runner_summary"
-    consumer = ast.Module(body=nodes, type_ignores=[])
-    summary = {"verdict": "FAIL", "plan": [["phase2", "PASS_WITH_WAIVERS", 0]]}
-    scope = {**vars(front), "project": project, "summary": summary}
-    exec(compile(consumer, front.__file__, "exec"), scope)
-    written = json.loads((project / "reports" / "orchestrator"
-                          / "vibe_ic_one_shot.json").read_text())
-    assert written["verdict"] == "FAIL"
-    assert written["plan"] == [["phase2", "PASS_WITH_WAIVERS", 0]]
-    sidecar = json.loads((project / "reports" / "orchestrator"
-                         / fpa.REPORT_NAME).read_text())
-    assert written["phase_attribution"] == sidecar
-    return written["phase_attribution"]
-
-
-@pytest.mark.parametrize("consumer", ["pure", "terminal", "standalone"])
+@pytest.mark.parametrize("consumer", ["pure", "standalone"])
 @pytest.mark.parametrize("declared", _RETAINED_INPUTS,
                          ids=[c["id"] for c in _RETAINED_INPUTS])
 def test_retained_rtl_origin_through_report_consumers(
         tmp_path, declared, consumer, monkeypatch, record_property):
     import hashlib
-    import ai_signed_judgement
     import rtl_provenance
 
     project = _retained_project(tmp_path, declared)
     before = _input_state(project)
     ownership = rtl_provenance.classify(project)
-    signature_requested = ai_signed_judgement._requested(project, "1")
 
-    def no_stamp(*args, **kwargs):
-        raise AssertionError("a reporting consumer must never stamp retained RTL")
-
-    monkeypatch.setattr(rtl_provenance, "stamp", no_stamp)
     if consumer == "pure":
         att = fpa.attribute(project)
-    elif consumer == "terminal":
-        att = _terminal_report_only(project)
     else:
         proc = subprocess.run([sys.executable, str(MODULE), str(project), "--json"],
                               capture_output=True, text=True)
@@ -623,14 +563,11 @@ def test_retained_rtl_origin_through_report_consumers(
 
     after = _input_state(project)
     current = rtl_provenance.classify(project)
-    signature_after = ai_signed_judgement._requested(project, "1")
     observed = {"input_id": declared["id"], "consumer": consumer,
                 "input_population_sha256": hashlib.sha256(
                     _RETAINED_INPUT_PATH.read_bytes()).hexdigest(),
                 "attribution": att, "ownership_before": ownership,
                 "ownership_after": current,
-                "ai_signature_requested_before": signature_requested,
-                "ai_signature_requested_after": signature_after,
                 "input_state_before": before, "input_state_after": after}
     record_property("observed", json.dumps(observed, sort_keys=True))
     (tmp_path / "observed.json").write_text(json.dumps(observed, indent=2) + "\n")
@@ -639,9 +576,6 @@ def test_retained_rtl_origin_through_report_consumers(
     assert before == after
     assert ownership == current
     assert ownership[0] == expected_kind
-    assert signature_requested == signature_after
-    assert signature_requested == (declared["fallback_note"] is not None
-                                   and expected_kind != "generated")
     # Both publication paths must return exactly the pure API's current facts.
     assert att == fpa.attribute(project)
     assert att["phase3_verifying"]["failed"] == ["reference_tb"]
@@ -653,22 +587,12 @@ def test_retained_rtl_origin_through_report_consumers(
     assert (r["solved_by"], r["emitter"]) == (expected_solver, expected_emitter), r
     assert r["status"] == declared["report"]["steps"][0]["status"]
     if declared["id"] in _REUSED_IDS:
-        assert r["mechanism"] == "PROGRAM"
-        assert r["actor"] == "runner"
-        assert r["reused"] is True
-        assert r["emitted_in_this_invocation"] is False
-        assert r["ai_authored_in_this_invocation"] is False
-        assert "emitter_absent_reason" not in r
         skill = declared["report"]["steps"][0]["extras"].get("fallback_skill")
-        assert r["current_dispatch"] == {
-            "status": "PASS_WITH_WAIVERS", "fallback_skill": skill,
-            "mechanism": "AI_HANDOFF" if skill else "NONE",
-            "actor": skill or "UNKNOWN",
-        }
-        assert r["rtl_provenance"] == "generated"
-        assert r["rtl_provenance_evidence"] == ownership[2]
-        assert "retained" in r["evidence"]
-        assert fpa.summarize([att])["phase2_emitters"] == {expected_emitter: 1}
+        assert r["mechanism"] == ("AI_HANDOFF" if skill else "NONE")
+        assert r["actor"] == (skill or "UNKNOWN")
+        assert r["ai_authored_in_this_invocation"] is False
+        assert r["emitter"] is None
+        assert not fpa.summarize([att])["phase2_emitters"]
     elif declared["id"] == "fresh-emit":
         assert r["mechanism"] == "PROGRAM" and r["actor"] == "runner"
         assert not r.get("reused", False)

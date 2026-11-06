@@ -34,7 +34,7 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 
 import formal_property_run as fpr  # noqa: E402
-from not_verified_tier import skip_not_verified  # noqa: E402
+from _tool_probes import skip_not_verified  # noqa: E402
 
 CAL = PROGRAMS / "calibration"
 STEM = "formal_ctr"

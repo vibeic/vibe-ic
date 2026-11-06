@@ -1,17 +1,16 @@
 # IC Expert DB — capture log
 
-Append-only chronological record of lessons filed into `ic_expert_db.json` via
-`programs/ic_expert_db_capture.py` (the gated dialogue write-back). One line per
-capture, newest at the bottom:
+Chronological record of lessons filed into `ic_expert_db.json`, newest at the
+bottom. For new lessons, follow `skills/benchmark-enhancement-capture/SKILL.md`:
+retain the actual input, failure, recovery and verification outside the product
+repository; distill only general design craft; review the DB diff before filing.
+Never import hidden benchmark answers, design identities or customer data into
+general lessons, and do not override a native tool result or original limit.
 
-```
-## [<ISO-8601>] capture | source=<dialogue|closed-loop> ic_class=<class> | VALIDATED(consistency+deny) | <lesson snippet>
-```
-
-Every logged capture passed `ic_expert_db_consistency_check` (blindness / oracle /
-gate-override / structural) + a chip-deny-token scan BEFORE it was staged, and was
-then reviewed as a git diff by the repo-gatekeeper. This file is the DB's provenance
-trail (the Karpathy LLM-Wiki `log.md`) — it is never rewritten, only appended.
+The records below describe the historical capture process. Their
+`VALIDATED(consistency+deny)` marker records that earlier review, rather than
+naming an executable step in the current flow. Preserve the existing entries
+and append new captures with the verification actually performed.
 
 <!-- captures below -->
 ## [2026-07-14] capture | source=issue-139 owner-directed distill (v1.4.14 clean-run) ic_class=functional-modification-delivery | VALIDATED(consistency+deny) | When a modification task asks you to ADD a new module or feature to an EXISTING provided f

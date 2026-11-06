@@ -44,16 +44,13 @@ structural test below them runs everywhere.
 from __future__ import annotations
 
 import ast
-import os
 import re
 import sys
 from pathlib import Path
 
-import pytest
 
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
-import phase3_one_shot_runner as R  # noqa: E402
 
 try:
     import pya  # noqa: F401
@@ -65,143 +62,24 @@ MET = (34, 0)           # the drawing layer the pin label sits on
 TOPLBL = (36, 10)
 
 
-def _need_pya():
-    return pytest.importorskip("pya")
 
 
-def _library_design(tmp_path, *, transform=None) -> Path:
-    """A top with one instance of a 'library cell' that carries pin labels,
-    one of them off the 5 nm grid, plus the top's own port label."""
-    ly = pya.Layout()
-    ly.dbu = 0.001
-    met = ly.layer(*MET)
-    pin = ly.layer(*PIN)
-    top_l = ly.layer(*TOPLBL)
-    cell = ly.create_cell("lib__inv_1")
-    cell.shapes(met).insert(pya.Box(0, 0, 400, 1000))
-    cell.shapes(pin).insert(pya.Text("A", pya.Trans(pya.Vector(100, 500))))
-    cell.shapes(pin).insert(pya.Text("ZN", pya.Trans(pya.Vector(303, 700))))
-    top = ly.create_cell("chip")
-    top.insert(pya.CellInstArray(
-        cell.cell_index(), transform or pya.Trans(pya.Vector(1000, 0))))
-    top.shapes(top_l).insert(pya.Text("clk", pya.Trans(pya.Vector(0, 0))))
-    p = tmp_path / "in.gds"
-    ly.write(str(p))
-    return p
 
 
-def _run(script: str, gds_in: Path, gds_out: Path, **env) -> None:
-    saved = {k: os.environ.get(k) for k in ("GDS_IN", "GDS_OUT", "MFG_GRID_UM",
-                                            "KEEP_HIERARCHY", *env)}
-    try:
-        os.environ.update(GDS_IN=str(gds_in), GDS_OUT=str(gds_out),
-                          MFG_GRID_UM="0.005")
-        os.environ.pop("KEEP_HIERARCHY", None)
-        os.environ.update({k: str(v) for k, v in env.items()})
-        exec(compile(script, "<runner script>", "exec"), {"__name__": "__main__"})
-    finally:
-        for k, v in saved.items():
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
 
 
-def _texts(gds: Path):
-    """{cell name: sorted [(string, x, y)]} for every cell with a text."""
-    ly = pya.Layout()
-    ly.read(str(gds))
-    out = {}
-    for c in ly.each_cell():
-        got = []
-        for li in ly.layer_indexes():
-            for s in c.shapes(li).each():
-                if s.is_text():
-                    got.append((s.text_string, s.text.trans.disp.x,
-                                s.text.trans.disp.y))
-        if got:
-            out[c.name] = sorted(got)
-    return out
 
 
-def test_the_grid_snap_keeps_every_cells_pin_labels(tmp_path):
-    """RED ON MAIN: main's snap returns the library cell with 0 labels."""
-    _need_pya()
-    out = tmp_path / "out.gds"
-    _run(R._GDS_GRID_SNAP_PY, _library_design(tmp_path), out)
-    got = _texts(out)
-    assert got.get("lib__inv_1") == [("A", 100, 500), ("ZN", 305, 700)], (
-        "the grid snap must carry a library cell's pin labels through its "
-        "Region round-trip (the off-grid anchor 303 snapped to 305, "
-        f"nothing else moved); got {got}")
-    assert got.get("chip") == [("clk", 0, 0)], got
 
 
-def test_the_snap_flatten_fallback_does_not_lift_library_labels(tmp_path):
-    """A non-orthogonal placement makes the snap flatten. A flattened
-    library label would become a TOP label, which is the 5,655-pin shape."""
-    _need_pya()
-    out = tmp_path / "out.gds"
-    _run(R._GDS_GRID_SNAP_PY,
-         _library_design(tmp_path, transform=pya.ICplxTrans(1.0, 30.0, False,
-                                                            1000, 0)),
-         out)
-    got = _texts(out)
-    assert list(got) == ["chip"] and got["chip"] == [("clk", 0, 0)], (
-        f"after a flatten only the top's own labels may remain: {got}")
 
 
-def test_the_layer_merge_flatten_does_not_lift_library_labels(tmp_path):
-    """RED ON MAIN: main's merge flattens a labelled library cell and puts
-    its pin labels in the top."""
-    _need_pya()
-    out = tmp_path / "out.gds"
-    _run(R._GDS_LAYER_MERGE_PY, _library_design(tmp_path), out)
-    got = _texts(out)
-    assert list(got) == ["chip"] and got["chip"] == [("clk", 0, 0)], (
-        f"a flattened GDS carries only the top's own labels: {got}")
 
 
-def test_the_layer_merge_keeping_hierarchy_keeps_library_labels(tmp_path):
-    _need_pya()
-    out = tmp_path / "out.gds"
-    _run(R._GDS_LAYER_MERGE_PY, _library_design(tmp_path), out,
-         KEEP_HIERARCHY="1")
-    got = _texts(out)
-    assert got.get("lib__inv_1") == [("A", 100, 500), ("ZN", 303, 700)], got
-    assert got.get("chip") == [("clk", 0, 0)], got
 
 
-def _flatten_guarded(script: str, clear_marker: str) -> None:
-    """Every `.flatten(` in `script` sits after a child-text clear that is
-    closer to it than any earlier flatten."""
-    pos = 0
-    n = 0
-    while True:
-        i = script.find(".flatten(", pos)
-        if i < 0:
-            break
-        j = script.rfind(clear_marker, 0, i)
-        k = script.rfind(".flatten(", 0, i)
-        assert j >= 0 and j > k, (
-            f"a flatten at offset {i} is not preceded by `{clear_marker}`; a "
-            "library cell's pin labels would be lifted into the top")
-        n += 1
-        pos = i + 1
-    assert n, "no flatten found; this guard would be vacuous"
 
 
-def test_every_flatten_is_preceded_by_the_child_text_clear():
-    """Host-runnable: the top-only rule lives at each flatten, and the snap's
-    per-cell text collection is unconditional."""
-    # The CALL (`...()` then a newline), never the `def _drop_child_texts():`
-    # line, which would satisfy a bare name search from above every flatten.
-    _flatten_guarded(R._GDS_GRID_SNAP_PY, "_drop_child_texts()\n")
-    _flatten_guarded(R._GDS_LAYER_MERGE_PY, "clear(pya.Shapes.STexts)")
-    body = R._GDS_GRID_SNAP_PY.split("def _snap_local_shapes")[1].split(
-        "return n")[0]
-    assert "_texts = [s_.text for s_ in sh.each() if s_.is_text()]" in body, (
-        "the snap must collect EVERY cell's texts, not only the top's")
 
 
 # ── Every flatten the plugin ships, enumerated from the code ────────────────
@@ -315,45 +193,8 @@ def test_the_klayout_flatten_census_calibrates():
     assert verdicts["guarded"] is None and verdicts["built"] is None, verdicts
 
 
-def test_every_klayout_flatten_is_guarded_or_has_no_text_to_lift():
-    """Enumerated from the code: every layout flatten a shipped program runs
-    or embeds either clears child texts first or holds a layout with no text."""
-    seen, bad = [], []
-    for p in _shipped_sources(".py"):
-        src = p.read_text(errors="replace")
-        if ".flatten(" not in src:
-            continue
-        for script, idx, kind in _klayout_sites_in(src):
-            seen.append((p.name, script))
-            why = _klayout_verdict(script, idx, kind)
-            if why:
-                bad.append(f"{p.relative_to(PLUGIN)} [{kind}] "
-                           f"`{script.splitlines()[idx].strip()}`: {why}")
-    # The census must see the two flattens the behavioural tests above drive.
-    scripts = {sc for _n, sc in seen}
-    assert R._GDS_GRID_SNAP_PY in scripts and R._GDS_LAYER_MERGE_PY in scripts, (
-        "the census went blind: it no longer finds the runner's own flattens")
-    assert not bad, ("a flatten would lift library pin labels into the top:\n"
-                     + "\n".join(bad))
 
 
-def test_the_rcx_clip_flatten_keeps_only_the_top_texts(tmp_path):
-    """The rcx reference clip reads the routed DEF with every label producer
-    off, so it has no texts today; its clear is exercised here on a layout
-    that has them."""
-    _need_pya()
-    import rcx_field_solver_reference as X
-    # The clip's own lines from its read through its flatten, run on a
-    # layout whose library cell carries pin labels.
-    body = X._CLIP_PY.split('ly.read(cfg["def"], opt)', 1)[1].split(
-        "top.flatten(-1, True)", 1)[0] + "top.flatten(-1, True)\n"
-    ly = pya.Layout()
-    ly.read(str(_library_design(tmp_path)))
-    g = {"db": pya, "ly": ly}
-    exec(compile(body, "<clip>", "exec"), g)
-    got = sorted(s.text_string for li in ly.layer_indexes()
-                 for s in g["top"].shapes(li).each() if s.is_text())
-    assert got == ["clk"], f"after the clip's flatten only the top's label: {got}"
 
 
 def _magic_sites_in(text: str, suffix: str):

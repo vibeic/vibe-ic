@@ -122,20 +122,3 @@ def test_entry_states_a_reason_and_a_disposition(gate):
     assert len(entry["why_no_umbrella"]) > 80, (
         f"{gate}: why_no_umbrella is too short to be a reason; a register whose "
         f"justifications are one-liners is a list of names")
-
-
-def test_register_gates_are_counted_as_licensed():
-    """The whole point: these four must move out of the undecided pile.
-
-    Verified through the drift check's own union rather than by re-implementing
-    it, so a change to how licensing is computed is caught here.
-    """
-    spec = importlib.util.spec_from_file_location(
-        "p0_gate_invocability_drift_check",
-        _PROGRAMS / "p0_gate_invocability_drift_check.py")
-    drift = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(drift)
-    licensed = drift._licensed_gates()
-    missing = sorted(set(REGISTER) - licensed)
-    assert not missing, (
-        f"recorded as undrivable but still counted undecided: {missing}")

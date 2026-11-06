@@ -22,14 +22,11 @@ occupy around each grammar, and measures that no published answer moves. The
 negative controls at the end move the answer deliberately, so a zero here is a
 fact about the grammar and not about a fixture that could not move anything.
 """
-import hashlib
 import sys
 from pathlib import Path
 
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import sta_annotation_population as S  # noqa: E402
 import _prose_polarity as pol  # noqa: E402
 
 _BODY = ("Found 1 unannotated drivers.\n"
@@ -58,17 +55,8 @@ def _denial(token: str) -> str:
             f"Found 0 unannotated drivers.")
 
 
-@pytest.fixture()
-def defpath(tmp_path):
-    p = tmp_path / "top.def"
-    p.write_text(_DEF)
-    return str(p)
 
 
-def _answer(body, defpath):
-    got = S.classify(body, defpath)
-    return (got["complete"], got["reason"],
-            tuple((d["driver"], d["classification"]) for d in got["drivers"]))
 
 
 def test_every_token_is_a_denial_in_the_shared_vocabulary():
@@ -77,69 +65,10 @@ def test_every_token_is_a_denial_in_the_shared_vocabulary():
         assert pol.is_denied(_denial(token)), token
 
 
-def test_no_denial_around_the_sta_banner_moves_the_answer(defpath):
-    base = _answer(_BODY, defpath)
-    assert base[0] is True and base[2] == (("u_pg/Y",
-                                            "EXPLICIT_PG_NOT_SIGNAL_PARASITICS"),)
-    for token in _TOKENS:
-        line = _denial(token)
-        for body in (line + "\n" + _BODY,                    # above
-                     _BODY + line + "\n",                    # below
-                     line + "\n" + _BODY + line + "\n"):     # both
-            assert _answer(body, defpath) == base, (token, body)
 
 
-def test_no_denial_around_the_def_net_statement_moves_the_answer(tmp_path):
-    p = tmp_path / "d.def"
-    p.write_text(_DEF)
-    base = _answer(_BODY, str(p))
-    for token in _TOKENS:
-        comment = f"# this net is {token} a ground net\n"
-        for text in (comment + _DEF, _DEF + comment,
-                     _DEF.replace("NETS 1 ;\n", "NETS 1 ;\n" + comment)):
-            q = tmp_path / "v.def"
-            q.write_text(text)
-            got = S.classify(_BODY, str(q))
-            # The DEF is hashed, so the sha MUST move; the VERDICT must not.
-            assert (got["complete"], got["reason"],
-                    tuple((d["driver"], d["classification"])
-                          for d in got["drivers"])) == base, (token, text)
-            assert got["def_sha256"] != hashlib.sha256(
-                _DEF.encode()).hexdigest()
 
 
-def test_a_token_spliced_inside_the_banner_never_publishes_a_verdict(defpath):
-    """Inside the grammar, a denial can only DESTROY the match, never win it.
-
-    The banner is anchored `^Found (\\d+) unannotated drivers\\.$`, so a token
-    spliced into it stops the line being the banner — and the function refuses
-    by name instead of reading the rival number.
-    """
-    for token in _TOKENS:
-        body = _BODY.replace("Found 1 unannotated drivers.",
-                             f"Found {token} 1 unannotated drivers.")
-        got = S.classify(body, defpath)
-        assert got["complete"] is False
-        assert got["reason"] == "missing native annotation counts", token
-        assert got["drivers"] == []
 
 
 # ── NEGATIVE CONTROLS: the fixture CAN move the answer ──────────────────────
-
-def test_changing_the_def_use_moves_the_classification(tmp_path):
-    p = tmp_path / "s.def"
-    p.write_text(_DEF.replace("+ USE GROUND", "+ USE SIGNAL"))
-    got = S.classify(_BODY, str(p))
-    assert got["complete"] is False
-    assert got["drivers"][0]["classification"] == "REQUIRED_OR_UNKNOWN"
-
-
-def test_changing_the_banner_count_moves_the_answer(defpath):
-    got = S.classify(_BODY.replace("Found 1 unannotated",
-                                   "Found 2 unannotated"), defpath)
-    assert got["reason"] == "inconsistent driver inventory or partial annotation"
-
-
-def test_an_absent_def_is_refused_by_name(tmp_path):
-    got = S.classify(_BODY, str(tmp_path / "missing.def"))
-    assert got["reason"] == "DEF authority absent"

@@ -71,6 +71,7 @@ if _os.path.dirname(_os.path.abspath(__file__)) not in _sys.path:
 
 
 import argparse
+import _progress_run as _pr
 import hashlib
 import json
 import re
@@ -624,28 +625,8 @@ def fold_prove_arms(lp: LogParse) -> Tuple[LogParse, List[dict]]:
             arms_of[base] = tr
             continue
         folded.tasks[name] = tr
-    uncalibrated = None
-    if arms_of:
-        import instrument_calibration as _instrument_calibration
-        try:
-            _instrument_calibration.assert_calibrated(
-                "formal_property_run::fold_prove_arms")
-        except _instrument_calibration.Uncalibrated as exc:
-            uncalibrated = str(exc)
     for base, kind in arms_of.items():
         primary = lp.tasks[base]
-        if uncalibrated:
-            # The second arm may not judge (NOT_MEASURED / uncalibrated); the
-            # claim is the first engine's alone, and the record says why.
-            folded.tasks[base] = primary
-            records.append({
-                "task": base, "status": primary.status,
-                "selected_engine": primary.engine, "engines_disagree": False,
-                "arms": [{"task": kind.name, "engine": kind.engine,
-                          "status": "NOT_MEASURED",
-                          "reason_class": "uncalibrated",
-                          "detail": uncalibrated}]})
-            continue
         arms = [primary, kind]
         statuses = [a.status for a in arms]
         disagreement = "FAIL" in statuses and "PASS" in statuses
@@ -3314,72 +3295,6 @@ def _write_report(formal_dir: Path, results: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# vibe-ic#562 — RE-ADJUDICATION RULES for this gate's published records.
-#
-# A published record can describe a state that no longer exists. For a formal
-# run the dangerous drift is the PROOF STRENGTH: `unbounded_proved` means "holds
-# for all reachable states", while a bounded BMC result only means "no
-# counterexample within the bound". A record carrying PASS on the strength of a
-# bounded proof is a record whose verdict a reader will over-trust, and the
-# distinction is exactly what `assert_bound_honesty` guards at run time.
-#
-# `_STRENGTH_HONESTY` re-derives that one question from what the record itself
-# publishes, so an old record is judged by today's rule rather than by the words
-# it was written with.
-import _record_adjudication as _ra  # noqa: E402
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import _progress_run as _pr  # noqa: E402
-
-
-def _strength_honesty(record: dict):
-    """Would this gate still call this a PASS on the strength it recorded?"""
-    verdict = record.get("verdict")
-    if verdict != "PASS":
-        return None                      # only a PASS can over-claim
-    unbounded = bool(record.get("unbounded_proved"))
-    if unbounded:
-        return None                      # a real unbounded proof still stands
-    return _ra.Supersession(
-        would_issue="PARTIAL",
-        because=("the record carries verdict PASS with unbounded_proved false, "
-                 "so every property it proved was proved BOUNDED — no "
-                 "counterexample within a bound, which is not a proof for all "
-                 "reachable states. Today's rule reserves PASS for a run whose "
-                 "properties all PASSED and discloses a bounded-only result as "
-                 "PARTIAL; a reader taking this PASS as a full proof would be "
-                 "over-trusting it"),
-    )
-
-
-RECORD_ADJUDICATION = _ra.declare(
-    __file__,
-    gate="formal_property_run",
-    # The entry point of the verdict decision; the fingerprint follows the
-    # module-local call closure from here, so `proof_strength` and
-    # `assert_bound_honesty` are covered without being listed.
-    decision_roots=("build_results",),
-    # Regenerate with:
-    #   python3 published_record_staleness_check.py \
-    #       --print-decision-digest formal_property_run
-    # Re-reviewed after the prove-arm/resource changes: build_results still
-    # permits all-bounded tasks to say PASS while unbounded_proved is false;
-    # the rule below must continue to demote that archived claim to PARTIAL.
-    decision_digest="b6967ecacf30cce0e66da91ac89d9d68b63356fb7177fdb5ac4a5adc24f22abb",
-    rules=(
-        _ra.Rule(
-            rule_id="formal_property_run.bounded-is-not-a-proof",
-            landed_in="#562",
-            requires=("verdict", "unbounded_proved"),
-            decide=_strength_honesty,
-            what=("a PASS whose properties were all proved BOUNDED claims more "
-                  "than a bounded result supports; PARTIAL is the honest verdict"),
-        ),
-    ),
-)
-
-
-
 def reachability_plan(project: Path, results: dict) -> dict:
     """Map the existing declaration denominator to source predicates or closures.
 

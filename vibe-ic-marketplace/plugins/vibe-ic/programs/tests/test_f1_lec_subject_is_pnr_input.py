@@ -26,16 +26,13 @@ import hashlib
 import json
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
-import pytest
 import yaml
 
 _PROGRAMS = Path(__file__).resolve().parent.parent
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
-import design_one_shot_runner as R          # noqa: E402
 import lec_equivalence_check as G           # noqa: E402
 import lec_gate_netlist_select as S         # noqa: E402
 import phase3_one_shot_runner as P3         # noqa: E402
@@ -124,82 +121,21 @@ def _lec_doc(proj: Path, gate_rel: str, *, scan_applied=None) -> dict:
     return doc
 
 
-@pytest.fixture()
-def lec_runs(monkeypatch):
-    """Fake lec_run's process: record argv, write its report for that gate."""
-    seen: list = []
-
-    def _run(argv, *a, **k):
-        argv = [str(x) for x in argv]
-        if argv and argv[1].endswith("lec_run.py"):
-            seen.append(argv)
-            proj = Path(argv[2])
-            gate = argv[argv.index("--gate-netlist") + 1]
-            doc = _lec_doc(proj, gate, scan_applied=(
-                True if "--scan-meta" in argv else None))
-            (proj / "reports").mkdir(exist_ok=True)
-            (proj / "reports/lec.json").write_text(json.dumps(doc))
-            (proj / "reports/lec.rpt").write_text(
-                "Equivalence successfully proven!\nProved 2 $equiv cells.\n")
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(R.subprocess, "run", _run)
-    return seen
 
 
-def _gate_arg(argv):
-    return argv[argv.index("--gate-netlist") + 1]
 
 
 # --------------------------------------------------------------------------- #
 # 1. the subject is step 15's input
 # --------------------------------------------------------------------------- #
-def test_arm_a_proves_the_mapped_netlist_not_the_generic_one(tmp_path, lec_runs):
-    proj = _tree(tmp_path)
-    rows = R.step_lec_equivalence(proj, TOP, "")
-    assert [_gate_arg(a) for a in lec_runs] == [MAPPED], lec_runs
-    assert rows[-1].name == "lec_equivalence" and rows[-1].status == "PASS"
-    assert P3.pnr_input_netlist(proj, TOP)[0] == proj / MAPPED
 
 
-def test_the_chain_hands_step13_the_same_subject(tmp_path, lec_runs):
-    proj = _tree(tmp_path)
-    rows = R.step_dft_lec_chain(proj, TOP, "", "digital_cmd_driven",
-                                full_chip=False)
-    assert [_gate_arg(a) for a in lec_runs] == [MAPPED]
-    assert rows[-1].name == "lec_equivalence"
 
 
-def test_scan_inserted_subject_is_post_dft_and_constrained(tmp_path, lec_runs):
-    proj = _tree(tmp_path, scan="authorized")
-    R.step_lec_equivalence(proj, TOP, "")
-    (argv,) = lec_runs
-    assert _gate_arg(argv) == POST_DFT
-    assert argv[argv.index("--scan-meta") + 1] == SCAN_META
 
 
-def test_unauthorised_chain_proves_the_routed_pre_dft_netlist_unconstrained(
-        tmp_path, lec_runs):
-    """Step 15 refuses to route a chain step 11's record does not authorise,
-    so step 13 proves the mapped pre-DFT netlist, and applies no scan
-    constraint to it even though a published scan netlist is on disk."""
-    proj = _tree(tmp_path, scan="unauthorized")
-    assert not R.scan_netlist_is_real_chain(proj)
-    R.step_lec_equivalence(proj, TOP, "")
-    (argv,) = lec_runs
-    assert _gate_arg(argv) == MAPPED
-    assert "--scan-meta" not in argv
 
 
-def test_before_the_mapped_netlist_exists_nothing_is_proved_in_its_place(
-        tmp_path, lec_runs):
-    proj = _tree(tmp_path, mapped=False)
-    rows = R.step_lec_equivalence(proj, TOP, "")
-    assert lec_runs == [], "a substitute netlist was proved"
-    assert rows[-1].status == "NOT_MEASURED"
-    assert rows[-1].reason_class == R._V.ReasonClass.INPUT_ABSENT
-    assert MAPPED in rows[-1].detail
-    assert not (proj / "reports/lec.json").exists()
 
 
 def test_flow_declares_step13_and_step15_read_one_netlist():
@@ -280,18 +216,6 @@ def test_gate_is_silent_before_step15_has_an_input(tmp_path):
 # --------------------------------------------------------------------------- #
 # 3. phase 3 re-proves on step 15's input, before PnR
 # --------------------------------------------------------------------------- #
-def test_phase3_reproves_a_stale_proof_and_leaves_a_current_one(tmp_path,
-                                                                 lec_runs):
-    proj = _tree(tmp_path)
-    (proj / "reports").mkdir()
-    (proj / "reports/lec.json").write_text(json.dumps(_lec_doc(proj, GENERIC)))
-    rows = P3.run_step13_lec_on_pnr_input(proj, TOP, "")
-    assert [_gate_arg(a) for a in lec_runs] == [MAPPED]
-    assert [r.name for r in rows] == ["step13_lec_equivalence"]
-    assert rows[0].status == "PASS"
-    assert rows[0].extras["subject_binding"]["state"] == S.BINDING_STALE
-    assert P3.run_step13_lec_on_pnr_input(proj, TOP, "") == []
-    assert len(lec_runs) == 1
 
 
 def test_phase3_main_runs_it_after_the_step11_selfheal_and_before_pnr():

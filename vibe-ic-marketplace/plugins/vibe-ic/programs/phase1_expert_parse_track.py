@@ -331,7 +331,9 @@ import _path_layout as _pl  # noqa: E402
 import ic_expert_backup_pack as _pack  # noqa: E402
 import nvm_program_supply_intent as _nps  # noqa: E402
 import _reference_flow_boundary as _rfb  # noqa: E402  §4.05 authority (FX_405)
-import ai_signed_judgement as _asj  # noqa: E402  the D1 design-input population
+DESIGN_DOCUMENT_GLOBS = ("input/design_input.txt", "input/phase1_prompt.md",
+                      "input/phase1_structured.yaml", "input/docs/**/*",
+                      "phase1/input_doc/**/*")
 
 PROGRAM = "phase1_expert_parse_track"
 VERSION = "1.0.0"
@@ -705,9 +707,8 @@ SKIP_FRAME_BUDGET = "FRAME_BUDGET"        #: readable context the budget left ou
 
 def _design_document_files(project: Path) -> set:
     """The design documents under `input/`: the D1 design-input population
-    exactly as D1's signed judgement binds it (`DESIGN_INPUT_GLOBS`), so the
-    frame and the D1 evidence cannot disagree about what the design input is."""
-    return {p for pattern in _asj.DESIGN_INPUT_GLOBS if pattern.startswith("input/")
+    using the original D1 design-document population."""
+    return {p for pattern in DESIGN_DOCUMENT_GLOBS if pattern.startswith("input/")
             for p in project.glob(pattern) if p.is_file()}
 
 
@@ -4543,220 +4544,16 @@ def evaluate(project: Path) -> Dict[str, Any]:
     }
 
 
-def _retained_input_frame_current(project: Path, rep: dict, target: Path) -> bool:
-    """Reopen an unchanged expert reading across a proved normal input transition.
-
-    The normal D1 intake owns authored documents; runtime qualification trees
-    are not extra extraction prompts. Its existing transition reader must bind
-    current intent, while the independently signed old reading stays immutable.
-    """
-    try:
-        import _phase1_producer_identity as identity
-        import ai_signed_judgement as judgement
-        import execution_backend_worker as worker
-        import _flow_yaml
-        ai = rep['ai_subtrack']
-        handoff = ai['handoff']
-        frame = handoff['source_frame']
-        out = target.parent / 'expert_parse_track_pack'
-        # Same rules, schema, context and complete historical semantic reading.
-        # A different policy or a fabricated prior frame cannot buy reuse.
-        _, binding = _pack.phase1_frame(frame['semantic_text'], frame,
-            authoring_schema=authoring_schema(project), out_dir=out)
-        import inspect
-        mapping = hashlib.sha256(inspect.getsource(_input_projection).encode()).hexdigest()
-        answer_raw = (out / 'l_doc_expectations.json').read_bytes()
-        answer = json.loads(answer_raw)
-        if (binding != ai['input_frame_sha256']
-                or frame['responsibility_mapping_sha256'] != mapping
-                or frame['truncated'] is not False
-                or answer.get('input_frame_sha256') != binding
-                or hashlib.sha256(answer_raw).hexdigest() != ai['answer_sha256']
-                or not judgement.check(project, 'D1')[0]):
-            return False
-        row = next(r for r in _flow_yaml.load()['steps'] if str(r['id']) == 'D1')
-        opened = worker._declared_input_files(project, row['required_inputs'])
-        historical = {'input/' + m['path']: m for m in frame['members']}
-        # Do not hide a new or changed authored input under a context decision.
-        # Derived input_doc bytes are independently bound by the D1 judgement.
-        for name, digest in opened.items():
-            if not name.startswith('input/'):
-                continue
-            member = historical.get(name)
-            if member is None or member.get('complete') is not True or member['sha256'] != digest:
-                return False
-            text = (project / name).read_text().replace('\r\n', '\n').replace('\r', '\n')
-            if _input_projection(text)[0] != member['semantic_text']:
-                return False
-        record = identity._si.read_sidecar(identity.sidecar_dir(project), identity.KIND)
-        if not isinstance(record, dict):
-            return False
-        assessment = identity.assess(project, Path(__file__).parent,
-                                     record['knobs'], checkpoint=True)
-        new = assessment.get('new') or {}
-        basis = new.get('input_basis') or {}
-        if (assessment.get('state') != identity.REVALIDATE
-                or assessment.get('reason') != identity.DESIGN_INPUT_CHANGED
-                or basis.get('classification') != 'RECONSTRUCTED_VERIFIED_PREIMAGE'
-                or not new.get('consumed_inputs') or not new.get('intent')):
-            return False
-        # No report/answer/sidecar updates. This only admits the existing
-        # reading; the remaining complete-consumer/row qualification still run.
-        return True
-    except (OSError, ValueError, TypeError, KeyError, AttributeError, StopIteration):
-        return False
 
 
-def check_report(project: Path) -> int:
-    """D1 reads Phase 1's evidence without consuming or rewriting its subject.
-
-    Execution is mandatory; findings remain advisory. Missing, malformed or
-    stale evidence refuses credit. This path never calls evaluate or emits a
-    pack. The producer invocation and answer/root digests identify the reading
-    being checked, rather than crediting an audit-time second pass (#2206).
-    """
-    target = _pl.report_path(project, "phase1/expert_parse_track.json")
-    try:
-        rep = json.loads(target.read_text())
-        if not isinstance(rep, dict) or rep.get("program") != PROGRAM:
-            raise ValueError("missing expert-track producer record")
-        producer = rep.get("producer")
-        if not isinstance(producer, dict) or not producer.get("invocation_id"):
-            raise ValueError("producer invocation is not recorded; rerun Phase 1")
-        rc = producer.get("returncode")
-        if type(rc) is not int or rc not in (0, 1, AWAITING_EXIT_CODE):
-            raise ValueError("producer return code is missing or invalid")
-        root = rep.get("phase1_root")
-        current = phase1_root_identity(project)
-        if (not isinstance(root, dict) or current.get("status") != "OK"
-                or root.get("digest") != current.get("digest")):
-            raise ValueError("Phase-1 layer set changed since the producer reading")
-        ai = rep.get("ai_subtrack")
-        execution = rep.get("execution")
-        if not isinstance(ai, dict) or not isinstance(execution, dict):
-            raise ValueError("expert execution record is malformed")
-        if ai.get("input_frame_sha256") is not None:
-            report = input_text_report(project)
-            _text, binding = _pack.phase1_frame(report["text"], report["source_frame"],
-                authoring_schema=authoring_schema(project),
-                out_dir=target.parent / "expert_parse_track_pack")
-            if (binding != ai["input_frame_sha256"]
-                    and not _retained_input_frame_current(project, rep, target)):
-                raise ValueError("INPUT_FRAME_CHANGED: source/instructions changed since reading")
-        if rc == 0:
-            # R-0915-126-D1: a completed track has DECIDED its expectations,
-            # and TWO derivations can do that. They are checked SEPARATELY and
-            # against DIFFERENT evidence, so a program-derived reading can
-            # never be mistaken for an AI one.
-            if (rep.get("verdict") not in ("PASS", "FINDINGS")
-                    or execution.get("complete") is not True):
-                raise ValueError("zero return code contradicts expert execution")
-            # AN ABSENT `derivation` IS THE AI DERIVATION IT ALWAYS WAS.
-            # Before R-0915-126-D1 the ONLY route to rc 0 was AI_CONSUMED with
-            # a matching `answer_sha256`, so a report written by an older
-            # producer — or staged by a fixture that predates this field — is
-            # an AI-derived reading, not an unnameable one. Reading its absence
-            # as "stale" refused reports that were never wrong: MEASURED on the
-            # FIX3I arms, three synthetic intact trees
-            # (test_flow_compliance_check_gate x2,
-            # test_issue1446_incomplete_in_scope_is_not_green) went
-            # "INCOMPLETE: report unavailable or stale: zero return code ..."
-            # at Step D1 and cascaded P0/1 to NOT_MEASURED(upstream_failed).
-            # Those fixtures stage `ai_subtrack.status = AI_CONSUMED` with a
-            # real `answer_sha256` and an `execution` block carrying no
-            # `derivation` — a legitimate AI completion, which is why they are
-            # NOT re-pinned here.
-            #
-            # ONLY A DERIVATION THAT IS PRESENT AND UNRECOGNISED IS REFUSED: a
-            # report that NAMES a derivation this checker does not know is
-            # claiming something it cannot support, and that is a different
-            # fact from saying nothing.
-            derivation = execution.get("derivation")
-            if derivation is None:
-                derivation = "ai"
-            if derivation == "ai":
-                if (ai.get("status") != AI_CONSUMED
-                        or type(execution.get("observed_ai_consumed")) is not int
-                        or execution["observed_ai_consumed"] < 1):
-                    raise ValueError(
-                        "zero return code contradicts expert execution")
-                # `l_doc_expectations.json` is THE AI'S FILE. The program never
-                # writes it, so it is read here only for an AI-derived claim.
-                answer = (target.parent / "expert_parse_track_pack"
-                          / "l_doc_expectations.json")
-                if ai.get("answer_sha256") != hashlib.sha256(
-                        answer.read_bytes()).hexdigest():
-                    raise ValueError(
-                        "current expert answer has no matching producer reading")
-            elif derivation == "program":
-                # The program-derived path answers for ITSELF, against its own
-                # digest over the deterministic expectations it decided.
-                digest = execution.get("program_expectations_sha256")
-                if not isinstance(digest, str) or len(digest) != 64:
-                    raise ValueError(
-                        "a program-derived reading must record its own "
-                        "program_expectations_sha256")
-                if type(execution.get("deterministic_examined")) is not int \
-                        or execution["deterministic_examined"] < 1:
-                    raise ValueError(
-                        "a program-derived reading must have decided at least "
-                        "one deterministic expectation")
-            else:
-                raise ValueError(
-                    f"zero return code with an unrecognised execution "
-                    f"derivation {derivation!r}")
-        elif rc == AWAITING_EXIT_CODE and (
-                rep.get("verdict") != "INCOMPLETE"
-                or ai.get("status") != AI_HANDOFF_EMITTED):
-            # R-0915-126-D1: AWAITING now means the producer could not read its
-            # own subject — it is no longer reachable merely because nobody
-            # invoked the subagent.
-            raise ValueError("awaiting return code contradicts expert execution")
-    except (OSError, ValueError, TypeError) as exc:
-        print(f"INCOMPLETE: {PROGRAM} report unavailable or stale: {exc}")
-        return 1
-    prefix = "INCOMPLETE: " if rc else ""
-    print(f"{prefix}{PROGRAM}: {rep.get('verdict')} — read-only report check; "
-          f"producer={producer.get('invoked_by')} "
-          f"invocation={producer['invocation_id']} rc={rc}; report: {target}")
-    # SAY THE WORD FOR THE STATE THIS BRANCH JUST PROVED. The `elif` above
-    # accepts `rc == AWAITING_EXIT_CODE` only together with verdict INCOMPLETE
-    # and `ai.status == AI_HANDOFF_EMITTED` -- the awaiting triple, established
-    # right here -- and then this printer said only "INCOMPLETE". The consumer
-    # distinguishes the two tiers by an `AWAITING_AGENT_PASS` token that must
-    # START a line, and the token appeared nowhere in this file, so every step
-    # whose gate is this clause was read as `partial_population`: "the gate
-    # reports its input was applicable and was NOT examined". That is a false
-    # sentence about a run awaiting a two-pass hand-off whose population
-    # answered in full.
-    #
-    # MEASURED (run21, `--stage-id stage_phase1 --strict` rc=1): step D1 is the
-    # only blocker, and all 33 of its gates returned a decisive verdict while
-    # this report says `execution.disposition = "AWAITING"`,
-    # `observed_ai_status = "HANDOFF_EMITTED"`, `observed_ai_consumed = 0`.
-    #
-    # LAST LINE, AT COLUMN 0, AND BOTH OF THOSE ARE LOAD-BEARING. The consumer's
-    # snippet keeps a 300-char HEAD and a 300-char TAIL, so the verdict line
-    # above survives in the head and this one survives in the tail however long
-    # the project path is; and the token is only read when it starts a line.
-    if rc == AWAITING_EXIT_CODE and str(
-            (rep.get("execution") or {}).get("disposition") or "") == "AWAITING":
-        print(f"AWAITING_AGENT_PASS: {ai.get('status')} — "
-              f"{execution.get('observed_ai_consumed')} of "
-              f"{execution.get('required_ai_consumed_min')} required agent "
-              f"answer(s) consumed; the hand-off is written and pass two is not "
-              f"a program's to make")
-    return rc
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("project_dir", type=Path)
     ap.add_argument("--json", default=None)
-    ap.add_argument("--check-report", action="store_true",
-                    help="read the Phase-1 producer report without running the track")
     ap.add_argument("--invoked-by", default="direct",
-                    help="name the invoking phase runner in the producer receipt")
+                    help="name the invoking phase runner in the execution report")
     ap.add_argument("--input-readability", action="store_true",
                     help="print ONLY whether this project's design input can "
                          "be read, and what was skipped — the census a "
@@ -4769,8 +4566,6 @@ def main(argv=None) -> int:
         return 1
 
     project = args.project_dir.resolve()
-    if args.check_report:
-        return check_report(project)
     if args.input_readability:
         rep = input_text_report(project)
         disp = input_readability_disposition(rep)

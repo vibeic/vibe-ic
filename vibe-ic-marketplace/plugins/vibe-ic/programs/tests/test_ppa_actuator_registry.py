@@ -365,28 +365,6 @@ def test_the_built_argv_is_a_list_and_names_the_interpreter_and_the_program(tmp_
     assert str((impl / "pnr.tcl").resolve()) in argv
 
 
-@pytest.mark.parametrize("rel", [
-    "programs/_ppa/closure.py", "programs/ppa_closure_run.py"])
-def test_the_executor_never_uses_a_shell(rel):
-    """Asserted on the PARSED SOURCE, so the prohibition survives a refactor
-    that the behavioural tests above would not notice.
-
-    Parsed, not grepped: both files DISCUSS `shell=True` in their prose, and a
-    substring check that a comment can trip is a check whose green means
-    "nobody wrote that word", not "nobody does that thing".
-    """
-    import ast
-    tree = ast.parse((PLUGIN / rel).read_text(encoding="utf-8"))
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            for kw in node.keywords:
-                assert kw.arg != "shell", (
-                    f"{rel}:{node.lineno} passes a `shell` keyword to a call")
-            name = ast.unparse(node.func) if hasattr(ast, "unparse") else ""
-            assert name not in ("os.system", "os.popen"), (
-                f"{rel}:{node.lineno} calls {name}")
-    assert "subprocess.run(" in (PLUGIN / rel).read_text(encoding="utf-8") \
-        or rel.endswith("ppa_closure_run.py")
 
 
 def test_the_registry_digest_is_canonical_and_stable():

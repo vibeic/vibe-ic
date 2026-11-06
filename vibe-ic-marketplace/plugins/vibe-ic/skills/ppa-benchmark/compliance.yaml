@@ -63,7 +63,7 @@ requirements:
     description: >-
       Names the independent scorer program; the skill does not score
     pattern: '(?i)Independent scorer:\s*\S'
-    positive_sample: 'Independent scorer: _ppa/benchmark.py'
+    positive_sample: 'Independent scorer: native reports listed by programs/flow_engine.py'
     negative_sample: 'Independent scorer:'
   - id: R_known_unfairness
     description: >-

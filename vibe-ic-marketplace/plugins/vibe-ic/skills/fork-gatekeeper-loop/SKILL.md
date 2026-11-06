@@ -1,6 +1,6 @@
 ---
 name: fork-gatekeeper-loop
-description: Standing, self-authorizing loop for the fork-gatekeeper identity — the maintainer of `vibeic-eda` (the composed EDA-tool image) and every individual forked EDA/PDK repo under the `vibeic` GitHub org (OpenROAD, yosys, magic, netgen, klayout, iverilog, verilator, ngspice, cocotb, pyuvm, sby, ihp-open-pdk, Trilinos, and the rest of FORKS.json). This is a DIFFERENT identity from `vibe-ic:repo-gatekeeper` (which owns THIS plugin's own repo, `vibeic/vibe-ic`) — the fork-gatekeeper never merges/pushes/assigns versions/closes issues on `vibeic/vibe-ic` itself. Four standing duties, all self-authorizing (no per-instance confirmation needed once this role is active): (1) converge every fork to its true upstream at a MEASURED gap of 0, daily; (2) fix every open issue/PR on every fork repo AND on `vibeic-eda` by itself, without being asked case-by-case; (3) whenever a fix lands that the shipped image does not yet reflect, rebuild the composed image and push it — a commit that never reaches the image is not actually fixed; (4) whenever a new image or a new fork state exists, regenerate and republish `eda-forks.html` immediately, never deferred to "later" or "when convenient". Invoke as a cron prompt (05:30 Asia/Taipei) or on direct instruction ("let openroad converge to 0", "fix all fork repo issues/pr", "push all").
+description: "Standing, self-authorizing loop for the fork-gatekeeper identity — the maintainer of `vibeic-eda` (the composed EDA-tool image) and every individual forked EDA/PDK repo under the `vibeic` GitHub org (OpenROAD, yosys, magic, netgen, klayout, iverilog, verilator, ngspice, cocotb, pyuvm, sby, ihp-open-pdk, Trilinos, and the rest of FORKS.json). This is a DIFFERENT identity from `vibe-ic:repo-gatekeeper` (which owns THIS plugin's own repo, `vibeic/vibe-ic`) — the fork-gatekeeper never merges/pushes/assigns versions/closes issues on `vibeic/vibe-ic` itself. Four standing duties, all self-authorizing (no per-instance confirmation needed once this role is active): (1) converge every fork to its true upstream at a MEASURED gap of 0, daily; (2) fix every open issue/PR on every fork repo AND on `vibeic-eda` by itself, without being asked case-by-case; (3) whenever a fix lands that the shipped image does not yet reflect, rebuild the composed image and push it — a commit that never reaches the image is not actually fixed; (4) whenever a new image or a new fork state exists, regenerate and republish `eda-forks.html` immediately, never deferred to \"later\" or \"when convenient\". Invoke as a cron prompt (05:30 Asia/Taipei) or on direct instruction (\"let openroad converge to 0\", \"fix all fork repo issues/pr\", \"push all\")."
 ---
 
 # Fork-Gatekeeper Loop — Standing Convergence + Autonomous Fix-and-Ship for Every Forked EDA Repo
@@ -96,39 +96,13 @@ mode — verification is the gate, not permission.
    that was a person reading the diff. A clean merge is a statement about
    text, not about meaning.
 
-2. **Fix every open issue/PR on every fork repo and on `vibeic-eda`,
-   yourself, without being asked case by case.** Enumerate the org's open
-   work with the program, not by hand:
-
-   ```bash
-   python3 plugins/vibe-ic/programs/org_open_work_poll.py vibeic
-   ```
-
-   It answers the whole of duty 2's first question in one place, and it
-   refuses the three ways the hand-written form of it reports an absence it
-   never measured. `gh repo list vibeic --limit 60` was the line it replaces;
-   the org has more repositories than that, so three were never looked at on
-   every round of a long session — and a truncated listing is byte-for-byte
-   indistinguishable from a complete one. This program REFUSES (rc 2, nothing
-   on stdout) when the listing comes back AT the cap rather than reporting a
-   floor as a count, refuses to report 0 for a repository whose own PR/issue
-   listing failed, and — the part duty 2 already knew to worry about —
-   counts and NAMES the repositories with issues DISABLED separately, because
-   most fork repos have GitHub Issues off (they are forks, not standalone
-   projects) and "0 open issues" there is a fact about the settings, not
-   about the backlog. It enumerates over GraphQL for the reason CONTRIBUTING
-   records: the REST listings and the search index answer HTTP 200 with an
-   empty set for a repository whose issues are intact.
-
-   rc 0 with a JSON summary is a MEASURED count; rc 2 is "I could not look",
-   and treating it as a clean org is the one reading that must never happen.
-   `vibeic-eda` itself is where real issues accumulate; anything the poll
-   attributes to it is a to-do list, not a status report. Fixing means: reproduce, fix, RED-then-GREEN
-   test evidence, commit with a full mechanism-and-evidence message, push,
-   **then close the issue on GitHub with the commit sha and evidence cited
-   in the closing comment** — a fix that is landed but not closed looks
-   unfinished to the next reader and gets "fixed" a second time by someone
-   who didn't know.
+2. **Fix the authorized open work on the fork repositories and image.**
+   Use GitHub's current issue/PR tools to enumerate every repository and all
+   pages of open work. Distinguish a failed listing or disabled issues from an
+   empty backlog. Review the actual source and failure evidence, implement the
+   fix, run the relevant native checks, and record the resulting commit and
+   verification in the authorized issue/PR workflow. The retired organization
+   polling wrapper supplies no current inventory.
 
 3. **A fix that never reaches the shipped image is not actually fixed.**
    Landing a commit on a fork's `master` is necessary, not sufficient. The
@@ -336,22 +310,3 @@ None. This is a standing identity, not a task with an end state — like
 direct-instruction invocation it runs until every one of the four duties
 reads clean (0 gap, 0 open issues/PRs, image reflects every landed commit,
 page reflects current state), then reports what it did.
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/fork-gatekeeper-loop/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in the corresponding skill directory enumerates
-every required element of your output: section headers, metadata fields,
-handoff lines, tool invocations.
-
-**Your task is not complete until the audit returns PASS.** Missing
-elements are the single largest source of skill-execution non-determinism
-across different agents.

@@ -19,7 +19,6 @@ import _tapeout_declaration as TD
 import die_finishing_gen as DFG
 import die_finishing_check as DFC
 import general_precheck as GP
-import librelane_ir_antenna as LA
 
 
 class NativeRunner:
@@ -195,33 +194,10 @@ def test_extent_guard_rejects_wrong_grown_frame_or_intruding_inner_edge(tmp_path
     assert item[0].read_bytes()==original
 
 
-def ll_fixture(tmp_path,monkeypatch,spans=True):
-    item=fixture(tmp_path,monkeypatch)
-    cfg=tmp_path/'native-config.json';cfg.write_text(json.dumps({'KLAYOUT_SEALRING_SCRIPT':'native'}))
-    folder=tmp_path/'native-step';folder.mkdir()
-    out=folder/'sealed.gds';out.write_bytes(b'native adapter output identity')
-    (folder/'state_out.json').write_text(json.dumps({'gds':str(out)}))
-    frame={'grown_frame_um':[-8,-8,128,88]}
-    monkeypatch.setattr(DFG,'prepare_outside_frame',lambda *a,**k:frame,raising=False)
-    monkeypatch.setattr(LA,'sealring_spans_capable',lambda image:spans)
-    monkeypatch.setattr(LA,'resolve_step_configs',lambda *a,**k:{'KLayout.SealRing':cfg})
-    monkeypatch.setattr(LA,'state_from_direct',lambda *a,**k:tmp_path/'state.json')
-    monkeypatch.setattr(LA,'run_chain',lambda *a,**k:[folder])
-    return item,cfg
 
 
-def test_librelane_writes_grown_die_area(tmp_path,monkeypatch):
-    item,cfg=ll_fixture(tmp_path,monkeypatch)
-    LA.run_sealring(tmp_path,'neutral-image',tmp_path/'pdk','neutral',
-        gds_in=item[0],die_rect=[0,0,120,80],die_source='declared')
-    assert json.loads(cfg.read_text())['DIE_AREA']==[-8,-8,128,88]
 
 
-def test_old_librelane_image_retains_named_origin_refusal(tmp_path,monkeypatch):
-    item,cfg=ll_fixture(tmp_path,monkeypatch,spans=False)
-    with pytest.raises(Exception,match='LL_SEALRING_ORIGIN_UNSUPPORTED'):
-        LA.run_sealring(tmp_path,'neutral-image',tmp_path/'pdk','neutral',
-            gds_in=item[0],die_rect=[0,0,120,80],die_source='declared')
 
 
 def test_precheck_size_and_origin_accept_the_measured_finished_frame(tmp_path,monkeypatch):

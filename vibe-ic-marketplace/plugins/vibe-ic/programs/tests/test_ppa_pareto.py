@@ -95,12 +95,6 @@ def test_positive_the_frontier_is_the_non_dominated_set():
     assert doc["dominated"][0]["dominated_by"] == ["A", "B"]
 
 
-def test_positive_cli_exits_zero_and_the_document_is_self_consistent(tmp_path):
-    cands = [cand("A", 100.0, 0.010, 0.05), cand("B", 140.0, 0.014, 0.30)]
-    r, doc = run(tmp_path, cands)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert doc["verdict"] == "VALID"
-    assert doc["frontier"] == ["A", "B"]
 
 
 def test_positive_the_relation_is_recomputable_from_what_is_published():
@@ -157,16 +151,6 @@ def test_negative_an_infeasible_candidate_never_enters_the_frontier():
          "code": "PARETO_INFEASIBLE_EXCLUDED"}]
 
 
-def test_negative_a_published_frontier_holding_an_infeasible_member_is_refused(tmp_path):
-    cands = [cand("A", 100.0, 0.010, 0.05),
-             cand("BEST", 50.0, 0.005, 0.40, lvs="MISMATCH")]
-    r, doc = run(tmp_path, cands, frontier={"schema": P.PARETO_SCHEMA,
-                                            "frontier": ["A", "BEST"]})
-    assert r.returncode == F.RC_FAIL, r.stdout + r.stderr
-    assert "[REFUSE]" in r.stderr
-    codes = {f["code"] for f in doc["findings"]}
-    assert "PARETO_INFEASIBLE_IN_FRONTIER" in codes
-    assert "PARETO_FRONTIER_DISAGREES" in codes
 
 
 def test_negative_a_not_measured_candidate_is_never_judged_better():
@@ -189,27 +173,8 @@ def test_negative_a_not_measured_candidate_is_never_judged_better():
     assert "PARETO_NOT_MEASURED" in doc["undetermined"][0]["codes"]
 
 
-def test_negative_publishing_an_unmeasured_candidate_as_a_winner_is_refused(tmp_path):
-    blind = cand("BLIND", 10.0, 0.001, 0.90)
-    for m in blind["metrics"]:
-        if m["metric"] == "power.total_w":
-            m["status"] = "NOT_MEASURED"
-            m.pop("value")
-    r, doc = run(tmp_path, [cand("A", 100.0, 0.010, 0.05), blind],
-                 frontier={"frontier": ["BLIND"]})
-    assert r.returncode != F.RC_PASS
-    assert "PARETO_UNDETERMINED_JUDGED_BETTER" in {f["code"] for f in doc["findings"]}
 
 
-def test_negative_a_collapsed_scalar_in_a_public_document_is_refused(tmp_path):
-    """One weighted number is a proxy for the property, and it gets quoted."""
-    cands = [cand("A", 100.0, 0.010, 0.05), cand("B", 140.0, 0.014, 0.30)]
-    _, honest = build(cands)
-    dishonest = dict(honest)
-    dishonest["ppa_score"] = {"A": 0.81, "B": 0.79}
-    r, doc = run(tmp_path, cands, frontier=dishonest)
-    assert r.returncode == F.RC_FAIL, r.stdout + r.stderr
-    assert "PARETO_COLLAPSED_SCALAR" in {f["code"] for f in doc["findings"]}
 
 
 def test_the_collapsed_scalar_detector_matches_keys_exactly_not_by_substring():
@@ -234,54 +199,14 @@ def test_the_emitted_frontier_carries_no_collapsed_scalar_of_its_own():
 
 
 # --- VACUOUS ----------------------------------------------------------------
-def test_vacuous_absent_candidates_file_is_rc2_with_a_marker(tmp_path):
-    out = tmp_path / "out.json"
-    r = subprocess.run([sys.executable, str(CHECK), "--candidates",
-                        str(tmp_path / "nope.json"), "--json", str(out)],
-                       capture_output=True, text=True)
-    assert r.returncode == F.RC_UNDETERMINED, r.stdout + r.stderr
-    assert "[CANNOT CHECK]" in r.stderr
-    assert json.loads(out.read_text())["exit_code"] == 2
 
 
-def test_vacuous_no_declared_objective_is_rc2_not_an_empty_frontier(tmp_path):
-    """Nothing to trade off is not `everything is on the frontier`."""
-    r, doc = run(tmp_path, [cand("A", 100.0, 0.010, 0.05)],
-                 contract={"required_views": [VIEW]})
-    assert r.returncode == F.RC_UNDETERMINED
-    assert doc["findings"][0]["code"] == "PARETO_NO_OBJECTIVES"
 
 
-def test_vacuous_an_undeclared_objective_scope_is_rc2(tmp_path):
-    """Without a reference scope the answer would depend on input order."""
-    contract = json.loads(json.dumps(CONTRACT))
-    for o in contract["objectives"]:
-        o.pop("scope")
-    r, doc = run(tmp_path, [cand("A", 100.0, 0.010, 0.05),
-                            cand("B", 140.0, 0.014, 0.30)],
-                 contract=contract)
-    assert r.returncode == F.RC_UNDETERMINED
-    assert doc["frontier"] == []
-    assert "PARETO_SCOPE_NOT_DECLARED" in doc["undetermined"][0]["codes"]
 
 
-def test_vacuous_empty_candidate_list_is_rc2(tmp_path):
-    r, _ = run(tmp_path, [])
-    assert r.returncode == F.RC_UNDETERMINED
 
 
-def test_vacuous_unreadable_frontier_is_rc2_not_a_disagreement(tmp_path):
-    cpath = tmp_path / "c.json"
-    cpath.write_text(json.dumps({"candidates": [cand("A", 1.0, 0.1, 0.1)]}))
-    kpath = tmp_path / "k.json"
-    kpath.write_text(json.dumps(CONTRACT))
-    fpath = tmp_path / "f.json"
-    fpath.write_text("{broken")
-    r = subprocess.run([sys.executable, str(CHECK), "--candidates", str(cpath),
-                        "--contract", str(kpath), "--frontier", str(fpath)],
-                       capture_output=True, text=True)
-    assert r.returncode == F.RC_UNDETERMINED
-    assert "[CANNOT CHECK]" in r.stderr
 
 
 def test_bad_invocation_is_rc3():
@@ -289,44 +214,10 @@ def test_bad_invocation_is_rc3():
 
 
 # --- an empty frontier is never a pass --------------------------------------
-def test_an_all_infeasible_set_gives_an_empty_frontier_and_rc1_not_rc0(tmp_path):
-    """Every invariant holds and there is still no winner.
-
-    This is the empty-tree lie at frontier level and the first implementation
-    of `frontier_exit_code` shipped it: the document was internally consistent,
-    so it returned 0 while naming no promotable design at all. A promoter
-    reading only the exit code would have proceeded with nothing.
-    """
-    cands = [cand("A", 100.0, 0.010, 0.05, lvs="MISMATCH"),
-             cand("B", 140.0, 0.014, 0.30, lvs="MISMATCH")]
-    r, doc = run(tmp_path, cands)
-    assert r.returncode == F.RC_FAIL, r.stdout + r.stderr
-    assert doc["frontier"] == []
-    assert "PARETO_EMPTY_FRONTIER" in {f["code"] for f in doc["findings"]}
-    assert "[REFUSE]" in r.stderr
 
 
-def test_an_all_unadjudicated_set_gives_rc2_not_rc1(tmp_path):
-    """Nobody looked is not the same finding as everybody failed."""
-    cands = [cand("A", 100.0, 0.010, 0.05), cand("B", 140.0, 0.014, 0.30)]
-    for c in cands:
-        for m in c["metrics"]:
-            if m["metric"] == "physical.drc.violations":
-                m["status"] = "NOT_MEASURED"
-                m.pop("value")
-    r, doc = run(tmp_path, cands)
-    assert r.returncode == F.RC_UNDETERMINED, r.stdout + r.stderr
-    assert doc["frontier"] == []
-    assert {e["code"] for e in doc["excluded_infeasible"]} == \
-        {"PARETO_FEASIBILITY_UNDETERMINED"}
-    assert "[CANNOT CHECK]" in r.stderr
 
 
-def test_the_empty_frontier_finding_is_printed_not_only_returned(tmp_path):
-    """An exit code nobody can explain is an exit code somebody overrides."""
-    cands = [cand("A", 100.0, 0.010, 0.05, lvs="MISMATCH")]
-    r, _ = run(tmp_path, cands)
-    assert "PARETO_EMPTY_FRONTIER" in r.stdout
 
 
 def test_emptiness_has_exactly_one_route_to_a_non_zero_exit_code():

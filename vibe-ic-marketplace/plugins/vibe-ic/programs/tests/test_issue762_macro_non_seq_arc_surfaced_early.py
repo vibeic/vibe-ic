@@ -473,73 +473,10 @@ def test_a_too_short_waiver_does_not_excuse_anything(tmp_path):
 # --------------------------------------------------------------------------- #
 # 7. WIRING — an unwired program is a no-op
 # --------------------------------------------------------------------------- #
-def _advisory_commands(gate) -> list:
-    """The commands an `advisory_program_exit_zero` clause names, in BOTH
-    shapes the flow engine accepts.
-
-    `flow_compliance_check._evaluate_gate` takes a bare command STRING or a
-    MAPPING carrying `command:` (plus optional `condition_files_exist:`), and
-    `flow_gate_enforcement_audit._walk_clauses` reads the same two. This test
-    read only the string form and every Step-7 advisory clause acquired an
-    `advisory_reason:` in d155935a7d, so it crashed with AttributeError on a
-    dict -- a WIRING probe that stopped being able to see the wiring. Reading
-    both shapes is not a loosening: the third assertion below refuses any
-    shape that is neither, so a further schema change reddens HERE rather than
-    silently collecting nothing (a probe that collects nothing proves nothing).
-    """
-    out = []
-    for sub in gate.get("all_of", []):
-        if not (isinstance(sub, dict) and "advisory_program_exit_zero" in sub):
-            continue
-        spec = sub["advisory_program_exit_zero"]
-        assert isinstance(spec, (str, dict)), (
-            "an `advisory_program_exit_zero` clause is neither a command "
-            f"string nor a mapping; the flow engine rejects this: {spec!r}")
-        cmd = spec if isinstance(spec, str) else spec.get("command")
-        assert isinstance(cmd, str) and cmd, (
-            f"the clause names no command: {spec!r}")
-        out.append(cmd)
-    return out
 
 
-def test_gate_is_wired_into_the_flow_at_constraint_setup():
-    import importlib.util
-    import yaml
-    doc = yaml.safe_load(FLOW_YAML.read_text())
-    step7 = next(s for s in doc["steps"] if str(s.get("id")) == "7")
-    cmds = _advisory_commands(step7["gate"])
-    assert cmds, "Step 7 declares no advisory clause at all"
-    assert any(c.startswith("macro_non_seq_arc_contract_check ") for c in cmds), \
-        ("the gate must be invoked BY THE FLOW at Step 7 (constraint setup) — "
-         "an unwired program is a no-op")
-    # ...and this file's reading of the schema must agree with the SHIPPED
-    # reader, so the two cannot drift into disagreeing about what is wired.
-    spec = importlib.util.spec_from_file_location(
-        "flow_gate_enforcement_audit",
-        PROGRAMS / "flow_gate_enforcement_audit.py")
-    fga = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(fga)
-    shipped = {c["command"] for c in fga.clauses_in_flow(FLOW_YAML)
-               if c["slot"] == "advisory_program_exit_zero"}
-    assert set(cmds) <= shipped, sorted(set(cmds) - shipped)
-    assert any(c.startswith("macro_non_seq_arc_contract_check ")
-               for c in shipped)
-    # ...and nowhere later than Step 9 (synthesis), because the repair is an
-    # RTL/integration change that has to land before the netlist is built.
-    step_ids = [str(s.get("id")) for s in doc["steps"]]
-    assert step_ids.index("7") < step_ids.index("9")
 
 
-def test_declared_enforcement_agrees_with_the_slot_it_is_wired_to():
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "flow_gate_enforcement_audit",
-        PROGRAMS / "flow_gate_enforcement_audit.py")
-    fga = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(fga)
-    assert fga.declared_intent(
-        PROGRAMS, "macro_non_seq_arc_contract_check") == "advisory", (
-        "wired to the advisory slot, so it must not declare blocking (#306)")
 
 
 def test_the_flow_gate_evaluator_actually_runs_it(tmp_path):

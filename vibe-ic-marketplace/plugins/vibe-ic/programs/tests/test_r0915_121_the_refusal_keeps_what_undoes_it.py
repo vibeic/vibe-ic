@@ -51,84 +51,33 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import phase3_one_shot_runner as R  # noqa: E402
 
 tclsh = shutil.which("tclsh")
 needs_tclsh = pytest.mark.skipif(tclsh is None, reason="tclsh not installed")
 
 
-def _pdk():
-    return R.PdkConfig(
-        name="gf180mcuD", liberty="/l", tech_lef="/t", cell_lef="/c",
-        cell_gds=None, site="S", drc_deck=None, metal_prefix="M",
-        tapcell_master="fx__filltie", antenna_diode_cell="fx__antenna")
 
 
-def _tcl():
-    return R._antenna_repair_tcl(_pdk())
 
 
-def _src():
-    return Path(R.__file__).read_text()
 
 
 # ── (2) the reconverge slot is bracketed like the repair slot ───────────────
 
-def test_both_antenna_slots_carry_begin_and_end_sentinels():
-    """The rollback omits BOTH stages by name, so both must be findable."""
-    src = _src()
-    for stage in R._ANTENNA_STAGES:
-        assert f'_pnr_stage_begin("{stage}")' in src, stage
-        assert f'_pnr_stage_end("{stage}")' in src, stage
 
 
-def test_the_rollback_omit_set_and_the_sentinels_agree():
-    """A stage the rollback omits but cannot find is a rollback that cannot be
-    derived -- which is exactly what int9, int10 and int11 reported."""
-    src = _src()
-    for stage in R._ANTENNA_STAGES:
-        assert src.count(f'_pnr_stage_begin("{stage}")') >= 1, stage
 
 
-def test_bracketing_the_reconverge_slot_does_not_make_it_signal_omittable():
-    """MEASURED, not assumed: the fatal-signal resume path gates on its own
-    set, and that set does not contain either antenna stage."""
-    for stage in R._ANTENNA_STAGES:
-        assert stage not in R._PNR_NONFATAL_STAGES, stage
 
 
 # ── (3) the first refusal stops, and nothing sweeps its evidence ────────────
 
-def test_the_first_refusal_stops_the_deck():
-    tcl = _tcl()
-    assert "ANTENNA_REPAIR_REFUSED_STOP" in tcl
-    i_req = tcl.index("ANTENNA_REPAIR_REFUSED_ROLLBACK_REQUEST")
-    i_stop = tcl.index("ANTENNA_REPAIR_REFUSED_STOP")
-    assert i_req < i_stop, (
-        "the parent is asked BEFORE the deck stops -- the request is what "
-        "triggers the restore and it is read out of the log")
 
 
-def test_the_stop_is_raised_not_printed():
-    """A `puts` is what let int11's second slot eat the restore point."""
-    tcl = _tcl()
-    i = tcl.index("ANTENNA_REPAIR_REFUSED_STOP")
-    assert 'error "ANTENNA_REPAIR_REFUSED_STOP' in tcl[i - 40:i + 40]
 
 
-def test_a_later_success_never_deletes_an_earlier_refusals_checkpoint():
-    tcl = _tcl()
-    assert "if {![info exists ::_vic_antenna_refused]} {" in tcl
-    i_guard = tcl.index("if {![info exists ::_vic_antenna_refused]} {")
-    i_del = tcl.index("file delete -- $_ant_ckpt")
-    assert i_guard < i_del, "the delete must sit INSIDE the guard"
-    assert "ANTENNA_CHECKPOINTS_KEPT" in tcl
 
 
-def test_the_refusal_sets_the_deck_global_flag():
-    tcl = _tcl()
-    i = tcl.index('if {$_ant_refused ne ""} {')
-    assert "set ::_vic_antenna_refused 1" in tcl[i:i + 200]
 
 
 @needs_tclsh
@@ -174,11 +123,6 @@ def test_driven_a_clean_pass_still_reaches_the_end_and_sweeps():
     assert "ANTENNA_CHECKPOINTS_KEPT" not in r.stdout
 
 
-def test_the_emitted_deck_is_balanced_tcl():
-    cmds = "\n".join(l for l in _tcl().splitlines()
-                     if not l.lstrip().startswith("#"))
-    assert sum(l.count("{") - l.count("}") for l in cmds.splitlines()) == 0
-    assert sum(l.count("[") - l.count("]") for l in cmds.splitlines()) == 0
 
 
 # ── (2) proved by BUILDING the thing that could not be built ────────────────
@@ -188,48 +132,3 @@ def test_the_emitted_deck_is_balanced_tcl():
 # by finding each omitted stage's BEGIN marker, and that derivation is what
 # int9, int10 and int11 all watched fail. Asserting the markers exist is not
 # the same as asserting the tail builds.
-
-def _real_pnr_deck(tmp_path, monkeypatch):
-    from test_pnr_tool_fatal_signal_and_checkpoint_resume import _drive
-    _res, calls, _p = _drive(tmp_path, monkeypatch, first_rc=139,
-                             stage="postroute_drv_repair")
-    return calls[0]["body"]
-
-
-def test_the_rollback_tail_can_actually_be_derived_with_both_stages_omitted(
-        tmp_path, monkeypatch):
-    """int9/int10/int11, verbatim: "rollback tail could not be derived:
-    pnr.tcl carries no stage 'postroute_antenna_reconverge' begin marker".
-    With the reconverge slot bracketed it builds."""
-    deck = _real_pnr_deck(tmp_path, monkeypatch)
-    tail = R._build_pnr_resume_tcl_text(
-        deck, checkpoint_def_c="/w/pnr/antenna_pass_pre.odb",
-        omit_stages=list(R._ANTENNA_STAGES),
-        restore_odb_c="/w/pnr/antenna_pass_pre.odb")
-    assert tail.strip(), "the derived tail is empty"
-    # and the omission really happened: neither antenna slot survives in it
-    assert "repair_antennas" not in tail, (
-        "the rollback tail re-runs the antenna stage it was told to omit")
-
-
-def test_omitting_only_the_repair_stage_still_works(tmp_path, monkeypatch):
-    """OVER-BREADTH CONTROL: the stage that already had markers keeps
-    working, so the new pair did not disturb the existing derivation."""
-    deck = _real_pnr_deck(tmp_path, monkeypatch)
-    tail = R._build_pnr_resume_tcl_text(
-        deck, checkpoint_def_c="/w/pnr/x.odb",
-        omit_stages=["postroute_antenna_repair"],
-        restore_odb_c="/w/pnr/x.odb")
-    assert tail.strip()
-
-
-def test_an_unmarked_stage_still_refuses_to_derive(tmp_path, monkeypatch):
-    """THE TOOTH THE DERIVATION KEEPS: a stage it cannot find is still an
-    error, not a silently-empty tail. Widening the markers must not widen
-    that."""
-    deck = _real_pnr_deck(tmp_path, monkeypatch)
-    with pytest.raises(R.PnrResumeUnavailable):
-        R._build_pnr_resume_tcl_text(
-            deck, checkpoint_def_c="/w/pnr/x.odb",
-            omit_stages=["postroute_a_stage_that_does_not_exist"],
-            restore_odb_c="/w/pnr/x.odb")

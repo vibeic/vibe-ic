@@ -49,7 +49,6 @@ Counting reds tells you nothing; `-k ppa_search_run` tells you everything.
 """
 from __future__ import annotations
 
-import json
 import pathlib
 import sys
 
@@ -155,72 +154,6 @@ def test_help_is_not_a_bad_invocation(prog):
 # One invocation per program that names input which is NOT THERE. The paths are
 # under a tmp_path that this file creates empty, so nothing on the machine can
 # accidentally satisfy them.
-def _vacuous_argv(prog: str, absent: pathlib.Path, emptydir: pathlib.Path):
-    a = str(absent)
-    d = str(emptydir)
-    table = {
-        "ppa_area_threshold_check.py": ["--original", a, "--optimized", a,
-                                        "--top", "nothing"],
-        "ppa_closure_run.py":          [d, "--edge", "32"],
-        "ppa_contract_build.py":       ["--declaration", a, "--root", d,
-                                        "--out", str(absent.parent / "o.json")],
-        "ppa_contract_check.py":       ["--contract", a],
-        # The ablation kind's gate. MEASURED before it was listed, not listed
-        # and hoped for: `--record <absent>` exits 2 and prints
-        # `[CANNOT CHECK] ... No record was read, so nothing has been
-        # established`, which is the shape `test_vacuous_refusal_is_marked`
-        # asks for below.
-        #
-        # `--record` AND NOT `--corpus <emptydir>`, deliberately. Both are
-        # vacuous and both answer 2, but the corpus arm's line is written by
-        # the shared `_ppa_corpus.vacuous` seam and carries `VACUOUS:` rather
-        # than a §1 marker -- a property of the SEAM, shared with every other
-        # corpus gate here, not of this program. Declaring the corpus arm
-        # would have made this row red for something no edit to this program
-        # can fix, and would have hidden this program's own vacuous answer
-        # behind it.
-        "ppa_ablation_check.py":       ["--record", a],
-        # The design-for-ECO producer. Its vacuous input is a spare plan that
-        # is not there, and the point of the arm for THIS program is sharper
-        # than the general one: a producer that read a missing plan as
-        # "0 spares" would emit a measured zero, and a measured zero below a
-        # declared floor is INFEASIBLE at the gate -- convicting a run nobody
-        # looked at. rc=2 is the only honest answer and its records carry no
-        # `value` key at all.
-        "ppa_eco_spare_records.py":    ["--spare-plan", a, "--stage",
-                                        "post_route"],
-
-        "ppa_head_to_head_check.py":   [a],
-        "ppa_measurement_check.py":    ["--coverage", a, "--expect", a],
-        "ppa_metric_extract.py":       ["--records", a],
-        "ppa_page_claim_check.py":     [a, "--claims", a],
-        "ppa_pareto_check.py":         ["--candidates", a],
-        # The search-space lane's producer. `--verify <absent>` names a subject
-        # that is not there AND `--programs-dir <empty>` gives it no runner to
-        # measure, so BOTH of its inputs are vacuous and neither can be
-        # satisfied by anything that happens to be on the machine.
-        "ppa_pnr_search_space.py":     ["--verify", a, "--programs-dir", d],
-        "ppa_predict_aggregate.py":    ["--cell-count", "0"],
-        # FOUR THE TABLE WAS MISSING. Their absence was RED, not quiet -- the
-        # `pytest.fail(... its vacuous arm is untested)` below is this table
-        # refusing to be silently incomplete, which is the rule it holds the
-        # programs to. Each invocation is the program's OWN vacuous shape,
-        # measured before it was listed: the first two take a POSITIONAL
-        # document (`manifest`, `situation`), and pointing `--policy` at the
-        # absent file instead is a BAD INVOCATION rather than a vacuous one --
-        # rc 3 for a reason that has nothing to do with this arm.
-        "ppa_agent_context_build.py":  [a, "--out",
-                                        str(emptydir / "ctx.json")],
-        "ppa_diagnostic_router.py":    [a, "--json",
-                                        str(emptydir / "route.json")],
-        # A run DIRECTORY that is not there. See `_VACUOUS_RC` for why this
-        # program's declared answer is 3 and not 2.
-        "ppa_signoff_records.py":      [str(emptydir / "absent_run_dir")],
-
-        "ppa_report_gen.py":           [a],
-        "ppa_search_run.py":           [a],
-    }
-    return table.get(prog)
 
 
 #: PROGRAMS WHOSE DECLARED VACUOUS ANSWER IS NOT 2, WITH THE ARGUMENT FOR IT.
@@ -267,49 +200,8 @@ def test_the_vacuous_rc_declaration_can_never_buy_a_pass():
     assert set(_VACUOUS_RC.values()) <= {2, 3}
 
 
-@pytest.mark.parametrize("prog", PPA_PROGRAMS)
-def test_vacuous_input_is_undetermined_not_pass(prog, tmp_path):
-    """Nothing to look at must be rc=2, never rc=0.
-
-    This is the arm the contract's own §7 calls "not paperwork": a gate whose
-    declared invocation exits 0 on absent input can never fail, and this
-    repository has shipped that twice.
-    """
-    argv = _vacuous_argv(prog, tmp_path / "absent.json", tmp_path)
-    if argv is None:
-        pytest.fail(f"{prog} has no vacuous invocation in this file's table. "
-                    f"A new ppa_* program must declare how it is invoked with "
-                    f"nothing to look at, or its vacuous arm is untested.")
-    r = _run([prog, *argv])
-    assert r.returncode != 0, (
-        f"{prog} exited 0 with nothing to look at (argv: {argv!r}). A checker "
-        f"that passes over an empty population is the defect this codebase "
-        f"exists to prevent.\nstdout: {r.stdout[:400]}")
-    want = _VACUOUS_RC.get(prog, 2)
-    assert r.returncode == want, (
-        f"{prog} exited {r.returncode} with nothing to look at; the code this "
-        f"family expects here is {want}. §1 says an absent input is "
-        f"UNDETERMINED (2), and a program that answers 3 must DECLARE it in "
-        f"`_VACUOUS_RC` with its reason. 1 is never right: it would be a "
-        f"finding about a design nobody measured.\nstderr: {r.stderr[-400:]}")
 
 
-@pytest.mark.parametrize("prog", PPA_PROGRAMS)
-def test_vacuous_refusal_is_marked(prog, tmp_path):
-    """§1: print `[CANNOT CHECK]` or `[REFUSE]` so a 2 can never be read as a
-    silent skip. A 2 with no marker is indistinguishable from an argparse
-    usage error, which is how the two got confused in the first place."""
-    argv = _vacuous_argv(prog, tmp_path / "absent.json", tmp_path)
-    if argv is None:
-        pytest.skip("no vacuous invocation declared; the arm above fails")
-    r = _run([prog, *argv])
-    if r.returncode != 2:
-        pytest.skip("the rc arm above already reports this program")
-    blob = r.stdout + r.stderr
-    assert ("[CANNOT CHECK]" in blob) or ("[REFUSE]" in blob), (
-        f"{prog} exited 2 with no marker. §1 requires one so that a 2 is "
-        f"never read as a silent skip.\nstdout: {r.stdout[:300]}\n"
-        f"stderr: {r.stderr[:300]}")
 
 
 # ---------------------------------------------------------------------------

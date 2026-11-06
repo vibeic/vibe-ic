@@ -296,4 +296,3 @@ def test_checked_in_requirements_remain_future_after_native_absent_pad_check(tmp
     _pad_input(project, "missing_report", _current_inputs(project, False))
     rc, out = _gate(project)
     assert rc == 0 and "not yet measurable" in out, out
-

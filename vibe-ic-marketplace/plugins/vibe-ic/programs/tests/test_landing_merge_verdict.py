@@ -8,23 +8,46 @@ pushes nothing from a local clone, so neither ever fires. Measured on
 Branch not protected`, no required status check exists. There is no
 server-side check to fall back on and none can be created.
 
+`tools/gatekeeper-verify-merge.sh` puts the existing gates on the path that
+lands code. This file gates the DECISION that script defers to
+(`landing_merge_verdict.decide`) and the plumbing that feeds it.
+
+WHAT THIS FILE REFUSES
+======================
+1. **A gate that cannot refuse.** Nine independent refusal reasons, each
+   asserted on the VERDICT rather than on the printed text, so the mutant that
+   neuters only the decision line kills them.
+2. **A gate that refuses everything.** :func:`test_a_known_good_pr_shape_is_allowed`
+   and the end-to-end paired guard: a landing that broke nothing must LAND OK.
+   PR #1020 lost a whole corpus's one true finding to an always-fires mutant
+   hours before #1019 was filed; a landing gate that refuses every landing is a
+   ban, not a check.
+3. **Crediting a silenced failure as a fix.** `failed -> skipped` and
+   `failed -> absent` are refusals. Without that row the differential rewards
+   the cheat it exists to catch: delete the red test and the failed set shrinks.
+4. **A permissive degradation.** Every way the differential can lose
+   information — empty base, no overlap, a truncated candidate run, a selected
+   file that produced no test case — is asserted to go STRICTER, never softer.
+   That list was asked of the CANDIDATE arm only. The BASE arm's completeness
+   is the one that goes SOFTER (vibe-ic#1443): `silenced` and `weakened` are
+   read off what was red or passing ON THE BASE, so a base failure that never
+   got measured is a base failure the branch may delete for free. Measured on
+   `3d13e2c59`, one selected file missing from the base report turned
+   `REFUSE 1 FAILING TEST(S) WERE SILENCED` into `LAND OK` with every other
+   input byte-identical.
 5. **A verdict about the wrong tree.** `gh pr merge --squash` creates the
    forge's merge tree. A rebase that produces a different tree, or a forge that
    disagrees with the local merge, is refused before any suite is run.
 """
 from __future__ import annotations
 
-import ast
 import json
 import hashlib
-import importlib.util
 import os
 import re
-import signal
 import shutil
 import subprocess
 import sys
-import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -32,11 +55,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import _watchdog  # noqa: E402
-import _hermetic_engine_capability as _CAP  # noqa: E402
+import landing_merge_verdict as V  # noqa: E402
 
 import _progress_run as _pr  # noqa: E402
-import _outcome_states as states  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _PROG = _PROGRAMS / "landing_merge_verdict.py"
@@ -60,59 +81,6 @@ def _service_program():
 # described is kept here, minus the two removed modules and plus the three the
 # survivors now run (`landing_execution_plan.py`,
 # `landing_record_primitives.py`, `landing_push_preflight.py`).
-_VERIFIER_CLOSURE = frozenset({
-    "tools/ci/_gate_dispatch.sh",
-    "tools/ci/benchmark_data_landing_checkout.py",
-    "tools/ci/hermetic_candidate_runner.py",
-    "tools/ci/hermetic_git_subject.py",
-    "tools/ci/hermetic_landing_arm_receipt.py",
-    "tools/ci/hermetic_progress_emit.py",
-    "tools/ci/hermetic_test_arm_entry.sh",
-    "tools/ci/landing_completion_record.py",
-    "tools/ci/landing_execution_plan.py",
-    "tools/ci/landing_push_preflight.py",
-    "tools/ci/landing_record_primitives.py",
-    "tools/ci/owned_command.py",
-    "tools/ci/repo_hygiene_gates.sh",
-    "tools/ci/routed_def_corpus.py",
-    "tools/ci/trusted_test_selection.py",
-    "tools/ci/trusted_worktree_attest.py",
-    "tools/gatekeeper-land.sh",
-    "tools/gatekeeper-verify-merge.sh",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/_atomic_artefact.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/_corpus_location.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/_crash_safe_scratch.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/_gate_usage_exit.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/_owned_process_supervisor.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/_progress_run.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/_prose_polarity.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/_pytest_progress_plugin.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/_routed_checker_progress.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/_semantic_child_progress.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/_vacuous_exit.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/_watchdog.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/ci_harness_timeout_ceiling_check.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/ci_targeted_test_select.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/drc_vacuous_pass_check.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/gate_process_attestation.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/generated_test_list_min_guard.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/hygiene_finding_delta.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/landing_merge_verdict.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/landing_noop_verdict_check.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/macro_obs_geometry_intersect_check.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/matrix_mutation_ledger.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/pytest_per_file_junit.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/repo_hygiene_parallel.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/step_internal_fail_bubble_up_check.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/step_metrics.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_flow_matrix_census_freshness.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_flow_matrix_coverage.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_matrix_artefact_mutation_channel.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_matrix_mutation_ledger.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/tool_diagnostic_id_acceptance.json",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/tool_diagnostic_id_gate.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/trusted_pytest_entry.py",
-})
 _SELECT_CONTROL_TESTS = (
     "programs/tests/test_ci_harness_timeout_ceiling_check.py",
     "programs/tests/test_gate_process_attestation.py",
@@ -144,38 +112,139 @@ _RED_TEST_TIER_LOG = """=== gatekeeper landing gates — base=origin/main ===
 """
 
 
+def _delta(**kw):
+    d = V.Delta(base_total=kw.pop("base_total", 10),
+                candidate_total=kw.pop("candidate_total", 10),
+                overlap=kw.pop("overlap", 10))
+    for k, v in kw.items():
+        setattr(d, k, v)
+    return d
 
 
+def _decide(**over):
+    """A LAND OK baseline; each test perturbs exactly one fact."""
+    kw = dict(rebase_status="ok", expected_tree=TREE, verified_tree=TREE,
+              github_tree=TREE, land=V.parse_land_log(_GOOD_LOG),
+              base_land=V.parse_land_log(_GOOD_LOG),
+              delta=_delta(), verified_sha=SHA, truncated=False,
+              dropped_files=(), selection_size=21,
+              hygiene={"status": "CLEAN", "introduced": [], "carried": [],
+                       "cleared": [], "candidate_findings": 0,
+                       "base_findings": 0, "declared": 1})
+    kw.update(over)
+    return V.decide(**kw)
 
 
 # ============================================================ THE PAIRED GUARD
 
 
+def test_a_known_good_pr_shape_is_allowed():
+    """LOAD-BEARING, and the reason it is first. Everything else in this file
+    proves the gate CAN refuse; a gate that refuses every landing is a ban.
+
+    Nothing here is a stub of the decision: the log is a real
+    `gatekeeper-land.sh` transcript shape, the trees agree with the forge, and
+    the differential is empty."""
+    v = _decide()
+    assert v.ok is True, v.reasons
+    assert v.reasons == []
+    assert v.unmeasurable is False
 
 
+def test_a_pre_existing_red_base_still_allows_the_landing():
+    """`main` is RED right now (`test_ci_harness_timeout_ceiling_check`, 3 of 40
+    at `e4880703b`, in files nothing in flight touches). Demanding green would
+    refuse EVERY landing today — which is how a repo ends up with a landing path
+    that has no gate. The same failure on both sides is nobody's."""
+    d = _delta(preexisting=["m::t_red"])
+    v = _decide(delta=d, land=V.parse_land_log(_RED_TEST_TIER_LOG))
+    assert v.ok is True, v.reasons
+    assert any("pre-existing" in n for n in v.notes)
 
 
+def test_the_test_tier_failing_is_not_by_itself_a_refusal():
+    """`gatekeeper-land.sh` withholds the stamp on ANY red test. The differential
+    owns that verdict and no other: every OTHER gate's FAIL still blocks."""
+    log = V.parse_land_log(_RED_TEST_TIER_LOG)
+    assert log.test_tier_failed is True
+    assert log.blocking_failures == []
 
 
+def test_a_test_tier_failure_with_all_green_machine_record_is_refused():
+    v = _decide(land=V.parse_land_log(_RED_TEST_TIER_LOG), delta=_delta())
+    assert v.ok is False
+    assert any("FAILED BUT THE CANDIDATE REPORT CONTAINS NO RED" in reason
+               for reason in v.reasons)
 
 
+def test_fixing_a_pre_existing_failure_is_reported_and_never_required():
+    v = _decide(delta=_delta(fixed=["m::t_was_red"]))
+    assert v.ok is True
+    assert any("now pass" in n for n in v.notes)
 
 
 # ==================================================== THE NINE REFUSAL REASONS
 
 
+def test_a_new_failure_this_branch_owns_is_refused():
+    v = _decide(delta=_delta(new_failures=["m::t_new"]))
+    assert v.ok is False
+    assert any("NEW FAILURE" in r for r in v.reasons)
 
 
+def test_a_silenced_failure_is_refused_and_is_never_an_improvement():
+    """`failed -> skipped` shrinks the failed set without fixing anything. If it
+    counted as an improvement, the cheapest way to pass this gate would be to
+    delete the test that fails."""
+    v = _decide(delta=_delta(silenced=["m::t_skipped_now"]))
+    assert v.ok is False
+    assert any("SILENCED" in r for r in v.reasons)
 
 
+def test_a_passing_test_weakened_to_skip_is_refused():
+    """Green base evidence must not become a stale permission to stop asking.
+
+    A cached PASS followed by a candidate SKIP is unsafe even when the live
+    base would still pass; if runtime drift made the live base red, allowing
+    PASS -> SKIP would hide the exact silenced failure the differential exists
+    to catch.
+    """
+    v = _decide(delta=_delta(weakened=["m::t_skipped_now"]))
+    assert v.ok is False
+    assert any("WEAKENED" in r for r in v.reasons)
 
 
+def test_a_rebase_conflict_is_refused():
+    v = _decide(rebase_status="conflict")
+    assert v.ok is False
+    assert any("REBASE CONFLICT" in r for r in v.reasons)
 
 
+def test_verifying_a_tree_that_is_not_the_merge_tree_is_refused():
+    v = _decide(verified_tree=OTHER_TREE, github_tree=TREE)
+    assert v.ok is False
+    assert any("WRONG TREE" in r for r in v.reasons)
 
 
+def test_the_forge_disagreeing_with_the_local_merge_is_refused():
+    """`gh pr merge --squash` creates a commit with the FORGE's merge tree. If
+    the local computation disagrees, the verified tree is not the landed one."""
+    v = _decide(github_tree=OTHER_TREE)
+    assert v.ok is False
+    assert any("FORGE DISAGREES" in r for r in v.reasons)
 
 
+def test_any_non_test_gate_failure_is_refused_when_there_is_no_base_to_compare():
+    """Missing baseline is incomplete, even when a candidate failure is visible."""
+    log = V.parse_land_log(
+        "=== gatekeeper landing gates ===\n"
+        "  PASS  targeted tests (3 file(s))\n"
+        "  FAIL  tree contains the base it claims as parent\n")
+    v = _decide(land=log, base_land=None)
+    assert v.ok is False
+    assert any("tree contains the base" in r for r in v.reasons)
+    assert v.admission == "INCOMPLETE"
+    assert "BASE_GATE_RECORD_MISSING_OR_INVALID" in v.incomplete
 
 
 # ==================================== THE GATE TIER GETS THE SAME DIFFERENTIAL
@@ -186,114 +255,593 @@ _RED_TEST_TIER_LOG = """=== gatekeeper landing gates — base=origin/main ===
 # compared, not asserted.
 
 
+def _gate_log(*lines, stamp=None):
+    body = "=== gatekeeper landing gates ===\n" + "".join(
+        f"  {w}  {label}\n" for w, label in lines)
+    if stamp:
+        body += f"=== ALL GATES PASS — stamped {stamp} ===\n"
+    elif any(word == "FAIL" for word, _ in lines):
+        body += V._FAILURES_TERMINAL + "\n"
+    else:
+        body += V._NON_TARGET_COMPLETE + "\n"
+    return V.parse_land_log(body)
 
 
+def test_a_gate_failing_on_the_base_too_is_not_this_branchs():
+    base = _gate_log(("FAIL", "repo hygiene gates"), ("PASS", "plugin full audit"))
+    cand = _gate_log(("FAIL", "repo hygiene gates"), ("PASS", "plugin full audit"),
+                     ("PASS", "targeted tests (3 file(s))"))
+    v = _decide(land=cand, base_land=base)
+    assert v.ok is True, v.reasons
+    assert any("fails on the base too" in n for n in v.notes)
 
 
+def test_a_gate_this_branch_reddens_is_refused():
+    base = _gate_log(("PASS", "repo hygiene gates"))
+    cand = _gate_log(("FAIL", "repo hygiene gates"),
+                     ("PASS", "targeted tests (3 file(s))"))
+    v = _decide(land=cand, base_land=base)
+    assert v.ok is False
+    assert any("PASSED ON THE BASE" in r for r in v.reasons)
 
 
+def test_a_failing_gate_that_stops_being_asked_is_refused():
+    """The gate-tier twin of `failed -> skipped`. Deleting the gate that fails is
+    the cheapest way to make a differential green, so it is a refusal."""
+    base = _gate_log(("FAIL", "repo hygiene gates"))
+    cand = _gate_log(("SKIP", "repo hygiene gates"),
+                     ("PASS", "targeted tests (3 file(s))"))
+    v = _decide(land=cand, base_land=base)
+    assert v.ok is False
+    assert any("SILENCED RATHER THAN FIXED" in r for r in v.reasons)
+
+    gone = _gate_log(("PASS", "targeted tests (3 file(s))"))
+    v2 = _decide(land=gone, base_land=base)
+    assert v2.ok is False
+    assert any("no longer asked here" in r for r in v2.reasons)
 
 
+def test_repairing_a_gate_the_base_was_failing_is_reported():
+    base = _gate_log(("FAIL", "worktree unchanged since the gates started"))
+    cand = _gate_log(("PASS", "worktree unchanged since the gates started"),
+                     ("PASS", "targeted tests (3 file(s))"))
+    v = _decide(land=cand, base_land=base)
+    assert v.ok is True, v.reasons
+    assert any("now passes" in n for n in v.notes)
 
 
+def test_the_replay_disagreeing_with_the_merge_is_refused():
+    """Rebasing asks whether the branch's intent still applies; merging asks
+    whether its text still combines. The phantom-revert shape is where the two
+    answers come apart, and only one of them is what `gh pr merge` creates."""
+    v = _decide(replayed_tree=OTHER_TREE)
+    assert v.ok is False
+    assert any("REPLAY AND THE MERGE DISAGREE" in r for r in v.reasons)
 
 
+def test_a_stamp_naming_another_commit_is_refused():
+    """The v1.9.16 shape: the suites read a WORKTREE for minutes while the stamp
+    names a COMMIT, so a tree that never existed got stamped."""
+    log = V.parse_land_log(_GOOD_LOG.replace(SHA[:9], "deadbeef1"))
+    v = _decide(land=log)
+    assert v.ok is False
+    assert any("ANOTHER COMMIT" in r for r in v.reasons)
 
 
+def test_a_truncated_candidate_run_is_refused_not_passed():
+    """`--maxfail=10` stops pytest. The tests after it did not run, so their
+    absence is not a result and the differential cannot be computed."""
+    v = _decide(truncated=True, dropped_files=["programs/tests/test_x.py"])
+    assert v.ok is False
+    assert any("TRUNCATED" in r for r in v.reasons)
 
 
+def test_a_selected_file_that_produced_no_test_case_is_refused():
+    """Chosen and then never asked. A selection that silently drops a file is
+    the hole #1019 is about, one level down."""
+    v = _decide(dropped_files=["programs/tests/test_ghost.py"])
+    assert v.ok is False
+    assert any("NO TEST CASE" in r for r in v.reasons)
 
 
 # ============================= ARM A'S COMPLETENESS IS ALSO A REFUSAL (#1443)
 
 
+def test_a_base_arm_that_did_not_finish_is_refused_not_passed():
+    """The same question as the test above, asked of the arm that is SUBTRACTED.
+
+    #1443's law: "a two-arm comparison must assert that both arms emitted a
+    summary line before it subtracts anything." The candidate arm had that
+    check; the base arm had only `base_total == 0`, which is all-or-nothing and
+    only a NOTE. A base arm that ran three of its five files sits between the
+    two and was subtracted as though whole."""
+    v = _decide(base_dropped_files=["programs/tests/test_alpha.py"])
+    assert v.ok is False, v.notes
+    assert any("NO TEST CASE ON THE BASE" in r for r in v.reasons), v.reasons
 
 
+def test_a_complete_base_arm_is_not_flagged_as_partial():
+    """THE FALSE-POSITIVE CONTROL. The check above must fire on a partial base
+    arm and on nothing else — a gate that refuses every landing is a ban."""
+    v = _decide(base_dropped_files=())
+    assert v.ok is True, v.reasons
+    assert not any("ON THE BASE" in r for r in v.reasons), v.reasons
 
 
+def test_a_caller_that_never_says_what_arm_a_was_asked_for_is_disclosed():
+    """DEGRADE LOUDLY. A caller supplying no base selection leaves the check
+    unable to fire, and a check that cannot fire must not read as a clean sheet.
+    Missing required coverage blocks admission while preserving the disclosure."""
+    v = _decide(base_selection_supplied=False)
+    assert v.ok is False, v.reasons
+    assert v.admission == "INCOMPLETE"
+    assert any("completeness was NOT checked" in n for n in v.notes), v.notes
 
 
 # ================================================= UNMEASURABLE IS NOT A PASS
 
 
+def test_land_gates_that_did_not_report_are_not_a_pass():
+    v = _decide(land=V.parse_land_log("nothing here\n"))
+    assert v.ok is False
+    assert v.unmeasurable is True
+    assert any("DID NOT RUN" in r for r in v.reasons)
 
 
+def test_a_partial_non_target_gate_log_is_not_a_composite_pass():
+    partial = V.parse_land_log(
+        "=== gatekeeper landing gates — base=origin/main ===\n"
+        "  PASS  one cheap gate\n")
+    v = _decide(land=partial, candidate_gate_rc=0,
+                require_composite_gate_record=True)
+    assert v.ok is False
+    assert v.unmeasurable is True
+    assert any("NO COMPLETE TERMINAL RECORD" in r for r in v.reasons)
 
 
+def test_a_non_target_gate_abnormal_exit_refuses_even_with_a_fake_terminal():
+    fake = V.parse_land_log(
+        "=== gatekeeper landing gates — base=origin/main ===\n"
+        "  PASS  one cheap gate\n"
+        "=== ALL NON-TARGET GATES COMPLETE — stamp withheld for composite verdict ===\n")
+    v = _decide(land=fake, candidate_gate_rc=2,
+                require_composite_gate_record=True)
+    assert v.ok is False
+    assert v.unmeasurable is True
+    assert any("DID NOT EXIT NORMALLY" in r for r in v.reasons)
 
 
+def test_a_complete_non_target_gate_record_can_join_the_composite():
+    complete = V.parse_land_log(
+        "=== gatekeeper landing gates — base=origin/main ===\n"
+        "  PASS  one cheap gate\n"
+        "=== ALL NON-TARGET GATES COMPLETE — stamp withheld for composite verdict ===\n")
+    v = _decide(land=complete, base_land=complete, candidate_gate_rc=0,
+                require_composite_gate_record=True)
+    assert v.ok is True, v.reasons
 
 
+def test_a_candidate_test_arm_that_wrote_the_tree_is_refused():
+    v = _decide(candidate_test_worktree_status="dirty")
+    assert v.ok is False
+    assert any("TEST ARM WROTE" in r for r in v.reasons)
 
 
+def test_an_uninspectable_candidate_test_worktree_is_unmeasurable():
+    v = _decide(candidate_test_worktree_status="unknown")
+    assert v.ok is False
+    assert v.unmeasurable is True
+    assert any("COULD NOT BE INSPECTED" in r for r in v.reasons)
 
 
+def test_a_candidate_test_arm_that_moved_to_another_commit_is_refused():
+    v = _decide(candidate_test_worktree_status="wrong-head")
+    assert v.ok is False
+    assert any("MOVED OFF THE VERIFIED COMMIT" in r for r in v.reasons)
 
 
+def test_a_base_test_arm_that_wrote_the_tree_is_refused():
+    v = _decide(base_test_worktree_status="dirty")
+    assert v.ok is False
+    assert any("BASE TEST ARM WROTE" in r for r in v.reasons)
 
 
+def test_an_uninspectable_base_test_worktree_is_unmeasurable():
+    v = _decide(base_test_worktree_status="unknown")
+    assert v.ok is False
+    assert v.unmeasurable is True
+    assert any("BASE TEST WORKTREE COULD NOT BE INSPECTED" in r
+               for r in v.reasons)
 
 
+def test_a_base_test_arm_that_moved_to_another_commit_is_refused():
+    v = _decide(base_test_worktree_status="wrong-head")
+    assert v.ok is False
+    assert any("MOVED OFF THE BASE COMMIT" in r for r in v.reasons)
 
 
+def test_a_candidate_that_ran_no_tests_is_not_a_pass():
+    v = _decide(delta=_delta(candidate_total=0, base_total=0, overlap=0))
+    assert v.ok is False
+    assert v.unmeasurable is True
+    assert any("NO TESTS" in r for r in v.reasons)
 
 
+def test_a_missing_tree_is_not_a_pass():
+    v = _decide(expected_tree="")
+    assert v.ok is False
+    assert v.unmeasurable is True
 
 
+def test_an_unmeasurable_refusal_still_names_the_reason_it_already_found():
+    """A conflicting rebase and an uncomputable merge tree are the SAME event
+    seen twice. The early return used to hand back a FRESH reason list, so the
+    operator got the symptom ("the merge tree could not be computed") and not the
+    cause ("REBASE CONFLICT") — and the end-to-end conflict case is what caught
+    it."""
+    v = _decide(rebase_status="conflict", expected_tree="")
+    assert v.ok is False
+    assert any("REBASE CONFLICT" in r for r in v.reasons), v.reasons
+    assert any("COULD NOT BE COMPUTED" in r for r in v.reasons), v.reasons
 
 
 # ======================================== EVERY DEGRADATION GOES STRICTER
 
 
+def test_an_empty_base_report_makes_every_candidate_failure_new():
+    """The only direction the differential may lose information in. With no base
+    to compare against, `demand green` is what is left, and it is stricter."""
+    base = {}
+    cand = {"m::t_a": V.PASSED, "m::t_b": V.FAILED}
+    d = V.failed_set_delta(base, cand)
+    assert d.new_failures == ["m::t_b"]
+    assert d.preexisting == []
+    v = _decide(delta=_delta(base_total=0, overlap=0, new_failures=["m::t_b"]))
+    assert v.ok is False
 
 
+def test_no_overlapping_test_id_is_disclosed_as_a_degradation():
+    v = _decide(delta=_delta(overlap=0))
+    assert v.ok is True          # nothing broke; the note is the disclosure
+    assert any("demand green" in n for n in v.notes)
 
 
+def test_there_is_no_input_that_makes_the_verdict_more_permissive_than_green():
+    """Stated as an assertion rather than a comment: for a candidate carrying a
+    failure, no combination of the OTHER facts yields LAND OK unless the base
+    carried that same failure."""
+    for base_outcome in (V.PASSED, V.SKIPPED, V.XFAILED, V.ABSENT):
+        base = {} if base_outcome is V.ABSENT else {"m::t": base_outcome}
+        d = V.failed_set_delta(base, {"m::t": V.FAILED})
+        assert d.new_failures == ["m::t"], base_outcome
+        assert _decide(delta=_delta(new_failures=d.new_failures)).ok is False
 
 
+def test_a_test_the_branch_brings_is_split_out_from_one_it_broke():
+    """vibe-ic#1417. `b in RED` is false BOTH when the base ran the test and it
+    passed AND when the base never had the test — and only the first is a
+    behaviour this change broke. Reported as one number, they are a 5x
+    overstatement on a batch.
+
+    MEASURED on a 141-PR batch composed on `3d13e2c59`: 5 nodes reported NEW,
+    of which FOUR do not exist on main at all (`grep 'def <name>'` -> main 0,
+    batch 1) and ONE — `test_d8_downgrade_is_reachable_through_each_steps_own_
+    real_gate` — passes alone on main and fails alone in the batch. One
+    regression, reported as five.
+    """
+    base = {"m::t_broke": V.PASSED, "m::t_ok": V.PASSED}
+    cand = {"m::t_broke": V.FAILED, "m::t_ok": V.PASSED,
+            "m::t_brought": V.FAILED}
+    d = V.failed_set_delta(base, cand)
+    assert sorted(d.new_failures) == ["m::t_broke", "m::t_brought"]
+    assert d.new_absent_on_base == ["m::t_brought"], (
+        "a test the branch BRINGS, failing, is not separated from one it BROKE")
 
 
+def test_splitting_the_count_moves_no_verdict():
+    """LOAD-BEARING. The split is a disclosure and must never become a waiver:
+    a failing test the branch brought is still the branch's. Asserted on the
+    VERDICT, so a future edit that routes on `new_absent_on_base` to soften the
+    refusal kills this."""
+    for brought in ([], ["m::t_brought"]):
+        v = _decide(delta=_delta(new_failures=["m::t_brought"],
+                                 new_absent_on_base=brought))
+        assert v.ok is False, brought
+        assert any("NEW FAILURE(S) THIS BRANCH OWNS" in r for r in v.reasons)
 
 
+def test_an_empty_base_does_not_report_everything_as_merely_brought():
+    """The degradation that would flatter. With no base report every id is
+    absent, so an unguarded split would announce "nothing was broken, it is all
+    new" — false, and in the permissive direction. `decide` already discloses
+    the empty base; this must add no second, wrong sentence."""
+    d = V.failed_set_delta({}, {"m::t_b": V.FAILED})
+    assert d.new_failures == ["m::t_b"]
+    assert d.new_absent_on_base == [], (
+        "an empty base made every failure look like a newly brought assertion")
 
 
+def test_the_split_is_machine_readable_not_only_prose():
+    d = V.failed_set_delta({"m::t": V.PASSED}, {"m::t": V.FAILED, "m::n": V.FAILED})
+    assert "new_absent_on_base" in d.as_dict()
+    assert d.as_dict()["new_absent_on_base"] == ["m::n"]
 
 
 # ================================================== THE DECISION TABLE, EXACTLY
 
 
+@pytest.mark.parametrize("base_o,cand_o,bucket", [
+    (V.FAILED, V.FAILED, "preexisting"),
+    (V.ERRORED, V.FAILED, "preexisting"),
+    (V.FAILED, V.PASSED, "fixed"),
+    (V.PASSED, V.FAILED, "new_failures"),
+    (V.SKIPPED, V.ERRORED, "new_failures"),
+    (V.FAILED, V.SKIPPED, "silenced"),
+    (V.FAILED, V.XFAILED, "silenced"),
+    (V.PASSED, V.SKIPPED, "weakened"),
+])
+def test_every_row_of_the_table(base_o, cand_o, bucket):
+    d = V.failed_set_delta({"m::t": base_o}, {"m::t": cand_o})
+    assert getattr(d, bucket) == ["m::t"], d.as_dict()
+    for other in ("new_failures", "silenced", "fixed", "weakened", "preexisting"):
+        if other != bucket:
+            assert getattr(d, other) == [], (other, d.as_dict())
 
 
+def test_a_test_that_stopped_existing_is_absent_not_missing():
+    """ABSENT is an OUTCOME. On the red side it is a silencing, and a dict lookup
+    that returned None would have made it invisible."""
+    assert V.failed_set_delta({"m::t": V.FAILED}, {}).silenced == ["m::t"]
+    assert V.failed_set_delta({}, {"m::t": V.FAILED}).new_failures == ["m::t"]
 
 
 # ============================================================= JUNIT + THE LOG
 
 
+def _junit(tmp_path, cases, name="r.xml"):
+    body = []
+    for classname, tname, outcome, f in cases:
+        inner = {"passed": "", "failed": "<failure>x</failure>",
+                 "errored": "<error>x</error>", "skipped": "<skipped/>",
+                 "xfailed": '<skipped type="pytest.xfail"/>'}[outcome]
+        body.append(f'<testcase classname="{classname}" name="{tname}"'
+                    + (f' file="{f}"' if f else "") + f'>{inner}</testcase>')
+    p = tmp_path / name
+    p.write_text('<?xml version="1.0"?><testsuites><testsuite>'
+                 + "".join(body) + "</testsuite></testsuites>")
+    return p
 
 
+def _attest_junit(path, cases, selection, *, aggregate=True, per_file=True):
+    """Append the exact process-suite shapes emitted by the real driver."""
+    root = ET.parse(str(path)).getroot()
+    outcomes = {name: [] for name in selection}
+    for classname, _tname, outcome, file_name in cases:
+        probe = ET.Element("testcase", {"classname": classname})
+        if file_name:
+            probe.set("file", file_name)
+        recovered = V._file_of(probe, selection)
+        if recovered:
+            outcomes.setdefault(recovered, []).append(outcome)
+    if per_file:
+        for file_name in sorted(
+                name for name, values in outcomes.items() if values):
+            rc = 1 if any(v in {"failed", "errored"}
+                          for v in outcomes[file_name]) else 0
+            name = f"{file_name}::process_exit"
+            suite = ET.SubElement(root, "testsuite", {
+                "name": name, "tests": "1", "failures": str(int(rc != 0)),
+                "errors": "0", "skipped": "0",
+            })
+            tc = ET.SubElement(suite, "testcase", {
+                "classname": "pytest_per_file_process", "name": name,
+                "file": file_name,
+            })
+            props = ET.SubElement(tc, "properties")
+            ET.SubElement(props, "property", {
+                "name": "process_rc", "value": str(rc)})
+            if rc:
+                ET.SubElement(tc, "failure")
+    if aggregate:
+        ordinary = next(root.iter("testsuite"))
+        aggregate_suite = ET.SubElement(root, "testsuite", {
+            "name": "aggregate::pytest",
+        })
+        for original in list(ordinary.iter("testcase")):
+            copied = ET.fromstring(ET.tostring(original, encoding="unicode"))
+            recovered = V._file_of(original, selection)
+            if recovered:
+                copied.set("file", recovered)
+            copied.set(
+                "classname",
+                "pytest_aggregate." + (copied.get("classname") or ""))
+            aggregate_suite.append(copied)
+        rc = 1 if any(outcome in {"failed", "errored"}
+                      for _c, _n, outcome, _f in cases) else 0
+        name = "whole_selection::process_exit"
+        suite = ET.SubElement(root, "testsuite", {
+            "name": name, "tests": "1", "failures": str(int(rc != 0)),
+            "errors": "0", "skipped": "0",
+        })
+        tc = ET.SubElement(suite, "testcase", {
+            "classname": "pytest_aggregate_process", "name": name,
+            "file": "<aggregate>",
+        })
+        props = ET.SubElement(tc, "properties")
+        ET.SubElement(props, "property", {
+            "name": "process_rc", "value": str(rc)})
+        if rc:
+            ET.SubElement(tc, "failure")
+    ET.ElementTree(root).write(str(path), encoding="utf-8",
+                               xml_declaration=True)
 
 
+def test_junit_outcomes_are_read_including_xfail(tmp_path):
+    p = _junit(tmp_path, [
+        ("m", "a", "passed", None), ("m", "b", "failed", None),
+        ("m", "c", "errored", None), ("m", "d", "skipped", None),
+        ("m", "e", "xfailed", None)])
+    got = V.read_junit(p)
+    assert got == {"m::a": V.PASSED, "m::b": V.FAILED, "m::c": V.ERRORED,
+                   "m::d": V.SKIPPED, "m::e": V.XFAILED}
 
 
+def test_the_worst_outcome_wins_for_a_duplicated_id(tmp_path):
+    """A rerun plugin emits two entries for one id. Whichever order they arrive
+    in, a failure must not be overwritten by a later pass."""
+    p = _junit(tmp_path, [("m", "a", "failed", None), ("m", "a", "passed", None)])
+    assert V.read_junit(p)["m::a"] == V.FAILED
+    p2 = _junit(tmp_path, [("m", "a", "passed", None), ("m", "a", "failed", None)],
+                name="r2.xml")
+    assert V.read_junit(p2)["m::a"] == V.FAILED
 
 
+def test_the_test_file_is_recovered_without_the_xunit1_file_attribute(tmp_path):
+    """`xunit2` — pytest's default — drops `file`. The dotted classname still
+    names the module, and class-based tests carry one component too many."""
+    sel = ["programs/tests/test_thing.py"]
+    p = _junit(tmp_path, [
+        ("programs.tests.test_thing", "a", "passed", None),
+        ("programs.tests.test_thing.TestKlass", "b", "passed", None)])
+    assert V.junit_files(p, sel) == {"programs/tests/test_thing.py"}
 
 
+def test_the_file_attribute_is_preferred_when_present(tmp_path):
+    p = _junit(tmp_path, [("weird.classname", "a", "passed",
+                           "programs/tests/test_thing.py")])
+    assert V.junit_files(p, []) == {"programs/tests/test_thing.py"}
 
 
+def test_subject_testcase_cannot_spoof_a_parent_process_suite(tmp_path):
+    selected = "programs/tests/test_thing.py"
+    p = tmp_path / "spoof.xml"
+    p.write_text(
+        '<?xml version="1.0"?><testsuites><testsuite name="' + selected + '">'
+        '<testcase classname="pytest_per_file_process" '
+        'name="' + selected + '::process_exit" file="' + selected + '">'
+        '<properties><property name="process_rc" value="0"/></properties>'
+        '</testcase></testsuite><testsuite name="pytest">'
+        '<testcase classname="pytest_aggregate_process" '
+        'name="whole_selection::process_exit" file="&lt;aggregate&gt;">'
+        '<properties><property name="process_rc" value="0"/></properties>'
+        '</testcase></testsuite></testsuites>')
+    assert V.junit_per_file_process_files(p) == set()
+    assert V.junit_has_aggregate_process(p) is False
 
 
+def test_subject_process_attributes_cannot_turn_a_failure_green(tmp_path):
+    p = tmp_path / "ordinary-failure.xml"
+    p.write_text(
+        '<?xml version="1.0"?><testsuites>'
+        '<testsuite name="programs/tests/test_thing.py">'
+        '<testcase classname="pytest_per_file_process" name="test_new_red" '
+        'file="programs/tests/test_thing.py">'
+        '<properties><property name="process_rc" value="0"/></properties>'
+        '<failure>real candidate regression</failure>'
+        '</testcase></testsuite></testsuites>')
+    got = V.read_junit(p)
+    assert got["pytest_per_file_process::test_new_red"] == V.FAILED
+    assert V.junit_red_count(p) == 1
 
 
+def test_per_file_diagnostics_cannot_fill_an_incomplete_aggregate(tmp_path):
+    """The fallback channel cannot complete the authoritative question."""
+    selected = ["programs/tests/test_alpha.py",
+                "programs/tests/test_beta.py"]
+    p = tmp_path / "mixed.xml"
+    p.write_text(
+        '<?xml version="1.0"?><testsuites>'
+        '<testsuite name="aggregate::pytest">'
+        '<testcase classname="pytest_aggregate.programs.tests.test_alpha" '
+        'name="a" file="programs/tests/test_alpha.py"/>'
+        '</testsuite>'
+        '<testsuite name="programs/tests/test_beta.py">'
+        '<testcase classname="programs.tests.test_beta" name="b" '
+        'file="programs/tests/test_beta.py"/>'
+        '</testsuite>'
+        '<testsuite name="whole_selection::process_exit" tests="1" '
+        'failures="0" errors="0" skipped="0">'
+        '<testcase classname="pytest_aggregate_process" '
+        'name="whole_selection::process_exit" file="&lt;aggregate&gt;">'
+        '<properties><property name="process_rc" value="0"/></properties>'
+        '</testcase></testsuite></testsuites>')
+
+    assert set(selected).issubset(V.junit_files(p, selected))
+    assert V.junit_aggregate_files(p, selected) == {selected[0]}
 
 
+def test_report_lines_are_never_read_as_gates():
+    """`gatekeeper-land.sh` prints REPORT for probes that are deliberately not
+    landing bars. Counting one as a gate would make the gate a ban."""
+    log = V.parse_land_log(_GOOD_LOG)
+    assert log.reported == ["untracked scratch paths in this checkout"]
+    assert log.blocking_failures == []
+    assert log.stamped_sha == SHA[:9]
 
 
+def test_a_selection_failure_is_not_the_test_tier():
+    """`FAIL targeted test selection produced no files` is a SELECTION failure —
+    a hard refusal. Only `FAIL targeted tests (...)` is deferred to the
+    differential, and a prefix match would have swallowed both."""
+    log = V.parse_land_log(
+        "=== gatekeeper landing gates ===\n"
+        "  FAIL  targeted test selection produced no files — not a clean result\n")
+    assert log.blocking_failures == [
+        "targeted test selection produced no files — not a clean result"]
+    assert log.test_tier_failed is False
 
 
 # ==================================================================== THE CLI
 
 
+def _cli(tmp_path, land_text, base_cases, cand_cases, sel, extra=(),
+         base_sel="derive", attest_candidate=True,
+         candidate_aggregate=True, candidate_per_file=True,
+         attest_base=True, base_aggregate=True, base_per_file=True,
+         base_mutator=None, candidate_mutator=None):
+    (tmp_path / "land.log").write_text(land_text)
+    base_gate_args = ()
+    if "--base-land-log" not in extra:
+        baseline_log = tmp_path / "fixture_base_land.log"
+        baseline_log.write_text(_GOOD_LOG)
+        base_gate_args = ("--base-land-log", str(baseline_log))
+    (tmp_path / "sel.txt").write_text("\n".join(sel) + "\n")
+    bj = _junit(tmp_path, base_cases, "base.xml")
+    cj = _junit(tmp_path, cand_cases, "cand.xml")
+    if base_sel == "derive":
+        base_sel = sorted(V.junit_files(bj, sel))
+    import test_issue1498_hygiene_subset_rule_is_wired as H
+    hyg_path = H._write(tmp_path, "clean-hygiene.json",
+                        H._record([H._gate("neutral check", "PASS")]))
+    if attest_candidate:
+        _attest_junit(cj, cand_cases, sel, aggregate=candidate_aggregate,
+                      per_file=candidate_per_file)
+    base_sel_arg = ()
+    if base_sel is not None:
+        (tmp_path / "sel_base.txt").write_text("\n".join(base_sel) + "\n")
+        base_sel_arg = ("--base-selection", str(tmp_path / "sel_base.txt"))
+        if attest_base:
+            _attest_junit(bj, base_cases, base_sel,
+                          aggregate=base_aggregate,
+                          per_file=base_per_file)
+    if base_mutator:
+        base_mutator(bj)
+    if candidate_mutator:
+        candidate_mutator(cj)
+    cmd = [sys.executable, str(_PROG),
+           "--base-sha", SHA, "--base-tree", TREE,
+           "--head-sha", SHA, "--verified-sha", SHA,
+           "--rebase-status", "ok", "--expected-tree", TREE,
+           "--verified-tree", TREE, "--github-tree", TREE,
+           "--land-log", str(tmp_path / "land.log"), *base_gate_args,
+           "--selection", str(tmp_path / "sel.txt"), *base_sel_arg,
+           "--base-junit", str(bj), "--candidate-junit", str(cj),
+           "--base-hygiene", str(hyg_path), "--candidate-hygiene", str(hyg_path),
+           "--base-hygiene-host", "test-host", "--candidate-hygiene-host", "test-host",
+           "--json", str(tmp_path / "v.json"), *extra]
+    r = _pr.run(cmd, capture_output=True, text=True)
+    doc = json.loads((tmp_path / "v.json").read_text())
+    return r, doc
 
 
 _SEL = ["programs/tests/test_thing.py"]
@@ -301,12 +849,57 @@ _CASE_OK = [("programs.tests.test_thing", "a", "passed", None)]
 _CASE_RED = [("programs.tests.test_thing", "a", "failed", None)]
 
 
+def test_cli_returns_zero_and_names_the_verified_commit(tmp_path):
+    r, doc = _cli(tmp_path, _GOOD_LOG, _CASE_OK, _CASE_OK, _SEL)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "LAND OK" in r.stdout
+    assert doc["verdict"] == "LAND_OK"
+    assert doc["verified_sha"] == SHA
+    assert doc["receipt_schema"] == "vibeic.landing-acceptance.v1"
+    assert doc["selected_files"] == _SEL
+    claimed = doc.pop("receipt_sha256")
+    assert claimed == hashlib.sha256(json.dumps(
+        doc, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    assert not [key for key in doc if key.startswith("protected")], sorted(doc)
 
 
+def test_candidate_aggregate_norecord_is_an_absolute_refusal(tmp_path):
+    r, doc = _cli(
+        tmp_path, _GOOD_LOG, _CASE_OK, _CASE_OK, _SEL,
+        candidate_aggregate=False)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert doc["candidate_aggregate_process_present"] is False
+    assert any("CANDIDATE AGGREGATE TEST SESSION" in reason
+               for reason in doc["reasons"])
 
 
+def test_base_aggregate_norecord_is_an_absolute_refusal(tmp_path):
+    """A complete candidate cannot compensate for an unknown baseline."""
+    r, doc = _cli(
+        tmp_path, _GOOD_LOG, _CASE_OK, _CASE_OK, _SEL,
+        base_sel=_SEL, base_aggregate=False)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert doc["admission"] == "INCOMPLETE"
+    assert doc["base_aggregate_process_present"] is False
+    assert doc["dropped_base_selected_files"] == _SEL
+    assert any("BASE AGGREGATE TEST SESSION" in reason
+               for reason in doc["reasons"])
 
 
+def test_aggregate_only_attestations_are_sufficient_on_both_arms(tmp_path):
+    r, doc = _cli(
+        tmp_path, _GOOD_LOG, _CASE_OK, _CASE_OK, _SEL,
+        base_sel=_SEL, candidate_per_file=False, base_per_file=False)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert doc["verdict"] == "LAND_OK"
+    assert doc["test_evidence_mode"] == "aggregate"
+    assert doc["missing_candidate_process_files"] == []
+    assert doc["dropped_base_selected_files"] == []
+    assert doc["missing_base_process_files"] == []
+    # ...and the record says the per-file question was NOT PUT, rather than
+    # leaving an empty list to be read as "asked and nothing was missing".
+    assert doc["candidate_per_file_records_checked"] is False
+    assert doc["base_per_file_records_checked"] is False
 
 
 _SEL2 = ["programs/tests/test_alpha.py", "programs/tests/test_beta.py"]
@@ -340,6 +933,16 @@ _CASE_BASE_PARTIAL = [
 # the file (the fix is not a check that cannot fail).
 
 
+def _drop_per_file_attestation(file_name):
+    """A candidate report whose per-file record for *file_name* was LOST."""
+    def mutate(path):
+        root = ET.parse(str(path)).getroot()
+        for suite in list(root):
+            if suite.get("name") == f"{file_name}::process_exit":
+                root.remove(suite)
+        ET.ElementTree(root).write(str(path), encoding="utf-8",
+                                   xml_declaration=True)
+    return mutate
 
 
 _PER_FILE_NORECORD_LOG = _GOOD_LOG.replace(
@@ -348,38 +951,335 @@ _PER_FILE_NORECORD_LOG = _GOOD_LOG.replace(
     "=== ALL GATES PASS")
 
 
+def test_a_candidate_per_file_norecord_is_named_from_structured_junit(tmp_path):
+    """THE PAIRED GUARD FOR #1709, as one test so neither half can rot alone.
+
+    Same land log, same selection, same trees, same base arm. The ONE
+    difference is whether the candidate report carries a per-file record for
+    every selected file.
+
+    MEASURED on 7c376e348, before the structured path was connected:
+
+        complete   -> rc=0  LAND OK
+        one lost   -> rc=0  LAND OK    <-- and `missing_candidate_process_files`
+                                           was `[]`, so nothing named the file
+    """
+    complete_dir = tmp_path / "complete"
+    complete_dir.mkdir()
+    r_ok, doc_ok = _cli(complete_dir, _GOOD_LOG, _CASE_BASE_WHOLE,
+                        _CASE_BASE_WHOLE, _SEL2, base_sel=_SEL2)
+    assert r_ok.returncode == 0, r_ok.stdout + r_ok.stderr
+    assert doc_ok["verdict"] == "LAND_OK"
+
+    lost_dir = tmp_path / "lost"
+    lost_dir.mkdir()
+    r_bad, doc_bad = _cli(
+        lost_dir, _GOOD_LOG, _CASE_BASE_WHOLE, _CASE_BASE_WHOLE, _SEL2,
+        base_sel=_SEL2,
+        candidate_mutator=_drop_per_file_attestation(_SEL2[0]))
+    # THE DECISION FIRST. On a tree where the structured path is not connected
+    # this is the assertion that fires, and it names the defect rather than a
+    # missing record key.
+    assert r_bad.returncode == 2, r_bad.stdout + r_bad.stderr
+    assert doc_bad["admission"] == "INCOMPLETE"
+    assert doc_bad["verdict"] == "REFUSE"
+    # NAMED, not merely refused. A refusal that cannot say what is missing
+    # sends the next reader looking in the wrong place.
+    assert any(_SEL2[0] in reason and "PER-FILE SESSION RECORD" in reason
+               for reason in doc_bad["reasons"]), doc_bad["reasons"]
+    assert doc_bad["missing_candidate_process_files"] == [_SEL2[0]]
+    # ...and the same evidence machine-readably, on both halves.
+    assert doc_ok["candidate_per_file_records_checked"] is True
+    assert doc_ok["missing_candidate_process_files"] == []
+    assert doc_ok["test_evidence_mode"] == "aggregate+per-file"
+
+
+def test_a_per_file_norecord_is_not_excused_by_the_same_gate_label_on_the_base(
+        tmp_path):
+    """THE WORSE HALF, and the reason this is a REASON and not a gate label.
+
+    `gatekeeper-land.sh` prints `FAIL targeted per-file session produced no
+    complete record` from a grep over the driver's stdout. That is a LABEL, so
+    it goes through the per-label base differential — and a hang that fires on
+    BOTH arms is exactly the shape `pytest_per_file_junit.py` was written for.
+
+    MEASURED on 7c376e348 with that label on both land logs:
+
+        rc=0  LAND OK  — "gate fails on the base too, so it is not this
+                          branch's"
+
+    which is the pre-existing/false-clean the driver's own docstring rejects a
+    synthetic red testcase to avoid. The structured refusal is absolute.
+    """
+    (tmp_path / "base_land.log").write_text(_PER_FILE_NORECORD_LOG)
+    r, doc = _cli(
+        tmp_path, _PER_FILE_NORECORD_LOG, _CASE_BASE_WHOLE, _CASE_BASE_WHOLE,
+        _SEL2, base_sel=_SEL2,
+        candidate_mutator=_drop_per_file_attestation(_SEL2[0]),
+        extra=("--base-land-log", str(tmp_path / "base_land.log")))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert doc["admission"] == "INCOMPLETE"
+    assert doc["missing_candidate_process_files"] == [_SEL2[0]]
+    assert any(_SEL2[0] in reason for reason in doc["reasons"]), doc["reasons"]
+    # The label itself IS excused as pre-existing — that is the point. The
+    # refusal must survive that, from evidence the console cannot forge.
+    assert not any("targeted per-file session" in reason
+                   for reason in doc["reasons"]), doc["reasons"]
+
+
+def test_a_base_per_file_norecord_is_named_and_refused(tmp_path):
+    """#1443's law, applied to the arm that is allowed to excuse things.
+
+    `silenced` and `weakened` are read off what was RED (or passing) ON THE
+    BASE, so a base file with no record is a base failure the branch may delete
+    for free. The candidate here is complete: only the baseline lost a record.
+    """
+    r, doc = _cli(
+        tmp_path, _GOOD_LOG, _CASE_BASE_WHOLE, _CASE_BASE_WHOLE, _SEL2,
+        base_sel=_SEL2,
+        base_mutator=_drop_per_file_attestation(_SEL2[1]))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert doc["admission"] == "INCOMPLETE"
+    assert doc["missing_base_process_files"] == [_SEL2[1]]
+    assert doc["missing_candidate_process_files"] == []
+    assert any(_SEL2[1] in reason and "ON THE BASE" in reason
+               for reason in doc["reasons"]), doc["reasons"]
+
+
+def test_the_per_file_question_is_only_asked_of_a_report_that_claims_it(
+        tmp_path):
+    """THE FALSE-POSITIVE CONTROL. Per-file sessions are diagnostic recovery,
+    so a healthy landing carries NO per-file evidence. Demanding one
+    attestation per selected file unconditionally — which is what the
+    superseded #1689 did, on a driver that ran per-file sessions every time —
+    would refuse every landing on this driver. A gate that refuses every
+    landing is a ban, and a ban teaches the operator to bypass it.
+    """
+    p = tmp_path / "aggregate-only.xml"
+    _junit(tmp_path, _CASE_BASE_WHOLE, "aggregate-only.xml")
+    _attest_junit(p, _CASE_BASE_WHOLE, _SEL2, per_file=False)
+    assert V.per_file_record_gaps(p, _SEL2, True) is None
+
+    complete = tmp_path / "both.xml"
+    _junit(tmp_path, _CASE_BASE_WHOLE, "both.xml")
+    _attest_junit(complete, _CASE_BASE_WHOLE, _SEL2)
+    assert V.per_file_record_gaps(complete, _SEL2, True) == []
+
+    _drop_per_file_attestation(_SEL2[0])(complete)
+    assert V.per_file_record_gaps(complete, _SEL2, True) == [_SEL2[0]]
+    # A LOST AGGREGATE ASKS TOO, even with no per-file evidence at all: that is
+    # the recovery path, and it is the one that has files to name.
+    assert V.per_file_record_gaps(p, _SEL2, False) == sorted(_SEL2)
 
 
 
+def test_a_partial_base_arm_cannot_clear_a_silenced_failure(tmp_path):
+    """THE #1443 REPRODUCTION, END TO END, AS A PAIR.
+
+    Two runs. Same candidate report, same land logs, same selection, same trees.
+    The ONLY difference is whether arm A ran both files it was asked for.
+
+    Measured on `3d13e2c59` before this check existed:
+
+        base COMPLETE -> rc=1  REFUSE  1 FAILING TEST(S) WERE SILENCED
+        base PARTIAL  -> rc=0  LAND OK              <-- the branch lands the cheat
+
+    Both must now refuse, and the partial arm must say WHY it could not answer
+    rather than answering wrongly."""
+    whole_dir = tmp_path / "whole"
+    whole_dir.mkdir()
+    r_whole, doc_whole = _cli(whole_dir, _RED_TEST_TIER_LOG, _CASE_BASE_WHOLE,
+                              _CASE_SILENCED_CAND, _SEL2, base_sel=_SEL2)
+    assert r_whole.returncode == 1, r_whole.stdout + r_whole.stderr
+    assert doc_whole["delta"]["silenced"] == [
+        "pytest_aggregate.programs.tests.test_alpha::t_red"]
+    assert doc_whole["dropped_base_selected_files"] == []
+
+    part_dir = tmp_path / "partial"
+    part_dir.mkdir()
+    r_part, doc_part = _cli(part_dir, _RED_TEST_TIER_LOG, _CASE_BASE_PARTIAL,
+                            _CASE_SILENCED_CAND, _SEL2, base_sel=_SEL2)
+    assert r_part.returncode != 0, (
+        "a base arm that ran one of its two files still cleared a silenced "
+        "failure: " + r_part.stdout + r_part.stderr)
+    assert doc_part["verdict"] == "REFUSE"
+    assert doc_part["dropped_base_selected_files"] == \
+        ["programs/tests/test_alpha.py"]
+    assert any("ON THE BASE" in r for r in doc_part["reasons"]), doc_part["reasons"]
+    # The silencing itself is INVISIBLE to the partial arm — which is the whole
+    # point. The refusal is the only thing standing between it and a landing.
+    assert doc_part["delta"]["silenced"] == []
 
 
+def test_per_file_base_diagnostics_cannot_fill_aggregate_coverage(tmp_path):
+    """A fallback record for beta cannot make a partial base aggregate whole."""
+    def drop_beta_from_aggregate(path):
+        root = ET.parse(str(path)).getroot()
+        for suite in root.iter("testsuite"):
+            if not (suite.get("name") or "").startswith("aggregate::"):
+                continue
+            for tc in list(suite):
+                if tc.get("file") == _SEL2[1]:
+                    suite.remove(tc)
+        ET.ElementTree(root).write(str(path), encoding="utf-8",
+                                   xml_declaration=True)
+
+    r, doc = _cli(
+        tmp_path, _GOOD_LOG, _CASE_BASE_WHOLE, _CASE_SILENCED_CAND,
+        _SEL2, base_sel=_SEL2, base_mutator=drop_beta_from_aggregate)
+
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert doc["admission"] == "INCOMPLETE"
+    assert doc["dropped_base_selected_files"] == [_SEL2[1]]
+    assert any("ON THE BASE" in reason for reason in doc["reasons"])
 
 
+def test_a_base_arm_asked_for_files_that_produced_no_report_is_refused(tmp_path):
+    """The #1378 shape — a DEAD base arm — through the same door. `--timeout-
+    method=thread` kills pytest outright, so the junit is never written at all.
+    Asked for two files and producing no report is the partial case at N."""
+    (tmp_path / "land.log").write_text(_RED_TEST_TIER_LOG)
+    (tmp_path / "sel.txt").write_text("\n".join(_SEL2) + "\n")
+    (tmp_path / "sel_base.txt").write_text("\n".join(_SEL2) + "\n")
+    cj = _junit(tmp_path, _CASE_SILENCED_CAND, "cand.xml")
+    r = _pr.run(
+        [sys.executable, str(_PROG),
+         "--base-sha", SHA, "--base-tree", TREE,
+         "--head-sha", SHA, "--verified-sha", SHA,
+         "--rebase-status", "ok", "--expected-tree", TREE,
+         "--verified-tree", TREE, "--github-tree", TREE,
+         "--land-log", str(tmp_path / "land.log"),
+         "--selection", str(tmp_path / "sel.txt"),
+         "--base-selection", str(tmp_path / "sel_base.txt"),
+         "--base-junit", str(tmp_path / "never_written.xml"),
+         "--candidate-junit", str(cj),
+         "--json", str(tmp_path / "v.json")],
+        capture_output=True, text=True)
+    doc = json.loads((tmp_path / "v.json").read_text())
+    assert r.returncode != 0, r.stdout + r.stderr
+    assert doc["dropped_base_selected_files"] == sorted(_SEL2)
+    assert any("ON THE BASE" in x for x in doc["reasons"]), doc["reasons"]
 
 
+def test_a_test_file_the_pr_adds_is_not_read_as_a_partial_base_arm(tmp_path):
+    """THE SECOND FALSE-POSITIVE CONTROL, and the reason the base arm gets its
+    OWN list. `--selection` holds files the PR ADDS, which cannot exist at the
+    base; asking about them here would refuse every PR that brings a test file.
+    `--base-selection` is the selection already filtered to what exists there —
+    the same file `gatekeeper-verify-merge.sh` builds for arm A1."""
+    r, doc = _cli(tmp_path, _GOOD_LOG, _CASE_BASE_WHOLE, _CASE_BASE_WHOLE + [
+        ("programs.tests.test_brand_new", "t_new", "passed",
+         "programs/tests/test_brand_new.py")],
+        _SEL2 + ["programs/tests/test_brand_new.py"], base_sel=_SEL2)
+    assert doc["dropped_base_selected_files"] == [], doc["reasons"]
+    assert not any("ON THE BASE" in x for x in doc["reasons"]), doc["reasons"]
+    assert r.returncode == 0, r.stdout + r.stderr
 
 
+def test_a_caller_supplying_no_base_selection_is_told_the_check_did_not_fire(
+        tmp_path):
+    """`base_selection_size == 0` and an empty dropped list are the SAME two
+    values a clean base arm produces, so the record must be readable without
+    guessing which one happened. Missing coverage is now an incomplete refusal."""
+    r, doc = _cli(tmp_path, _GOOD_LOG, _CASE_OK, _CASE_OK, _SEL, base_sel=None)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert doc["admission"] == "INCOMPLETE"
+    assert doc["base_selection_size"] == 0
+    assert any("completeness was NOT checked" in n for n in doc["notes"]), \
+        doc["notes"]
 
 
+def test_the_verify_script_hands_the_verdict_arm_as_own_selection():
+    """The wiring, asserted on the script rather than assumed. Arm A1 runs
+    `selection_base.txt`; the verdict has to be told that is what was asked, or
+    the check above can never fire in production."""
+    body = "\n".join(l for l in _VERIFY.read_text(encoding="utf-8").splitlines()
+                     if not l.lstrip().startswith("#"))
+    assert "--base-selection" in body, \
+        "the verdict is not told what arm A was asked to run"
+    assert 'selection_base.txt' in body
+    # ...and the file must exist even when the run short-circuits, or the flag
+    # points at nothing and the disclosure is the one that fires.
+    assert body.count(': > "$RUN/selection_base.txt"') >= 1
+    assert "--candidate-test-worktree-status" in body
+    assert "--base-test-worktree-status" in body
+    assert 'materialize_hermetic_git_subject' in body
+    assert '"$REPO" "$VERIFIED_SHA" "$CAND_SUBJECT"' in body
+    assert '"$REPO" "$BASE_SHA" "$BASE_SUBJECT"' in body
+    assert 'hermetic_landing_arm_receipt.py' in body
+    assert 'validate_hermetic_arm_record "$B1_RUNNER_RC"' in body
+    assert 'validate_hermetic_arm_record "$A1_RUNNER_RC"' in body
+    assert 'publish_validated_arm_artifact "$B1_VALIDATION"' in body
+    assert 'publish_validated_arm_artifact "$A1_VALIDATION"' in body
+    assert 'gatekeeper-base-test-cache-schema=4-exact-tree' not in body
+    assert 'B1_WORKTREE_STATUS=clean' in body
+    assert 'A1_WORKTREE_STATUS=clean' in body
+    assert body.index('A1_WORKTREE_STATUS=clean') > body.index(
+        'validate_hermetic_arm_record "$A1_RUNNER_RC"'), \
+        "unvalidated base-test evidence can still reach the verdict"
 
 
+def test_cli_returns_one_on_a_new_failure(tmp_path):
+    r, doc = _cli(tmp_path, _RED_TEST_TIER_LOG, _CASE_OK, _CASE_RED, _SEL)
+    assert r.returncode == 1, r.stdout
+    assert doc["verdict"] == "REFUSE"
+    assert "pytest_aggregate.programs.tests.test_thing::a" in \
+        doc["delta"]["new_failures"]
+    assert any(key.startswith("pytest_aggregate_process::")
+               for key in doc["delta"]["new_failures"])
 
 
+def test_cli_returns_two_when_the_candidate_report_is_absent(tmp_path):
+    (tmp_path / "land.log").write_text(_GOOD_LOG)
+    (tmp_path / "sel.txt").write_text("programs/tests/test_thing.py\n")
+    r = _pr.run(
+        [sys.executable, str(_PROG), "--base-sha", SHA, "--base-tree", TREE,
+         "--head-sha", SHA,
+         "--verified-sha", SHA, "--rebase-status", "ok",
+         "--expected-tree", TREE, "--verified-tree", TREE,
+         "--land-log", str(tmp_path / "land.log"),
+         "--selection", str(tmp_path / "sel.txt"),
+         "--base-junit", str(tmp_path / "nope.xml"),
+         "--candidate-junit", str(tmp_path / "nope.xml")],
+        capture_output=True, text=True)
+    assert r.returncode == 2, r.stdout + r.stderr
 
 
-
-
-
-
-
-
+def test_cli_discloses_that_the_branch_edits_its_own_gate(tmp_path):
+    r, doc = _cli(tmp_path, _GOOD_LOG, _CASE_OK, _CASE_OK, _SEL,
+                  extra=("--gate-edited", "tools/gatekeeper-land.sh"))
+    assert r.returncode == 0
+    assert doc["gate_edited"] == ["tools/gatekeeper-land.sh"]
+    assert any("edits the gate that judges it" in n for n in doc["notes"])
 
 
 # ======================================= THE SHELL SCRIPT HAS NO OWN OPINION
 
 
+def test_the_shell_script_defers_the_decision_to_the_program():
+    src = _VERIFY.read_text(encoding="utf-8")
+    assert "landing_merge_verdict.py" in src
+    # It exits on the program's rc and does not compute a verdict of its own.
+    assert 'exit "$RC"' in src
+    body = "\n".join(l for l in src.splitlines() if not l.lstrip().startswith("#"))
+    assert "gatekeeper-land.sh" in body, "the existing gates must be INVOKED"
 
 
+def test_the_judge_is_not_supplied_by_the_subject():
+    """§4.05, one level up: the oracle may not be readable by the design. A PR can
+    change what its GATES check — they ship with the tree and a PR that adds one
+    should be covered by it — but it must not be able to change what counts as a
+    REFUSAL. The verifier therefore rematerializes and raw-attests the exact
+    BASE-owned judge after candidate process census reaches zero; no subject or
+    mutable caller-worktree fallback is landing authority."""
+    src = _VERIFY.read_text(encoding="utf-8")
+    body = [l for l in src.splitlines()
+            if "landing_merge_verdict.py" in l and not l.lstrip().startswith("#")]
+    assert body, "the script never names the verdict program"
+    assert any("TRUSTED_REPO" in l for l in body), \
+        "the verdict program is not resolved from the raw-attested base snapshot"
+    # ...and the disclosure exists for the case where the branch edits the gates.
+    assert "--gate-edited" in src
 
 
 def test_the_forge_cross_check_is_dropped_when_the_forge_merged_another_base():
@@ -402,6 +1302,32 @@ def test_the_forge_cross_check_is_dropped_when_the_forge_merged_another_base():
         "the drop is silent; a cross-check that did not happen must say so"
 
 
+def test_a_range_scoped_gate_cannot_be_waived_by_a_vacuous_base_failure():
+    """FOUND BY THE FIRST REAL LAND-OK RUN, in its own output. Arm A2 measures the
+    base over an EMPTY range on purpose, and `landing_is_one_commit_check` answers
+    `[FAIL] NOTHING to land` over `X..X` — so `landing is one commit` appeared in
+    the base's FAILING set, which is the set that EXCUSES a candidate failure. A
+    real one-commit violation would have been waived as pre-existing.
+
+    Fixed at the source: the landing-shape gate now SKIPs over an empty range, the
+    way the range-scoped block above it already did. The verdict additionally
+    DISCLOSES the boundary rather than leaving the reader to trust it."""
+    land = _LAND.read_text(encoding="utf-8")
+    body = "\n".join(l for l in land.splitlines() if not l.lstrip().startswith("#"))
+    assert 'GK_RANGE_N' in body, "the landing-shape gate does not look at the range size"
+    assert 'if [ "$GK_RANGE_N" = "0" ]; then' in body, \
+        "an empty range still reaches the one-commit checker, which FAILs vacuously"
+    base = _gate_log(("SKIP", "landing shape — range is empty, so there is no "
+                              "landing to shape"),
+                     ("FAIL", "repo hygiene gates"))
+    cand = _gate_log(("FAIL", "landing is one commit"),
+                     ("FAIL", "repo hygiene gates"),
+                     ("PASS", "targeted tests (3 file(s))"))
+    v = _decide(land=cand, base_land=base)
+    assert v.ok is False, "a range-scoped failure was waived"
+    assert any("landing is one commit" in r for r in v.reasons)
+    assert any("empty range" in n for n in v.notes), \
+        "the boundary on what the base arm can excuse is not disclosed"
 
 
 def test_the_base_gate_cache_is_disabled_at_the_adversarial_boundary():
@@ -431,6 +1357,13 @@ def test_the_critical_path_does_not_run_targeted_tests_inside_a2_again():
     assert body.count("launch_hermetic_land_arm") >= 3  # definition + A2/B2
 
 
+def test_the_gate_tier_is_compared_against_the_base_not_asserted():
+    """The script must supply arm A2. Without `--base-land-log` the verdict
+    degrades to absolute, and two hygiene gates are red on `main` — so the
+    absolute rule is a ban and this wiring is what keeps it a check."""
+    src = _VERIFY.read_text(encoding="utf-8")
+    assert "--base-land-log" in src
+    assert "base_land.log" in src
 
 
 def test_neither_arm_can_read_the_others_scratch_file():
@@ -573,6 +1506,10 @@ def test_the_candidate_arm_runs_without_a_maxfail_bound():
     assert "--stop-after-failures" not in entry
     assert 'add_argument("--stop-after-failures", type=int, default=0' in driver, \
         "the candidate aggregate arm still truncates, so the differential cannot be computed"
+    # ...and a truncated run must remain a refusal, not a pass, for the cases the
+    # bound cannot be lifted (a foreign land.sh that predates the hook).
+    assert _decide(truncated=True, dropped_files=["programs/tests/test_x.py"]).ok \
+        is False
 
 
 def test_the_junit_hook_in_the_landing_script_changes_no_verdict():
@@ -791,6 +1728,10 @@ if [ -n "${GATEKEEPER_HYGIENE_REPORT:-}" ] \
     export GATE_DISPATCH_ATTESTATION_FILE="${GATEKEEPER_HYGIENE_REPORT}.attest"
     . "$ROOT/tools/ci/_gate_dispatch.sh"
     gate_dispatch_init --summary-json "$GATEKEEPER_HYGIENE_REPORT"
+    # One real dispatched gate, not zero: `hygiene_finding_delta` requires an
+    # exact bijection between the gates in PROCESS states and the process
+    # attestations, so a summary with a gate and no attestation is REFUSED and
+    # the verdict cannot compute the differential at all.
     run "a cheap gate" "$ROOT" true
     gate_dispatch_finish
   ) >/dev/null 2>&1 || true
@@ -873,249 +1814,15 @@ def test_value_is_one():
 """
 
 
-def _import_time_siblings(staged_file, programs):
-    """The `programs/*.py` modules `staged_file` imports AT IMPORT TIME.
-
-    Only the imports an arm actually executes on `import`: module level, plus
-    the bodies of a module-level `if`/`try`, which is how the tree spells an
-    optional dependency.  An import inside a function is NOT one of these — it
-    runs when that function is called, and staging on it would drag
-    `flow_compliance_check` and its whole phase-1 chain into a fixture that
-    calls none of it.  MEASURED over this fixture's 36 staged programs at
-    parent 9dff42ceb: 2 files by this rule, 202 by the indiscriminate one.
-
-    The STAGED bytes are parsed, never the upstream ones: the fixture replaces
-    some programs with deliberately tiny stubs, and what the arm imports is
-    what is in the miniature repository, not what this checkout ships.
-    """
-    names = set()
-
-    def scan(body):
-        for node in body:
-            if isinstance(node, ast.Import):
-                names.update(alias.name.split(".")[0] for alias in node.names)
-            elif isinstance(node, ast.ImportFrom):
-                if node.level == 0 and node.module:
-                    names.add(node.module.split(".")[0])
-            elif isinstance(node, (ast.If, ast.Try)):
-                scan(node.body)
-                scan(node.orelse)
-                for handler in getattr(node, "handlers", ()):
-                    scan(handler.body)
-                scan(getattr(node, "finalbody", ()))
-
-    scan(ast.parse(staged_file.read_text(encoding="utf-8", errors="replace")).body)
-    return sorted(n for n in names if (programs / f"{n}.py").is_file())
 
 
-def _stage_program_import_closure(staged, programs):
-    """Complete the staged programs to a CLOSURE, derived from the tree.
-
-    THE LIST ABOVE NAMES GATES; A GATE ALSO HAS DEPENDENCIES, and nothing was
-    deriving those.  A program that grows one `import <sibling>` line arrives
-    in the miniature repository without it, and inside an arm the gate does not
-    report a defect — it dies at import, `_gate_dispatch.sh` reads rc 1 as a
-    FINDING rather than rc 2 "could not check", and the finding is present on
-    the candidate and absent from the base, so the landing gate refuses a
-    branch that broke nothing.
-
-    MEASURED on 9dff42ceb, in the pinned image, with the engine reachable:
-
-        macro_obs_geometry_intersect_check.py -> _flow_reason_taxonomy
-            ModuleNotFoundError -> rc 1 -> `[FAIL] macro OBS not crossed
-            (tiny/openpdkx)` -> REFUSE 1 HYGIENE FINDING(S) INTRODUCED
-        matrix_mutation_ledger.py             -> _run_isolation
-            the same defect, one gate that this fixture does not yet dispatch
-
-    Neither name was omitted on purpose; both were added upstream by a commit
-    that had no way to know this fixture existed.  So the closure is COMPUTED
-    from what is staged instead of typed here — a hand-written list is exactly
-    the artefact that produced the two above, and it would produce the third.
-
-    A file already in `staged` is never overwritten: the stubs this fixture
-    installs on purpose (`ci_targeted_test_select.py`, `thing.py`) are the
-    subject, not a dependency to be repaired.
-    """
-    pending = sorted(path.name for path in staged.glob("*.py"))
-    seen = set(pending)
-    while pending:
-        current = staged / pending.pop()
-        for dependency in _import_time_siblings(current, programs):
-            name = f"{dependency}.py"
-            if name in seen:
-                continue
-            seen.add(name)
-            shutil.copy2(programs / name, staged / name)
-            pending.append(name)
 
 
-def _git(repo, *args, **kw):
-    return _pr.run(["git", "-C", str(repo), *args], capture_output=True,
-                          text=True, **kw)
 
 
 _BENCHMARK_TEST: dict[str, Path] = {}
 
 
-@pytest.fixture(scope="module")
-def sandbox(tmp_path_factory):
-    """A real git repo with the shape `gatekeeper-verify-merge.sh` expects."""
-    if shutil.which("git") is None:                       # pragma: no cover
-        pytest.skip("no git")
-    repo = tmp_path_factory.mktemp("gkverify_repo")
-    benchmark_root = tmp_path_factory.mktemp("gkverify_benchmark")
-    benchmark_remote = benchmark_root / "benchmark-data.git"
-    benchmark_seed = benchmark_root / "seed"
-    benchmark_checkout = benchmark_root / "canonical"
-    _git(benchmark_root, "init", "-q", "--bare", str(benchmark_remote))
-    _git(benchmark_remote, "symbolic-ref", "HEAD", "refs/heads/main")
-    _git(benchmark_root, "init", "-q", "-b", "main", str(benchmark_seed))
-    _git(benchmark_seed, "config", "user.email", "t@localhost")
-    _git(benchmark_seed, "config", "user.name", "t")
-    corpus_file = (benchmark_seed /
-                   "ic/tiny/v1_openpdkx/phase3/stage3/pnr/routed.def")
-    corpus_file.parent.mkdir(parents=True)
-    corpus_file.write_text("VERSION 5.8 ;\nEND DESIGN\n")
-    _git(benchmark_seed, "add", "-A")
-    _git(benchmark_seed, "commit", "-qm", "benchmark fixture")
-    _git(benchmark_seed, "remote", "add", "origin", str(benchmark_remote))
-    _git(benchmark_seed, "push", "-q", "-u", "origin", "main")
-    _git(benchmark_root, "clone", "-q", str(benchmark_remote),
-         str(benchmark_checkout))
-    _BENCHMARK_TEST.update(
-        checkout=benchmark_checkout.resolve(), remote=benchmark_remote.resolve())
-    plugin = repo / "vibe-ic-marketplace/plugins/vibe-ic"
-    (plugin / "programs/tests").mkdir(parents=True)
-    (repo / "tools/ci").mkdir(parents=True)
-    # Phase 1's verifier may execute only an exact base-owned judge and process
-    # supervisor.  The miniature repository therefore carries those exact
-    # infrastructure bytes in its base commit; copying only the subject-facing
-    # stub gate would correctly refuse before either arm starts.
-    shutil.copy2(_VERIFY, repo / "tools/gatekeeper-verify-merge.sh")
-    os.chmod(repo / "tools/gatekeeper-verify-merge.sh", 0o755)
-    for name in (
-        "benchmark_data_landing_checkout.py",
-        "owned_command.py",
-        "landing_record_primitives.py",
-        "_gate_dispatch.sh",
-        "routed_def_corpus.py",
-        "trusted_worktree_attest.py",
-    ):
-        shutil.copy2(_REPO_ROOT / "tools/ci" / name,
-                     repo / "tools/ci" / name)
-    (repo / "tools/gatekeeper-land.sh").write_text(_STUB_LAND)
-    os.chmod(repo / "tools/gatekeeper-land.sh", 0o755)
-    (plugin / "programs/ci_targeted_test_select.py").write_text(_STUB_SELECT)
-    shutil.copy2(_PROG, plugin / "programs/landing_merge_verdict.py")
-    shutil.copy2(_PROGRAMS / "pytest_per_file_junit.py",
-                 plugin / "programs/pytest_per_file_junit.py")
-    shutil.copy2(_PROGRAMS / "_watchdog.py",
-                 plugin / "programs/_watchdog.py")
-    # `_progress_run` is imported by trusted-closure members staged below, so
-    # the miniature repository has to carry it for the same reason it carries
-    # `_watchdog`: a base commit that cannot import its own judge refuses
-    # before either arm starts, and the refusal says nothing about the subject.
-    shutil.copy2(_PROGRAMS / "_progress_run.py",
-                 plugin / "programs/_progress_run.py")
-    shutil.copy2(_PROGRAMS / "_pytest_progress_plugin.py",
-                 plugin / "programs/_pytest_progress_plugin.py")
-    shutil.copy2(_PROGRAMS / "ci_harness_timeout_ceiling_check.py",
-                 plugin / "programs/ci_harness_timeout_ceiling_check.py")
-    for name in (
-        "_atomic_artefact.py",
-        "_commercial_pdk.py",
-        "_crash_safe_scratch.py",
-        "_owned_process_supervisor.py",
-        "_semantic_child_progress.py",
-        "commit_msg_nda_check.py",
-        "gate_process_attestation.py",
-        "git_prohibition_guard.py",
-        "hygiene_finding_delta.py",
-        "_corpus_location.py",
-        "nda_diff_scan_check.py",
-        "_prose_polarity.py",
-        "drc_vacuous_pass_check.py",
-        "macro_obs_geometry_intersect_check.py",
-        "repo_hygiene_parallel.py",
-        "step_internal_fail_bubble_up_check.py",
-        "step_metrics.py",
-        "tool_diagnostic_id_gate.py",
-        # The hermetic runner and the landing transition verifier both resolve
-        # the EDA image through the plugin's resolver in the BASE runtime
-        # (R-0915-96); without it the arm dies on `No module named _eda_pin`.
-        "_eda_pin.py",
-    ):
-        shutil.copy2(_PROGRAMS / name, plugin / "programs" / name)
-    # Keep the fixture's deliberately tiny subject-facing stubs, but copy the
-    # rest of the exact BASE-owned authority closure generically.  A newly
-    # imported authority file must therefore be present before the manifest is
-    # written instead of being silently omitted by this test repository.
-    for rel in sorted(_VERIFIER_CLOSURE):
-        destination = repo / rel
-        if destination.exists():
-            continue
-        source = _REPO_ROOT / rel
-        assert source.is_file(), f"fixture authority source is absent: {rel}"
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, destination)
-    (plugin / "programs/thing.py").write_text(_THING_SRC.format(v=1))
-    (plugin / "programs/tests/test_thing.py").write_text(_THING_TEST)
-    for rel in _SELECT_CONTROL_TESTS:
-        control = plugin / rel
-        control.parent.mkdir(parents=True, exist_ok=True)
-        control.write_text("def test_fixture_control():\n    assert True\n")
-    (plugin / "pytest.ini").write_text("[pytest]\ntestpaths = programs/tests\n")
-    (repo / "contended.txt").write_text("base\n")
-    # LAST, so it sees every program the lines above staged, stubs included.
-    _stage_program_import_closure(plugin / "programs", _PROGRAMS)
-    _git(repo, "init", "-q", "-b", "main")
-    _git(repo, "config", "user.email", "t@localhost")
-    _git(repo, "config", "user.name", "t")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "base")
-
-    # THE NEGATIVE CONTROL. An ordinary source edit; NO test file in the diff.
-    # The suite goes red because the value the test pins moved.
-    _git(repo, "checkout", "-q", "-b", "innocuous_red")
-    (plugin / "programs/thing.py").write_text(_THING_SRC.format(v=2))
-    (repo / "notes_red.txt").write_text("a harmless-looking note\n")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "an innocuous-looking change")
-
-    # THE PAIRED GUARD. Same files, same shape, still green.
-    _git(repo, "checkout", "-q", "main")
-    _git(repo, "checkout", "-q", "-b", "innocuous_green")
-    (plugin / "programs/thing.py").write_text("# a comment\nVALUE = 1\n")
-    (repo / "notes_green.txt").write_text("an equally harmless note\n")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "an equally innocuous change")
-
-    # A CONFLICT against a base that moved under the branch. `contended.txt` is
-    # touched by nothing else, so the OTHER branches keep rebasing cleanly.
-    _git(repo, "checkout", "-q", "main")
-    _git(repo, "checkout", "-q", "-b", "conflicting")
-    (repo / "contended.txt").write_text("mine\n")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "mine")
-    _git(repo, "checkout", "-q", "main")
-    (repo / "contended.txt").write_text("theirs\n")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "theirs")
-
-    # Same gate bytes as phase 1; the fixture-only arm switch above models the
-    # first candidate whose routed producer is activated under the already
-    # trusted verifier/HDF infrastructure.
-    _git(repo, "checkout", "-q", "-b", "routed_transition")
-    (repo / "routed-transition-note.txt").write_text("activate routed corpus\n")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "activate routed corpus")
-    _git(repo, "checkout", "-q", "main")
-    # A new-branch push is measured as `<head> --not --remotes`.  Give the
-    # fixture the same already-published main boundary a real clone has, so the
-    # push preflight does not accidentally include the synthetic repository's
-    # whole history in its question.
-    _git(repo, "update-ref", "refs/remotes/origin/main", "main")
-    return repo
 
 
 # ── NORECORD HAS TO REACH THE VERDICT (rlmv) ────────────────────────────────
@@ -1141,27 +1848,8 @@ def sandbox(tmp_path_factory):
 # alone is refused and why a run that blames an engine this process CAN start
 # stays red. Where the engine is reachable this function does nothing at all,
 # so the arms run, and a branch that deserves a refusal still gets one.
-def _judgeable(*chunks):
-    """Skip as NOT_MEASURED — with the cause named — if the arms never ran."""
-    status, reason = _CAP.classify("".join(c or "" for c in chunks))
-    if status == _CAP.NOT_MEASURED:
-        pytest.skip("NOT_MEASURED \u2014 " + reason)
 
 
-def _verify(repo, ref, tmp_path, *extra, env_extra=None):
-    out = tmp_path / f"v_{ref}.json"
-    r = _pr.run(
-        ["bash", str(_VERIFY), "--ref", ref, "--base", "main",
-         "--repo", str(repo), "--no-fetch", "--json", str(out), *extra],
-        capture_output=True, text=True, env={**os.environ, "GIT_DIR": "", "GIT_WORK_TREE": "",
-             "VIBE_IC_BENCHMARK_DATA": str(_BENCHMARK_TEST["checkout"]),
-             "VIBEIC_BENCHMARK_CHECKOUT_TEST_OVERRIDE": "1",
-             "VIBEIC_BENCHMARK_CHECKOUT_TEST_ORIGIN":
-                 str(_BENCHMARK_TEST["remote"]),
-             **(env_extra or {})})
-    _judgeable(r.stdout, r.stderr)
-    doc = json.loads(out.read_text()) if out.is_file() else None
-    return r, doc
 
 
 
@@ -1186,31 +1874,6 @@ _ROUTED_ACTIVATION_MARKER = "routed-corpus-producer.activated"
 
 
 
-def test_end_to_end_every_arm_of_both_waves_actually_ran(sandbox, tmp_path):
-    """All four arms produce their record. NOT an ordering guard — see below.
-
-    This used to assert `A2.started`/`B1.started`/`B2.started` in a probe
-    directory the stub wrote from inside the arm. Since the arms became
-    hermetic that could never work: `GATEKEEPER_CONCURRENCY_PROBE_DIR` is not
-    on `_LAND_REVIEWED_ENV_NAMES`, so the arm never saw it, and the directory
-    is a host path no arm can write to anyway. The probe held exactly the three
-    `cleanup.*` files the VERIFIER writes on the host, and nothing else.
-
-    The verdict document already carries per-arm evidence, and the line below
-    was already asserting one of them. Use it for all four. This is stronger
-    than the marker it replaces: a marker proved an arm STARTED, a record
-    proves it COMPLETED.
-
-    NOT GUARDED, and it was not guarded before either: the old name promised
-    "B1/B2 finish before A artifacts exist; A1/A2 then run in parallel", but
-    marker existence never showed ordering, and the verdict document carries no
-    timestamps. Renamed to what is actually asserted rather than leaving a name
-    that over-promises. A real ordering guard needs a per-arm completion record
-    with times, which `landing_completion_record.py` could carry but does not
-    surface to the verdict today.
-    """
-    r, doc = _verify(sandbox, "innocuous_green", tmp_path)
-    assert r.returncode == 0, r.stdout + r.stderr
 
 
 # ── waiting for the verifier by PROGRESS, not by a clock ────────────────────
@@ -1231,114 +1894,12 @@ def test_end_to_end_every_arm_of_both_waves_actually_ran(sandbox, tmp_path):
 # the whole grace, with its process still alive, is genuinely wedged — and that
 # still FAILS these tests, which is the half that must not move.
 
-class _WhileProgressing:
-    """`while watcher.alive():` — the loop condition the watchers below need.
-
-    They used `proc.poll() is None and time.monotonic() < deadline` with the
-    same 55 s constant, and that is the SAME defect one level up from the
-    handler. On a slow host the watcher gave up while the verifier was still
-    producing the very artefacts the test then asserts about, so the assertion
-    failed about a run that was working — and it failed with a message about the
-    ARTEFACTS, which is the worst version: the reader is pointed at the wave
-    ordering when the real answer is that nobody watched long enough.
-
-    Alive means: the process has not exited AND its run tree has moved at some
-    point within the grace. A verifier that is producing files is watched for as
-    long as it keeps producing them; one that has gone completely quiet with the
-    process still up is not watched forever.
-    """
-
-    def __init__(self, proc, run_root: Path):
-        self._proc = proc
-        self._root = run_root
-        self._grace = _stall_grace_s()
-        self._score = None
-        self._moved = time.monotonic()
-
-    def alive(self) -> bool:
-        if self._proc.poll() is not None:
-            return False
-        now = time.monotonic()
-        try:
-            score = _run_dir_progress(self._root)
-        except OSError:
-            # A probe that could not read is "no reading", never "no progress":
-            # treating an unreadable tree as a stall would kill a healthy run
-            # for a reason that is about the prober.
-            return True
-        if score != self._score:
-            self._score = score
-            self._moved = now
-            return True
-        return (now - self._moved) <= self._grace
 
 
-def _run_dir_progress(run_root: Path) -> float:
-    """A monotonic score over the verifier's run tree: file count, total bytes,
-    and the newest mtime. Any one of them advancing is progress; none of them
-    can advance without the verifier doing something."""
-    files = 0
-    total = 0.0
-    newest = 0.0
-    # `os.walk`, not `Path.rglob`. THE TREE IS BEING WRITTEN AND DELETED WHILE
-    # THIS WALKS IT — `_first_seen_wave_artefacts` says so in as many words
-    # ("cleanup removes the run directory and `publish_validated_arm_artifact`
-    # consumes receipts") — and on 3.10 `rglob` raises FileNotFoundError out of
-    # its own scandir when a directory vanishes mid-walk. MEASURED: it did,
-    # inside the progress probe, and failed the test it was added to protect.
-    # `os.walk` ignores such errors by default and returns what it could see.
-    #
-    # A score that goes DOWN because a directory was removed is still MOVEMENT,
-    # which is the right reading: cleanup running is the verifier working.
-    try:
-        roots = list(run_root.glob("gkverify.*"))
-    except OSError:
-        return 0.0
-    for run in roots:
-        for dirpath, _dirs, names in os.walk(run):
-            for name in names:
-                try:
-                    st = os.stat(os.path.join(dirpath, name))
-                except OSError:
-                    continue
-                files += 1
-                total += st.st_size
-                newest = max(newest, st.st_mtime)
-    return float(files) + total + newest
 
 
-def _stall_grace_s() -> float:
-    """Measured on THIS host in THIS session, not hard-coded.
-
-    A grace below the cost of simply LAUNCHING a process is how a supervisor
-    kills its child during boot. The floor here is the observed cost of starting
-    and reaping a trivial subprocess, scaled generously: the verifier's quietest
-    legitimate stretch is a container step producing no file for a while, which
-    is many multiples of a bare launch. 30 s is the lower bound so an
-    unrealistically fast measurement cannot shrink it to nothing.
-    """
-    t0 = time.monotonic()
-    subprocess.run([sys.executable, "-c", "pass"], capture_output=True)
-    launch = time.monotonic() - t0
-    return max(30.0, launch * 200.0)
 
 
-def _finish_by_progress(proc, run_root: Path):
-    """(stdout, stderr) once the verifier exits. Fails the test only if it is
-    STALLED — no movement in its run tree across the whole grace — never merely
-    because it has been slow."""
-    meter = _watchdog.ProgressMeter(size_fn=lambda: _run_dir_progress(run_root))
-    outcome, _rc = _watchdog.supervise(
-        proc, meter.sample, lambda p, _why: p.kill(),
-        poll_s=0.5, stall_grace_s=_stall_grace_s(),
-        hard_ceiling_s=3600.0)
-    stdout, stderr = proc.communicate()
-    if outcome != "natural":
-        pytest.fail(
-            f"the verifier was {outcome}: its run directory did not change at "
-            f"all for the whole stall grace, so it was not working — this is "
-            f"NOT the same as it having been slow:\n{stdout}\n{stderr}")
-    return stdout, stderr
 
 
 _WAVE_ARTEFACTS = (
@@ -1354,117 +1915,12 @@ _WAVE_ARTEFACTS = (
 
 
 
-def _first_seen_wave_artefacts(proc, run_root, interval=0.02):
-    """When each wave artefact FIRST appeared in the verifier's run directory.
-
-    The run directory is `mktemp -d -t gkverify.XXXXXX`, so pointing the
-    verifier's TMPDIR at a caller-owned directory makes every arm artefact
-    host-visible under a known name while the run is still going.  First-seen
-    times are recorded rather than live set membership because cleanup removes
-    the run directory and `publish_validated_arm_artifact` consumes receipts:
-    a "does it exist now" reading flickers back to False at the end of the run,
-    and the ORDER things appeared in is what the wave property is about.
-    """
-    seen: dict[str, float] = {}
-    start = time.monotonic()
-    watcher = _WhileProgressing(proc, run_root)
-    while watcher.alive():
-        runs = sorted(run_root.glob("gkverify.*"))
-        if runs:
-            for name in _WAVE_ARTEFACTS:
-                if name not in seen and (runs[0] / name).exists():
-                    seen[name] = round(time.monotonic() - start, 3)
-        time.sleep(interval)
-    return seen
 
 
 
 
 
 
-def test_end_to_end_candidate_wave_precedes_parallel_isolated_base_wave(
-        sandbox, tmp_path):
-    """B1/B2 finish before A artifacts exist; A1/A2 then run in parallel.
-
-    REWRITTEN AGAINST THIS REPOSITORY'S DESIGN (v1.11.69+). THE PROPERTY IS
-    UNCHANGED, word for word; only the vantage point it is observed from has
-    moved, and the reason it had to move is the property next door.
-
-    It used to be observed from INSIDE the arms: the stub landing gate wrote
-    `<ARM>.started` into `GATEKEEPER_CONCURRENCY_PROBE_DIR`, and the fixture's
-    own test file waited for its siblings' markers to appear.  A cross-arm
-    rendezvous through a shared host directory is exactly what the hermetic
-    launcher exists to make impossible — each arm is a container with
-    `network: none` whose only writable surface is a private tmpfs and a
-    private evidence volume — and MEASURED on a4caccefe the name is not on the
-    launcher's `--env` allow-list either, so inside an arm the variable is
-    EMPTY, the stub's branch never fires and no marker is ever written. The
-    only thing that directory received was `cleanup.*`, written host-side by
-    `cleanup_event`. An arm CANNOT see another arm, by design; asserting the
-    wave structure through an inter-arm channel therefore cannot be repaired,
-    it can only be moved.
-
-    So it is observed where the parallelism actually lives: the parent shell,
-    which launches B1/B2, `wait`s for both, rebuilds the base wave, and only
-    then launches A1/A2 and waits for those.  Every arm's runner log is created
-    by the launch redirection and every arm's receipt is sealed at its exit, so
-    the order those files appear in IS the wave structure, observed from
-    outside without asking any arm to cooperate.
-
-    MARGINS, measured on this host: B receipts at 5.2s/7.7s, the base subject
-    at 9.3s, the A logs at 10.59s/10.61s, the first A receipt at 12.1s. The
-    wave boundary this test asserts has 2.9s of daylight and the A overlap
-    window is 1.5s, both sampled every 20ms. A poller that misses a phase
-    collapses two first-seen times together and the strict `<` below FAILS —
-    the failure mode is loud, not a quiet pass.
-    """
-    run_root = tmp_path / "verifier-tmp"
-    run_root.mkdir()
-    out = tmp_path / "wave.json"
-    proc = subprocess.Popen(
-        ["bash", str(_VERIFY), "--ref", "innocuous_green", "--base", "main",
-         "--repo", str(sandbox), "--no-fetch", "--json", str(out)],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        env={**os.environ, "GIT_DIR": "", "GIT_WORK_TREE": "",
-             "TMPDIR": str(run_root),
-             "VIBE_IC_BENCHMARK_DATA": str(_BENCHMARK_TEST["checkout"]),
-             "VIBEIC_BENCHMARK_CHECKOUT_TEST_OVERRIDE": "1",
-             "VIBEIC_BENCHMARK_CHECKOUT_TEST_ORIGIN":
-                 str(_BENCHMARK_TEST["remote"])})
-    seen = _first_seen_wave_artefacts(proc, run_root)
-    stdout, stderr = _finish_by_progress(proc, run_root)
-    _judgeable(stdout, stderr)
-    doc = json.loads(out.read_text()) if out.is_file() else None
-
-    assert proc.returncode == 0, stdout + stderr
-    # NON-VACUITY FIRST. Every arm has to have been WATCHED, or the ordering
-    # below is a comparison between two absences. This is the assertion that
-    # would have caught the defect this test was blind to for four days: the
-    # old body read a probe directory that was never written to, and could
-    # only say the markers were missing, never that no arm had ever run.
-    missing = [name for name in _WAVE_ARTEFACTS if name not in seen]
-    assert not missing, (f"never observed {missing}; the poller saw {seen}")
-
-    # THE CANDIDATE WAVE PRECEDES. No base-wave artefact exists until BOTH
-    # candidate receipts are sealed -- the base subject is not even
-    # materialized while candidate code is running, which is what makes the
-    # base wave isolated from it rather than merely later.
-    candidate_wave_done = max(seen["b1-hermetic-receipt.json"],
-                              seen["b2-hermetic-receipt.json"])
-    base_wave_started = min(seen["base-subject"], seen["a1-runner.log"],
-                            seen["a2-runner.log"])
-    assert candidate_wave_done < base_wave_started, seen
-
-    # THE BASE WAVE IS PARALLEL. Both A arms are launched before either has
-    # sealed a receipt, so they were in flight at the same time.
-    assert max(seen["a1-runner.log"], seen["a2-runner.log"]) < min(
-        seen["a1-hermetic-receipt.json"],
-        seen["a2-hermetic-receipt.json"]), seen
-    # ... and so was the candidate wave, which is the same launch shape one
-    # wave earlier and is why the base wave is not simply the whole run.
-    assert max(seen["b1-runner.log"], seen["b2-runner.log"]) < min(
-        seen["b1-hermetic-receipt.json"],
-        seen["b2-hermetic-receipt.json"]), seen
 
 
 # Every A-only artefact `clear_base_wave_artifacts` names, in its own words.
@@ -1480,120 +1936,6 @@ _BASE_WAVE_ARTEFACTS = (
 _FORGED = b"candidate planted this base artefact\n"
 
 
-def test_end_to_end_candidate_cannot_prewrite_base_wave_artifacts(
-        sandbox, tmp_path):
-    """PROPERTY (unchanged): a candidate cannot pre-write the base wave's
-    artefacts and have them counted as base evidence.
-
-    REWRITTEN, AND THIS ONE WAS GREEN — WHICH IS WORSE THAN RED. It set
-    `GATEKEEPER_PREWRITE_BASE_ARTIFACTS=1` and asserted that a planted line was
-    absent from the output. MEASURED on a4caccefe, TWO independent reasons that
-    assertion could never have failed:
-
-      1. the name occurs ZERO times in `tools/gatekeeper-verify-merge.sh` and
-         is not on the hermetic launcher's `--env` allow-list, so inside an arm
-         the switch is EMPTY and the stub's branch never runs; and
-      2. even if it ran, the branch writes to
-         `$(dirname "$GATEKEEPER_BENCHMARK_MEASUREMENT_RECORD")`, and that name
-         occurs ZERO times in the verifier AND ZERO times in the real
-         `tools/gatekeeper-land.sh` — so inside the arm it expands to `.`, the
-         container's read-only `/subject`. The candidate cannot NAME the
-         parent's run directory, let alone write in it.
-
-    Two layers of prevention, and the test was reading the absence of a line
-    nobody had tried to print. "Unchanged" and "nobody tried" are the same
-    bytes; this one had been the second for four days while reading as the
-    first.
-
-    SO WHAT DOES MAIN ACTUALLY DO, and what can still be observed? Prevention
-    is layer one and is asserted by the measurement above rather than by a
-    stimulus that cannot exist. Layer two is `clear_base_wave_artifacts`, which
-    deletes every A-only artefact after both candidate process groups reach a
-    terminal census and before the base wave is prepared -- its own comment
-    says the names are "discoverable from the measurement-record path handed to
-    B2", i.e. it is written for a candidate that DOES somehow get a path. That
-    layer is testable, so this test drives it: the artefacts are planted from
-    the host, in the parent's own run directory, while the candidate wave is in
-    flight, and the base wave must start with not one of those bytes left.
-
-    One of them is planted as a DIRECTORY where a file belongs, which is what
-    the old stub did too: `rm -f` cannot remove that, `rm -rf` can, and the
-    difference between those two is a mutation somebody could make.
-    """
-    run_root = tmp_path / "verifier-tmp"
-    run_root.mkdir(parents=True)
-    out = tmp_path / "verdict.json"
-    proc = subprocess.Popen(
-        ["bash", str(_VERIFY), "--ref", "innocuous_green", "--base", "main",
-         "--repo", str(sandbox), "--no-fetch", "--json", str(out)],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        env={**os.environ, "GIT_DIR": "", "GIT_WORK_TREE": "",
-             "TMPDIR": str(run_root),
-             "VIBE_IC_BENCHMARK_DATA": str(_BENCHMARK_TEST["checkout"]),
-             "VIBEIC_BENCHMARK_CHECKOUT_TEST_OVERRIDE": "1",
-             "VIBEIC_BENCHMARK_CHECKOUT_TEST_ORIGIN":
-                 str(_BENCHMARK_TEST["remote"])})
-
-    planted: list[str] = []
-    survivors: list[str] | None = None
-    watcher = _WhileProgressing(proc, run_root)
-    while watcher.alive():
-        runs = sorted(run_root.glob("gkverify.*"))
-        if not runs:
-            time.sleep(0.02)
-            continue
-        run = runs[0]
-        if not planted and (run / "b1-runner.log").exists():
-            for name in _BASE_WAVE_ARTEFACTS:
-                path = run / name
-                if path.is_dir():
-                    shutil.rmtree(path)
-                elif path.exists() or path.is_symlink():
-                    path.unlink()
-                if name == "base_hygiene_progress.jsonl":
-                    path.mkdir()
-                    (path / "forged").write_bytes(_FORGED)
-                else:
-                    path.write_bytes(_FORGED)
-                planted.append(name)
-            # NON-VACUITY: the forgery is READ BACK before anything is claimed
-            # about its removal, so "no forged byte survives" cannot be
-            # satisfied by never having written one.
-            assert sorted(_leaked_forgeries(run)) == sorted(planted), (
-                "the plant did not take")
-        if planted and (run / "a1-runner.log").exists():
-            survivors = _leaked_forgeries(run)
-            break
-        time.sleep(0.02)
-    stdout, stderr = _finish_by_progress(proc, run_root)
-    _judgeable(stdout, stderr)
-    doc = json.loads(out.read_text()) if out.is_file() else None
-
-    assert planted == list(_BASE_WAVE_ARTEFACTS), (
-        f"the candidate wave was never observed; planted {planted}")
-    assert survivors is not None, "the base wave never started"
-    # THE PROPERTY. Not one candidate-written byte is present in the parent's
-    # run directory when the base wave begins.
-    assert survivors == [], survivors
-
-    assert proc.returncode == 0, stdout + stderr
-    assert "candidate planted this base" not in stdout
-
-
-def _leaked_forgeries(run):
-    """Top-level run-directory entries still carrying the planted bytes."""
-    found = []
-    for path in sorted(run.iterdir()):
-        try:
-            if path.is_dir():
-                if path.name in _BASE_WAVE_ARTEFACTS:
-                    found.append(path.name)
-                continue
-            if path.is_file() and _FORGED in path.read_bytes():
-                found.append(path.name)
-        except OSError:                                   # pragma: no cover
-            continue
-    return found
 
 
 
@@ -1606,242 +1948,10 @@ def _leaked_forgeries(run):
 
 
 
-def test_end_to_end_the_caller_checkout_is_never_touched(sandbox, tmp_path):
-    """It rebases in a THROWAWAY worktree. A gate that mutates the operator's
-    checkout to answer a question is a gate that gets turned off."""
-    before = _git(sandbox, "rev-parse", "HEAD").stdout.strip()
-    status = _git(sandbox, "status", "--porcelain").stdout
-    _verify(sandbox, "innocuous_green", tmp_path)
-    assert _git(sandbox, "rev-parse", "HEAD").stdout.strip() == before
-    assert _git(sandbox, "status", "--porcelain").stdout == status
-    assert _git(sandbox, "worktree", "list").stdout.count("\n") == 1
 
 
-def _assert_interruption_cleans_every_parallel_arm(
-        sandbox, tmp_path, hung_arm, pid_only_term):
-    """Parallel speed must not trade an interrupt for leaked gate processes.
 
-    A private clone's selected arm deliberately ignores TERM forever.  Both a
-    process-group SIGINT and the common PID-only SIGTERM service-stop path must
-    run bounded cleanup, escalate every dedicated group to KILL, reap it, and
-    remove all four temporary worktrees.
-    """
-    repo = tmp_path / "interrupt-repo"
-    cloned = _pr.run(
-        ["git", "clone", "-q", str(sandbox), str(repo)],
-        capture_output=True, text=True)
-    assert cloned.returncode == 0, cloned.stderr
-    _git(repo, "config", "user.email", "t@localhost")
-    _git(repo, "config", "user.name", "t")
-    _git(repo, "checkout", "-q", "main")
 
-    land = repo / "tools/gatekeeper-land.sh"
-    text = land.read_text()
-    needle = 'echo "=== gatekeeper landing gates — base=${GATEKEEPER_BASE:-origin/main} ==="\n'
-    # KEYED ONLY ON `GATEKEEPER_VERIFY_ARM`, and that is the whole repair. This
-    # block used to require `GATEKEEPER_CONCURRENCY_PROBE_DIR` as well, and to
-    # announce itself by writing `<ARM>.pid` into it. MEASURED on a4caccefe: the
-    # hermetic launcher forwards an explicit `--env` allow-list and that name is
-    # not on it, so inside the arm the variable is EMPTY, the branch never
-    # fired, nothing ever hung, and this test failed waiting for a pid file that
-    # could not be written. `GATEKEEPER_VERIFY_ARM` IS forwarded, so keying on
-    # it alone makes the arm hang for real under this repository's design.
-    hang = r'''if [ "${GATEKEEPER_VERIFY_ARM:-}" = "__HUNG_ARM__" ]; then
-  trap '' TERM
-  while :; do sleep 30; done
-fi
-'''.replace("__HUNG_ARM__", hung_arm)
-    assert needle in text
-    land.write_text(text.replace(needle, hang + needle))
-    _git(repo, "add", "tools/gatekeeper-land.sh")
-    assert _git(repo, "commit", "-qm", "make interrupt control").returncode == 0
-    _git(repo, "checkout", "-q", "-b", "probe")
-    (repo / "probe.txt").write_text("candidate\n")
-    _git(repo, "add", "probe.txt")
-    assert _git(repo, "commit", "-qm", "candidate").returncode == 0
-
-    probe = tmp_path / "interrupt-probe"
-    out = tmp_path / "interrupt.json"
-    proc = subprocess.Popen(
-        ["bash", str(_VERIFY), "--ref", "probe", "--base", "main",
-         "--repo", str(repo), "--no-fetch", "--json", str(out)],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        start_new_session=True,
-        # The same hermetic benchmark-data checkout `_verify` publishes. Without
-        # it the script falls back to `$HOME/_matrix_benchmark_data` — a host
-        # path this suite neither creates nor owns — so on any machine that does
-        # not happen to have the gatekeeper's canonical corpus checked out, the
-        # run died at "benchmark-data canonical checkout produced NORECORD"
-        # before either arm existed, and the test read that as "the arm never
-        # started".
-        env={**os.environ, "GIT_DIR": "", "GIT_WORK_TREE": "",
-             "GATEKEEPER_CONCURRENCY_PROBE_DIR": str(probe),
-             "VIBE_IC_BENCHMARK_DATA": str(_BENCHMARK_TEST["checkout"]),
-             "VIBEIC_BENCHMARK_CHECKOUT_TEST_OVERRIDE": "1",
-             "VIBEIC_BENCHMARK_CHECKOUT_TEST_ORIGIN":
-                 str(_BENCHMARK_TEST["remote"])},
-    )
-    # WAIT FOR THE ARM PHASE THE WAY THE HOST CAN SEE IT. This used to wait for
-    # `probe / f"{hung_arm}.pid"`, and that file can never appear:
-    # GATEKEEPER_CONCURRENCY_PROBE_DIR is not on the hermetic launcher's
-    # `--env` allow-list, so inside the arm the variable is EMPTY and nothing
-    # writes there. The arm cannot signal out -- that is the point of the
-    # containment -- so what is polled is the verifier's own worktrees
-    # appearing in the subject repository, which is host-side and is what
-    # "the arms are set up and running" looks like from outside.
-    # Wait on the same suite ceiling the cleanup wait below uses. The old bound
-    # here was a 12s wall-clock estimate, which the verifier outlives on a cold
-    # cache purely by doing its honest work.
-    def _arms_are_up():
-        return _git(repo, "worktree", "list").stdout.count("\n") > 1
-
-    deadline = time.monotonic() + _T
-    while time.monotonic() < deadline and not _arms_are_up():
-        if proc.poll() is not None:
-            break
-        time.sleep(0.05)
-    if not _arms_are_up():
-        # NEVER evaluate the diagnosis inside the assert message. Against a
-        # verifier that is still running, `proc.communicate(timeout=2)` raises
-        # TimeoutExpired, and that exception REPLACES the AssertionError: the
-        # failure then reads "timed out after 2 seconds", which points at the
-        # verifier as the thing that hung. That is the exact inverse of the
-        # common case, where the verifier ran to completion and it is the
-        # CONTROL ARM that never existed. It also leaks the verifier, because
-        # nothing ever reaps it. Settle the process first, then report which of
-        # the two distinguishable things actually happened.
-        still_running = proc.poll() is None
-        # The host's load is read HERE, at the ceiling, before the kill below
-        # changes what the host is doing (R-0929-ENV-AT-RUNTIME).
-        at_ceiling = states.run_conditions()
-        if still_running:
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        stdout, stderr = proc.communicate()
-        if still_running:
-            why = (f"the verifier was still running after {_T}s and no "
-                   f"verifier worktree ever appeared in the subject "
-                   f"repository, so the {hung_arm} control arm never started")
-            # THIS branch is the suite ceiling, a wall clock, and nothing at it
-            # shows where the verifier is (no worktree, no event): slow and
-            # wedged look the same from here. So it is NOT_MEASURED only when
-            # the host was MEASURABLY loaded at the ceiling -- never for the
-            # xdist worker count alone -- and on a quiet host it is the FAIL
-            # below, serial or parallel. The EXITED branch is never a clock.
-            states.skip_if_not_measurable(
-                why, progress=states.PROGRESS_UNOBSERVABLE,
-                conditions=at_ceiling)
-        else:
-            why = (f"the verifier EXITED rc={proc.returncode} without ever "
-                   f"running the {hung_arm} control arm: the injected hang was "
-                   f"unreachable, so this test measured NOTHING about "
-                   f"interrupt cleanup")
-        pytest.fail(f"{why}\n=== verifier stdout ===\n{stdout}\n"
-                    f"=== verifier stderr ===\n{stderr}")
-    if pid_only_term:
-        os.kill(proc.pid, signal.SIGTERM)
-    else:
-        os.killpg(proc.pid, signal.SIGINT)
-    # WHAT THE VERIFIER HAD BUILT WHEN THE INTERRUPT LANDED, read right after
-    # it. Bash runs a trapped signal once the command in flight returns, and
-    # that one command can register at most one more worktree; every later
-    # worktree is a later COMMAND, i.e. the script went on as if never
-    # interrupted. That is the progress evidence the ceiling branch below needs
-    # (R-0929-ENV-AT-RUNTIME): it tells a verifier still inside its step from
-    # one that ignored the signal.
-    def _worktree_paths():
-        out = _git(repo, "worktree", "list", "--porcelain").stdout
-        return {line[len("worktree "):] for line in out.splitlines()
-                if line.startswith("worktree ")}
-
-    worktrees_at_signal = _worktree_paths()
-    # Wait on the cleanup protocol, not on a wall-clock estimate of how fast a
-    # loaded host can remove four worktrees.  `_T` is only the suite's final
-    # dead-process safety ceiling; the success path is the atomic `done` event.
-    cleanup_started = probe / "cleanup.started"
-    cleanup_reaped = probe / "cleanup.reaped"
-    cleanup_done = probe / "cleanup.done"
-    deadline = time.monotonic() + _T
-    while time.monotonic() < deadline and not cleanup_done.is_file():
-        if proc.poll() is not None:
-            break
-        time.sleep(0.05)
-    if not cleanup_done.is_file():
-        # FOUR different things end the wait above, and they used to share one
-        # message:
-        #   * the verifier EXITED without the event -- a behaviour, always FAIL;
-        #   * it was still running at the `_T` ceiling AFTER `cleanup.started`
-        #     -- cleanup began and never reached `reaped`/`done`. That IS the
-        #     never-reaped arm this deadline exists to catch, and the events
-        #     are the progress evidence: cleanup was seen to start and then do
-        #     nothing observable. A hang, FAIL on any host at any load.
-        #     (Reverse mutation M9b -- cleanup() blocks right after
-        #     `cleanup_event started` -- read NOT_MEASURED at -n 2 on a host at
-        #     0.14 load per core while this branch keyed on the worker count.)
-        #   * it was still running at the ceiling and cleanup NEVER STARTED,
-        #     yet it had created later worktrees after the signal: it IGNORED
-        #     the interrupt and carried on -- a behaviour, FAIL at any load;
-        #   * it was still running, cleanup never started, and no later step
-        #     had begun: the interrupt was still deferred behind the step in
-        #     flight (bash runs a trapped signal only once that child
-        #     returns). Nothing here tells slow from wedged, so this one branch
-        #     is NOT_MEASURED when the host was MEASURABLY loaded at the
-        #     ceiling (R-0929-ENV-AT-RUNTIME), and a FAIL on a quiet host.
-        still_running = proc.poll() is None
-        # Read at the ceiling, before the kill below changes the host or lets
-        # a late event land: the verdict is about what was true AT `_T`.
-        at_ceiling = states.run_conditions()
-        started = cleanup_started.is_file()
-        reaped = cleanup_reaped.is_file()
-        after_signal = sorted(_worktree_paths() - worktrees_at_signal)
-        # A failed cleanup test must clean up its own control process; leaving
-        # the intentionally TERM-ignoring arm behind would contaminate every
-        # later timing measurement in the same suite.
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        stdout, stderr = proc.communicate()
-        if still_running and started:
-            stuck = ("removing the worktrees never finished (cleanup.reaped "
-                     "present, cleanup.done absent)" if reaped else
-                     "an arm process group was never reaped (cleanup.started "
-                     "present, cleanup.reaped absent)")
-            pytest.fail(
-                f"cleanup STARTED and the verifier was still running at the "
-                f"suite safety ceiling ({_T}s): {stuck} -- a hang, not a slow "
-                f"host:\n{stdout}\n{stderr}")
-        if still_running and len(after_signal) >= 2:
-            # MEASURED 2026-09-29 on 8HD-6 (process tree at the ceiling): the
-            # verifier was not inside any step -- bash sat in `wait` on the
-            # hung base arm, which it had LAUNCHED ~25 s after the SIGINT, the
-            # whole candidate wave having run in between. A lost interrupt is
-            # the behaviour under test failing, not a slow host.
-            pytest.fail(
-                f"the verifier IGNORED the interrupt: cleanup never started, "
-                f"and {len(after_signal)} worktree(s) were created AFTER the "
-                f"signal ({', '.join(Path(w).name for w in after_signal)}), so "
-                f"the script went on as if never interrupted -- a behaviour, "
-                f"not a slow host:\n{stdout}\n{stderr}")
-        if still_running:
-            why = (f"verifier still running at the suite safety ceiling "
-                   f"({_T}s) and cleanup never STARTED (no cleanup.started), "
-                   f"with no later step begun after the signal: the interrupt "
-                   f"was still deferred behind the step in flight")
-            states.skip_if_not_measurable(
-                why, progress=states.PROGRESS_UNOBSERVABLE,
-                conditions=at_ceiling)
-            pytest.fail(f"{why}:\n{stdout}\n{stderr}")
-        pytest.fail(
-            f"verifier exited rc={proc.returncode} without the cleanup.done "
-            f"event:\n{stdout}\n{stderr}")
-    stdout, stderr = proc.communicate()
-    assert proc.returncode != 0, stdout + stderr
-    assert cleanup_started.is_file(), "cleanup never announced its start"
-    assert cleanup_reaped.is_file(), "cleanup did not reap its process groups"
-    assert _git(repo, "worktree", "list").stdout.count("\n") == 1
     # `cleanup.reaped` IS the proof that the TERM-ignoring arm died, and it is a
     # stronger one than polling a pid the arm had to publish for itself: the
     # parent writes that event only after WAITING on every arm process group it
@@ -1850,145 +1960,28 @@ fi
     # fails on the deadline above rather than passing quietly.
 
 
-def test_interruption_kills_a_term_ignoring_parallel_arm_and_removes_worktrees(
-        sandbox, tmp_path):
-    """Keep the original A2/SIGINT nodeid stable across the differential."""
-    _assert_interruption_cleans_every_parallel_arm(
-        sandbox, tmp_path, "A2", False)
 
 
-def test_pid_only_term_kills_a_term_ignoring_b2_and_removes_worktrees(
-        sandbox, tmp_path):
-    """The service-stop path also owns the newly independent B2 group."""
-    _assert_interruption_cleans_every_parallel_arm(
-        sandbox, tmp_path, "B2", True)
 
 
-def _reassert(sandbox, path, head=None):
-    doc = json.loads(path.read_text())
-    head = head or doc["head_sha"]
-    return _pr.run(
-        ["bash", str(_VERIFY), "--reassert", str(path), "--base", "main",
-         "--reassert-head", head, "--repo", str(sandbox), "--no-fetch"],
-        capture_output=True, text=True)
 
 
-def _clone_for_reassert(sandbox, tmp_path):
-    repo = tmp_path / "reassert-repo"
-    cloned = _pr.run(["git", "clone", "-q", str(sandbox), str(repo)],
-                     capture_output=True, text=True)
-    assert cloned.returncode == 0, cloned.stderr
-    _git(repo, "config", "user.email", "t@localhost")
-    _git(repo, "config", "user.name", "t")
-    _git(repo, "checkout", "-q", "main")
-    return repo
 
 
-def _advance_main(repo, rel, content):
-    path = repo / rel
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content)
-    _git(repo, "add", "--", rel)
-    assert _git(repo, "commit", "-qm", f"advance {rel}").returncode == 0
 
 
-def _write_reassert_receipt(repo, path, verdict="LAND_OK"):
-    dependency = ("vibe-ic-marketplace/plugins/vibe-ic/"
-                  "programs/tests/test_thing.py")
-    doc = {
-        "receipt_schema": "vibeic.landing-acceptance.v1",
-        "verdict": verdict,
-        "base_sha": _git(repo, "rev-parse", "main").stdout.strip(),
-        "head_sha": _git(repo, "rev-parse", "innocuous_green").stdout.strip(),
-        "selected_files": [dependency],
-        "base_selected_files": [dependency],
-        "gate_edited": [],
-    }
-    doc["receipt_sha256"] = hashlib.sha256(json.dumps(
-        doc, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    path.write_text(json.dumps(doc))
-    return doc
 
 
-def test_reassert_reuses_unchanged_receipt_without_rerun(sandbox, tmp_path):
-    good = tmp_path / "v_innocuous_green.json"
-    _write_reassert_receipt(sandbox, good)
-    reused = _reassert(sandbox, good)
-    assert reused.returncode == 0, reused.stdout + reused.stderr
-    assert "REASSERT: REUSED" in reused.stdout
-    assert "rerun" not in reused.stderr.lower()
 
 
-def test_reassert_reuses_receipt_after_unrelated_base_landing(sandbox, tmp_path):
-    good = tmp_path / "v_innocuous_green.json"
-    _write_reassert_receipt(sandbox, good)
-    repo = _clone_for_reassert(sandbox, tmp_path)
-    _advance_main(repo, "unrelated-owner.txt", "independent landing\n")
-    reused = _reassert(repo, good)
-    assert reused.returncode == 0, reused.stdout + reused.stderr
-    assert "only through unrelated paths" in reused.stdout
 
 
-def test_reassert_changed_candidate_input_requests_bounded_revalidation(
-        sandbox, tmp_path):
-    good = tmp_path / "v_innocuous_green.json"
-    _write_reassert_receipt(sandbox, good)
-    repo = _clone_for_reassert(sandbox, tmp_path)
-    _advance_main(repo, "notes_green.txt", "main changed candidate bytes\n")
-    changed = _reassert(repo, good)
-    assert changed.returncode == 1, changed.stdout + changed.stderr
-    assert "REASSERT: REVALIDATE" in changed.stderr
-    assert "notes_green.txt\tcandidate-bytes" in changed.stderr
-    assert "full verify" not in changed.stderr.lower()
 
 
-@pytest.mark.parametrize("selection_namespace", ["repo", "plugin"])
-def test_reassert_changed_named_dependency_blocks_reuse(sandbox, tmp_path, selection_namespace):
-    good = tmp_path / "v_innocuous_green.json"
-    doc = _write_reassert_receipt(sandbox, good)
-    assert doc["base_selected_files"]
-    repo = _clone_for_reassert(sandbox, tmp_path)
-    dependency = doc["base_selected_files"][0]
-    if selection_namespace == "plugin":
-        # The real verdict producer stores pytest selection paths relative to
-        # the plugin root; git diff reports them relative to the repository.
-        prefix = "vibe-ic-marketplace/plugins/vibe-ic/"
-        doc["selected_files"] = [dependency.removeprefix(prefix)]
-        doc["base_selected_files"] = [dependency.removeprefix(prefix)]
-        doc.pop("receipt_sha256")
-        doc["receipt_sha256"] = hashlib.sha256(json.dumps(
-            doc, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        good.write_text(json.dumps(doc))
-    _advance_main(repo, dependency, "def test_changed_dependency():\n    assert True\n")
-    changed = _reassert(repo, good)
-    assert changed.returncode == 1, changed.stdout + changed.stderr
-    assert "named-evidence/dependency" in changed.stderr
-    assert dependency in changed.stderr
 
 
-def test_reassert_rejects_tampered_or_mismatched_receipt(sandbox, tmp_path):
-    good = tmp_path / "v_innocuous_green.json"
-    doc = _write_reassert_receipt(sandbox, good)
-
-    tampered = tmp_path / "tampered.json"
-    doc["selected_files"].append("forged.py")
-    tampered.write_text(json.dumps(doc))
-    refused = _reassert(sandbox, tampered)
-    assert refused.returncode == 2, refused.stdout + refused.stderr
-    assert "receipt digest mismatch" in refused.stderr
-
-    mismatch = _reassert(sandbox, good, head="main")
-    assert mismatch.returncode == 2, mismatch.stdout + mismatch.stderr
-    assert "candidate head mismatch" in mismatch.stderr
 
 
-def test_reassert_refuses_a_record_that_was_not_a_pass(sandbox, tmp_path):
-    receipt = tmp_path / "v_innocuous_red.json"
-    doc = _write_reassert_receipt(sandbox, receipt, verdict="REFUSE")
-    bad = _reassert(sandbox, receipt,
-                    head=doc["head_sha"])
-    assert bad.returncode == 1, bad.stdout + bad.stderr
-    assert "not LAND_OK" in bad.stderr
 
 
 
@@ -2023,25 +2016,124 @@ _FALLBACK = {"GATEKEEPER_FORCE_REBASE_REPLAY": "1"}
 # ------------------------------------------------- the decision, both tiers
 
 
+def test_an_unrecognised_tier_refuses_rather_than_inheriting_the_strong_silence():
+    """A third tier arriving by typo must not be read as the strong one. If the
+    gate cannot say WHAT was verified, nothing was."""
+    v = _decide(verification_tier="merge_tree")      # underscore, not hyphen
+    assert v.ok is False
+    assert v.unmeasurable is True
+    assert any("UNKNOWN VERIFICATION TIER" in r for r in v.reasons), v.reasons
+    assert "VERIFICATION_TIER_UNKNOWN" in v.disclosures
 
 
+def test_the_fallback_tier_discloses_the_cross_check_it_did_not_perform():
+    v = _decide(verification_tier=V.TIER_REBASE_REPLAY, git_version="2.34.1",
+                tier_reason="git 2.34.1 does not support `merge-tree --write-tree`")
+    assert v.ok is True, v.reasons          # PAIRED: a clean candidate still lands
+    assert "SQUASH_VS_REBASE_CROSS_CHECK_NOT_PERFORMED" in v.disclosures
+    assert "VERIFICATION_TIER_REBASE_REPLAY" in v.disclosures
+    # NAMES THE VERSION FOUND AND THE VERSION NEEDED, so the refusal/disclosure
+    # is actionable rather than just true.
+    prose = " ".join(v.notes)
+    assert "2.34.1" in prose and V.MERGE_TREE_MIN_VERSION in prose, prose
 
 
+def test_the_strong_tier_records_that_the_cross_check_was_performed():
+    """The other side of the disclosure. Without this the fallback's code could
+    be emitted unconditionally and nothing would notice."""
+    v = _decide()
+    assert v.ok is True
+    assert "SQUASH_VS_REBASE_CROSS_CHECK_PERFORMED" in v.disclosures
+    assert "VERIFICATION_TIER_MERGE_TREE" in v.disclosures
+    assert "SQUASH_VS_REBASE_CROSS_CHECK_NOT_PERFORMED" not in v.disclosures
 
 
+def test_the_fallback_still_refuses_a_new_failure_this_branch_owns():
+    """The decision-level half of the paired guard. A FALLBACK THAT PASSES
+    EVERYTHING IS WORSE THAN A GATE THAT REFUSES EVERYTHING."""
+    v = _decide(verification_tier=V.TIER_REBASE_REPLAY,
+                delta=_delta(new_failures=["m::t"]))
+    assert v.ok is False
+    assert any("NEW FAILURE" in r for r in v.reasons), v.reasons
 
 
+def test_the_fallback_still_refuses_when_the_replay_itself_conflicted():
+    """The fallback adopts the replay as the tree under test ONLY when the replay
+    succeeded. A conflicted rebase leaves it empty and must still refuse as
+    UNMEASURABLE — the fallback trades away a cross-check, never fail-closed."""
+    v = _decide(verification_tier=V.TIER_REBASE_REPLAY,
+                rebase_status="conflict", expected_tree="")
+    assert v.ok is False and v.unmeasurable is True
+    assert any("REBASE CONFLICT" in r for r in v.reasons), v.reasons
+    assert any("COULD NOT BE COMPUTED" in r for r in v.reasons), v.reasons
+    # The refusal still says which tier could not answer.
+    assert "VERIFICATION_TIER_REBASE_REPLAY" in v.disclosures
 
 
+@pytest.mark.parametrize("over,expected_ok", [
+    ({}, True),
+    ({"delta": _delta(new_failures=["m::t"])}, False),
+    ({"delta": _delta(silenced=["m::t"])}, False),
+    ({"rebase_status": "conflict"}, False),
+    ({"verified_tree": OTHER_TREE}, False),
+    ({"truncated": True}, False),
+    ({"dropped_files": ("programs/tests/test_x.py",)}, False),
+    ({"base_dropped_files": ("programs/tests/test_x.py",)}, False),
+    ({"land": V.parse_land_log(_GOOD_LOG.replace("PASS  repo hygiene gates",
+                                                 "FAIL  repo hygiene gates"))},
+     False),
+])
+def test_the_tier_reports_what_it_checked_and_never_changes_the_answer(
+        over, expected_ok):
+    """THE PROPERTY THAT MAKES THE FALLBACK SAFE, stated as an assertion.
+
+    For every fact the verdict turns on, BOTH tiers reach the SAME answer. The
+    degraded tier is allowed to say what it could not check; it is not allowed to
+    excuse anything it did check. If this ever fails, the fallback has become a
+    way to land something the strong tier refuses."""
+    strong = _decide(verification_tier=V.TIER_MERGE_TREE, **over)
+    weak = _decide(verification_tier=V.TIER_REBASE_REPLAY, **over)
+    assert strong.ok is expected_ok, strong.reasons
+    assert weak.ok is strong.ok, (weak.reasons, strong.reasons)
+    assert weak.reasons == strong.reasons, (weak.reasons, strong.reasons)
 
 
 # ------------------------------------------------------ the record, both tiers
 
 
+def test_the_cli_record_tells_the_two_tiers_apart_machine_readably(tmp_path):
+    """DISCLOSED IN PROSE IS NOT ENOUGH. A downstream reader keys on these."""
+    r, doc = _cli(tmp_path, _GOOD_LOG, _CASE_OK, _CASE_OK, _SEL,
+                  extra=("--verification-tier", V.TIER_REBASE_REPLAY,
+                         "--git-version", "2.34.1"))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert doc["verdict"] == "LAND_OK"
+    assert doc["verification_tier"] == V.TIER_REBASE_REPLAY
+    assert doc["tier_degraded"] is True
+    assert doc["squash_vs_rebase_cross_check"] == "NOT_PERFORMED"
+    assert "SQUASH_VS_REBASE_CROSS_CHECK_NOT_PERFORMED" in doc["disclosures"]
+    assert doc["git_version"] == "2.34.1"
+    assert doc["git_version_required_for_merge_tree"] == V.MERGE_TREE_MIN_VERSION
+    # ...and PRINTED, with the same codes, so a terminal and a program are told
+    # the same thing.
+    assert "DISCLOSE  SQUASH_VS_REBASE_CROSS_CHECK_NOT_PERFORMED" in r.stdout
+    assert f"[tier {V.TIER_REBASE_REPLAY}]" in r.stdout
 
 
+def test_the_cli_record_marks_the_strong_tier_as_not_degraded(tmp_path):
+    r, doc = _cli(tmp_path, _GOOD_LOG, _CASE_OK, _CASE_OK, _SEL)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert doc["verification_tier"] == V.TIER_MERGE_TREE
+    assert doc["tier_degraded"] is False
+    assert doc["squash_vs_rebase_cross_check"] == "PERFORMED"
 
 
+def test_the_cli_refuses_an_unrecognised_tier_as_unmeasurable(tmp_path):
+    r, doc = _cli(tmp_path, _GOOD_LOG, _CASE_OK, _CASE_OK, _SEL,
+                  extra=("--verification-tier", "whatever"))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert doc["verdict"] == "REFUSE"
+    assert doc["tier_degraded"] is True
 
 
 # ------------------------------------------- the detection, on THIS host

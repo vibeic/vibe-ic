@@ -1,3 +1,6 @@
+> Historical record. Program names in this record describe the earlier run;
+> use the current skill and native step table for execution.
+
 # Spec Validator — PRACTICAL_NOTES
 
 > Source: 135-IC v2 Campaign Regression (2026-04-09 ~ 04-10)
@@ -7,7 +10,7 @@
 
 ## 1. Overview
 
-In the 135-IC campaign, Spec Validator ran Datasheet quality scoring (ds_quality_check.py), Application Note scoring (an_validator.py), and cross-document consistency check (spec_validator.py). Most ICs had Phase 1 documents generated in batch by AI Agents, so quality is consistent but exhibits specific systematic issues.
+In the 135-IC campaign, Spec Validator ran Datasheet quality scoring, Application Note scoring, and cross-document consistency review. Most ICs had Phase 1 documents generated in batch by AI Agents, so quality is consistent but exhibits specific systematic issues.
 
 ---
 
@@ -72,7 +75,7 @@ In this campaign, 125+ of the 135 ICs produced `04_datasheet.md`.
 
 ## 4. Cross-document consistency-check results
 
-spec_validator.py ran cross-doc comparison on 125+ ICs:
+The campaign's former consistency checker ran cross-doc comparison on 125+ ICs:
 
 ### Most common inconsistencies
 

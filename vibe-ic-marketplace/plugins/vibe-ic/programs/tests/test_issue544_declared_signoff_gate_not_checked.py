@@ -45,7 +45,6 @@ supervision instead (`_supervise_signoff_launcher`), and
 """
 from __future__ import annotations
 
-import json
 import subprocess
 import sys
 from pathlib import Path
@@ -57,10 +56,8 @@ _RUNNER_SRC = _PROGRAMS / "phase3_one_shot_runner.py"
 
 sys.path.insert(0, str(_PROGRAMS))
 
-import ci_harness_timeout_ceiling_check as ceiling_check   # noqa: E402
 import _watchdog                                           # noqa: E402
 
-_CEILING_REPO_ROOT = ceiling_check.find_repo_root()
 
 #: CI's per-test harness bound, READ from the workflows (vibe-ic#542). The
 #: landed version of this line was `= 180`, a second copy of a value this file
@@ -68,9 +65,6 @@ _CEILING_REPO_ROOT = ceiling_check.find_repo_root()
 #: pytest bounds across two workflows and they do not agree, so the binding one
 #: is the minimum. None when no workflow is reachable — the guard below then
 #: SKIPs rather than fall back to a remembered number.
-_CI_HARNESS_TIMEOUT_S = (
-    ceiling_check.ci_harness_timeout_seconds(_CEILING_REPO_ROOT)
-    if _CEILING_REPO_ROOT else None)
 
 #: There is no inner subprocess bound any more, and that is the point. #542
 #: asked only that the number stay under CI's harness bound; the number itself
@@ -724,35 +718,6 @@ def test_the_blast_radius_is_recorded_where_the_change_is():
         "the concrete finding that justified the change is not recorded")
 
 
-def test_this_file_declares_no_inner_wall_clock_bound_at_all():
-    """The SUCCESSOR of `_INNER_TIMEOUT_S <= ceiling`, and a stronger claim.
-
-    #542 asked only that this file's own subprocess bound stay under CI's
-    harness bound, because a bound at or above it cannot fail as a test — it
-    kills the whole subset. That is true, and it is not the whole defect. A
-    bound UNDER the ceiling still decides something it cannot know: these tests
-    assert which of BLOCKED / rc=2 / FAIL a gate reached, and
-    `_run_declared_signoff_gate` folds a `TimeoutExpired` into NOT_CHECKED, so a
-    bound firing on a busy host impersonates a gate that could not answer.
-
-    So the assertion becomes the ABSENCE of any readable bound, checked with the
-    SAME shared scanner rather than an inline walk. `sites` counted the bounds
-    read; asserting it is EMPTY is the strict strengthening of asserting each
-    one was small enough, and it fails on a bound reintroduced under any name or
-    spelling the scanner understands — including the module constant and the
-    `**kwargs`-splatting wrapper an inline copy used to miss."""
-    if _CI_HARNESS_TIMEOUT_S is None:
-        pytest.skip("no .github/workflows in reach — the harness bound cannot "
-                    "be resolved, and a remembered copy of it is the defect")
-    ceiling = _CI_HARNESS_TIMEOUT_S // ceiling_check.CEILING_DIVISOR
-    findings, unresolved, sites = ceiling_check.scan_source(
-        Path(__file__).read_text(errors="replace"), Path(__file__).name,
-        ceiling)
-    assert not sites, (
-        "a wall-clock bound is back on a blocking call in this file; the gates "
-        f"here are supervised by forward progress instead: {sites}")
-    assert not findings and not unresolved, "\n  ".join(
-        str(x) for x in list(findings) + list(unresolved))
 
 
 def test_every_gate_this_file_drives_reaches_a_real_verdict(tmp_path, runner):

@@ -88,11 +88,9 @@ Per IC, committed AND pushed into **`<clone>/ic/<ic>/`** — the full step outpu
 
 #### Only PASSING, conforming cells are published there
 
-The published tree carries a cell only when three conditions hold, each measured:
-its directory is named `v<version>_<PDK>`, its own `RESULT.md` says PASS, and
-`benchmark_evidence_structure_check.py` exits 0. A run that did not pass is not
-evidence of anything except that a run happened, and shipping it beside the
-passing ones makes those harder to trust. Publish the failure as an issue instead.
+Keep the native tool result, its original limit, and official score together.
+A failing or unmeasured run remains useful evidence when its scope is stated.
+Store results outside the plugin repository at the owner's requested location.
 
 #### The two sibling repositories
 
@@ -179,161 +177,35 @@ Before any run, follow **`vibe-ic:open-benchmark-methodology`**:
    never fabricate a number or call something "floor" without the evidence.
 5. Every RESULT.md carries the seven mandatory sections (§ 6 of the skill).
 
-## ★ PUBLISHING A CONVERGED CELL — the layout is a CONTRACT, not a preference
+## Record native benchmark evidence
 
-**You do not hand-assemble an evidence folder and you do not invent a folder name.**
-Two programs own this; run them, do not reimplement them:
+Read reports/flow_engine.json and the selected native tool reports. Use programs/flow_engine.py report --project <project> for the current report entry.
 
-| program | role |
-|---|---|
-| `programs/benchmark_evidence_publish.py` | STAGES a completed run into the canonical layout. **Refuses a non-converged run.** Excludes oversize files, generates `GDS_MANIFEST.txt`. Stages only — never commits. |
-| `programs/benchmark_evidence_structure_check.py` | VALIDATES any published folder. Run it before you commit; CI runs it with `--changed-since`. |
-| `programs/benchmark_evidence_index.py --write` | REGENERATES `<clone>/ic/INDEX.md`. Run it after any publish or delete. Point `VIBE_IC_BENCHMARK_DATA` at the clone — the corpus is not in this repo, and the program says which tree it walked. Without a corpus it writes NOTHING and reports `NO_CORPUS`; it never emits an index of empty sections that would read as "the corpus published nothing". |
+## Keep run evidence separate from product code
 
-### The naming rule — VERSION FIRST, THEN PDK
+Save run documents, generated samples, tool reports, raw transcripts and
+`RESULT.md` outside the plugin repository. Keep product fixes general and
+separate from design-specific results. Follow the owner's branch and landing
+instructions for the current task.
 
-```
-<clone>/ic/<IC>/
-    input/                       # shared design input, staged ONCE per IC
-    v<major>.<minor>.<patch>_<PDK>/   # ONE folder per converged (version x PDK)
-```
+## Capture and verify a general improvement
 
-`v1.5.66_gf180mcuD`, `v1.9.86_sky130A`. **Nothing else belongs at the `<IC>/`
-level.** `<clone>/ic/spm/` is the reference: `input/` plus exactly three
-`v*_<PDK>/` folders and not one other entry. Look at it before you publish.
+When a native tool or official scorer exposes a real plugin or MCP defect,
+reproduce it using the visible input and its original requirement. Follow
+`benchmark-enhancement-capture` to put a general correction in the responsible
+program, local tool fork, or IC Expert skill. Keep product fixes separate from
+benchmark results and run evidence outside the plugin repository.
 
-Names that are rejected by name, each because it caused a real loss:
-  * `clean_run_*` — a gitignored prefix, so the committed phase folders are
-    STRIPPED and the evidence silently never lands
-  * `pass_*` / `fail_*` / `PASS_*` — a verdict in the folder name. The verdict
-    belongs in `RESULT.md`, where it can be audited, not in a path.
+Run the actual affected behavior and relevant existing tests. Preserve Program
+First, independent blind AI review and backup, and official scoring. Authors
+and reviewers never inspect hidden oracle, harness, or golden contents.
 
-### Publishing a new result MEANS retiring the old one
-
-When a cell re-converges on a newer plugin, the older `v*_<PDK>` folder for the
-SAME (IC x PDK) is superseded and comes out. Before deleting anything, check what
-depends on it — the repo has three separate mechanisms that cite published paths
-and each of them FAILS LOUDLY when a citation goes stale:
-
-  * `<clone>/ic/retention.json` — the index gate fails when a retention
-    key names no published cell
-  * `programs/tests/fixtures/matrix_d3_output_manifest.json` — records run roots
-    and the artefacts under them
-  * `programs/tests/**` — several read published cells directly
-
-If something genuinely depends on a folder you are retiring, MIGRATE THE
-DEPENDENT and then delete. Keeping a non-conforming folder "because a test reads
-it" is how an IC directory drifts back into the shape this contract exists to
-end.
-
-### The sequence, in order
-
-```
-1  gate the run        flow_compliance_check.py <run> --strict     # exit 0 or stop
-2  stage               benchmark_evidence_publish.py --run-dir <run> --ic <IC> \
-                          --pdk <PDK> --plugin-version <X.Y.Z>
-3  retire the old      git rm -r <clone>/ic/<IC>/v<older>_<PDK>
-4  fix the citations   retention.json / matrix_d3 manifest / any test that read it
-5  regenerate          VIBE_IC_BENCHMARK_DATA=<clone> benchmark_evidence_index.py --write
-6  validate            VIBE_IC_BENCHMARK_DATA=<clone> \
-                          benchmark_evidence_structure_check.py --tree benchmark-data
-7  commit + push
-```
-
-Skipping step 1 is fabrication. Skipping step 4 breaks CI for whoever pushes next.
-
-## Check-in boundary (HARD — enforced by a program, not by trust)
-
-Two SEPARATE commit channels, NEVER mixed:
-
-1. **Benchmark RESULTS** → **the `vibeic/benchmark-data` repository only** (run results, generated
-   samples, reports, RESULT.md, SOURCE_MANIFEST.md, cross-check, transcripts).
-   You COMMIT **and PUSH** these — a run whose outputs are not pushed has not been
-   benchmarked.
-2. **Plugin / MCP FIXES** → `vibe-ic-marketplace/plugins/vibe-ic/**` (incl
-   `mcp-eda/**`), authored as a **chip-AGNOSTIC, VERSION-LESS PR** on its own
-   branch. The repo-gatekeeper reviews + assigns the version + lands it.
-
-**NO-MIX (the anti-gaming invariant):** a benchmark-data RESULT commit and a
-plugin/MCP FIX commit may **never be the same commit**. Bundling a hand-patch
-with the run whose number it changes is benchmark gaming. backlog
-(`community/backlogs/`) is **no longer a check-in target** for you (owner
-directive: PR, not backlog).
-
-**Before EVERY `git commit`, gate your own staged diff:**
-
-```bash
-python3 vibe-ic-marketplace/plugins/vibe-ic/programs/agent_checkin_scope_guard.py \
-    --role benchmark-agent --staged
-# exit 0 → safe;  exit 1 → either a forbidden path (backlog/other) OR a NO-MIX
-# violation (results + plugin in one commit) — SPLIT into a pure result commit and
-# a pure plugin-fix PR commit, then re-gate.
-```
-
-A plugin/MCP fix you author goes out as its OWN PR commit (no benchmark-data/
-paths); your RESULT commit stays pure benchmark-data/. The published number is
-only re-measured on the NEXT clean-room run against the LANDED plugin version —
-never against your un-landed local patch.
-
-## Capture Enhancement → version-less PR (how you change the plugin)
-
-> **Contribution-layer note.** The version-less PR is your **Layer-1** path — the
-> *report-with-fix* half of Vibe-IC's public contribution model (a **backlog** is
-> the report-only half). You are NOT the maintainer, so you never direct-push to
-> `main`: the **repo-gatekeeper** (whose OWN in-house fixes do land by Layer-2
-> direct push) reviews and lands your PR into the next version. Keep results
-> (the `benchmark-data` repo) and the plugin/MCP fix in SEPARATE commits — and now
-> in separate REPOSITORIES, so NO-MIX is enforced by where you are standing rather
-> than by remembering.
-
-When a run surfaces a real, **VERIFIED** plugin / MCP gap (a runner waiver that
-should be a deterministic program, an ingester miss, a missing gate, an MCP tool
-bug):
-
-1. **VERIFY it is a real bug FIRST** (open-benchmark-methodology §4.1): run the
-   exact official scorer and, for a suspected floor, the golden-self-test. A
-   misdiagnosed non-bug must NEVER become a PR.
-2. **Triage** with **`vibe-ic:benchmark-enhancement-capture`** into Bucket A
-   (deterministic program rule) / B (ic-expert-agent skill section) / D (discard,
-   genuine over-fit only).
-3. **Author the chip-AGNOSTIC fix + a §4.05 no-leak regression** in the plugin/MCP,
-   run the cadence-correct tests, and open a **VERSION-LESS PR** (no version bump;
-   the repo-gatekeeper assigns it at merge). Keep the title + content chip-AGNOSTIC
-   (no vendor / SKU / IC names). This is a SEPARATE commit from any benchmark
-   result (NO-MIX).
-
-### PR publication base (HARD Plugin contract; not a Skill)
-
-Immediately before publishing the PR, freeze the exact pair you validated and
-render the required PR-body block with the Plugin program:
-
-```bash
-python3 vibe-ic-marketplace/plugins/vibe-ic/programs/gatekeeper_review.py \
-  --render-pr-contract --repo . --base origin/main --head HEAD
-```
-
-Put that block in the PR body. Its policy token is
-`gatekeeper-replay-no-author-rebase`. After `gh pr create`, the publication base
-is immutable. Main advancing is expected and is **not** a reason for the author
-to fetch/rebase/force-push. If Gatekeeper finds a genuine defect in the PR, fix
-the defect on the existing branch without merging/rebasing later main, rerun
-the author tests, update only the validated-head SHA, and retain the original
-validated-base SHA. Repo Gatekeeper alone owns integration replay/rebase,
-re-testing on current main, version assignment, and landing.
-
-The live contract check is:
-
-```bash
-gh pr view <PR> --json body,headRefOid,baseRefName,createdAt | \
-  python3 vibe-ic-marketplace/plugins/vibe-ic/programs/gatekeeper_review.py \
-    --check-pr-contract --pr-json - --repo . --base origin/main --head HEAD
-```
-
-Missing/mutable base metadata, a head mismatch, or absorbing a later main commit
-is blocking. `main advanced after publication` is a PASS owned by Gatekeeper.
-4. The **repo-gatekeeper** reviews (machine gates + Step-2.7 §4.05) + lands it. The
-   improvement reaches you on the next plugin version — re-run clean-room to confirm
-   it moved the number against the LANDED version.
+The current task determines authority to create an issue, publish a PR, push,
+or land a change. Follow the owner's current branch and landing instructions;
+this role does not establish a publication hash contract, a new gate, or another
+approval layer. If publication is not authorized, leave the concrete fix and
+its verification results for the owner. After an authorized landing, use the
+owner-requested clean-room rerun to measure the result against that version.
 
 ## 5/5 STABILITY-CONVERGE CAMPAIGN — the per-suite measure→converge harness
 
@@ -456,8 +328,8 @@ the runner reads ONLY the prompt (clean-room), the host scorer reads the golden+
   of one judgement, three of them reachable only by importing a benchmark's own
   module. Their capability moved to `task_nature_route` (classify),
   `deterministic_emit_chain` (emit + the emit-blocking parity check),
-  `spec_conformance_gate` (build_gate/gate_check) and `testbench_verdict`
-  (transcript -> PASS/FAIL), all of which the general flow can reach.
+  `spec_conformance_gate` (build_gate/gate_check), and the native simulation
+  report readers in `flow_native_adapters`, all reached by the general flow.
 
 **CVDP scoring env — the exact working recipe** (re-stated; this is the setting that
 golden-mode and the API-model `--llm` path both FAIL on):

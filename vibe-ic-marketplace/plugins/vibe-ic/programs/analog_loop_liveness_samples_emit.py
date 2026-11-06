@@ -426,21 +426,6 @@ def emit(project: Path, block: str, container: str,
         rec["verdict"] = "EMITTED"
         rec["checker_argv"] = argv
         return _pc.RC_OK, rec
-    except _ce.ContainerImageMismatch as exc:
-        # AN ENVIRONMENT REFUSAL IS NOT AN HONEST GAP (vibe-ic#2173). A
-        # `Refusal` here is a statement about the DESIGN — a node this block
-        # does not declare, a deck with no transient. A container running bytes
-        # other than the pinned ones says nothing about the design at all: it
-        # says this HOST was not allowed to run the simulator that is sitting
-        # right there, and reporting it as `ngspice is not reachable` sends the
-        # reader to install a tool that is already installed.
-        if samples_out.is_file():
-            samples_out.unlink()
-            rec["stale_samples_removed"] = str(samples_out)
-        rec.update(verdict="ENV_REFUSED",
-                   reason=f"{_ce.IMAGE_REFUSAL_MARK}{exc}",
-                   env_refused=True)
-        return _ce.EX_ENV_REFUSED, rec
     except Refusal as exc:
         # A stale samples file is exactly as good as an empty one to a checker
         # that cannot tell how old it is.

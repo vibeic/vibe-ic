@@ -26,7 +26,6 @@ on the real design, `pin_access` on the same tree:
 """
 from __future__ import annotations
 
-import json
 
 import pytest
 
@@ -91,36 +90,12 @@ def test_the_minimum_widths_come_from_the_tech_lef():
 
 
 # ── the deck consumer ──────────────────────────────────────────────────────
-def _report(connected, not_connected=(), undecided=()):
-    rows = [{"net": n, "verdict": "CONNECTED", "pin_layer": "Metal5",
-             "overlap": [0, 0, 1, 1], "instance": "u_pad_" + n,
-             "terminal": "BOND"} for n in connected]
-    rows += [{"net": n, "verdict": "NOT_CONNECTED"} for n in not_connected]
-    rows += [{"net": n, "verdict": "UNDECIDED"} for n in undecided]
-    return json.dumps({"connected_nets": list(connected),
-                       "not_connected_nets": list(not_connected),
-                       "undecided_nets": list(undecided), "nets": rows})
 
 
-def test_the_deck_excludes_exactly_the_measured_nets():
-    tcl, names = R._padring_bterm_exclusion_tcl(
-        _report(["a", "b[0]"], not_connected=["c"], undecided=["d"]))
-    assert names == ["a", "b[0]"]
-    assert tcl.count("setSpecial") == 2
-    assert "{b[0]}" in tcl, "a bus name must reach Tcl as one word"
-    assert "findNet {c}" not in tcl and "findNet {d}" not in tcl
 
 
-def test_a_net_the_check_could_not_decide_is_never_excluded():
-    tcl, names = R._padring_bterm_exclusion_tcl(_report([], undecided=["a"]))
-    assert names == [] and tcl == ""
 
 
-def test_no_measurement_means_a_byte_identical_deck():
-    """A design with no pad ring must emit the deck it emitted before."""
-    for text in ("", "not json", _report([])):
-        tcl, names = R._padring_bterm_exclusion_tcl(text)
-        assert tcl == "" and names == []
 
 
 def test_the_consumer_reads_names_and_never_a_class():

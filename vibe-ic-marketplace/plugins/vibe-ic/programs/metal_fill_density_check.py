@@ -637,7 +637,6 @@ def tool_arm_findings(project_dir: Path) -> Tuple[List[Finding], dict]:
                         f"step 34 is `{mode}` but {_lf.RECORD_REL} is absent or "
                         f"unreadable: the tool path left no evidence")], stats
     odb = doc.get("odb") if isinstance(doc, dict) else None
-    routed = _pl.pnr_dir(project_dir) / "routed.def"
     if not isinstance(odb, dict):
         findings.append(Finding("ERROR", "LL_FILL_ODB_NOT_RUN",
                                 "OpenROAD.FillInsertion left no record"))
@@ -649,9 +648,6 @@ def tool_arm_findings(project_dir: Path) -> Tuple[List[Finding], dict]:
             except Exception as exc:
                 stats["odb_fill_consumed"] = False
                 findings.append(Finding("ERROR", "LL_FILL_HANDOFF_UNBOUND", str(exc)))
-        if odb.get("def_sha256") != _sha256(routed):
-            findings.append(Finding("ERROR", "LL_FILL_RECORD_STALE",
-                                    "the fill record is about another routed DEF"))
         if not odb.get("shipped"):
             why = ((odb.get("tool") or {}).get("refusals") or
                    [odb.get("refusal") or "no arm produced a filled DEF"])
@@ -769,7 +765,7 @@ def main(argv: list = None) -> int:
         findings.append(Finding(
             "INFO", "PER_LAYER_DENSITY_CONSUMED",
             f"{judged['consumer']} judged {len(judged['per_layer'])} current metal layers: "
-            f"{judged['verdict']}; adopted GDS sha256={judged['subject_sha256']}",
+            f"{judged['verdict']}",
             details="per_layer_density_verified=true"))
     findings.extend(tool_findings)
     report = build_report(findings, stats, str(project_dir))

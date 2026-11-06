@@ -23,71 +23,32 @@ that came from an artefact. A prediction and a measurement look identical once
 they are two cells of the same table, which is why they are never allowed to
 become two cells of the same table.
 
-**The skill that measures is `ppa-measure`.** It parses tool artefacts, hashes
-what it parsed, and emits `MEASURED` records. This skill has read no artefact —
+**The skill that measures is `ppa-measure`.** It reads the actual native tool artifacts and reports their measured values
+with scope and source paths. This skill has read no artefact —
 that is the whole point of it, and it is also the whole limit of it.
-
-Three things make this hard to misread rather than merely stated once: the
-frontmatter above says it, every output row carries the `ESTIMATED` status
-literal, and `compliance.yaml` refuses an output of this skill that claims a
-measured status or a post-route stage. The third one is the one that still
-works after nobody remembers the first two.
 
 This skill also produces no gate verdict. Whether an estimate is good enough to
 proceed is a caller's decision or a program's; it is not a line in this report.
 
-
 > **Doctrine (v0.1.50):** 把修法寫進工具，而非寫進 prompt。
-> Mandatory program preflight first; AI is the backstop, not the lead.
+> Use native tool measurements when available and label estimates explicitly.
 
 Provide fast, pre-synthesis estimates of Power, Performance (Fmax /
 critical-path delay), and Area for an RTL module. Acts as a Circuit
 Foundation Model surrogate for the synthesis tool — seconds instead of
 hours.
 
-## Mandatory Deterministic Preflight
+## Prepare an explicit estimate
 
-Before any narrative estimate:
+Read the actual design input, RTL structure and selected PDK characterization.
+Use a native synthesis cell count if one is already available, and state that
+scope separately from a purely pre-synthesis estimate. Name the area, delay,
+activity, capacitance and voltage assumptions behind the model.
 
-```bash
-# 1. Extract any PPA hints already declared in the project README / spec:
-python3 plugins/vibe-ic/programs/readme_ppa_extractor.py \
-    --rtl-dir <rtl> --readme <README.md> --json /tmp/ppa_hints.json
-
-# 2. Turn the RTL cell count + the PDK + those hints into the numbers
-#    themselves. This is the program that owns the arithmetic:
-python3 plugins/vibe-ic/programs/ppa_predict_aggregate.py \
-    --cell-count <yosys stat cells> --pdk <gf180mcuD|sky130A|...> \
-    [--fmax-hint-mhz <from step 1>] \
-    [--declared-area-um2 <from step 1>] [--declared-power-uw <from step 1>] \
-    --out-md /tmp/ppa_estimate.md --out-json /tmp/ppa_estimate.json
-```
-
-Use the JSON output as the floor of any estimate you state. **Do not
-overclaim a tighter number than the program returned** — the program
-read the actual spec/README declared values; LLM-generated estimates
-without that anchor have a known confabulation rate.
-
-**Step 2 is not optional and it is not a formatter.** Every area, power and
-Fmax number this skill reports comes from `ppa_predict_aggregate`, and the
-report you write quotes it rather than re-deriving it. The doctrine line at the
-top of this file — *把修法寫進工具，而非寫進 prompt* — is exactly this: the
-cell-count → area/power tables, the per-PDK constants, the `ESTIMATED` /
-`RTL_PROXY` labels, the `eligible_for_physical_ppa: false` flag and the
-per-figure "what this number assumed" block are all IN the program. A narrative
-estimate written beside it is a second table nobody can diff against the first.
-
-Its exit codes are the same three this lane uses everywhere:
-
-| rc | meaning | what you do |
-|---|---|---|
-| 0 | an estimate was produced | quote it; add trade-off narration only |
-| 2 | `[CANNOT CHECK]` — e.g. `--cell-count 0`, which is a count that was never taken, not a design of zero cells | say the count is missing and stop; do NOT supply a number of your own |
-| 3 | bad invocation | fix the arguments |
-
-An rc=2 is the one to be careful with: this skill's whole failure mode is
-producing a fluent number when it has no anchor, and rc=2 is the program saying
-there is no anchor.
+Report ranges and units. Keep every predicted value labelled ESTIMATED, state
+what the model omits, and use native tool measurements before claiming a PPA
+requirement is met. No retired estimator program supplies a JSON result or
+exit code for this workflow.
 
 ## When to use
 
@@ -172,33 +133,11 @@ Grounded in Circuit Foundation Models for pre-synthesis prediction — encoder-b
 - Do not answer whether the design met its target from these numbers. That
   question is answered from `MEASURED` records by a deterministic program.
 
-## ⛔ ECO spare-cell preservation (mandatory)
+## Preserve the ECO reserve
 
-> ⛔ **ECO spare-cell preservation:** cells/gates/pads carrying the `dont_touch` /
-> `keep` attribute (or otherwise tagged spare/ECO) are RESERVED for a future
-> metal-only ECO. When predicting PPA or suggesting area/power optimizations,
-> NEVER RECOMMEND deleting, resizing, re-purposing, or "recovering" spare cells
-> or reserved pads to shrink area — they are a deliberate ~1-5% investment, not
-> waste to reclaim, and any such recommendation would later trip
-> `spare_cell_preservation_check.py`. Report spare-pool area separately (as
-> intentional ECO reserve) rather than flagging it as a removable area
-> overhead. See the `design-for-eco` skill.
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/ppa-predict/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in the corresponding skill directory enumerates
-every required element of your output: section headers, metadata fields,
-handoff lines, tool invocations.
-
-**Your task is not complete until the audit returns PASS.** Missing
-elements are the single largest source of skill-execution non-determinism
-across different agents.
+Keep unused spare cells, ECO gates and reserved pads through synthesis and
+physical repair. Compare the native netlist or database before and after the
+change. No unused reserve instance may disappear, and its keep attributes must
+remain intact. A consumed spare must be named in the intended ECO. Restore any
+unintentionally removed spare before rerunning the native tools. See
+`design-for-eco` for the design intent.

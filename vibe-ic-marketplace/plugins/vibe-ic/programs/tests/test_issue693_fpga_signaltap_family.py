@@ -245,18 +245,3 @@ def test_nothing_examined_exits_2_and_declares_a_visible_skip(gate, tmp_path):
         f"{gate} exits {proc.returncode} on nothing; rc 2 is the disclosed-skip "
         f"tier, rc 0 is a pass\n{proc.stderr}")
     assert proc.stderr.lstrip().startswith("[SKIP]"), proc.stderr
-
-
-def test_skip_token_vocabulary_actually_matches_our_declarations():
-    """Re-derive the ratchet's own predicate rather than trusting the prefix."""
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "gate_skip_routing_check", _PROGRAMS / "gate_skip_routing_check.py")
-    mod = importlib.util.module_from_spec(spec)
-    # dataclasses resolves annotations through sys.modules[cls.__module__]
-    sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
-    for gate in _FAMILY:
-        line = f"[SKIP] {gate}: no input — NOTHING EXAMINED, this is not a pass"
-        assert mod._skip_token(line), (
-            f"the ratchet cannot see {gate}'s skip declaration: {line!r}")

@@ -9,7 +9,6 @@ Generation is not physical verification or Flow109 acceptance.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 from pathlib import Path
@@ -23,10 +22,6 @@ from librelane_contract import Refusal, declaration_config, DECLARATION_REL
 DEST = "phase3/analog_top"
 RECORD = "reports/phase3/analog_macro_top.json"
 PAD_RECORD = "reports/phase3/io_pad_chip_top.json"
-
-
-def sha(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
 def identifier(value, label):
@@ -57,14 +52,12 @@ def external_macro_views(project, settings):
 
 def generate(project):
     project = Path(project).resolve()
-    inputs = {str(path): sha(path) for path in
-              (Path(__file__).resolve(), Path(__file__).with_name("analog_macro_top_run.py").resolve(),
-               Path(__file__).with_name("analog_macro_top_pdn.py").resolve())}
+    inputs = []
 
     def read(path):
         path = Path(path)
         require(path.is_file(), "A18_DECLARATION_ABSENT", str(path))
-        inputs[str(path)] = sha(path)
+        inputs.append(str(path))
         value = json.loads(path.read_text())
         require(isinstance(value, dict), "A18_DECLARATION_INVALID", f"object required: {path}")
         return value
@@ -162,7 +155,7 @@ def generate(project):
             path = (project / raw).resolve()
             require(path.is_file() and path.stat().st_size > 0,
                     "A18_MACRO_VIEW_ABSENT", f"{master}: {view}: {path}")
-            inputs[str(path)] = sha(path)
+            inputs.append(str(path))
             selected[view] = [str(path)]
         lef = Path(selected["lef"][0]).read_text()
         require(lef_macro_classes(lef).get(master) in ("BLOCK", "PAD", "RING"),
@@ -355,7 +348,7 @@ def generate(project):
     record = {"producer": "analog_macro_top_gen", "verdict": "WROTE",
               "core_module": core, "chip_top_module": "chip_top", "execution": execution,
               "config": str(cfg_path), "netlist": str(flat), "spice": str(spice),
-              "inputs": inputs, "outputs": {str(p): sha(p) for p in outputs},
+              "inputs": inputs, "outputs": [str(p) for p in outputs],
               "declaration_sources": sources, "stand_in": settings.get("stand_in", False),
               "flow109_acceptance": "NOT_MEASURED", "delivery_accepted": False}
     write_json(project / RECORD, record)

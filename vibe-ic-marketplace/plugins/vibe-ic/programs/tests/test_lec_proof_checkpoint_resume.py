@@ -40,7 +40,7 @@ assert SCRIPT.exists(), f"Script not found: {SCRIPT}"
 
 sys.path.insert(0, str(SCRIPT.parent))
 import lec_run  # noqa: E402
-from not_verified_tier import skip_not_verified  # noqa: E402
+from _tool_probes import skip_not_verified  # noqa: E402
 
 _ARGS = dict(gold_files=["/p/rtl/a.v"], gate_netlist="/p/synth/netlist.v",
              top="dut", liberty="/foss/pdks/x.lib")

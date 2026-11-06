@@ -75,7 +75,7 @@ RULE 0).
 
 | subject | entry | target |
 |---|---|---|
-| benchmark IC (doc→GDS) | `/vibe-ic-all <project> --route ic --flow109-manifest <manifest> --entry-step <D-id> --exit-step <D-id> --pdk <pdk> --ic-name <ic>` | selected flow row evidence; whole-flow acceptance remains separate |
+| benchmark IC (doc→GDS) | `/vibe-ic-all <project> --route ic --entry-step <D-id> --exit-step <D-id> --pdk <pdk> --ic-name <ic>` | selected native tool results against original limits |
 | IP-cell (doc→LEF) | same runner, IP route | LEF + GDS emitted, the 37.5 gate reached |
 | open benchmark | `/vibe-ic-benchmark <bench>` | the highest HONEST pass@1 |
 
@@ -288,8 +288,11 @@ retains valid checkpoints and all historical outputs.
 
 **Terminate on the subject's target, not on effort:**
 
-* benchmark IC — `flow_compliance_check` exit 0, or `PASS_WITH_WAIVERS` where every
-  waiver carries evidence + ticket + `review_required: true`
+* benchmark IC — every selected applicable native tool result in
+  `reports/flow_engine.json` meets its original spec, PDK or owner limit and has
+  been AI reviewed. Use current `flow/steps.json` row position/name. Deferred
+  work stays open; missing native values or original limits are `NOT_MEASURED`,
+  never summary PASS.
 * IP-cell — the LEF/GDS deliverables exist and the 37.5 gate is reached
 * open benchmark — the highest pass@1 that survives §4.05 and the tool-substitution
   disclosure
@@ -305,25 +308,6 @@ Run through the one front door → classify each FAIL as flow / gate / tool → 
 fixing the layer that owns it → prove it in the cache against real artefacts with a
 falsification and a control → PR it to the owning repo → upgrade, restart, re-run.
 
-Next: run `/vibe-ic-all` through the explicit flow public entry (or use a
+Next: run `/vibe-ic-all` through the native table public entry (or use a
 benchmark dispatcher whose saved argv proves that same entry), then classify
 every FAIL per §2 before changing anything.
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/loop2converge/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in the corresponding skill directory enumerates
-every required element of your output: section headers, metadata fields,
-handoff lines, tool invocations.
-
-**Your task is not complete until the audit returns PASS.** Missing
-elements are the single largest source of skill-execution non-determinism
-across different agents.

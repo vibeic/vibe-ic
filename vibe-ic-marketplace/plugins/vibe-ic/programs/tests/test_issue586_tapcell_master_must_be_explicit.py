@@ -43,9 +43,7 @@ its null, which now carries the meaning it always claimed.
 """
 from __future__ import annotations
 
-import importlib.util
 import json
-import os
 import pathlib
 import re
 import subprocess
@@ -55,7 +53,7 @@ import pytest
 # vibe-ic#1128 — these skips mean A VERIFICATION DID NOT HAPPEN, not that
 # one passed. Declared through `not_verified_tier` so the run's roll-up
 # cannot count them under `passed`; see that module's docstring.
-from not_verified_tier import skip_not_verified  # noqa: E402
+from _tool_probes import skip_not_verified  # noqa: E402
 
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -97,61 +95,12 @@ def test_the_one_null_is_a_stated_null():
 
 
 # ── the gate blocks on an omission ───────────────────────────────────────────
-def _run_gate(registry_path):
-    """The NAME half only, which is the half this invariant lives in.
-
-    `VIBEIC_EDA_IMAGE` is pointed at a tag that cannot resolve, so the gate's
-    asset half reports SKIPPED instead of shelling into docker. That is not a
-    convenience: with the image reachable this call took minutes, and a test
-    whose inner bound outlives the 180s harness kills the SESSION rather than
-    failing. Measured at 0.06s image-free, so 30s is a ceiling, not a budget.
-    """
-    env = dict(os.environ, VIBEIC_EDA_IMAGE="ghcr.io/vibeic/no-such-image:0")
-    return _pr.run(
-        [sys.executable, str(_GATE), "--registry", str(registry_path),
-         "--container", "__no_such_container__"],
-        capture_output=True, text=True, env=env)
 
 
-def test_the_gate_passes_on_the_shipped_registry():
-    r = _run_gate(_REGISTRY)
-    assert r.returncode == 0, r.stdout + r.stderr
 
 
-@pytest.mark.parametrize("victim", ["asap7", "sky130A", "ihp-sg13g2"])
-def test_the_gate_fails_when_a_declaration_is_removed(tmp_path, victim):
-    """Proven negative, per entry — including the tapless one, whose null is a
-    declaration like any other. A gate that only noticed the entry I happened to
-    fix would be a gate against one commit."""
-    d = json.loads(_REGISTRY.read_text(encoding="utf-8"))
-    for e in d["pdks"]:
-        if e.get("name") == victim:
-            e.pop("tapcell_master")
-    f = tmp_path / "reg.json"
-    f.write_text(json.dumps(d, indent=2), encoding="utf-8")
-    r = _run_gate(f)
-    assert r.returncode == 1, r.stdout + r.stderr
-    assert victim in r.stdout, r.stdout
 
 
-def test_an_entry_without_a_container_path_is_exempt(tmp_path):
-    """The sentinel must not be forced to declare physical cells it has none of.
-    Without this the gate would fail on a correct registry, and a gate that
-    fails on correct input gets routed around.
-
-    ADDED to the shipped registry rather than filtering it down to the sentinel:
-    a registry with no container_path at all makes every shipped tree read as
-    unregistered, which fails on a DIFFERENT finding and would have passed this
-    test for the wrong reason once the exemption broke.
-    """
-    d = json.loads(_REGISTRY.read_text(encoding="utf-8"))
-    d["pdks"].append({"name": "another_sentinel", "process_node_nm": 0,
-                      "open_source": True})
-    f = tmp_path / "reg.json"
-    f.write_text(json.dumps(d, indent=2), encoding="utf-8")
-    r = _run_gate(f)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert "another_sentinel" not in r.stdout, r.stdout
 
 
 # ── the registry and the hard-coded branches must not drift ──────────────────

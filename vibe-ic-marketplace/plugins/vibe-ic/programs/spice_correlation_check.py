@@ -3651,16 +3651,10 @@ def run_audit(project: Path, run_spice: bool = True,
     products.extend((_pl.spice_dir(project) if kind == 'spice' else reports) / name
                     for kind, name in _DECLARED_CORRELATION_NAMES)
     if not any(path.exists() for path in products):
-        from flow_compliance_check import _asked_before_producer
-        early = _asked_before_producer(result.program, project)
-        if early is not None:
-            result.summary = {'skipped': True, 'pass': False,
-                              'measurement': 'NOT_MEASURED',
-                              'current_binding': 'NOT_YET_PRODUCED',
-                              'reason': 'asked_before_producer',
-                              'reason_class': 'ASKED_BEFORE_PRODUCER',
-                              'asked_before_producer': early}
-            return result
+        result.passed = False
+        result.summary = {"pass": False, "measurement": "NOT_MEASURED",
+                          "reason": "No native SPICE correlation report was produced."}
+        return result
     try:
         doc = pst.validate_current_step30(project)
         verdict = doc.get('verdict')
@@ -3739,12 +3733,18 @@ def main(argv: list = None) -> int:
     reason = _vx.skip_reason(result.summary)
 
     if not args.json:
-        print(_vx.verdict_line("spice_correlation_check", result.passed,
-                               skipped, reason))
+        if result.summary.get("measurement") == "NOT_MEASURED":
+            print("spice_correlation_check: NOT_MEASURED: " + result.summary.get("reason", ""))
+        else:
+            print(_vx.verdict_line("spice_correlation_check", result.passed,
+                                   skipped, reason))
         for f in result.findings:
             if f.severity in ("ERROR", "WARNING"):
                 suffix = " (measured SPICE decks=0)" if f.rule == "NO_SPICE_VERIFICATION" else ""
                 print(f"  [{f.severity}] {f.rule}: {f.message}{suffix}")
+
+    if result.summary.get("measurement") == "NOT_MEASURED":
+        return 2
 
     if result.passed and skipped:
         _vx.announce_vacuous(result.program, reason)

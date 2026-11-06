@@ -171,7 +171,7 @@ def _diagnostic_project(project, text):
 
 
 def _native_diagnostic_proof(project, rtl, floor):
-    from not_verified_tier import skip_not_verified
+    from _tool_probes import skip_not_verified
     if any(shutil.which(tool) is None for tool in ("yosys", "sby")):
         skip_not_verified("native diagnostic reset control needs yosys/sby",
                           "Run this module in the pinned EDA image")

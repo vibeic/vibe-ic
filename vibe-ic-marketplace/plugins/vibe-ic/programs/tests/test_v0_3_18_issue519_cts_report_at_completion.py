@@ -19,12 +19,10 @@ complete (no post_cts.def).
 chip-AGNOSTIC: synthetic project + synthetic OpenROAD log, no chip literal.
 """
 import sys
-import os
 from pathlib import Path
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
-import phase3_one_shot_runner as R  # noqa: E402
 
 _SRC = (PROGRAMS / "phase3_one_shot_runner.py").read_text()
 
@@ -41,129 +39,20 @@ _CTS_LOG = """\
 """
 
 
-def _pnr(project: Path):
-    pnr = R._pl.pnr_dir(project)
-    pnr.mkdir(parents=True, exist_ok=True)
-    return pnr
 
 
-def test_report_emitted_when_cts_complete_even_without_routing(tmp_path):
-    # CTS completed (post_cts.def + CTS log) but routing aborted → NO
-    # routed.def. The report must still be written.
-    pnr = _pnr(tmp_path)
-    (pnr / "openroad.log").write_text(_CTS_LOG)
-    (pnr / "post_cts.def").write_text("VERSION 5.8 ;\nDESIGN top ;\nEND DESIGN\n")
-    # THE ORDER THE TOOL PRODUCES, STATED, NOT LEFT TO THE CLOCK (T109c). The
-    # emitter reads the log only when it is at least as new as post_cts.def
-    # (a log older than the DEF belongs to an earlier pass). OpenROAD writes
-    # the DEF during the run and keeps appending to the log, so the log is the
-    # newer file. Written in the other order, this test passed only when both
-    # writes fell in one kernel timestamp tick and failed on a loaded host
-    # (measured: 1 red in a sharded run, 3/3 green in isolation).
-    import os
-    t = (pnr / "post_cts.def").stat().st_mtime
-    os.utime(pnr / "post_cts.def", (t, t))
-    os.utime(pnr / "openroad.log", (t + 1, t + 1))
-    # explicitly NO routed.def — routing never finished.
-    out = R._emit_cts_report_if_complete(tmp_path, "top")
-    rpt = R._pl.cts_dir(tmp_path) / "clock_tree.rpt"
-    assert out == str(rpt)
-    assert rpt.is_file() and rpt.stat().st_size > 0
-    txt = rpt.read_text()
-    # extracted canonical CTS metrics are present.
-    assert "inserted_buffers: 42" in txt
-    assert "sinks: 89" in txt
-    assert "clock_subnets: 41" in txt
-    assert "max_path_depth: 7" in txt
-    assert "sink_wire_length_um: 1234.5" in txt
-    # raw CTS evidence lines carried through.
-    assert "CTS-0004" in txt
 
 
-def test_no_report_when_cts_did_not_complete(tmp_path):
-    # log present but NO post_cts.def → CTS never finished → must NOT
-    # fabricate a report (honest).
-    pnr = _pnr(tmp_path)
-    (pnr / "openroad.log").write_text(_CTS_LOG)
-    out = R._emit_cts_report_if_complete(tmp_path, "top")
-    assert out is None
-    assert not (R._pl.cts_dir(tmp_path) / "clock_tree.rpt").is_file()
 
 
-def test_idempotent_does_not_overwrite_existing(tmp_path):
-    pnr = _pnr(tmp_path)
-    (pnr / "openroad.log").write_text(_CTS_LOG)
-    (pnr / "post_cts.def").write_text("DESIGN top ;\n")
-    cts = R._pl.cts_dir(tmp_path)
-    cts.mkdir(parents=True, exist_ok=True)
-    (cts / "clock_tree.rpt").write_text("PRE-EXISTING REPORT\n")
-    out = R._emit_cts_report_if_complete(tmp_path, "top")
-    assert out is None                              # no re-write
-    assert (cts / "clock_tree.rpt").read_text() == "PRE-EXISTING REPORT\n"
 
 
-def test_second_pnr_rebuilds_cts_report_for_its_new_post_cts_def(tmp_path):
-    pnr = _pnr(tmp_path)
-    post_cts = pnr / "post_cts.def"
-    log = pnr / "openroad.log"
-    log.write_text(_CTS_LOG.replace("Inserted: 42", "Inserted: 77"))
-    post_cts.write_text("DESIGN top ;\n")
-    cts = R._pl.cts_dir(tmp_path)
-    cts.mkdir(parents=True)
-    report = cts / "clock_tree.rpt"
-    report.write_text("[INFO CTS-0004] Total number of Buffers Inserted: 11.\n")
-    os.utime(report, (100, 100))
-    os.utime(post_cts, (200, 200))
-    os.utime(log, (200, 200))
-
-    result = R._emit_cts_report_if_complete(tmp_path, "top")
-    assert R._parse_cts_metrics(report.read_text())["inserted_buffers"] == "77"
-    assert "Inserted: 11" not in report.read_text()
-    assert result == str(report)
 
 
-def test_second_pnr_with_lost_cts_log_refuses_old_report(tmp_path):
-    pnr = _pnr(tmp_path)
-    post_cts = pnr / "post_cts.def"
-    log = pnr / "openroad.log"
-    log.write_text("[INFO DRT-0267] detailed_route ...\n")
-    post_cts.write_text("DESIGN top ;\n")
-    cts = R._pl.cts_dir(tmp_path)
-    cts.mkdir(parents=True)
-    report = cts / "clock_tree.rpt"
-    report.write_text("[INFO CTS-0004] Total number of Buffers Inserted: 11.\n")
-    os.utime(report, (100, 100))
-    os.utime(post_cts, (200, 200))
-    os.utime(log, (200, 200))
-
-    result = R._emit_cts_report_if_complete(tmp_path, "top")
-    assert report.read_text().splitlines()[0] == (
-        "# CTS sign-off report — EVIDENCE LOST (#568)")
-    assert result == str(report)
 
 
-def test_nonfatal_noop_cts_recorded_honestly(tmp_path):
-    # post_cts.def exists but the log carries no CTS signature. The two
-    # indistinguishable causes (clkbuf-less PDK no-op OR a post-ECO
-    # log-replacement that lost the original CTS section, ORGANIC #568) are
-    # both recorded honestly as a VACUOUS report — never a fabricated tree —
-    # so cts_quality_check FAILs on it explicitly rather than passing.
-    pnr = _pnr(tmp_path)
-    (pnr / "openroad.log").write_text("[INFO ODB-0227] LEF file: merged.lef\n")
-    (pnr / "post_cts.def").write_text("DESIGN top ;\n")
-    out = R._emit_cts_report_if_complete(tmp_path, "top")
-    assert out
-    txt = Path(out).read_text()
-    # no fabricated tree: marker is one the cts_quality gate treats as vacuous
-    assert "not invoked or zero output captured" in txt
-    assert "EVIDENCE LOST" in txt
 
 
-def test_parse_cts_metrics_omits_missing_fields():
-    # a log with only some fields → only those keys appear (no fabrication).
-    m = R._parse_cts_metrics(
-        "[INFO CTS-0004] Total number of Buffers Inserted: 5.\n")
-    assert m == {"inserted_buffers": "5"}
 
 
 def test_step_pnr_emits_cts_before_routing_fail_return():

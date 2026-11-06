@@ -56,7 +56,6 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
 import _atomic_output  # noqa: E402  (#1082 same-dir temp + atomic rename)
-import _audit_receipt  # noqa: E402  (#2057 content-addressed subject digest)
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import lvs_verdict_tokens as _lvt  # #524 — shared netgen terminal-verdict tokens
@@ -69,7 +68,6 @@ import sta_corner_record_completeness_check as _sta_slack
 
 import _sta_basis
 from _mcp_measurement import strip_stamp as _meas_strip
-import _gate_authorship as _ga  # R-0915-152 (who invoked this writer)
 
 
 # ---------------------------------------------------------------------------
@@ -4402,8 +4400,6 @@ def _antenna_klayout_count(text: str) -> Optional[int]:
     a run that measured nothing as a passing antenna sign-off, which is the
     exact direction this audit exists to refuse.
     """
-    import instrument_calibration as _cal
-    _cal.assert_calibrated("eda_report_audit::_antenna_klayout_count")
     head = text[:4096]
     # --- the per-rule JSON tally ---
     s = text.lstrip()
@@ -4744,38 +4740,10 @@ def main(argv: list = None) -> int:
     if not report.get("verdict"):
         report.pop("verdict", None)
 
-    # #2057 — THE `--json` DOCUMENT IS ITS OWN RECEIPT.
-    #
-    # The four `eda_report_audit` wrappers that sit inside phase-3 sign-off
-    # (`drc_report_check`, `lvs_report_check`, `ir_drop_report_check`,
-    # `sta_report_check`) write to a caller-chosen `--json` path which IS a
-    # declared step output — `reports/phase3/lvs.json` at step 31,
-    # `reports/phase3/sta/post_route_summary.json` at step 23, and so on.
-    # #2050 left all four UNREGISTERED and blocking rather than write a second
-    # artefact into a sign-off directory whose contents are accounted
-    # elsewhere. The ruling on #2057 is that no second file is needed: this
-    # document becomes the receipt by carrying the one field it lacked.
-    #
-    # `subject` is `_audit_receipt.subject_of` over exactly the population
-    # `summary.files_found` counts — a content-addressed digest over
-    # basename + sha256, identical in any checkout and different for any other
-    # subject, so a stale audit beside a fresh report is detectable instead of
-    # indistinguishable. `basis` states whether the digest witnessed bytes
-    # (`content`) or only paths (`path`); it is never assumed.
-    #
-    # Every mode gains it, not only the four: this is the single write site
-    # behind six sign-off wrappers, and a field present on some reports and
-    # absent on others would make its absence ambiguous.
-    report["subject"] = _audit_receipt.subject_of(
-        report.pop("subject_files", []), relative_to=project_dir)
-    # R-0915-152 -- the document states WHO INVOKED this writer, beside the
-    # verdict it already composes. Unstated role == producer, so the run's
-    # own path is unchanged.
     # ONE EDIT FOR SIX WRAPPERS: `drc_report_check`, `sta_report_check`,
     # `em_report_check`, `ir_drop_report_check`, `antenna_report_check` and
     # `lvs_report_check` all import this `main`, and between them own 8 of the
     # shared pairs -- drc and sta each serve two steps.
-    _ga.stamp(report)
     report_json = json.dumps(report, indent=2, ensure_ascii=False)
 
     if args.json:

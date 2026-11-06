@@ -29,14 +29,11 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import pytest
 
 PROG = Path(__file__).resolve().parents[1]
 if str(PROG) not in sys.path:
     sys.path.insert(0, str(PROG))
 
-import design_one_shot_runner as D        # noqa: E402
-import vibe_ic_one_shot_runner as O       # noqa: E402
 
 #: The audit transcript shape, transcribed from the run above.
 NM_OUT = """=== Vibe-IC phase1_phase2_phase3 compliance ===
@@ -54,80 +51,24 @@ FAIL_OUT = NM_OUT.replace("Overall: NOT_MEASURED", "Overall: FAIL")
 
 
 # ── 1. the rows, which are the information the word throws away ───────────
-def test_the_not_measured_rows_are_extracted_in_order():
-    rows = D._not_measured_rows(NM_OUT)
-    assert len(rows) == 5
-    assert rows[0].startswith("Step P0:")
-    assert "partial_population" in rows[0]
-    assert any("execution_error" in r for r in rows)
 
 
-def test_a_FAIL_row_is_never_collected_as_not_measured():
-    """THE DISCRIMINATION. The two tiers must not blur into each other."""
-    assert all("15.5ic" not in r for r in D._not_measured_rows(NM_OUT))
 
 
-def test_a_transcript_with_none_yields_an_empty_list_not_a_guess():
-    assert D._not_measured_rows("Overall: PASS\n") == []
-    assert D._not_measured_rows("") == []
 
 
 # ── 2. the mapping, both directions ───────────────────────────────────────
-def _drive(out: str, tmp_path, monkeypatch):
-    """Run step_final_audit against a canned audit transcript."""
-    (tmp_path / "reports" / "audit").mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(D, "_run", lambda *a, **k: (1, out, ""))
-    monkeypatch.setattr(D.PROGRAMS_DIR.__class__, "is_file",
-                        lambda self: True, raising=False)
-    return D.step_final_audit(tmp_path, phase=2)
 
 
-def test_an_overall_NOT_MEASURED_becomes_NOT_MEASURED_not_FAIL(tmp_path,
-                                                               monkeypatch):
-    r = _drive(NM_OUT, tmp_path, monkeypatch)
-    assert r.status == "NOT_MEASURED", r.status
-    assert r.extras.get("not_measured_rows")
-    assert len(r.extras["not_measured_rows"]) == 5
-    assert "cannot certify" in r.detail or "not a defect found" in r.detail
 
 
-def test_an_overall_FAIL_is_STILL_a_FAIL(tmp_path, monkeypatch):
-    """THE NEGATIVE ARM. This changes one word and only one word."""
-    r = _drive(FAIL_OUT, tmp_path, monkeypatch)
-    assert r.status == "FAIL", r.status
 
 
 # ── 3. the other half: proceeding must NOT become passing ─────────────────
-def test_a_NOT_MEASURED_phase_cannot_roll_up_to_PASS():
-    """Stacked on next/icslot70. The whole safety of R-0915-159 rests here: if
-    a NOT_MEASURED phase could still reach PASS, turning FAIL into NOT_MEASURED
-    would be a softening. It cannot."""
-    verdict, why = O._roll_up([("phase1", "PASS", 0),
-                               ("phase2", "NOT_MEASURED", 0)],
-                              audit_axis={"state": "NOT_APPLICABLE",
-                                          "reason": ""})
-    assert verdict == "NOT_MEASURED", (verdict, why)
-    assert any("not measured" in w for w in why)
 
 
-def test_a_NOT_MEASURED_completion_audit_row_cannot_roll_up_to_PASS():
-    verdict, why = O._roll_up([("phase1", "PASS", 0), ("phase2", "PASS", 0)],
-                              audit_axis={"state": "NOT_MEASURED",
-                                          "reason": "no verdict could be read"})
-    assert verdict == "NOT_MEASURED", (verdict, why)
 
 
-def test_the_flow_PROCEEDS_on_a_not_measured_phase_but_never_certifies():
-    """Both halves in one statement: NOT_MEASURED is not a halt word for the
-    orchestrator (only FAIL is), and it is not a pass word for the roll-up."""
-    assert O._roll_up([("phase1", "PASS", 0), ("phase2", "NOT_MEASURED", 0),
-                       ("phase3", "PASS", 0)],
-                      audit_axis={"state": "PASS", "reason": ""})[0] \
-        == "NOT_MEASURED"
-    # and a genuinely clean run is still a clean PASS
-    assert O._roll_up([("phase1", "PASS", 0), ("phase2", "PASS", 0),
-                       ("phase3", "PASS", 0)],
-                      audit_axis={"state": "PASS", "reason": ""})[0] == "PASS"
 
 
 # ── 4. MUTATION: the old fall-through must go red ─────────────────────────

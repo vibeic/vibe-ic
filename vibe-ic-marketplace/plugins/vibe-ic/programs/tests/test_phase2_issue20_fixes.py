@@ -29,9 +29,7 @@ for _p in (str(PROGRAMS), str(PLUGIN_ROOT)):
 def test_coalesce_drops_bus_oe_tx_rx_when_id_bus_present():
     """Direct unit test: when canonical id_bus is present alongside
     bus_oe / bus_tx / bus_rx, the decomposition must be dropped."""
-    from programs.phase1_one_shot_runner import (
-        _coalesce_half_duplex_alias_group,
-    )
+    from programs.phase1_doc_one_shot_runner import _coalesce_half_duplex_alias_group
     ports = [
         {"name": "id_bus",  "direction": "inout"},
         {"name": "bus_oe",  "direction": "output"},
@@ -52,9 +50,7 @@ def test_coalesce_drops_bus_oe_tx_rx_when_id_bus_present():
 def test_coalesce_drops_prefixed_decomposition():
     """Prefixed forms (id_bus_oe / aid_bus_tx) must also be dropped
     when the canonical is present."""
-    from programs.phase1_one_shot_runner import (
-        _coalesce_half_duplex_alias_group,
-    )
+    from programs.phase1_doc_one_shot_runner import _coalesce_half_duplex_alias_group
     ports = [
         {"name": "id_bus",     "direction": "inout"},
         {"name": "id_bus_oe",  "direction": "output"},
@@ -72,9 +68,7 @@ def test_coalesce_keeps_decomposition_when_no_canonical_present():
     """Reject-test: if only bus_oe/bus_tx/bus_rx exist and there's no
     canonical bus port, the decomposition must be KEPT (some designs
     legitimately expose only the discrete tri-state pins)."""
-    from programs.phase1_one_shot_runner import (
-        _coalesce_half_duplex_alias_group,
-    )
+    from programs.phase1_doc_one_shot_runner import _coalesce_half_duplex_alias_group
     ports = [
         {"name": "bus_oe", "direction": "output"},
         {"name": "bus_tx", "direction": "output"},
@@ -91,10 +85,7 @@ def test_l9_emitter_collapses_bus_oe_alias_group(tmp_path):
     """Integration test: when L1.pin_table extraction surfaces both
     id_bus AND its tri-state decomposition, the L9 emitter must drop
     the decomposition end-to-end."""
-    from programs.phase1_one_shot_runner import (
-        gen_l1_datasheet,
-        gen_l9_integration_spec,
-    )
+    from programs.phase1_doc_one_shot_runner import gen_l1_datasheet, gen_l9_integration_spec
     project = tmp_path
     (project / "phase1" / "generated_docs").mkdir(parents=True, exist_ok=True)
     extracted = {
@@ -134,11 +125,7 @@ def test_l9_emitter_collapses_bus_oe_alias_group(tmp_path):
 def test_l8_emits_typed_clock_domains_with_freq_hz_role(tmp_path):
     """L8 must carry a typed clock_domains[] block with name + freq +
     role/source/domain_kind so l8_clock_domains_typed_check passes."""
-    from programs.phase1_one_shot_runner import (
-        gen_l1_datasheet,
-        gen_l9_integration_spec,
-        gen_l8_timing_waveform,
-    )
+    from programs.phase1_doc_one_shot_runner import gen_l1_datasheet, gen_l9_integration_spec, gen_l8_timing_waveform
     project = tmp_path
     (project / "phase1" / "generated_docs").mkdir(parents=True, exist_ok=True)
     extracted = {
@@ -193,12 +180,7 @@ def test_l8_synthesises_clock_domains_from_l9_when_no_freq_in_source(tmp_path):
     site moved to a post-pass `_post_emit_typed_clock_domains` that
     runs AFTER L9 is on disk; this test now drives that post-pass
     explicitly."""
-    from programs.phase1_one_shot_runner import (
-        gen_l1_datasheet,
-        gen_l9_integration_spec,
-        gen_l8_timing_waveform,
-        _post_emit_typed_clock_domains,
-    )
+    from programs.phase1_doc_one_shot_runner import gen_l1_datasheet, gen_l9_integration_spec, gen_l8_timing_waveform, _post_emit_typed_clock_domains
     project = tmp_path
     (project / "phase1" / "generated_docs").mkdir(parents=True, exist_ok=True)
     extracted = {
@@ -239,7 +221,7 @@ def test_l8_clock_domains_skipped_when_no_clk_pin_no_freq(tmp_path):
     """Reject-test: when there's no clk-shaped pin AND no clock
     frequency in source, clock_domains stays empty (the gate's
     SKIP path) — never invents a fake 50 MHz entry."""
-    from programs.phase1_one_shot_runner import gen_l8_timing_waveform
+    from programs.phase1_doc_one_shot_runner import gen_l8_timing_waveform
     project = tmp_path
     (project / "phase1" / "generated_docs").mkdir(parents=True, exist_ok=True)
     extracted = {
@@ -412,7 +394,7 @@ def test_full_stack_tb_gen_never_emits_placeholder_pass(tmp_path):
 def test_is_real_clock_freq_rejects_sub_khz():
     """Direct unit test: a 2 Hz value is below the clock floor and
     must be rejected even when clock context is present."""
-    from programs.phase1_one_shot_runner import _is_real_clock_freq
+    from programs.phase1_doc_one_shot_runner import _is_real_clock_freq
     text = "respond within 2 Hz of nominal clock frequency target"
     # Position of "2" in the string.
     span_start = text.index("2 Hz")
@@ -425,7 +407,7 @@ def test_is_real_clock_freq_rejects_sub_khz():
 def test_is_real_clock_freq_rejects_no_clock_context():
     """A 50 MHz value (= 50_000_000 Hz) without any clock-keyword in
     a ±50-char window must be rejected."""
-    from programs.phase1_one_shot_runner import _is_real_clock_freq
+    from programs.phase1_doc_one_shot_runner import _is_real_clock_freq
     text = "data rate 50 MHz of total bandwidth across the bus pins"
     span_start = text.index("50 MHz")
     span_end = span_start + len("50 MHz")
@@ -441,7 +423,7 @@ def test_is_real_clock_freq_rejects_no_clock_context():
 def test_is_real_clock_freq_accepts_real_clock():
     """Positive control: a 50 MHz value with clock-keyword context
     must be accepted."""
-    from programs.phase1_one_shot_runner import _is_real_clock_freq
+    from programs.phase1_doc_one_shot_runner import _is_real_clock_freq
     text = "system clock at 50 MHz primary input"
     span_start = text.index("50 MHz")
     span_end = span_start + len("50 MHz")

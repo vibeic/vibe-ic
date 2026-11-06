@@ -210,7 +210,7 @@ def test_aid_scaffold_residue_purged_when_pre_seeded(tmp_path):
     # is the contract: any external caller can invoke the purge as a
     # cleanup pass without running the full extractor.
     sys.path.insert(0, str(REPO / "programs"))
-    from phase1_one_shot_runner import _purge_aid_scaffold_residue
+    from phase1_doc_one_shot_runner import _purge_aid_scaffold_residue
     _purge_aid_scaffold_residue(project)
 
     # Now assert the residue is gone.
@@ -288,7 +288,7 @@ def test_clock_mhz_50_without_evidence_is_null(tmp_path):
     (gd / "L8_RTL_CONSTANTS.json").write_text(json.dumps(l8))
 
     sys.path.insert(0, str(REPO / "programs"))
-    from phase1_one_shot_runner import _purge_aid_scaffold_residue
+    from phase1_doc_one_shot_runner import _purge_aid_scaffold_residue
     _purge_aid_scaffold_residue(project)
 
     l8 = json.loads((gd / "L8_RTL_CONSTANTS.json").read_text())
@@ -322,7 +322,7 @@ def test_clock_mhz_50_with_evidence_is_preserved(tmp_path):
     # value because the extraction_evidence carries a "clock frequency"
     # label.
     sys.path.insert(0, str(REPO / "programs"))
-    from phase1_one_shot_runner import _purge_aid_scaffold_residue
+    from phase1_doc_one_shot_runner import _purge_aid_scaffold_residue
     _purge_aid_scaffold_residue(project)
 
     l8 = json.loads((gd / "L8_RTL_CONSTANTS.json").read_text())
@@ -370,7 +370,7 @@ def test_l8_clock_mhz_purged_evidence_keyed_at_value_250(tmp_path):
     (gd / "L8_RTL_CONSTANTS.json").write_text(json.dumps(l8))
 
     sys.path.insert(0, str(REPO / "programs"))
-    from phase1_one_shot_runner import _purge_aid_scaffold_residue
+    from phase1_doc_one_shot_runner import _purge_aid_scaffold_residue
     _purge_aid_scaffold_residue(project)
 
     l8 = json.loads((gd / "L8_RTL_CONSTANTS.json").read_text())
@@ -400,7 +400,7 @@ def test_l8_clock_mhz_preserved_when_evidence_present(tmp_path):
     # extracted value because an evidence entry references clock /
     # frequency / mhz.
     sys.path.insert(0, str(REPO / "programs"))
-    from phase1_one_shot_runner import _purge_aid_scaffold_residue
+    from phase1_doc_one_shot_runner import _purge_aid_scaffold_residue
     _purge_aid_scaffold_residue(project)
 
     l8 = json.loads((gd / "L8_RTL_CONSTANTS.json").read_text())
@@ -443,7 +443,7 @@ def test_l8_clock_mhz_purged_at_arbitrary_scaffold_values(tmp_path_factory):
     purged = 0
 
     sys.path.insert(0, str(REPO / "programs"))
-    from phase1_one_shot_runner import _purge_aid_scaffold_residue
+    from phase1_doc_one_shot_runner import _purge_aid_scaffold_residue
 
     for idx, val in enumerate(cases):
         proj = tmp_path_factory.mktemp(f"clk{idx}")

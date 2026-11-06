@@ -44,7 +44,6 @@ PROGRAMS = PLUGIN / 'programs'
 sys.path.insert(0, str(PROGRAMS))
 sys.path.insert(0, str(PROGRAMS / 'tests'))
 import flow_compliance_check as fcc  # noqa: E402
-import flow_gate_enforcement_audit as AUDIT  # noqa: E402
 
 GATE = 'catalog_synth_safe_params_check'
 CODE = 'CATALOG_REUSE_DECLARED_NOT_INSTANTIATED'
@@ -224,17 +223,8 @@ def test_the_runner_step_never_credits_an_unread_declaration(root):
     assert (sr.status, sr.reason_class) == ('NOT_MEASURED', 'input_absent'), sr
 
 
-def _gate_row(programs):
-    rep = AUDIT.audit(FLOW, programs)
-    return rep, next(g for g in rep['gates'] if g['gate'] == GATE)
 
 
-def _programs_copy(tmp_path, runner_text):
-    d = tmp_path / 'programs'
-    d.mkdir(parents=True)
-    (d / RUNNER).write_text(runner_text)
-    (d / f'{GATE}.py').write_text((PROGRAMS / f'{GATE}.py').read_text())
-    return d
 
 
 def _main_plan_appends(src):
@@ -256,13 +246,6 @@ def _main_plan_appends(src):
             for c in sorted(calls, key=lambda c: (c.lineno, c.col_offset))]
 
 
-def test_the_audit_reads_the_gate_as_declared_blocking_and_enforced():
-    rep, row = _gate_row(PROGRAMS)
-    assert (row['declared'], row['enforcement'], row['wiring']) == (
-        'blocking', 'ENFORCED', 'INLINE_BLOCKING'), row
-    assert GATE not in {c['gate'] for c in rep['contradictions']}
-    assert GATE not in {u['gate'] for u in rep['undeclared_audit_only']}
-    assert GATE not in {g['gate'] for g in rep['declared_weaker_than_wired']}
 
 
 def test_main_appends_the_step_after_the_rtl_is_staged_and_before_step2():
@@ -284,16 +267,6 @@ def test_mutation_an_uncalled_step_is_seen(tmp_path):
     assert 'step_catalog_synth_safe_params' not in _main_plan_appends(cut)
 
 
-def test_mutation_dropping_the_spawn_is_a_contradiction(tmp_path):
-    text = (PROGRAMS / RUNNER).read_text()
-    spawn = f'str(PROGRAMS_DIR / "{GATE}.py")'
-    assert text.count(spawn) == 1, 'the spawn moved; update spawn'
-    live = _gate_row(_programs_copy(tmp_path / 'live', text))[1]
-    assert live['wiring'] == 'INLINE_BLOCKING', live
-    rep, row = _gate_row(_programs_copy(
-        tmp_path / 'cut', text.replace(spawn, 'str(PROGRAMS_DIR / "other_check.py")')))
-    assert row['wiring'] == 'NOT_INVOKED', row
-    assert GATE in {c['gate'] for c in rep['contradictions']}
 
 
 def test_the_register_is_not_written_for_it():

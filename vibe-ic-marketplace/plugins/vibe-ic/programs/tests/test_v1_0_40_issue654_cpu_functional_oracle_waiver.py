@@ -20,13 +20,11 @@ blocking INCOMPLETE (rc=1) until a non-vacuous professional functional JUnit
 result exists. A forged record (no/empty evidence, or
 functional_verified=true) also FAILs — NO-LEAK.
 """
-import subprocess
 import sys
 from pathlib import Path
 
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
-import design_one_shot_runner as R  # noqa: E402
 import cpu_functional_oracle_waiver_check as G  # noqa: E402
 import flow_compliance_check as F  # noqa: E402
 
@@ -43,49 +41,14 @@ def _mk_conn_run(tmp_path):
 
 # ── runner bridge emitter ───────────────────────────────────────────────────
 
-def test_bridge_emits_canonical_step4_artifacts(tmp_path):
-    project, log = _mk_conn_run(tmp_path)
-    assert R._emit_connectivity_sim_bridge(
-        project, log, "soc_top", "AID reference TB cannot bind bus-top")
-    sim = project / "phase2/stage1/sim"
-    assert (sim / "results.xml").is_file()
-    assert (sim / "pass.flag").is_file()
-    xml = (sim / "results.xml").read_text()
-    assert "<verdict>CONNECTIVITY_PASS</verdict>" in xml
-    assert "cap:cpu_functional_oracle" in xml
-    assert "functional_verified>false" in xml
-    # evidence backlink dereferences
-    assert "generic_full_stack_run/full_stack.log" in xml
 
 
-def test_bridge_refuses_when_no_done_marker(tmp_path):
-    # NO-LEAK: a connectivity TB that did NOT reach FULL_STACK_TB_DONE must
-    # NOT produce a waiver bridge (no false connectivity-PASS).
-    run = tmp_path / "phase2/stage1/sim_full_stack/generic_full_stack_run"
-    run.mkdir(parents=True)
-    log = run / "full_stack.log"
-    log.write_text("FULL_STACK_TB_INIT (crashed before DONE)\n")
-    assert not R._emit_connectivity_sim_bridge(tmp_path, log, "soc_top", "x")
-    assert not (tmp_path / "phase2/stage1/sim/results.xml").exists()
 
 
-def test_bridge_refuses_empty_transcript(tmp_path):
-    run = tmp_path / "phase2/stage1/sim_full_stack/generic_full_stack_run"
-    run.mkdir(parents=True)
-    log = run / "full_stack.log"
-    log.write_text("")
-    assert not R._emit_connectivity_sim_bridge(tmp_path, log, "soc_top", "x")
 
 
 # ── gate program verdicts ───────────────────────────────────────────────────
 
-def test_gate_blocks_incomplete_on_connectivity_bridge(tmp_path):
-    project, log = _mk_conn_run(tmp_path)
-    R._emit_connectivity_sim_bridge(project, log, "soc_top", "no oracle class")
-    code, msg = G._evaluate(project)
-    assert code == 1, msg
-    assert "INCOMPLETE" in msg
-    assert "No waiver is granted" in msg
 
 
 def test_gate_na_for_genuine_functional_pass(tmp_path):
@@ -153,23 +116,6 @@ def test_gate_fails_when_evidence_missing_done_marker(tmp_path):
 
 # ── gate program CLI / json ─────────────────────────────────────────────────
 
-def test_gate_cli_exit_code_and_json(tmp_path):
-    project, log = _mk_conn_run(tmp_path)
-    R._emit_connectivity_sim_bridge(project, log, "soc_top", "no oracle class")
-    jp = project / "reports/g.json"
-    r = subprocess.run(
-        [sys.executable,
-         str(PROG / "cpu_functional_oracle_waiver_check.py"),
-         str(project), "--json", str(jp)],
-        capture_output=True, text=True)
-    assert r.returncode == 1
-    assert jp.is_file()
-    import json
-    rep = json.loads(jp.read_text())
-    assert rep["verdict"] == "INCOMPLETE"
-    assert rep["enforcement"] == "BLOCKING"
-    assert rep["functional_test_denominator"]["tests_run"] == 0
-    assert rep["exit_code"] == 1
 
 
 # ── end-to-end: flow_compliance_check Step-4 promotion ──────────────────────
@@ -190,15 +136,6 @@ def _step4_gate():
     }
 
 
-def test_step4_fails_incomplete_for_no_oracle_cpu(tmp_path):
-    project, log = _mk_conn_run(tmp_path)
-    R._emit_connectivity_sim_bridge(project, log, "soc_top", "no oracle class")
-    res = F.check_step(project, _step4_gate(), waivers={})
-    # The connectivity-PASS bridge satisfies files_exist, but the functional
-    # evidence gate blocks Step 4 until a non-vacuous oracle result exists.
-    assert res.status == "FAIL", (res.status, res.reasons)
-    assert not any("PASS_WITH_WAIVERS" in r or "WAIVED-DEFERRED" in r
-                   for r in res.reasons)
 
 
 def test_step4_hard_fails_without_any_sim_artifact(tmp_path):

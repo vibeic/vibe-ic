@@ -29,7 +29,6 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import design_one_shot_runner as DOR               # noqa: E402
 import analog_pdk_deck_context as APDC             # noqa: E402
 import analog_mc_yield_run as MC                   # noqa: E402
 import analog_real_corner_sweep as ARS             # noqa: E402
@@ -58,78 +57,22 @@ _CONV_DIGITAL_IFACE = [
 ]
 
 
-def _l9_project(tmp_path: Path, ports: list) -> Path:
-    gd = tmp_path / "phase1" / "generated_docs"
-    gd.mkdir(parents=True)
-    (gd / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({
-        "top_module": "dut", "top_ports": ports}))
-    return tmp_path
 
 
 # ══ #148 — all-analog RTL-dependent steps SKIP, not FAIL ════════════════════
 
-def test_148_helper_all_analog_absent(tmp_path):
-    p = _l9_project(tmp_path, _ADC_ALL_ANALOG)
-    absent, reason = DOR._analog_rtl_track_absent(p, "data_converter")
-    assert absent is True
-    assert "all-analog" in reason
 
 
-def test_148_helper_digital_iface_present(tmp_path):
-    p = _l9_project(tmp_path, _CONV_DIGITAL_IFACE)
-    absent, _reason = DOR._analog_rtl_track_absent(p, "data_converter")
-    assert absent is False
 
 
-def test_148_reference_tb_skips_on_all_analog(tmp_path):
-    p = _l9_project(tmp_path, _ADC_ALL_ANALOG)
-    r = DOR.step_reference_tb(p, "chip_top", "data_converter")
-    assert r.status == "NOT_APPLICABLE"
-    assert r.extras.get("deferred_to") == "analog_track"
-    assert "rtl/ missing" not in r.detail
 
 
-def test_148_yosys_synth_skips_on_all_analog(tmp_path):
-    p = _l9_project(tmp_path, _ADC_ALL_ANALOG)
-    r = DOR.step_yosys_synth(p, "chip_top", "vibeic-eda", "data_converter")
-    assert r.status == "NOT_APPLICABLE"
-    assert r.extras.get("deferred_to") == "analog_track"
 
 
-def test_148_reference_tb_refuses_on_digital_iface(tmp_path):
-    """No-leak: a design that DOES expose a digital clk/rst/data input must
-    NOT be deferred to the analog track on the absent rtl/ -- it must produce
-    a non-green record naming the absent input.
-
-    The status asserted here changed from FAIL to the runner refusal status
-    BLOCKED: the reference TB never ran, so FAIL asserted a design verdict
-    that had not been measured. Every property #148 relies on is still
-    asserted, and more: the verdict is non-green, is not deferred to the
-    analog track, still names the absent rtl/, and now also names the
-    producer that failed to fill it."""
-    p = _l9_project(tmp_path, _CONV_DIGITAL_IFACE)
-    r = DOR.step_reference_tb(p, "chip_top", "data_converter")
-    assert r.status == DOR._spf.REFUSAL_STATUS == "NOT_MEASURED"
-    assert "rtl/ missing" in r.detail
-    # the load-bearing #148 property: must not leak into the analog track
-    assert r.extras.get("deferred_to") != "analog_track"
-    # and it must remain a red verdict, exactly as FAIL was
-    assert DOR._aggregate_verdict([r]) not in ("PASS", "PASS_WITH_WAIVERS")
-    # strictly more than the original assertion: name the producer
-    assert r.extras.get("producer_step") == "rtl_gen"
 
 
-def test_148_yosys_synth_fails_on_digital_iface(tmp_path):
-    p = _l9_project(tmp_path, _CONV_DIGITAL_IFACE)
-    r = DOR.step_yosys_synth(p, "chip_top", "vibeic-eda", "data_converter")
-    assert r.status == "FAIL" and "rtl/ missing" in r.detail
 
 
-def test_148_no_l9_is_failsafe_fail(tmp_path):
-    """No L9 pinout → cannot assert all-analog → keep the digital track (FAIL on
-    the absent rtl/, not a silent SKIP)."""
-    r = DOR.step_yosys_synth(tmp_path, "chip_top", "vibeic-eda", "data_converter")
-    assert r.status == "FAIL"
 
 
 # ══ #149 — primary lib is the device-defining one, not the most-sections one ═

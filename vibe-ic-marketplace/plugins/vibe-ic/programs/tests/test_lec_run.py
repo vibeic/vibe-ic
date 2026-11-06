@@ -2480,5 +2480,3 @@ def test_no_live_docker_exec_targets_the_bare_shared_container_name():
         f"line(s) {offenders} — pass `_live_container()` instead, so the name "
         f"carries the pin digest and cannot be squatted by another lane's "
         f"container (#2230)")
-
-

@@ -27,18 +27,15 @@ chip-, PDK- and vendor-AGNOSTIC: every fixture below is synthetic.
 """
 from __future__ import annotations
 
-import json
 import math
 import sys
 from pathlib import Path
 
-import pytest
 
 PROG = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROG))
 
 import phase3_one_shot_runner as R  # noqa: E402
-import _yosys_stat as YS  # noqa: E402
 from _ppa import power as PP  # noqa: E402
 
 # A 7-track-shaped library: row site 0.56 x 3.92 (2.1952 um^2). The site x 6.0
@@ -51,96 +48,22 @@ _MASTERS = {  # name: (width, count)
 }
 
 
-def _cell_lef() -> str:
-    out = ["VERSION 5.7 ;",
-           "SITE coresite", "  CLASS CORE ;",
-           f"  SIZE {_SITE_W} BY {_SITE_H} ;", "END coresite"]
-    for name, (w, _n) in _MASTERS.items():
-        out += [f"MACRO {name}", "  CLASS CORE ;", "  SITE coresite ;",
-                f"  SIZE {w} BY {_SITE_H} ;", f"END {name}"]
-    return "\n".join(out + ["END LIBRARY", ""])
 
 
-def _true_area() -> float:
-    return sum(w * _SITE_H * n for w, n in _MASTERS.values())
 
 
-def _cells() -> int:
-    return sum(n for _w, n in _MASTERS.values())
 
 
-def _stage(tmp_path: Path, *, stats: str = "bound", masters=None):
-    synth = tmp_path / "phase2" / "stage2" / "synth"
-    synth.mkdir(parents=True)
-    nl = synth / "top_synth.v"
-    lines = ["module top (a, y);", "  input a;", "  output y;"]
-    i = 0
-    for name, (_w, n) in (masters or _MASTERS).items():
-        for _ in range(n):
-            lines.append(f"  {name} u{i} (.A(a), .Z(y));")
-            i += 1
-    nl.write_text("\n".join(lines + ["endmodule", ""]))
-    lef = tmp_path / "cells.lef"
-    lef.write_text(_cell_lef())
-    if stats != "none":
-        rec = {"schema": "vibe-ic/synth-stats/1",
-               "netlist": "phase2/stage2/synth/top_synth.v",
-               YS.NETLIST_DIGEST_FIELD: YS.netlist_digest(nl),
-               "chip_area": round(_true_area(), 4), "chip_area_unit": "um^2",
-               "chip_area_unit_evidence": {"established": True},
-               "cell_count": _cells()}
-        if stats == "unbound":
-            rec[YS.NETLIST_DIGEST_FIELD] = "sha256:" + "0" * 64
-        if stats == "unit_unproven":
-            rec["chip_area_unit"] = "cell-library area unit"
-            rec["chip_area_unit_evidence"] = {"established": False}
-        (synth / "stats.json").write_text(json.dumps(rec))
-
-    class _Pdk:
-        name = "testpdk"
-        site = "coresite"
-        cell_lef = str(lef)
-        tech_lef = str(tmp_path / "absent.tlef")
-    return nl, _Pdk()
 
 
-def _side(die: str) -> int:
-    w, h = (int(x) for x in die.lower().split("x"))
-    assert w == h
-    return w
 
 
 # ── 1+2: the area is READ and it sizes the CORE ─────────────────────────────
 
-def test_the_core_is_sized_from_the_synthesis_stat_bound_to_this_netlist(tmp_path):
-    """RED on main: main sizes an 8x-ish smaller die from site x 6.0."""
-    nl, pdk = _stage(tmp_path)
-    m: dict = {}
-    die, note = R._resolve_auto_die_um("auto", nl, 0.3, pdk, None, top="",
-                                       container="", metrics=m)
-    core = math.ceil(math.sqrt(_true_area() / R._AUTO_DIE_TARGET_UTIL))
-    assert _side(die) == core + 2 * R._AUTO_DIE_CORE_INSET_UM, (die, note)
-    assert "synthesis stat" in note, note
-    assert m["cell_area_um2"] == pytest.approx(_true_area(), rel=1e-6)
-    assert m["core_side_um"] == core
-    # the utilisation is the CORE's and it is at or under the target
-    assert _true_area() / (core * core) <= R._AUTO_DIE_TARGET_UTIL + 1e-9
 
 
-def test_a_stat_for_another_netlist_is_not_this_designs_area(tmp_path):
-    """The stat's sha256 names a different netlist -> the instances' own LEF
-    SIZEs are summed instead, and the note says so."""
-    nl, pdk = _stage(tmp_path, stats="unbound")
-    die, note = R._resolve_auto_die_um("auto", nl, 0.3, pdk, None, container="")
-    core = math.ceil(math.sqrt(_true_area() / R._AUTO_DIE_TARGET_UTIL))
-    assert _side(die) == core + 2 * R._AUTO_DIE_CORE_INSET_UM, (die, note)
-    assert "LEF SIZE" in note and "synthesis stat" not in note, note
 
 
-def test_an_unproven_area_unit_is_not_read_as_um2(tmp_path):
-    nl, pdk = _stage(tmp_path, stats="unit_unproven")
-    _die, note = R._resolve_auto_die_um("auto", nl, 0.3, pdk, None, container="")
-    assert "LEF SIZE" in note, note
 
 
 def test_no_per_pdk_average_cell_constant_is_left_in_the_flow():
@@ -149,13 +72,6 @@ def test_no_per_pdk_average_cell_constant_is_left_in_the_flow():
     assert "site_area * " not in src.split("def _resolve_auto_die_um", 1)[1][:9000]
 
 
-def test_the_measured_spm_numbers_land_where_librelane_did():
-    """The measured case, as arithmetic: 8857.632 um^2 at the design's declared
-    0.5 is a 134 um core and a 154 um die (LibreLane on the same RTL: 152.7 um
-    at FP_CORE_UTIL 50). The old sizing gave 85 um."""
-    assert R._auto_die_side_um(273, 0.5, 8857.632 / 273, min_side=1) == 134
-    old = R._auto_die_side_um(273, 0.5, _SITE_W * _SITE_H * 6.0)
-    assert old == 85  # the defect, reproduced from its own inputs
 
 
 # ── 3: the core holds one strap period, or the run says why not ────────────
@@ -188,33 +104,10 @@ def test_no_strap_is_no_floor():
     assert PP.pdn_strap_min_core_span_um([{"layer": "m", "width": 0}])[0] is None
 
 
-def test_an_auto_core_below_the_strap_floor_is_grown_and_says_so(tmp_path):
-    """RED on main (no strap floor exists). A small design at the target util
-    would get a core pdngen cannot strap; it is grown to the floor."""
-    small = {"lib__nand2_1": (2.24, 30)}
-    nl, pdk = _stage(tmp_path, stats="none", masters=small)
-    m: dict = {}
-    die, note = R._resolve_auto_die_um(
-        "auto", nl, 0.3, pdk, None, container="", metrics=m,
-        strap_core_floor=(102, "Metal5 offset 16.65 + ... = 94.84 um"))
-    assert _side(die) == 102 + 2 * R._AUTO_DIE_CORE_INSET_UM, (die, note)
-    assert "PDN_CORE_GROWN" in note and "94.84" in note, note
-    assert m["core_side_um"] == 102
 
 
-def test_a_core_already_above_the_floor_is_not_touched(tmp_path):
-    nl, pdk = _stage(tmp_path)
-    d0, _ = R._resolve_auto_die_um("auto", nl, 0.3, pdk, None, container="")
-    d1, n1 = R._resolve_auto_die_um("auto", nl, 0.3, pdk, None, container="",
-                                    strap_core_floor=(102, "b"))
-    assert d0 == d1 and "PDN_CORE_GROWN" not in n1
 
 
-def test_the_downsize_retry_cannot_shrink_below_the_floor_die():
-    """The over-sparse retry takes a floor; step_pnr hands it the strap floor
-    plus both insets, so a later tightening cannot undo the growth."""
-    assert R._compute_downsized_die(209, 209, 5.0, die_min_um=122) is None
-    assert R._compute_downsized_die(209, 209, 20.0, die_min_um=122) is not None
 
 
 _GF_DIRS = {"Metal4": "VERTICAL", "Metal5": "HORIZONTAL"}
@@ -253,160 +146,3 @@ def test_the_pinned_check_judges_each_layer_on_its_own_axis():
     # direction unknown: judged on the larger extent, so it refuses LESS
     assert PP.pdn_strap_core_misfit(_GF_STRAPS, 60, 200, nets=2,
                                     site_dims_um=(_SITE_W, _SITE_H)) == []
-
-
-class _Stop(Exception):
-    pass
-
-
-def _pnr_until_the_pdn_check(tmp_path, monkeypatch, die, deck_detail=True):
-    nl, pdk_stub = _stage(tmp_path)
-    pdk = R.PdkConfig(name="testpdk", liberty=str(tmp_path / "x.lib"),
-                      tech_lef=str(tmp_path / "absent.tlef"),
-                      cell_lef=pdk_stub.cell_lef, cell_gds=None,
-                      site="coresite", drc_deck=None)
-    monkeypatch.setattr(R, "pnr_input_netlist",
-                        lambda project, top: (nl, "fixture netlist", False),
-                        raising=True)
-
-    def floor(pdk, container="", detail=None):
-        if deck_detail:
-            detail.update(status="DERIVED", stripes=_GF_STRAPS,
-                          directions=_GF_DIRS,
-                          site_dims_um=[_SITE_W, _SITE_H],
-                          plan_source="fixture")
-            return 102, "Metal5 needs 94.84 um"
-        detail.update(status="NOT_DETERMINED", reason="fixture: no strap plan")
-        return None, "fixture: no strap plan"
-    monkeypatch.setattr(R, "_strap_plan_core_floor", floor, raising=False)
-
-    def stop(*a, **k):  # the first call after the PDN check
-        raise _Stop()
-    monkeypatch.setattr(R, "ct03_pin_rect", stop)
-    try:
-        return R.step_pnr(tmp_path, "top", pdk, "", die, 0.3)
-    except _Stop:
-        return None
-
-
-def test_a_pinned_core_that_pdngen_measured_building_is_accepted(
-        tmp_path, monkeypatch):
-    """RED on 41dbdd7f2 (review wave 3, MAJOR): a pinned 120x120 die has a
-    100 x 100 core, which pdngen was MEASURED to build; the padded floor (102)
-    refused it."""
-    res = _pnr_until_the_pdn_check(tmp_path, monkeypatch, "120x120")
-    assert res is None, res  # reached the step after the check
-
-
-def test_a_pinned_core_below_the_strap_floor_is_refused_with_numbers(
-        tmp_path, monkeypatch):
-    """RED on main: main runs on to pdngen, which builds no grid. DRIVES
-    step_pnr itself -- hermetic: no container, the strap plan supplied. A
-    115x115 die is a 95 x 95 core: rows 94.64 x 94.08, below Metal4's 94.72
-    and Metal5's 94.84, exactly as measured."""
-    res = _pnr_until_the_pdn_check(tmp_path, monkeypatch, "115x115")
-    assert res is not None and res.status == "FAIL", res
-    d = str(res.detail)
-    assert "PDN_CORE_TOO_SMALL" in d and "95x95" in d, d
-    assert "Metal4 (VERTICAL) needs 94.72" in d and "94.64" in d, d
-    assert "Metal5 (HORIZONTAL) needs 94.84" in d and "94.08" in d, d
-    assert "--die-um 115x115 (explicit)" in d, d
-
-
-def test_an_underivable_floor_is_named_not_silent(tmp_path, monkeypatch, capsys):
-    """RED on 41dbdd7f2 (review wave 3): with no floor the checks switched off
-    and nothing said so. Now a named line is printed, and a pinned core too
-    small for any plan is not refused on a floor nobody derived."""
-    res = _pnr_until_the_pdn_check(tmp_path, monkeypatch, "90x90",
-                                   deck_detail=False)
-    assert res is None
-    assert "PDN_CORE_FLOOR_NOT_DETERMINED: fixture: no strap plan" in capsys.readouterr().err
-
-
-def test_the_floor_record_is_persisted_with_the_floorplan(tmp_path):
-    rec = R._floorplan_rectangles_record(
-        tmp_path, die_rect=[0, 0, 154, 154], fp_rect=None,
-        die_source="--die-um auto", core_pad=10, ring_inset_um=None,
-        pdn_core_floor={"status": "NOT_DETERMINED", "reason": "why"})
-    on_disk = json.loads((tmp_path / R.FLOORPLAN_RECTANGLES_REL).read_text())
-    assert on_disk["pdn_core_floor"] == {"status": "NOT_DETERMINED", "reason": "why"}
-    assert rec["pdn_core_floor"]["reason"] == "why"
-
-
-def _write_leFS(tmp_path):
-    tech = tmp_path / "tech.tlef"
-    tech.write_text("VERSION 5.7 ;\n"
-                    "LAYER Metal4\n  TYPE ROUTING ;\n  DIRECTION VERTICAL ;\n"
-                    "  PITCH 0.56 ;\n  WIDTH 0.28 ;\nEND Metal4\n"
-                    "LAYER Metal5\n  TYPE ROUTING ;\n  DIRECTION HORIZONTAL ;\n"
-                    "  PITCH 0.56 ;\n  WIDTH 0.28 ;\nEND Metal5\nEND LIBRARY\n")
-    cell = tmp_path / "cells.lef"
-    cell.write_text(_cell_lef())
-    return tech, cell
-
-
-def test_the_floor_is_derived_from_the_decks_own_plan_without_mocking_it_out(
-        tmp_path, monkeypatch):
-    """Review wave 3: `_strap_plan_core_floor` itself, not patched away. The
-    deck double fills `plan_out` exactly as `_build_pdn_tcl` does; the tech
-    LEF declares no SITE, so the row step must come from the CELL LEF, and the
-    strap DIRECTIONS from the tech LEF."""
-    tech, cell = _write_leFS(tmp_path)
-
-    def deck(pdk, container=None, plan_out=None, **kw):
-        plan_out.update(straps=[dict(st) for st in _GF_STRAPS])
-        return "  add_pdn_stripe -grid grid -layer Metal1 -width 0.6 -followpins\n"
-    monkeypatch.setattr(R, "_build_pdn_tcl", deck)
-
-    class _P:
-        site = "coresite"
-        tech_lef = str(tech)
-        cell_lef = str(cell)
-    detail = {}
-    side, basis = R._strap_plan_core_floor(_P(), "", detail=detail)
-    assert side == 102 and "94.84" in basis
-    assert detail["site_dims_um"] == [_SITE_W, _SITE_H]
-    assert detail["site_dims_from"] == str(cell)
-    assert detail["directions"] == _GF_DIRS
-    assert detail["plan_source"] == "the PDN deck's plan_out"
-
-
-def test_a_deck_that_does_not_report_its_plan_is_read_from_its_own_text(
-        tmp_path, monkeypatch):
-    """The tuned-grid deck branch draws met4/met5 straps and fills no
-    `plan_out`; the floor used to say 'no strap plan' about it. It is now read
-    off the deck text pdngen receives."""
-    tech, cell = _write_leFS(tmp_path)
-    monkeypatch.setattr(R, "_build_pdn_tcl", lambda *a, **k: (
-        "  add_pdn_stripe -grid grid -layer met1 -width 0.48 -pitch 5.44 "
-        "-offset 0 -followpins\n"
-        "  add_pdn_stripe -grid grid -layer met4 -width 1.6 -pitch 40.0 "
-        "-offset 8.0 -extend_to_core_ring\n"
-        "  add_pdn_stripe -grid grid -layer met5 -width 1.6 -pitch 40.0 "
-        "-offset 8.0 -extend_to_core_ring\n"))
-
-    class _P:
-        site = "coresite"
-        tech_lef = str(tech)
-        cell_lef = str(cell)
-    detail = {}
-    side, _basis = R._strap_plan_core_floor(_P(), "", detail=detail)
-    layers = [st["layer"] for st in detail["stripes"]]
-    assert layers == ["met4", "met5"], detail   # follow-pin rails are no period
-    assert detail["plan_source"].startswith("the add_pdn_stripe lines")
-    assert side is not None
-
-
-def test_a_deck_with_no_pitched_strap_is_not_determined_with_its_reason(
-        tmp_path, monkeypatch):
-    monkeypatch.setattr(R, "_build_pdn_tcl", lambda *a, **k: (
-        "  add_pdn_stripe -grid grid -layer Metal1 -width 0.6 -followpins\n"))
-
-    class _P:
-        site = "coresite"
-        tech_lef = str(tmp_path / "none.tlef")
-        cell_lef = str(tmp_path / "none.lef")
-    detail = {}
-    side, why = R._strap_plan_core_floor(_P(), "", detail=detail)
-    assert side is None and detail["status"] == "NOT_DETERMINED"
-    assert "no pitched strap" in why

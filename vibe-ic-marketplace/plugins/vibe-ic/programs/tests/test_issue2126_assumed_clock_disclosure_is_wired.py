@@ -48,7 +48,6 @@ import json
 import sys
 from pathlib import Path
 
-import pytest
 
 _HERE = Path(__file__).resolve()
 _PROGRAMS = _HERE.parents[1]
@@ -157,16 +156,6 @@ def test_the_rollup_lists_the_new_gate_exactly_once():
     assert rollup["declared"] == len(set(R.DECLARED_SIGNOFF_STEP_NAMES)), rollup
 
 
-def test_the_enforcement_audit_calls_the_gate_enforced():
-    """The plugin's own register, in its own terms: ENFORCED means a runner
-    invokes it inline, so it can stop the step it guards. AUDIT_ONLY is what
-    this gate was."""
-    import flow_gate_enforcement_audit as AUDIT
-    rep = AUDIT.audit(_FLOW, _PROGRAMS)
-    rows = {r["gate"]: r for r in rep["gates"]}
-    row = rows.get(GATE_PROGRAM) or rows.get(GATE_PROGRAM.replace(".py", ""))
-    assert row is not None, sorted(rows)[:20]
-    assert row["enforcement"] == "ENFORCED", row
 
 
 # ===========================================================================

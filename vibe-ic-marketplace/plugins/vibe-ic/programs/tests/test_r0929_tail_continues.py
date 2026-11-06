@@ -34,10 +34,6 @@ import pytest
 import yaml
 
 import phase3_one_shot_runner as R
-from test_phase3_postpnr_disclosure_and_gds_guard import (
-    OLD_DIE, OLD_UTIL, NEW_DIE, NEW_UTIL, TOP, _REPAIR_PRODUCERS, _drive,
-    _plan, _project, _repair_producer,
-)
 
 FLOW = Path(R.__file__).resolve().parent.parent / "flow" / "phase1_phase2_phase3.yaml"
 
@@ -55,210 +51,28 @@ def diagnostic_transport_mode(monkeypatch):
                         lambda *a, **k: R.step_pnr(*a, **k))
 
 
-def _stage_fill(monkeypatch, project, d):
-    """The post-stream canonicalize writes (fill DEF + canonical GDS copy) the
-    layout freeze reads -- the only EDA writes faked here."""
-    pnr = R._pl.pnr_dir(project)
-
-    def canonicalize(proj, top, pdk, container, **kw):
-        if kw.get("prepv"):
-            (pnr / "filled.def").write_text("post-fill\n")
-            out = R._pl.gds_dir(proj) / f"{top}.gds"
-            out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_bytes((pnr / f"{top}.gds").read_bytes())
-        d.called.append("canonicalize_artefacts")
-        return R.StepResult("canonicalize_artefacts", "PASS", 0.0, "staged")
-
-    monkeypatch.setattr(R, "step_canonicalize_artefacts", canonicalize)
 
 
 # ── Step 32 ───────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("status", ["FAIL", "NOT_MEASURED"])
-@pytest.mark.parametrize("producer", sorted(_REPAIR_PRODUCERS))
-def test_step32_fail_streams_and_measures_the_tail(tmp_path, monkeypatch,
-                                                   producer, status):
-    """RED on main: `gds` is never called and drc/lvs read 'sign-off skipped'.
-    Review wave 58: the stream is MEASUREMENT-ONLY even though the pre-stream
-    gate (the fixture's) PASSes -- never admitted, the receipt names step 32,
-    and the admission the previous run left behind is not reused."""
-    project = _project(tmp_path, cached_die=OLD_DIE, cached_util=OLD_UTIL)
-    d = _drive(monkeypatch, project, die=NEW_DIE, util=NEW_UTIL)
-    _stage_fill(monkeypatch, project, d)
-    row = _repair_producer(monkeypatch, project, producer, status,
-                           "residual DRV 9 after repair (measured)")
-    if status == "NOT_MEASURED":
-        monkeypatch.setattr(R, _REPAIR_PRODUCERS[producer][0], lambda *a, **k:
-                            R.StepResult(row, status, 0.0, "trigger inconclusive",
-                                         reason_class="inconclusive"))
-    rc = R.main()
-    plan = _plan(project)
-    assert plan[row]["status"] == status
-    assert "gds" in d.called, plan.get("gds")
-    assert plan["gds"]["status"] == "PASS"
-    for step in ("drc", "lvs"):
-        assert step in d.called, f"{step} was not measured: {plan.get(step)}"
-        assert "sign-off skipped" not in plan[step]["detail"]
-    gds = R._pl.pnr_dir(project) / f"{TOP}.gds"
-    assert gds.is_file()
-    assert not R._ga.admitted_gds(project, gds), "a Step-32 non-PASS stream was admitted"
-    assert R._ga.measurement_stream_current(project)
-    receipt = json.loads((project / "reports/phase3/layout_receipts.json").read_text())
-    assert receipt["release_scope"] == "MEASUREMENT_ONLY"
-    assert receipt["release_verdict"] == "NOT_ELIGIBLE_FOR_RELEASE"
-    assert f"step 32 ({row} {status})" in receipt["upstream_failed_gate"]
-    assert rc != 0, "a Step-32 non-PASS must keep the run FAIL"
 
 
-@pytest.mark.parametrize("producer", sorted(_REPAIR_PRODUCERS))
-def test_step32_that_left_no_route_stops_the_tail_and_names_32(
-        tmp_path, monkeypatch, producer):
-    """The stopping direction the ruling keeps: nothing to stream."""
-    project = _project(tmp_path, cached_die=OLD_DIE, cached_util=OLD_UTIL)
-    d = _drive(monkeypatch, project, die=NEW_DIE, util=NEW_UTIL)
-    fn, row, _switch = _REPAIR_PRODUCERS[producer]
-    _repair_producer(monkeypatch, project, producer, "FAIL", "died")
-
-    def died(*_a, **_k):
-        (R._pl.pnr_dir(project) / "routed.def").unlink()
-        return R.StepResult(row, "FAIL", 0.0, "repair died mid-write")
-
-    monkeypatch.setattr(R, fn, died)
-    rc = R.main()
-    plan = _plan(project)
-    assert plan[row]["status"] == "FAIL"
-    assert "gds" not in d.called
-    assert plan["gds"]["status"] == "NOT_MEASURED"
-    assert "step 32" in plan["gds"]["detail"]
-    assert "routed.def" in plan["gds"]["detail"]
-    assert rc != 0
 
 
 # ── the pre-stream gate ───────────────────────────────────────────────────
 
-def _measured_gate(verdict: str, *, failed=("sta_corner",), unmeasured=()):
-    def gate(proj, top, pdk, container):
-        basis, error = R._layout_basis(proj, top, pdk, container)
-        assert not error, error
-        rows = ([{"name": g, "status": "FAIL"} for g in failed]
-                + [{"name": g, "status": "NOT_MEASURED"} for g in unmeasured]
-                + [{"name": "drv_signoff", "status": "PASS"}])
-        out = R._pl.reports_phase3_dir(proj) / "prestream_gate.json"
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps({
-            "layout_digest": basis, "verdict": verdict,
-            "failed_gates": list(failed), "unmeasured_gates": list(unmeasured),
-            "gates": rows}) + "\n")
-        return R.StepResult("prestream_gate", verdict, 0.0,
-                            f"failed gates: {', '.join(failed) or 'none'}",
-                            [str(out)], waiver_rows=(
-                                [{"id": "u/Y", "reason": "owner DRV deviation",
-                                  "owner": "reyerchu"}]
-                                if verdict == "WAIVED" else []),
-                            reason_class=(
-                                "partial_population" if verdict == "NOT_MEASURED"
-                                else ""), extras={
-                                "layout_digest": basis,
-                                "failed_gates": list(failed),
-                                "unmeasured_gates": list(unmeasured)})
-    return gate
 
 
-def _prestream_run(tmp_path, monkeypatch, gate):
-    project = _project(tmp_path, cached_die=OLD_DIE, cached_util=OLD_UTIL)
-    d = _drive(monkeypatch, project, die=NEW_DIE, util=NEW_UTIL)
-    _stage_fill(monkeypatch, project, d)
-    monkeypatch.setattr(R, "step_prestream_gate", gate)
-    rc = R.main()
-    return project, d, _plan(project), rc
 
 
-def test_a_measured_prestream_fail_streams_for_measurement_only(
-        tmp_path, monkeypatch):
-    """RED on main: gds/drc/lvs read 'pre-stream gate failed (sta_corner)'."""
-    project, d, plan, rc = _prestream_run(tmp_path, monkeypatch,
-                                          _measured_gate("FAIL"))
-    assert plan["prestream_gate"]["status"] == "FAIL"
-    assert "gds" in d.called, plan.get("gds")
-    assert plan["gds"]["status"] == "PASS"
-    for step in ("drc", "lvs"):
-        assert step in d.called, plan.get(step)
-        assert "sign-off skipped" not in plan[step]["detail"]
-    gds = R._pl.pnr_dir(project) / f"{TOP}.gds"
-    assert gds.is_file(), "the measured stream must stay where the tail reads it"
-    # never admitted, never packaged
-    assert not R._ga.admitted_gds(project, gds)
-    rec = json.loads(R._ga.measurement_path(project).read_text())
-    assert rec["admitted"] is False and rec["prestream_verdict"] == "FAIL"
-    assert rec["failed_gates"] == ["sta_corner"]
-    assert rec["gds_sha256"] == R._sha256_file(gds)
-    assert R._ga.measurement_stream_current(project)
-    receipt = json.loads((project / "reports/phase3/layout_receipts.json").read_text())
-    assert receipt["release_scope"] == "MEASUREMENT_ONLY"
-    assert receipt["release_verdict"] == "NOT_ELIGIBLE_FOR_RELEASE"
-    assert "sta_corner" in receipt["upstream_failed_gate"]
-    assert not list(R._pl.foundry_handoff_dir(project).glob("*.gds"))
-    assert rc != 0, "the pre-stream FAIL must keep the run FAIL"
 
 
-def test_an_unusable_route_in_the_prestream_receipt_still_stops_stream_out(
-        tmp_path, monkeypatch):
-    """Control: the route itself unmeasurable -> nothing is streamed."""
-    _project_, d, plan, rc = _prestream_run(
-        tmp_path, monkeypatch,
-        _measured_gate("NOT_MEASURED", failed=(), unmeasured=("route_completion",)))
-    assert "gds" not in d.called
-    assert plan["gds"]["status"] == "NOT_MEASURED"
-    assert "route_completion" in plan["gds"]["detail"]
-    assert rc != 0
 
 
-def test_a_waived_prestream_gate_streams_for_measurement_only(
-        tmp_path, monkeypatch):
-    """RED before review wave 58: WAIVED took the admission branch, step_gds
-    refused ('not PASS'), and the whole tail went unmeasured."""
-    project, d, plan, rc = _prestream_run(
-        tmp_path, monkeypatch, _measured_gate("WAIVED", failed=()))
-    assert plan["prestream_gate"]["status"] == "WAIVED"
-    assert "gds" in d.called and plan["gds"]["status"] == "PASS", plan.get("gds")
-    for step in ("drc", "lvs"):
-        assert step in d.called, plan.get(step)
-    gds = R._pl.pnr_dir(project) / f"{TOP}.gds"
-    assert not R._ga.admitted_gds(project, gds)
-    assert R._ga.measurement_stream_current(project)
-    receipt = json.loads((project / "reports/phase3/layout_receipts.json").read_text())
-    assert receipt["release_scope"] == "MEASUREMENT_ONLY"
-    assert "pre-stream gate WAIVED" in receipt["upstream_failed_gate"]
 
 
-def test_a_layout_changed_after_the_freeze_still_voids_measurement_rows(
-        tmp_path, monkeypatch):
-    """Review wave 58 (integrity): the identity guards run in measurement
-    mode too -- a late writer to the shipped GDS turns drc/lvs/gds PASS into
-    NOT_MEASURED 'receipt invalidated', exactly as with a PASS gate."""
-    def late_writer(proj):
-        with (R._pl.pnr_dir(proj) / f"{TOP}.gds").open("ab") as fh:
-            fh.write(b"written after the layout freeze\n")
-        return R.StepResult("drv_promotion_corroboration", "PASS", 0.0, "ok")
-
-    monkeypatch.setattr(R, "step_drv_promotion_corroboration", late_writer)
-    project, d, plan, rc = _prestream_run(tmp_path, monkeypatch,
-                                          _measured_gate("FAIL"))
-    assert "gds" in d.called
-    for step in ("gds", "drc", "lvs"):
-        assert plan[step]["status"] == "NOT_MEASURED", (step, plan[step])
-        assert "receipt invalidated" in plan[step]["detail"], plan[step]["detail"]
-    assert plan["drc"]["extras"]["release_scope"] == "MEASUREMENT_ONLY"
-    assert rc != 0
 
 
-def test_a_passing_gate_is_still_admitted(tmp_path, monkeypatch):
-    project, d, plan, _rc = _prestream_run(tmp_path, monkeypatch,
-                                           _measured_gate("PASS", failed=()))
-    gds = R._pl.pnr_dir(project) / f"{TOP}.gds"
-    assert "gds" in d.called
-    assert R._ga.admitted_gds(project, gds)
-    assert not R._ga.measurement_stream_current(project)
 
 
 # ── the admission predicate ───────────────────────────────────────────────

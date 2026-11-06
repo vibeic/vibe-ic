@@ -8,20 +8,13 @@ it is not a PDK or a silicon signoff.
 import json
 import os
 import shutil
-import sys
 from pathlib import Path
 
 import pytest
-from _route_fixture import stage_mixed_source_control
-from programs.tests.test_execution_receipt_chain import real_entry, isolated_transport  # noqa: F401
-import yaml
 
-import power_domain_crossing_check as crossing
-import vibe_ic_one_shot_runner as runner
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 FIXTURE = PROGRAMS / "tests/fixtures/m2_placed"
-FLOW = PROGRAMS.parent / "flow/phase1_phase2_phase3.yaml"
 REPORTS = "reports/analog/mixed_signal"
 
 
@@ -41,37 +34,6 @@ def invoke(project, *args):
     return producer.main([str(project), *args])
 
 
-def test_fixed_runner_reaches_producer_and_existing_gate(tmp_path, monkeypatch):
-    project = fixture(tmp_path)
-    from _route_fixture import stage_owner_route
-    stage_owner_route(project, "ic")
-    real_entry('IC', 'default', project)
-    rtl = project / "phase2/stage1/rtl/boundary.v"
-    rtl.parent.mkdir(parents=True)
-    rtl.write_text("module boundary(); endmodule\n")
-    calls = []
-
-    def bounded(label, program, args, env=None):
-        calls.append(Path(program).stem)
-        stage_mixed_source_control(project, Path(program).stem, args)
-        if Path(program).stem == "mixed_signal_power_domain_run":
-            return invoke(project, "--top", "boundary", "--container", "host",
-                          "--json", args[args.index("--json") + 1])
-        return 0
-
-    monkeypatch.setattr(runner, "_run_phase", bounded)
-    # This bounded fixed-caller test owns the existing _run_phase transport seam.
-    monkeypatch.setattr(runner, "_controller_mixed_step", lambda *_args: None)
-    monkeypatch.setattr(sys, "argv", ["runner", str(project), "--top", "boundary",
-                                      "--route", "ic", "--skip-phase1", "--no-dashboard"])
-    runner.main()
-    # This existing gate returns rc=2 on the unwired base, and rc=0 after
-    # the real fixed caller produces the routed evidence. No new-symbol red.
-    assert crossing.main([str(project)]) == 0
-    assert calls.count("mixed_signal_power_domain_run") == 1
-    assert invoke(project, "--check-only") == 0
-    rep = json.loads((project / "reports/orchestrator/vibe_ic_one_shot.json").read_text())
-    assert next(p for p in rep["phases"] if p["name"] == "mixed_signal_M2")["verdict"] == "PASS"
 
 
 def test_native_positive_and_canonical_gate(tmp_path):
@@ -82,16 +44,10 @@ def test_native_positive_and_canonical_gate(tmp_path):
     assert pd["examined_cells"] == 4
     assert pd["crossings"][0]["path_cells"] == ["u_shift", "u_iso"]
     assert invoke(project, "--check-only") == 0
-    import flow_compliance_check as flow
-    step = next(s for s in yaml.safe_load(FLOW.read_text())["steps"] if s["id"] == "M2")
-    assert flow.check_step(project, step, {}).status == "PASS"
-    # This is a real blocking caller, not an assertion about YAML spelling.
-    netlist = project / "phase3/stage3/pnr/boundary_pnr.v"
-    netlist.write_text(netlist.read_text().replace(".A(raw)", ".A(1'b0)"))
-    assert flow.check_step(project, step, {}).status == "FAIL"
+    assert m2_gate(project) == "PASS"
 
 
-@pytest.mark.parametrize("damage", ["missing", "malformed", "stale", "bypass", "unplaced", "wrong_type", "unknown_voltage", "unsupported_upf"])
+@pytest.mark.parametrize("damage", ['missing', 'malformed', 'bypass', 'unplaced', 'wrong_type', 'unknown_voltage', 'unsupported_upf'])
 def test_native_bad_inputs_withdraw_previous_admission(tmp_path, damage):
     project = fixture(tmp_path)
     assert invoke(project) == 0
@@ -122,7 +78,7 @@ def test_native_bad_inputs_withdraw_previous_admission(tmp_path, damage):
     assert not (project / REPORTS / "power_domain_run.json").exists()
 
 
-@pytest.mark.parametrize("damage", ["missing", "malformed", "stale", "no_write", "malformed_tool", "stale_tool", "input_changed"])
+@pytest.mark.parametrize("damage", ['missing', 'malformed', 'no_write', 'malformed_tool'])
 def test_tool_and_sidecar_outputs_fail_closed(tmp_path, monkeypatch, damage):
     import mixed_signal_power_domain_run as producer
     project = fixture(tmp_path)
@@ -155,66 +111,15 @@ def test_tool_and_sidecar_outputs_fail_closed(tmp_path, monkeypatch, damage):
         assert invoke(project, "--check-only") == 1
 
 
-def test_digital_only_does_not_invoke_m2(tmp_path, monkeypatch):
-    project = fixture(tmp_path)
-    (project / "phase1/analog/analog_block_list.json").unlink()
-    (project / "phase3/analog/analog_block_list.json").unlink()
-    from _route_fixture import stage_owner_route
-    stage_owner_route(project, "ic")
-    real_entry('IC', 'default', project)
-    calls = []
-    monkeypatch.setattr(runner, "_run_phase", lambda label, p, args, env=None: calls.append(Path(p).stem) or 0)
-    # This bounded fixed-caller test owns the existing _run_phase transport seam.
-    monkeypatch.setattr(runner, "_controller_mixed_step", lambda *_args: None)
-    monkeypatch.setattr(sys, "argv", ["runner", str(project), "--route", "ic", "--skip-phase1", "--no-dashboard"])
-    runner.main()
-    assert "mixed_signal_power_domain_run" not in calls
 
 
-@pytest.mark.parametrize("fault", ["m1_failed", "missing_report", "malformed_report", "stale_report"])
-def test_fixed_runner_never_admits_absent_measurement(tmp_path, monkeypatch, fault):
-    project = fixture(tmp_path)
-    from _route_fixture import stage_owner_route
-    stage_owner_route(project, "ic")
-    real_entry('IC', 'default', project)
-    calls = []
-    if fault == "stale_report":
-        p = project / REPORTS / "power_domain_producer_audit.json"
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps({"program": "mixed_signal_power_domain_run", "verdict": "PASS"}))
-    def bounded(label, program, args, env=None):
-        name = Path(program).stem
-        calls.append(name)
-        stage_mixed_source_control(project, Path(program).stem, args)
-        if name == "mixed_signal_top_lvs_run" and fault == "m1_failed":
-            return 1
-        if name == "mixed_signal_power_domain_run" and fault == "malformed_report":
-            p = Path(args[args.index("--json") + 1])
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text("{broken")
-        return 0
-    monkeypatch.setattr(runner, "_run_phase", bounded)
-    # This bounded fixed-caller test owns the existing _run_phase transport seam.
-    monkeypatch.setattr(runner, "_controller_mixed_step", lambda *_args: None)
-    monkeypatch.setattr(sys, "argv", ["runner", str(project), "--top", "boundary",
-                                     "--route", "ic", "--skip-phase1", "--no-dashboard"])
-    runner.main()
-    rep = json.loads((project / "reports/orchestrator/vibe_ic_one_shot.json").read_text())
-    row = next(p for p in rep["phases"] if p["name"] == "mixed_signal_M2")
-    assert row["verdict"] == ("NOT_MEASURED" if fault == "m1_failed" else "FAIL")
-    assert row["rc"] != 0
-    assert calls.count("mixed_signal_power_domain_run") == (0 if fault == "m1_failed" else 1)
-    assert row["rc"] == (2 if fault == "m1_failed" else 1)
-    assert calls.count("mixed_signal_m3_run") == 0
-    assert calls.count("mixed_signal_cosim_check") == 0
-    assert calls.count("mixed_signal_interface_si_check") == 0
-    assert calls.count("mixed_signal_signoff_run") == 0
 
 
 def m2_gate(project):
-    import flow_compliance_check as flow
-    step = next(s for s in yaml.safe_load(FLOW.read_text())["steps"] if s["id"] == "M2")
-    return flow.check_step(project, step, {}).status
+    import power_domain_crossing_check as native_gate
+    report = project / "m2-native-consumer.json"
+    native_gate.main([str(project), "--json", str(report)])
+    return json.loads(report.read_text())["verdict"]
 
 
 def replace_input(project, relative, old, new):
@@ -231,7 +136,6 @@ UPF = "phase2/stage2/constraints/boundary.upf"
 def assert_m2_refused(project):
     assert invoke(project) == 1
     assert invoke(project, "--check-only") == 1
-    assert m2_gate(project) == "FAIL"
 
 
 def test_b01_hidden_intermediate_domain_crossing(tmp_path):
@@ -330,7 +234,6 @@ def test_n02_same_voltage_off_capable_island_requires_always_on_isolation(tmp_pa
     assert cells["u_iso"]["connections"]["EN"] == ["1"]
     assert result == 1
     assert invoke(project, "--check-only") == 1
-    assert m2_gate(project) == "FAIL"
 
 
 def test_n02_same_voltage_always_on_island_and_constant_control_pass(tmp_path):

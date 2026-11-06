@@ -267,7 +267,7 @@ def test_review_followup_submodule_qualifier_reaches_actual_consumer(
         if role == 'conditional':
             assert entry['requirement_evidence'][0]['evidence'] == declaration
 
-from programs.phase1_one_shot_runner import _ic_name_from_docs
+from programs.phase1_doc_one_shot_runner import _ic_name_from_docs
 
 
 def test_memory_profile_public_prose_explicit_array(tmp_path):
@@ -483,7 +483,7 @@ def test_phase1_picker_no_fpga_board_in_results() -> None:
     """Aggregate guard: NO fixture should return an FPGA / silicon
     part-number SKU. Catches regressions of the v1.6.58 VCU1525 and
     v1.6.60 XCVU095 cases."""
-    from programs.phase1_one_shot_runner import _is_fpga_board_name
+    from programs.phase1_doc_one_shot_runner import _is_fpga_board_name
     bad: dict[str, str] = {}
     for p in _EXPECTED:
         actual = _ic_name_from_docs(_load_fixture(p))

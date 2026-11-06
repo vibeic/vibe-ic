@@ -16,8 +16,6 @@ by invoking the real `skill_doc_section_present_check.py` marker-presence gate.
 
 chip-AGNOSTIC: markdown marker presence; no chip / vendor / SKU literal.
 """
-import subprocess
-import sys
 from pathlib import Path
 
 PROGRAMS = Path(__file__).resolve().parent.parent
@@ -35,24 +33,10 @@ _DIRECT_PUSH_MARKERS = [
 ]
 
 
-def _run_marker_check(markers):
-    cmd = [sys.executable, str(_CHECK), "--doc", str(SKILL)]
-    for m in markers:
-        cmd += ["--marker", m]
-    return subprocess.run(cmd, capture_output=True, text=True)
 
 
-def test_skill_documents_direct_push_section():
-    # END-STATE via the real program: every direct-push marker present → rc 0.
-    r = _run_marker_check(_DIRECT_PUSH_MARKERS)
-    assert r.returncode == 0, (r.stdout + r.stderr)
 
 
-def test_marker_check_is_a_real_gate_negative():
-    # sanity: a marker that is NOT in the doc makes the gate FAIL (rc 1), so the
-    # green result above is meaningful, not vacuous.
-    r = _run_marker_check(["this-marker-is-not-in-the-skill-doc-xyz"])
-    assert r.returncode == 1, r.stdout
 
 
 def test_pr_method_is_no_longer_the_ship_instruction():

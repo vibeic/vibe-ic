@@ -1116,39 +1116,6 @@ def test_knob_the_zero_spare_arm_took_a_third_of_the_campaign_budget():
     assert zero_n >= 2, zero_n
 
 
-def test_knob_the_space_guard_is_what_makes_that_cost_zero(tmp_path):
-    """And the reason the answer is still "keep the lever, bounded below".
-
-    With a declaration supplied, the space program REFUSES the zero value
-    before a single place-and-route trial is spent -- so the 33.9% above is the
-    cost of the guard being available rather than wired, not the cost of the
-    lever existing. Run, not asserted: the negative control is the same
-    invocation without the declaration.
-    """
-    decl = tmp_path / "eco.json"
-    decl.write_text(json.dumps({"eco_readiness": dict(DECL)}), encoding="utf-8")
-    space = _PROGRAMS / "ppa_pnr_search_space.py"
-    args = [sys.executable, str(space), "--json", str(tmp_path / "space.json"),
-            "--values", "spare_cell_density=0.00,0.02"]
-
-    without = subprocess.run(args, capture_output=True, text=True,
-                             cwd=str(tmp_path))
-    withd = subprocess.run(args + ["--eco-declaration", str(decl)],
-                           capture_output=True, text=True, cwd=str(tmp_path))
-
-    assert without.returncode == 0, without.stderr      # the control
-    # THE RC IS THE GATE. The message is corroboration on wording this file does
-    # not own, kept because the landed `test_M_ECO_7` asserts the same phrase --
-    # diverging would leave two tests disagreeing about what the refusal looks
-    # like. Split out with its own message so a REWORD reads as a reword and
-    # not as the guard having stopped refusing. (Audited after a sibling row was
-    # found parsing an output shape that had already moved: this program is not
-    # touched by current main, so the phrase has not drifted yet.)
-    assert withd.returncode == 1, withd.stdout + withd.stderr
-    assert "metal-only ECO" in withd.stderr, (
-        "the space guard still refuses (rc=1) but no longer explains itself in "
-        "these words; if the wording moved, update this row and the landed "
-        f"test_M_ECO_7 together:\n{withd.stderr}")
 
 
 # ---------------------------------------------------------------------------

@@ -43,7 +43,6 @@ PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 
 import _signoff_drc_format as _sdf  # noqa: E402  the shared home
-import phase3_one_shot_runner as P  # noqa: E402  the contrasting reader
 import signoff_audit as SA          # noqa: E402  the gate under test
 
 
@@ -188,15 +187,3 @@ def test_shared_helper_completing_fallback():
 # --------------------------------------------------------------------------- #
 # 4. Invariant 4 — the two readers agree BY CONSTRUCTION, on every fixture.     #
 # --------------------------------------------------------------------------- #
-def test_two_readers_agree_by_construction(tmp_path):
-    for name, body in (("a", FIXTURE_A), ("b", FIXTURE_B),
-                       ("c", FIXTURE_C), ("d", FIXTURE_D)):
-        gate = GATE_READER(_write(tmp_path, f"{name}.rpt", body))
-        drt = P._drt_final_violations(body)
-        assert gate == drt, f"readers disagree on fixture {name}: {gate!r} != {drt!r}"
-
-
-def test_phase3_reader_unchanged_on_two_pass_report():
-    # The contrasting reader was already correct; the fix must keep it so.
-    assert P._drt_final_violations(FIXTURE_B) == 7
-    assert P._drt_final_violations(FIXTURE_D) is None

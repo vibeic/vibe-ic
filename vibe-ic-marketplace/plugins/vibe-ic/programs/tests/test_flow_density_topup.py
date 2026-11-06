@@ -140,23 +140,17 @@ def test_configured_klayout_zero_does_not_invoke_magic(driver):
     ("magic", 0, "PASS"), ("magic", 2, "FAIL"),
     ("klayout", 0, "PASS"), ("klayout", 2, "FAIL"), (None, None, "NOT_MEASURED")])
 def test_density_recipe_measures_actual_backend_and_dfm_observes_it(tmp_path, backend, count, status):
-    from flow_steps_generate import classify_checks, generate
-
-    root = engine.TABLE.parent.parent
-    native = json.loads((root / "flow/native_limits.json").read_text())
-    generated, _, _ = generate(json.loads((root / "flow/flow109.json").read_text()), native)
-    classify_checks(generated, native)
     features = {"ic": True, "physical": True, "analog_physical": False,
                 "digital_physical": True, "assembly_only": False, "requires_advanced_dfm": False}
     metrics = {f"{backend}__density_error__count": count} if backend else {}
-    for table in (generated, engine.read_json(engine.TABLE)):
-        row = next(item for item in table["steps"] if item["name"] == "metal_density_fill")
-        selected = engine.choose_tool(row["tool"], features)
-        assert "Checker.KLayoutDensity" not in selected["steps"]
-        measured = engine.measure(row["checks"], metrics, {}, features)
-        assert len(measured) == 1 and measured[0]["status"] == status
-        assert measured[0]["limit"] == 0
-        dfm = next(item for item in table["steps"] if item["name"] == "design_for_manufacturability")
-        observations, _ = engine.report_observations(
-            dfm, tmp_path, SimpleNamespace(metrics=metrics.copy()), {}, features, None)
-        assert observations[0]["values"] == metrics
+    table = engine.read_json(engine.TABLE)
+    row = next(item for item in table["steps"] if item["name"] == "metal_density_fill")
+    selected = engine.choose_tool(row["tool"], features)
+    assert "Checker.KLayoutDensity" not in selected["steps"]
+    measured = engine.measure(row["checks"], metrics, {}, features)
+    assert len(measured) == 1 and measured[0]["status"] == status
+    assert measured[0]["limit"] == 0
+    dfm = next(item for item in table["steps"] if item["name"] == "design_for_manufacturability")
+    observations, _ = engine.report_observations(
+        dfm, tmp_path, SimpleNamespace(metrics=metrics.copy()), {}, features, None)
+    assert observations[0]["values"] == metrics

@@ -37,7 +37,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
 import formal_property_run as _F  # noqa: E402
-from not_verified_tier import not_verified_reason, skip_not_verified  # noqa: E402
+from _tool_probes import not_verified_reason, skip_not_verified  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parent.parent
 _FORMAL = _PROGRAMS / "formal_property_run.py"

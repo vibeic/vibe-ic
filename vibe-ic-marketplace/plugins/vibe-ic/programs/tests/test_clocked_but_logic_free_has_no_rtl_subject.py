@@ -226,19 +226,8 @@ def test_step_rtl_gen_still_declares_it_when_there_is_a_subject(tmp_path):
 
 # ── D. the halting step, and every consumer of the one resolver ────────────
 
-def test_step4_functional_evidence_skips_instead_of_failing(tmp_path):
-    p = _mk_project(tmp_path, _CLOCKED_LOGIC_FREE)
-    res = DOR.step_step4_functional_evidence(p, "data_converter")
-    assert res.status == "NOT_APPLICABLE", res.detail
 
 
-def test_step4_still_runs_when_there_is_a_subject(tmp_path):
-    p = _mk_project(tmp_path, _CLOCKED_LOGIC_FREE,
-                    docs=_with_field("L4_REGMAP", "registers",
-                                     [{"name": "CTRL", "offset": 0}]))
-    res = DOR.step_step4_functional_evidence(p, "data_converter")
-    assert res.status != "SKIP", (
-        "a converter with declared digital content must still be measured")
 
 
 def test_flow_compliance_backend_na_moves_with_the_resolver(tmp_path, monkeypatch):

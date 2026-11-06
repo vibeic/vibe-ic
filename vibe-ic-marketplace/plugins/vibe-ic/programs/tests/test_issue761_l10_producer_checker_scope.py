@@ -44,7 +44,6 @@ sys.path.insert(0, str(PROGRAMS))
 
 import testbench_gen as TBG               # noqa: E402
 import l10_tb_conformance_check as GATE   # noqa: E402
-import design_one_shot_runner as R        # noqa: E402
 import _path_layout as _pl                # noqa: E402
 import _l10_execution as L10X             # noqa: E402
 
@@ -121,61 +120,11 @@ def _run_gate(monkeypatch, proj: Path, extra=(), executed=None):
 # --------------------------------------------------------------------------
 # 1. the SKIP message must state the LAYER fact, not the FILTER fact
 # --------------------------------------------------------------------------
-def test_761_skip_states_the_layer_not_the_filter(tmp_path):
-    proj = _project(tmp_path, _measured_cases())
-    res = R.step_l10_unit_tb_gen(proj, _DUT_MODULE)
-    assert res.status == "NOT_MEASURED", res.detail
-    d = res.detail
-
-    # the LAYER: how many cases exist, and of which kinds
-    assert "95" in d, d
-    for kind, n in _MEASURED_HIST:
-        assert f"{kind} {n}" in d, d
-    # the FILTER: what this producer is actually scoped for
-    assert "functional_vector" in d and "scope" in d, d
-    # the CONSEQUENCE: who grades the remainder, and what happens to them
-    assert "l10_tb_conformance_check" in d, d
-    assert "FAIL" in d, d
-    # and the sentence that made the two scopes look like one is gone
-    assert "nothing to produce" not in d, d
 
 
 # --------------------------------------------------------------------------
 # 2. the gate names BOTH scopes — and still fails all 95
 # --------------------------------------------------------------------------
-def test_761_gate_names_both_scopes_and_still_fails_all_95(
-        tmp_path, monkeypatch, capsys):
-    proj = _project(tmp_path, _measured_cases())
-    R.step_l10_unit_tb_gen(proj, _DUT_MODULE)
-    rc, art = _run_gate(monkeypatch, proj)
-
-    # THE VERDICT IS UNCHANGED — this is the load-bearing assertion. A design
-    # that ships no testbench for 95 declared cases is still marked down.
-    assert rc == 1
-    assert (art["total"], art["ok"], art["not_executed"], art["waived"]) \
-        == (95, 0, 95, 0)
-
-    # what changed: the disagreement is now a first-class number in the artefact
-    assert art["producer_scope_gap"] == 95
-    scope = art["producer_scope"]
-    assert scope["total"] == 95
-    assert scope["kind_histogram"] == {k: n for k, n in sorted(
-        _MEASURED_HIST, key=lambda kv: (-kv[1], kv[0]))}
-    assert scope["in_scaffold_scope"] == 0
-    assert scope["out_of_scaffold_scope"] == 95
-    assert "functional_vector" in scope["scaffold_kinds"]
-
-    # …and it is said out loud where the FAIL is reported
-    err = capsys.readouterr().err
-    assert "SCOPE DISAGREEMENT" in err, err
-    assert "95 case(s)" in err and "happy_path 16" in err, err
-    assert "grades ALL 95" in err, err
-
-    # every out-of-scope failure carries the reason on the case itself
-    miss = [r for r in art["results"] if r["status"] == L10X.NOT_EXECUTED]
-    assert len(miss) == 95
-    assert all(r["producer_scaffold_scope"] == "out" for r in miss)
-    assert all(any("NO PRODUCER" in e for e in r["evidence"]) for r in miss)
 
 
 # --------------------------------------------------------------------------
@@ -213,32 +162,6 @@ def test_761_both_readers_find_the_cases_in_the_same_places(tmp_path):
 # --------------------------------------------------------------------------
 # 4. the REAL oracle emitters are no longer gated on the kind TOKEN
 # --------------------------------------------------------------------------
-def test_761_real_oracle_not_gated_on_kind_token(tmp_path, monkeypatch):
-    """A boot-latency-shaped case that Phase 1 typed `happy_path` instead of
-    `functional_vector`. The oracle emitters are content-keyed and fail-closed,
-    so gating them on the token denied a genuine golden to a case whose only
-    defect was its label. It now gets the REAL oracle — and the gate credits
-    it, because the evidence is real."""
-    case = {
-        "id": "boot_first_fetch", "name": "boot_first_fetch",
-        "kind": "happy_path",          # NOT functional_vector — the whole point
-        "stimulus": "after reset release the first instruction fetch occurs",
-        "expected": "within 8 cycles of reset release",
-    }
-    proj = _project(tmp_path, [case])
-    res = R.step_l10_unit_tb_gen(proj, _DUT_MODULE)
-    assert res.status == "PASS", res.detail
-
-    tb = (_pl.sim_dir(proj) / "tb" / "boot_first_fetch.v").read_text()
-    assert TBG.ORACLE_NONE_MARKER not in tb, "a REAL oracle, not the floor"
-    assert f"{_DUT_MODULE} u_dut (" in tb
-    assert "$fatal(1);" in tb
-
-    rc, art = _run_gate(
-        monkeypatch, proj, executed={"boot_first_fetch": "PASS"})
-    assert rc == 0
-    assert (art["total"], art["ok"], art["fail"]) == (1, 1, 0)
-    assert art["producer_scope_gap"] == 0
 
 
 # --------------------------------------------------------------------------

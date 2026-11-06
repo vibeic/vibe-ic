@@ -53,7 +53,6 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import floorplan_contract as FC  # noqa: E402
-import phase3_one_shot_runner as P3  # noqa: E402
 
 
 # The real shape, reduced: a top-level cap plus two non-applicable scoped caps.
@@ -151,27 +150,3 @@ def test_oracle_tree_is_not_read(tmp_path):
 
 
 # ── the consumer: _l9_declared_max_fanout must now resolve it ────────────────
-
-def test_runner_resolver_picks_up_the_design_config(tmp_path):
-    proj = _stage(tmp_path, CFG)
-    (proj / "input" / "docs").mkdir(parents=True, exist_ok=True)
-    (proj / "input" / "docs" / "L9_constraints_floorplan.md").write_text(
-        "# L9\n\n- PDK: SKY130A. Standard-cell lib: sky130_fd_sc_hd.\n"
-        "- CLOCK_PERIOD = 25 ns.\n")
-    assert P3._l9_declared_max_fanout(proj, "sky130A") == 16
-
-
-def test_l9_explicit_number_still_wins(tmp_path):
-    """Pure addition: an L9 that states the cap keeps deciding it."""
-    proj = _stage(tmp_path, CFG)
-    (proj / "input" / "docs").mkdir(parents=True, exist_ok=True)
-    (proj / "input" / "docs" / "L9_constraints_floorplan.md").write_text(
-        "| key | value |\n|---|---|\n| `SYNTH_MAX_FANOUT` | **9** |\n")
-    assert P3._l9_declared_max_fanout(proj, "sky130A") == 9
-
-
-def test_runner_resolver_returns_none_without_any_declaration(tmp_path):
-    (tmp_path / "input" / "docs").mkdir(parents=True)
-    (tmp_path / "input" / "docs" / "L9_constraints_floorplan.md").write_text(
-        "# L9\n\nnothing about fanout here\n")
-    assert P3._l9_declared_max_fanout(tmp_path, "sky130A") is None

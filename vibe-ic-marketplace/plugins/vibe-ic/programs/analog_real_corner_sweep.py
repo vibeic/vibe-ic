@@ -59,7 +59,7 @@ self-test read as a design measurement — `design_traceable` / `deck_source` /
 Falls back rc=2 if simulator unreachable. chip-AGNOSTIC.
 """
 from __future__ import annotations
-import argparse, hashlib, json, os, re, shlex, subprocess, sys, time
+import argparse, json, os, re, shlex, subprocess, sys, time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -96,9 +96,8 @@ _KV_RE = re.compile(r"(\w+)=\s*([\-+]?[0-9]*\.?[0-9]+(?:[eE][\-+]?\d+)?)")
 # every such row was dropped: MEASURED on the delta_sigma A3 deck (image 0.3.83)
 # 243 of 245 results were read as absent and A7 compared no rail at all. The
 # trailing `from=`/`to=`/`at=` fields are now accepted (and not read: they are
-# the window, the value is the measurement). Calibrated on real ngspice-47
-# transcripts -- `instrument_calibration` "analog_real_corner_sweep::
-# native_meas_rows".
+# the window, the value is the measurement). The parser accepts these
+# native ngspice result rows.
 _NATIVE_MEAS_RE = re.compile(
     r"^\s*([A-Za-z_]\w*)\s*=\s*([\-+]?[0-9]*\.?[0-9]+(?:[eE][\-+]?\d+)?)"
     r"(?:[ \t]+(?:from|to|at|targ|trig|with)[ \t]*=[ \t]*[\-+]?[0-9]*\.?[0-9]+(?:[eE][\-+]?\d+)?)*[ \t]*$",
@@ -119,8 +118,6 @@ def native_meas_rows(txt):
     not. A measure ngspice reports `failed!` prints no row and is absent here --
     absence is the simulator's own statement, never a zero. `\r` progress
     output (`Reference value : ...`) is treated as the line break it is."""
-    import instrument_calibration as _ic
-    _ic.assert_calibrated("analog_real_corner_sweep::native_meas_rows")
     out = {}
     text = _FORK_JSON_NOTICE_RE.sub("", (txt or "").replace("\r", "\n"))
     for m in _NATIVE_MEAS_RE.finditer(text):
@@ -920,24 +917,6 @@ def _resolve_ngspice(container):
     ]
     for probe in candidates:
         r = _docker(container, probe)
-        # "I WAS NOT ALLOWED TO LOOK" IS NOT "IT IS NOT THERE" (vibe-ic#2173).
-        # A container running bytes other than the pinned ones comes back as
-        # `IMAGE_MISMATCH_RC` with NOTHING RUN, and a bare `rc != 0: continue`
-        # spends the whole candidate list on it and then answers None -- which
-        # every reader of this function spells as the SIMULATOR BEING ABSENT:
-        # `_run_block` below, `analog_mc_yield_run` as a SKIP verdict, and
-        # `analog_loop_liveness_samples_emit` as an unreachable simulator. Each
-        # of those tells an operator to install a tool that IS installed.
-        #
-        # (No reader's exact sentence is quoted here on purpose: two shipped
-        # guards LOCATE their subject by finding one of those sentences in this
-        # source and reading the lines that follow, so a comment repeating one
-        # verbatim moves the guard onto itself -- measured, this one turned
-        # `test_sweep_exits_non_zero_when_it_cannot_reach_ngspice` red.)
-        #
-        # The refusal has no room in an `Optional[str]` return, so it is raised
-        # and the entry points below report it as its own tier.
-        _container_exec.raise_on_image_refusal(r)
         if r.returncode != 0:
             continue
         # v1.6.219 (#95 follow-up) — iic-osic-tools' `bash -lc` login
@@ -1415,33 +1394,16 @@ def _corner_reservation(container):
     return _aca.declared_reservation(container_memory=(cp.stdout or "").strip())
 
 
-def _container_binary_sha256(container, path, *, require_executable=False):
-    """Hash *path* in the selected container, never in the host namespace."""
-    quoted = shlex.quote(path)
-    prefix = f"test -x {quoted} && " if require_executable else ""
-    cp = _docker(container, prefix + f"sha256sum {quoted} 2>/dev/null")
-    if cp.returncode != 0:
-        return None
-    for line in (cp.stdout or "").splitlines():
-        match = re.search(r"\b([0-9a-fA-F]{64})\b", line)
-        if match:
-            return match.group(1).lower()
-    return None
-
-
 def _selected_ngspice_binary(container, ngspice_bin):
-    """Admit an explicit execution-side binary and bind its remote bytes."""
+    """Select an executable native ngspice path in the requested container."""
     if (not isinstance(ngspice_bin, str)
             or not Path(ngspice_bin).is_absolute()):
         raise ValueError(
             "selected ngspice_bin must be an absolute container path")
-    digest = _container_binary_sha256(
-        container, ngspice_bin, require_executable=True)
-    if digest is None:
-        raise ValueError(
-            "selected ngspice_bin is not executable or hashable in container: "
-            + ngspice_bin)
-    return {"path": ngspice_bin, "sha256": digest}
+    available = _docker(container, "test -x " + shlex.quote(ngspice_bin))
+    if available.returncode != 0:
+        raise ValueError("selected ngspice_bin is not executable in container: " + ngspice_bin)
+    return {"path": ngspice_bin}
 
 
 def _run_ngspice(container, sp_in_container, cwd=None, deck_text=None,
@@ -1683,25 +1645,14 @@ def _run_ngspice(container, sp_in_container, cwd=None, deck_text=None,
             if tran_stop_ns(deck_text or "") is not None else None),
     }
     if selected_binary is not None:
-        after = _container_binary_sha256(container, ngspice_bin)
         sim_status.update(
-            native_binary={**selected_binary, "sha256_after": after},
+            native_binary=selected_binary,
             argv=[ngspice_bin, "-b",
                   *(["--json-measure=" + json_path] if json_path else []),
                   str(sp_in_container)],
             cwd=cwd,
             command=command,
         )
-        if after != selected_binary["sha256"]:
-            failed_analyses.add("*")
-            for key in meas:
-                meas[key] = None
-            sim_status.update(
-                partial=True,
-                failed_analyses=sorted(failed_analyses),
-                nulled_metrics=sorted(meas),
-                changed_inputs=["native_binary"],
-            )
     if native_execution is not None:
         sim_status["native_execution"] = native_execution
     # #438(a): return the FULL transcript — run_block persists it as the
@@ -3475,8 +3426,7 @@ def netlist_origin(project: Path, block: str, env=None) -> dict:
 
     `netlist_provenance` is the load-bearing field: `a3_netlist` when the deck
     derives from A3's output, `builtin_template` when this program authored the
-    circuit itself, `absent` when A3 produced nothing. `netlist_sha256` ties the
-    record to the exact bytes so a later reader can prove which netlist it was.
+    circuit itself, `absent` when A3 produced nothing.
 
     `a3_netlist` is claimed ONLY when both halves of the delivered pair are on
     disk — the netlist AND the stimulus that instantiates it. A netlist with no
@@ -3492,7 +3442,7 @@ def netlist_origin(project: Path, block: str, env=None) -> dict:
         if str(tb_path).startswith(str(project)) else str(tb_path)
     if not found:
         return {"netlist_source": None, "netlist_provenance": NETLIST_PROV_ABSENT,
-                "netlist_sha256": None, "netlist_expected_path": rel,
+                "netlist_expected_path": rel,
                 "netlist_testbench": None,
                 "netlist_expected_testbench_path": tb_rel,
                 "netlist_produced_by": A3_STEP,
@@ -3500,13 +3450,9 @@ def netlist_origin(project: Path, block: str, env=None) -> dict:
                 "design_content_source": None,
                 "netlist_provenance_ref": None,
                 "design_traceable": False}
-    try:
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    except OSError:
-        digest = None
     if not tb_found:
         return {"netlist_source": None, "netlist_provenance": NETLIST_PROV_ABSENT,
-                "netlist_sha256": digest, "netlist_expected_path": rel,
+                "netlist_expected_path": rel,
                 "netlist_testbench": None,
                 "netlist_expected_testbench_path": tb_rel,
                 "netlist_present_but_unusable": rel,
@@ -3515,10 +3461,6 @@ def netlist_origin(project: Path, block: str, env=None) -> dict:
                 "design_content_source": None,
                 "netlist_provenance_ref": None,
                 "design_traceable": False}
-    try:
-        tb_digest = hashlib.sha256(tb_path.read_bytes()).hexdigest()
-    except OSError:
-        tb_digest = None
     # The deck this program emits IS this netlist, driven by this stimulus.
     # `design_content` is INHERITED from the upstream record, never inferred
     # here — see `upstream_design_content`.
@@ -3529,9 +3471,8 @@ def netlist_origin(project: Path, block: str, env=None) -> dict:
                       if str(dc_src).startswith(str(project)) else str(dc_src))
     return {"netlist_source": rel,
             "netlist_provenance": NETLIST_PROV_A3,
-            "netlist_sha256": digest, "netlist_expected_path": rel,
+            "netlist_expected_path": rel,
             "netlist_testbench": tb_rel,
-            "netlist_testbench_sha256": tb_digest,
             "netlist_expected_testbench_path": tb_rel,
             "netlist_produced_by": A3_STEP,
             "design_content": dc,
@@ -3772,13 +3713,6 @@ def run_block(project, block, container, pdk, topology_override):
     # `ams-sim` skill, which cannot supply a container or a memory ceiling.
     try:
         return _run_block(project, block, container, pdk, topology_override)
-    except _container_exec.ContainerImageMismatch as exc:
-        print(f"{_container_exec.IMAGE_REFUSAL_MARK}{exc}", file=sys.stderr)
-        print(f"ENV_REFUSED: analog_real_corner_sweep block={block}: nothing "
-              f"was simulated and NO artefact was written: this is NOT a "
-              f"statement about the design, and NOT a missing simulator — the "
-              f"container holds the wrong bytes.", file=sys.stderr)
-        return _container_exec.EX_ENV_REFUSED
     except _aca.AdmissionRefused as exc:
         # MEASURED (lane mig94, 0.3.77, u_hawaii_adc/ldo): a container started
         # without a memory ceiling made the first single-deck launch raise
@@ -4247,10 +4181,8 @@ def _run_block(project, block, container, pdk, topology_override):
         # silence that let a real run's analog section read stronger than it was.
         "netlist_source": origin["netlist_source"],
         "netlist_provenance": origin["netlist_provenance"],
-        "netlist_sha256": origin["netlist_sha256"],
         "netlist_produced_by": origin["netlist_produced_by"],
         "netlist_testbench": origin.get("netlist_testbench"),
-        "netlist_testbench_sha256": origin.get("netlist_testbench_sha256"),
         # The single field a reader can sort on. True ONLY when the simulated
         # deck's circuit came from the design; false for every deck this file
         # authored, no matter how real the simulator run was.

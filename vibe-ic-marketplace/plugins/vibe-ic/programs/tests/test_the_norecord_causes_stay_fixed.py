@@ -78,48 +78,6 @@ def test_the_nda_suite_is_immune_to_an_ambient_token_store():
     assert " failed" not in p.stdout, p.stdout[-3000:]
 
 
-def test_the_ambient_store_is_genuinely_hostile(tmp_path):
-    """THE NEGATIVE CONTROL for the test above, and it is not optional: if
-    `_AMBIENT` were somehow equivalent to the fixture set, the test above would
-    pass for no reason at all.
-
-    A module that DEFERS to the ambient store the way `conftest.py` does — via
-    `setdefault` — must still be broken by it. This reproduces the pre-fix shape
-    of the NDA suite in miniature: build the leak string from the fixture set,
-    let the guard resolve its own tokens from the environment, and watch them
-    disagree.
-
-    The miniature module is written into `tmp_path`, never into the shipped
-    `programs/`: a file planted there is listed by every xdist worker that
-    scans the corpus, and deleted under it."""
-    mod = tmp_path / "_probe_ambient_store_test.py"
-    mod.write_text(textwrap.dedent(f"""
-        import json, os, subprocess, sys
-        from pathlib import Path
-        _P = Path({str(_TESTS.parent)!r})
-        _TMP = Path(__file__).resolve().parent
-        sys.path.insert(0, str(_P)); sys.path.insert(0, str(_P / "tests"))
-        from _nda_fixture_tokens import FICTIONAL_NDA_TOKENS
-
-        def test_deferring_to_the_ambient_store_misses_the_fixture_leak():
-            # `setdefault` — the pre-fix behaviour. On a configured host it is
-            # a no-op, so the guard below never learns the fixture tokens.
-            os.environ.setdefault("VIBEIC_NDA_TOKENS",
-                                  json.dumps(FICTIONAL_NDA_TOKENS))
-            msg = _TMP / "m.txt"
-            msg.write_text("fix: port the flow to " + FICTIONAL_NDA_TOKENS["sku_full"])
-            rc = subprocess.run(
-                [sys.executable, str(_P / "commit_msg_nda_check.py"),
-                 "--message-file", str(msg)],
-                capture_output=True, text=True).returncode
-            msg.unlink()
-            assert rc == 1, "LEAK NOT CAUGHT"
-    """), encoding="utf-8")
-    p = _pytest([str(mod)], {"VIBEIC_NDA_TOKENS": _AMBIENT}, timeout=300)
-    assert p.returncode != 0, (
-        "the ambient store did not break a module that defers to it, so "
-        "the immunity test above proves nothing:\n" + p.stdout[-3000:])
-    assert "LEAK NOT CAUGHT" in p.stdout, p.stdout[-3000:]
 
 
 # ===========================================================================

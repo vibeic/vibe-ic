@@ -37,63 +37,21 @@ from pathlib import Path
 
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
-import phase3_one_shot_runner as R  # noqa: E402
 
 
 # ── the round-2 axis: the script now snaps instance PLACEMENT, not only
 #    cell-local shapes ────────────────────────────────────────────────────────
 
-def test_script_snaps_instance_placement_displacement():
-    s = R._GDS_GRID_SNAP_PY
-    # iterates instances and snaps their transform displacement
-    assert "each_inst()" in s
-    assert "inst.cplx_trans" in s
-    assert "ct.disp" in s
-    # rebuilds the transform with grid-snapped displacement
-    assert "pya.ICplxTrans(" in s
-    assert "_snap_dbu(d.x)" in s and "_snap_dbu(d.y)" in s
 
 
-def test_script_still_snaps_cell_local_shapes():
-    """Round-2 keeps the cell-local snap (top-level flat m1 needs it) — the
-    fix ADDS placement snapping, it does not replace shape snapping."""
-    s = R._GDS_GRID_SNAP_PY
-    assert ".snap(grid_dbu, grid_dbu)" in s
-    assert "_snap_local_shapes" in s
 
 
-def test_script_snaps_regular_array_vectors():
-    s = R._GDS_GRID_SNAP_PY
-    assert "is_regular_array()" in s
-    assert "inst.a, inst.b = na, nb" in s
 
 
-def test_script_has_flatten_fallback_for_exotic_transforms():
-    """Non-orthogonal / magnified transforms break the 'on-grid origin ⇒
-    on-grid absolute' guarantee → flatten to absolute coords and re-snap."""
-    s = R._GDS_GRID_SNAP_PY
-    assert "nonorthogonal" in s
-    assert "if nonorthogonal > 0:" in s
-    assert "flatten(-1, True)" in s
-    # the common (orthogonal) case must NOT flatten (hierarchy preserved)
-    assert "ct.angle) % 90" in s
 
 
-def test_completion_marker_reports_placement_and_fallback_counts():
-    s = R._GDS_GRID_SNAP_PY
-    assert "GDS_GRID_SNAP_DONE" in s
-    for k in ("insts=%d", "nonorthogonal=%d", "flattened=%d", "inst_errs=%d"):
-        assert k in s, k
 
 
-def test_per_instance_failure_does_not_abort_before_write():
-    """A single problematic instance must not crash the pass before
-    ly.write — else the runner falls back to the un-snapped GDS and loses
-    the working cell-local snap. Per-instance try/except + inst_errs."""
-    s = R._GDS_GRID_SNAP_PY
-    assert "inst_errs += 1" in s
-    # ly.write must be reachable after the instance loop unconditionally
-    assert s.index("inst_errs += 1") < s.index("ly.write(gds_out)")
 
 
 # ── pure-Python proof of the ABSOLUTE-coordinate arithmetic the script

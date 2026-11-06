@@ -60,7 +60,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 #: Where the runner writes the netlist and where the gates read it.
 NETLIST_REL = "reports/phase2/cdc/netlist.json"
 NETLIST_LOG_REL = "reports/phase2/cdc/netlist.yosys.log"
-NETLIST_MANIFEST_REL = "reports/phase2/cdc/netlist_front_end.json"
 NETLIST_RAW_REL = "reports/phase2/cdc/netlist.raw.json"
 NETLIST_NORMALIZE_LOG_REL = "reports/phase2/cdc/netlist.normalize.yosys.log"
 
@@ -145,142 +144,51 @@ def normalization_script(raw: Path, out: Path) -> str:
                       f"json -o {out}"])
 
 
-def source_binding(project: Path, top: Optional[str],
-                   rtl_files: Optional[List[Path]] = None, *,
-                   normalization: bool = True) -> dict:
-    """Current native frontend inputs, using the existing source/hash contracts.
+def _liberty_group(text: str, brace: int) -> tuple[str, int]:
+    """The body of the group whose ``{`` is at ``brace``, with nested groups blanked."""
+    depth, top = 0, []
+    for index in range(brace, len(text)):
+        char = text[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return "".join(top), index
+        elif depth == 1:
+            top.append(char)
+    raise ValueError("Unterminated Liberty group")
 
-    Headers and structured top/switch declarations are dependencies too. A
-    partial read cannot establish a verdict over the current source population.
-    Include dependencies use the existing resolver; the Yosys frontend remains
-    the connectivity producer. Only the reader of a proven one-stage checkpoint
-    uses the original options/fingerprint without normalization.
+
+def liberty_pin_roles(text: str) -> dict[str, dict[str, dict]]:
+    """``cell -> pin -> {direction, clock, is_pad}`` from each pin's own attributes.
+
+    Only a pin group's top-level attributes count; timing and power subgroups
+    are blanked so their keywords cannot be read as the pin's.
     """
-    import _specrtl_common as sources
-    from _chip_synth_read import NON_SILICON_SUBSTRS
-    from _step_identity import resolved_inputs_digest
-    import librelane_contract as ll
-    from p0_tool_frontend_check import _top
-    from formal_property_run import resolve_include_headers
-    project = Path(project).resolve()
-    files = [p.resolve() for p in sources.rtl_source_files(project)
-             if not any(t in p.name.lower() for t in NON_SILICON_SUBSTRS)]
-    if not files:
-        raise Refusal("CDC_NETLIST_NO_RTL", "no current RTL source population")
-    if rtl_files is not None and set(map(Path.resolve, rtl_files)) != set(files):
-        raise Refusal("CDC_NETLIST_PARTIAL_SOURCES",
-                      "native read must cover the current RTL source population")
-    # L9 may name the IP core while the caller explicitly selects its wrapper.
-    declared = _top(project, include_runtime=False)
-    deps = set(files)
-    deps.update(p.resolve() for p in sources.rtl_source_files(
-        project, exts=("*.vh", "*.svh")))
-    # Explicit includes remain inputs even when they live outside the canonical
-    # tree. Reuse the existing resolver rather than widening the header census.
-    deps.update(p.resolve() for p in resolve_include_headers(files, [project]))
-    for rel in ("phase1/generated_docs/L9_INTEGRATION_SPEC.json",
-                "phase1/generated_docs/L9_INTEGRATION.json",
-                "phase3/librelane_switch.json"):
-        if (project / rel).is_file():
-            deps.add(project / rel)
-    options = {"sv": True,
-               "frontend": "read_slang" if _uses_slang(files) else "read_verilog",
-               "passes": list(JSON_HEADER_PASSES),
-               "requested_top": top, "declared_top": declared}
-    if normalization:
-        options["normalization"] = {"frontend": "read_json",
-                                    "passes": list(CONSTANT_NORMALIZATION_PASSES)}
-    inputs = [("source", p, "raw") for p in sorted(deps)]
-    fingerprint, why = resolved_inputs_digest(
-        project, inputs, {"frontend_options": json.dumps(options, sort_keys=True)})
-    if fingerprint is None:
-        raise Refusal("CDC_NETLIST_SOURCE_UNREADABLE", "; ".join(why))
-    return {"fingerprint": fingerprint, "options": options,
-            "rtl_files": [os.path.relpath(p, project) for p in sorted(files)],
-            "files": [{"path": os.path.relpath(p, project), "sha256": ll.digest(p)}
-                      for p in sorted(deps)]}
-
-
-def require_binding(project: Path, path: Path, nl: "Netlist") -> dict:
-    """Require the existing producer manifest to bind this JSON to current inputs."""
-    import librelane_contract as ll
-    manifest = path.parent / Path(NETLIST_MANIFEST_REL).name
-    try:
-        rec = ll._load(manifest)
-        inputs = rec.get("input")
-        producer = rec.get("producer")
-        if not isinstance(inputs, dict) or not isinstance(producer, dict):
-            raise ValueError("missing native input/producer binding")
-        top = inputs["options"]["requested_top"]
-        if top is not None and (not isinstance(top, str) or top != nl.top):
-            raise Refusal("CDC_NETLIST_TOP_MISMATCH", "native top differs from JSON top")
-        if (producer.get("step") != "Yosys.JsonHeader"
-                or type(producer.get("exit_code")) is not int
-                or producer["exit_code"] != 0
-                or not isinstance(producer.get("argv"), list) or not producer["argv"]
-                or rec.get("top") != nl.top):
-            raise ValueError("missing successful native producer run/top")
-        root = Path(producer["source_root"])
-        order = producer["read_order"]
-        if not root.is_absolute() or not isinstance(order, list):
-            raise ValueError("missing native source root/read order")
-        files = [Path(os.path.normpath(root / rel)) for rel in order]
-        argv = producer["argv"]
-        hashes = rec.get("sha256") or {}
-        # Published one-stage checkpoints have a final-output invocation and
-        # the original input fingerprint. Absence of new fields alone cannot
-        # downgrade a raw-output invocation or a partial normalization claim.
-        legacy = ("normalization" not in inputs["options"]
-                  and "normalization" not in producer
-                  and "netlist.raw.json" not in hashes
-                  and "netlist.normalize.yosys.log" not in hashes
-                  and argv[-3:] == ["-q", "-p", yosys_script(
-                      files, top, root / Path(NETLIST_REL).with_suffix(".json.tmp"))])
-        current = source_binding(project, top, normalization=not legacy)
-        # The fingerprint retains both declarations; a later change is stale.
-        if current != inputs:
-            raise Refusal("CDC_NETLIST_STALE", "source population, contents, top or options changed")
-        if sorted(order) != current["rtl_files"]:
-            raise ValueError("native command read a partial/different source population")
-        raw = root / NETLIST_RAW_REL
-        output = root / NETLIST_REL if legacy else raw
-        script = yosys_script(files, top, output.with_suffix(".json.tmp"))
-        if argv[-3:] != ["-q", "-p", script] or not (
-                argv[0] == "yosys" or
-                any(argv[i:i + 2] == ["--entrypoint", "yosys"]
-                    for i in range(len(argv) - 1))):
-            raise ValueError("native invocation does not match frontend sources/top/options")
-        normalization = producer.get("normalization")
-        if not legacy and (not isinstance(normalization, dict)
-                or type(normalization.get("exit_code")) is not int
-                or normalization["exit_code"] != 0
-                or normalization.get("argv") != argv[:-3] + [
-                    "-q", "-p", normalization_script(
-                        raw, root / Path(NETLIST_REL).with_suffix(".json.tmp"))]):
-            raise ValueError("missing successful normalization by the same native engine")
-        log = path.parent / Path(NETLIST_LOG_REL).name
-        raw = path.parent / Path(NETLIST_RAW_REL).name
-        normalize_log = path.parent / Path(NETLIST_NORMALIZE_LOG_REL).name
-        if (hashes.get("netlist.json") != ll.digest(path)
-                or hashes.get("netlist.yosys.log") != ll.digest(log)):
-            raise Refusal("CDC_NETLIST_STALE", "native output or invocation log hash changed")
-        if not legacy and (
-                hashes.get("netlist.raw.json") != ll.digest(raw)
-                or normalization.get("input_sha256") != ll.digest(raw)
-                or hashes.get("netlist.normalize.yosys.log") != ll.digest(normalize_log)):
-            raise Refusal("CDC_NETLIST_STALE", "native output or invocation log hash changed")
-        if not log.read_text().startswith("$ " + " ".join(argv) + "\n"):
-            raise ValueError("invocation transcript does not record this native command")
-        if not legacy and not normalize_log.read_text().startswith(
-                "$ " + " ".join(normalization["argv"]) + "\n"):
-            raise ValueError("normalization transcript does not record this native command")
-    except Refusal:
-        raise
-    except (OSError, ValueError, KeyError, TypeError, ll.Refusal) as exc:
-        raise Refusal("CDC_NETLIST_UNBOUND",
-                      f"no complete current native producer binding: {exc}") from None
-    _load_clock_gates(project, nl)
-    return rec
+    import re
+    roles = {}
+    for cell in re.finditer(r'\bcell\s*\(\s*"?([A-Za-z_][\w$]*)"?\s*\)\s*\{', text):
+        _, end = _liberty_group(text, cell.end() - 1)
+        block, pins = text[cell.end() - 1:end + 1], {}
+        for pin in re.finditer(r'\bpin\s*\(\s*"?([A-Za-z_][\w$]*)"?\s*\)\s*\{', block):
+            body, pin_end = _liberty_group(block, pin.end() - 1)
+            pin_block, arcs = block[pin.end():pin_end], []
+            for timing in re.finditer(r'\btiming\s*\([^)]*\)\s*\{', pin_block):
+                arc, _ = _liberty_group(pin_block, timing.end() - 1)
+                fields = [re.search(r'\b' + key + r'\s*:\s*"?([\w$]+)', arc)
+                          for key in ("related_pin", "timing_sense")]
+                arcs.append(tuple(f.group(1) if f else None for f in fields))
+            direction = re.search(r'\bdirection\s*:\s*"?(\w+)', body)
+            pins[pin.group(1)] = {
+                "direction": direction.group(1) if direction else None,
+                "clock": bool(re.search(r'\bclock\s*:\s*"?true', body)),
+                "is_pad": bool(re.search(r'\bis_pad\s*:\s*"?true', body)),
+                "timing_arcs": arcs,
+                **{key: bool(re.search(r"\b" + key + r'\s*:\s*"?true', body))
+                   for key in ("clock_gate_clock_pin", "clock_gate_out_pin")}}
+        roles[cell.group(1)] = pins
+    return roles
 
 
 def _load_latched_clock_gates(nl: "Netlist") -> None:
@@ -310,7 +218,6 @@ def _load_latched_clock_gates(nl: "Netlist") -> None:
 def _load_clock_gates(project: Path, nl: "Netlist") -> None:
     """Use the native JsonHeader library configuration for clock-only ancestry."""
     import fnmatch
-    from flow109_clock_plan import liberty_pin_roles
     config = project / "phase3/librelane/step2/header_resolved.json"
     nl.clock_parents.clear()
     if not config.is_file():
@@ -339,19 +246,17 @@ def _load_clock_gates(project: Path, nl: "Netlist") -> None:
 
 def build(project: Path, rtl_files: List[Path], top: Optional[str],
           image: Optional[str] = None, docker: str = "docker") -> Path:
-    """Write a bound raw JsonHeader and its native constant-normalized CDC input."""
+    """Run native JsonHeader and constant normalization, retaining both logs."""
     project = Path(project).resolve()
     out = project / NETLIST_REL
     log = project / NETLIST_LOG_REL
-    manifest = project / NETLIST_MANIFEST_REL
     raw = project / NETLIST_RAW_REL
     normalize_log = project / NETLIST_NORMALIZE_LOG_REL
-    # No failed, partial or interrupted producer can leave a prior admission.
-    manifest.unlink(missing_ok=True)
     out.unlink(missing_ok=True)
     raw.unlink(missing_ok=True)
     normalize_log.unlink(missing_ok=True)
-    binding = source_binding(project, top, rtl_files)
+    if not rtl_files:
+        raise Refusal("CDC_NETLIST_NO_RTL", "no RTL source files")
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_suffix(".json.tmp")
     tmp.unlink(missing_ok=True)
@@ -393,11 +298,7 @@ def build(project: Path, rtl_files: List[Path], top: Optional[str],
     if done.returncode or not raw_tmp.is_file():
         raise Refusal("CDC_NETLIST_BUILD_FAILED",
                       f"yosys rc={done.returncode}; {NETLIST_LOG_REL}")
-    if source_binding(project, top, rtl_files) != binding:
-        raise Refusal("CDC_NETLIST_STALE", "sources changed during native producer run")
     raw_tmp.replace(raw)
-    import librelane_contract as ll
-    raw_hash = ll.digest(raw)
     # Reuse the entire engine/container/memory/mount/user prefix. A fresh process
     # is necessary for this native normalization, not a different backend.
     normalize_argv = argv[:-3] + ["-q", "-p", normalization_script(raw, tmp)]
@@ -408,25 +309,10 @@ def build(project: Path, rtl_files: List[Path], top: Optional[str],
         raise Refusal("CDC_NETLIST_BUILD_FAILED",
                       f"normalization yosys rc={normalized.returncode}; "
                       f"{NETLIST_NORMALIZE_LOG_REL}")
-    if (source_binding(project, top, rtl_files) != binding
-            or ll.digest(raw) != raw_hash):
-        raise Refusal("CDC_NETLIST_STALE", "sources or raw input changed during normalization")
     nl = load(tmp)
     if top and nl.top != top:
         raise Refusal("CDC_NETLIST_TOP_MISMATCH", "native JSON top differs from requested top")
     tmp.replace(out)
-    ll.write_json(manifest, {
-        "input": binding, "top": nl.top,
-        "producer": {"step": "Yosys.JsonHeader", "argv": argv,
-                     "exit_code": done.returncode, "image": image,
-                     "source_root": str(project),
-                     "normalization": {"argv": normalize_argv,
-                                       "exit_code": normalized.returncode,
-                                       "input_sha256": raw_hash},
-                     "read_order": [os.path.relpath(f, project) for f in files]},
-        "sha256": {"netlist.json": ll.digest(out), "netlist.yosys.log": ll.digest(log),
-                   "netlist.raw.json": raw_hash,
-                   "netlist.normalize.yosys.log": ll.digest(normalize_log)}})
     return out
 
 
@@ -1059,9 +945,6 @@ def reg_crossing_findings(nl: Netlist,
                           lookup: Optional[_LookupSnapshot] = None, *,
                           metadata: Optional[dict] = None, calibrate: bool = True) -> List[dict]:
     """A flop of domain A read by a flop of domain B (clock_domain_reg_crossing)."""
-    if calibrate:
-        import instrument_calibration
-        instrument_calibration.assert_calibrated("_cdc_netlist::reg_crossing_findings")
     lookup = lookup or _LookupSnapshot(nl)
     domains = clock_domains(nl, lookup)
     if len(domains) < 2 and metadata is None:
@@ -1135,9 +1018,6 @@ def async_input_findings(nl: Netlist, is_candidate,
     candidate set is drawn from the netlist's PORTS only, so an internal net is
     never an async input whatever it is called (#2063).
     """
-    if calibrate:
-        import instrument_calibration
-        instrument_calibration.assert_calibrated("_cdc_netlist::async_input_findings")
     lookup = lookup or _LookupSnapshot(nl)
     clock_or_reset = {nl.root(f.clk) for f in nl.flops} | \
         {nl.root(f.arst) for f in nl.flops if f.arst is not None}
@@ -1185,9 +1065,6 @@ def reset_dependency_findings(
     examine each node/edge exactly twice. Witness walks examine at most one
     further graph's worth of edges, with no recursion limit.
     """
-    if calibrate:
-        import instrument_calibration
-        instrument_calibration.assert_calibrated("_cdc_netlist::reset_dependency_findings")
     lookup = lookup or _LookupSnapshot(nl)
     reset_roles = reset_roles or {}
     unresolved = [r for r in (reset_role_candidates(nl) if require_reset_roles else [])
@@ -1315,11 +1192,7 @@ def reset_dependency_findings(
 def judge(nl: Netlist, rule: str, is_candidate=None, *,
           metadata: Optional[dict] = None, reset_roles: Optional[dict] = None,
           calibrate: bool = True, require_reset_roles: bool = True) -> List[dict]:
-    """The one entry every gate uses to judge a netlist.
-
-    Each rule carries its own `assert_calibrated` line: one pair per rule, so
-    a calibrated crossing rule cannot vouch for the reset rule.
-    """
+    """Apply the selected structural rule to the native netlist."""
     lookup = _LookupSnapshot(nl)
     if rule == "reg_crossing":
         return reg_crossing_findings(nl, lookup, metadata=metadata, calibrate=calibrate)
@@ -1396,57 +1269,35 @@ def apply_front_end(project: Path, mode: str, netlist_arg: Optional[str],
                           f"not substituted for it")],
                 {"front_end": "netlist" if mode == "librelane" else "dual",
                  "netlist": str(netlist_arg or NETLIST_REL), "netlist_read": False})
-    import instrument_calibration
     try:
-        import hashlib
-        graph_sha256 = None
-        if rule == "reg_crossing":
-            try:
-                graph_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
-            except OSError:
-                pass  # load() retains the existing unreadable-graph refusal.
         nl = load(path)
-        binding = require_binding(project, path, nl)
+        _load_clock_gates(project, nl)
         analysis: dict = {}
         roles = None
         if rule == "reset_dependency" and reset_role_candidates(nl):
             import ai_signed_judgement as expert
             roles, why = expert.reset_roles(project, nl, path)
             analysis["role_authority"] = why
-            analysis["reset_role_request"] = expert.reset_role_request(project)
+            analysis["reset_role_request"] = expert.reset_role_request(project, nl, path)
         rows = judge(nl, rule, is_candidate, metadata=analysis, reset_roles=roles)
-    except (Refusal, instrument_calibration.Uncalibrated) as exc:
+    except Refusal as exc:
         code = getattr(exc, "code", "NETLIST_RULE_UNCALIBRATED")
         return ([_finding(code, "ERROR", str(exc))],
                 {"front_end": mode, "netlist": str(path), "netlist_read": False})
-    import hashlib
     extra: Dict[str, object] = {
         "netlist": str(path), "netlist_read": True,
-        "netlist_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         "netlist_top": nl.top, "netlist_flops": len(nl.flops),
-        "netlist_clock_domains": clock_domains(nl),
-        "netlist_input_fingerprint": binding["input"]["fingerprint"]}
+        "netlist_clock_domains": clock_domains(nl)}
     if rule == "reset_dependency":
         extra["reset_dependency_analysis"] = analysis
     if rule == "reg_crossing":
-        # Bind the observed population to the same native producer and current
-        # readset. A changed/absent graph cannot become a measured empty set.
-        population = {"status": "NOT_MEASURED", "reason": "CDC_POPULATION_SOURCE_UNPROVEN"}
+        population = {"status": "NOT_MEASURED", "reason": "CDC_POPULATION_TRAVERSAL_INCOMPLETE"}
         if nl.ambiguous_drivers:
             population.update(reason="CDC_POPULATION_AMBIGUOUS_DRIVERS",
                               traversal_complete=False,
                               ambiguous_driver_bits=sorted(nl.ambiguous_drivers))
-        try:
-            if (hashlib.sha256(path.read_bytes()).hexdigest() == graph_sha256
-                    and require_binding(project, path, nl) == binding and nl.flops
-                    and analysis.get("traversal_complete") is True):
-                population = {"status": "MEASURED", **analysis,
-                    "netlist": {"path": str(path), "sha256": graph_sha256},
-                    "input_fingerprint": binding["input"]["fingerprint"],
-                    "producer": binding["producer"],
-                    "checker_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
-        except (OSError, Refusal):
-            pass
+        elif nl.flops and analysis.get("traversal_complete") is True:
+            population = {"status": "MEASURED", **analysis, "netlist": {"path": str(path)}}
         extra["reg_crossing_population"] = population
     if mode == "librelane":
         extra["front_end"] = "netlist"

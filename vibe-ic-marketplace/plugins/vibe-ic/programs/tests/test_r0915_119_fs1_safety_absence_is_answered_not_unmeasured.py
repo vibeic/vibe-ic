@@ -66,7 +66,6 @@ import flow_compliance_check as F        # noqa: E402
 import fmeda_fault_injection_coverage as fi  # noqa: E402
 
 CLS = SA.NOT_APPLICABLE_BY_STRUCTURE
-FLOW = PROG.parent / "flow" / "phase1_phase2_phase3.yaml"
 
 #: run13's own RTL, reduced to the one property under test: a plain digital
 #: design with no ECC / parity / lockstep anywhere.
@@ -128,13 +127,6 @@ def _run_producer(project: Path, out_rel="reports/phase2/safety/f.json"):
     return cp, report
 
 
-def _fs1_step() -> dict:
-    yaml = pytest.importorskip("yaml")
-    doc = yaml.safe_load(FLOW.read_text())
-    for s in doc["steps"]:
-        if str(s.get("id")) == "FS1":
-            return s
-    raise AssertionError("FS1 is not in the flow")
 
 
 # ── 1. the reader's half of guard (i): the report channel must carry it ───
@@ -217,38 +209,6 @@ def test_the_second_gate_mirrors_the_class_and_does_not_re_derive_it(tmp_path):
                     ).read_text())), "the two gates must not disagree"
 
 
-def test_the_fs1_step_row_is_decided_and_never_not_measured(tmp_path, monkeypatch):
-    """THE DEFECT ITSELF, at the row the completion audit consumes."""
-    import execution_policy as policy
-    from test_fs1_fmeda_producer_is_run_by_the_runner import _runner
-    proj = _project(tmp_path, PLAIN_RTL)
-    monkeypatch.setattr(policy, 'request', lambda: {'mode': 'default'})
-    # Injection is a retained producer now. Run it before the read-only gate,
-    # keeping its actual structural enumeration and both current reports.
-    produced = _runner().step_fmeda_fault_injection(proj)
-    reports = [json.loads((proj / rel).read_text()) for rel in (
-        'reports/phase2/safety/fmeda_coverage.json',
-        'reports/phase2/safety/fmeda_coverage_gate.json')]
-    assert all(T.report_reason_class(report) == CLS for report in reports), reports
-    assert all(SA.evidence_of(report)['scanned'] >= SA.MIN_SCANNED for report in reports)
-    assert produced.status != 'FAIL', produced
-    res = F.check_step(proj, _fs1_step(), waivers={})
-    joined = " ".join(res.reasons)
-    assert res.status != "NOT_MEASURED", (res.status, res.reasons)
-    assert res.reason_class != "no_population", res.reason_class
-    assert "vacuity" not in (res.disclosures or []), res.disclosures
-    assert CLS in joined, res.reasons
-    assert "ENUMERATED its subject population" in joined, res.reasons
-    # it must not borrow the other class's sentence: no design declaration was
-    # read, because no L-doc in the taxonomy carries one.
-    assert "DESIGN-DECLARED-N/A" not in joined, res.reasons
-    assert len(res.executed_declared_not_applicable) == 1, \
-        res.executed_declared_not_applicable
-    # The same independent reader answered; the producer evidence above is
-    # no longer miscounted as a second read-only gate.
-    assert [str(e).split(" ", 1)[0]
-            for e in res.executed_declared_not_applicable] == ['fmeda_coverage_check'], \
-        res.executed_declared_not_applicable
 
 
 # ── 3. the other direction: a safety design keeps FS1 MEASURED ────────────

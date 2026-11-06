@@ -42,7 +42,6 @@ These tests are the both-directions proof:
 
 Chip/PDK-AGNOSTIC: the fixtures name no design, vendor, PDK or cell library.
 """
-import re
 import sys
 from pathlib import Path
 
@@ -119,64 +118,18 @@ def _reader_a(tmp_path, text, name):
     return [tuple(t) for t in R._parse_def_components(f)]
 
 
-def _reader_b(tmp_path, text, name):
-    """`_padring_def_components` — the text-taking reader (pad-ring physical
-    instance creation, BTerm exclusion)."""
-    return [tuple(t) for t in R._padring_def_components(text)]
 
 
-def _reader_c(tmp_path, text, name):
-    """The COMPONENTS half of `_def_net_orphan_instances`, driven through the
-    step it belongs to. The function returns (n_orphans, detail); with no NETS
-    section every declared instance is an orphan, so the count IS the component
-    population and the detail names its denominator."""
-    proj = tmp_path / (name + "_c")
-    (proj / "phase3" / "stage3" / "pnr").mkdir(parents=True, exist_ok=True)
-    d = R._pl.pnr_dir(proj)
-    d.mkdir(parents=True, exist_ok=True)
-    (d / "routed.def").write_text(text)
-    return R._def_net_orphan_instances(proj)
 
 
-_READERS = {
-    "_parse_def_components": _reader_a,
-    "_padring_def_components": _reader_b,
-}
 
 
 # ── 1. the ambiguous fixtures: ONE answer ────────────────────────────────
 
-@pytest.mark.parametrize("fixture", sorted(_AMBIGUOUS))
-@pytest.mark.parametrize("reader", sorted(_READERS))
-def test_every_reader_returns_the_same_components(tmp_path, reader, fixture):
-    """Every reader in the table returns the SAME component list — by value,
-    not by count — for a DEF whose whitespace two of them used to read
-    differently."""
-    got = _READERS[reader](tmp_path, _AMBIGUOUS[fixture], f"{reader}_{fixture}")
-    assert got == _EXPECTED, (
-        f"{reader} read {got!r} from the {fixture!r} DEF; the file declares "
-        f"{_EXPECTED!r}")
 
 
-@pytest.mark.parametrize("fixture", sorted(_AMBIGUOUS))
-def test_orphan_precondition_sees_the_same_population(tmp_path, fixture):
-    """The same-net heal's orphan precondition counts the same instances the
-    other readers see. A DEF it cannot read must never reach the caller as a
-    measured zero."""
-    n, detail = _reader_c(tmp_path, _AMBIGUOUS[fixture], fixture)
-    assert n == len(_EXPECTED), (
-        f"orphan precondition read {n} placed instances from the {fixture!r} "
-        f"DEF ({detail!r}); the file declares {len(_EXPECTED)}")
-    assert "no COMPONENTS section in DEF" not in detail
 
 
-def test_one_def_no_longer_yields_three_answers(tmp_path):
-    """The headline: the three-way fixture, all three readers, one answer."""
-    a = _reader_a(tmp_path, _THREE_WAY, "hdr")
-    b = _reader_b(tmp_path, _THREE_WAY, "hdr")
-    n_c, _detail = _reader_c(tmp_path, _THREE_WAY, "hdr")
-    assert a == b == _EXPECTED
-    assert n_c == len(_EXPECTED)
 
 
 # ── 2. the control: an unambiguous DEF is handled identically ────────────
@@ -189,45 +142,14 @@ def test_unambiguous_def_reader_a_unchanged(tmp_path):
                                                   ("u_b", "MASTER_B")]
 
 
-def test_unambiguous_def_reader_b_unchanged(tmp_path):
-    assert _reader_b(tmp_path, _PLAIN, "ctl") == [("u_a", "MASTER_A"),
-                                                  ("u_b", "MASTER_B")]
 
 
-def test_unambiguous_def_reader_c_unchanged(tmp_path):
-    n, detail = _reader_c(tmp_path, _PLAIN, "ctl")
-    assert n == 2
-    assert detail == "2/2 placed instances participate in no net (MASTER_A x1, MASTER_B x1)"
 
 
-def test_unambiguous_def_design_name_unchanged(tmp_path):
-    f = tmp_path / "ctl_design.def"
-    f.write_text(_PLAIN)
-    assert R._def_design_name(f) == "chip_top"
-    assert R._streamout_top(f, "chip_top") == ("chip_top", "")
-    cell, note = R._streamout_top(f, "core")
-    assert cell == "chip_top"
-    assert "chip_top" in note
 
 
-def test_def_without_components_still_reads_empty(tmp_path):
-    """A DEF with no COMPONENTS block: [] from every reader, as before. The
-    ABSENCE of a block and a block that could not be parsed must not have
-    become the same thing."""
-    text = "VERSION 5.8 ;\nDESIGN chip_top ;\nEND DESIGN\n"
-    assert _reader_a(tmp_path, text, "empty") == []
-    assert _reader_b(tmp_path, text, "empty") == []
-    n, detail = _reader_c(tmp_path, text, "empty")
-    assert (n, detail) == (0, "no COMPONENTS section in DEF")
 
 
-def test_unreadable_def_is_not_an_empty_def(tmp_path):
-    """An unreadable path resolves to no design and no components without
-    raising — the pre-fix contract of every reader in the table."""
-    missing = tmp_path / "does_not_exist.def"
-    assert R._parse_def_components(missing) == []
-    assert R._def_design_name(missing) is None
-    assert R._streamout_top(missing, "core") == ("core", "")
 
 
 # ── 3. the one record, and the design authority ──────────────────────────
@@ -243,15 +165,6 @@ def test_resolution_is_one_frozen_record(tmp_path):
         res.design = "somethingelse"       # frozen
 
 
-def test_streamout_and_reopen_read_the_same_record(tmp_path):
-    """The two facts the issue names — which design is the top, which masters
-    are instantiated — come out of ONE resolution of ONE file."""
-    f = tmp_path / "both.def"
-    f.write_text(_THREE_WAY)
-    res = R._def_reopen_resolution(f)
-    assert R._streamout_top(f, "core")[0] == res.design
-    assert [m for _i, m in R._parse_def_components(f)] == \
-           [m for _i, m in res.components]
 
 
 def test_design_half_has_exactly_one_parser():

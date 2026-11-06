@@ -320,28 +320,3 @@ def test_native_insertion_owner_reaches_the_public_preservation_cli(tmp_path, fa
             assert any(row['name'] == 'future_alpha' for row in doc['removed']), doc
         else:
             assert doc['insertion_provenance']['status'] == 'UNVERIFIED', doc
-
-
-def test_native_step18_publishes_owner_metadata_without_rewriting_its_plan(tmp_path, monkeypatch):
-    import json
-    from types import SimpleNamespace
-    import execution_backend_producers as producer
-    import librelane_contract as native
-    import phase3_one_shot_runner as runner
-    project, folder = _native_insertion_project(tmp_path, handoff=False)
-    plan = folder / 'spare_cells.json'
-    receipt = folder / 'vibeic_receipt.json'
-    originals = (plan.read_bytes(), receipt.read_bytes())
-    monkeypatch.setattr(producer, '_parameters', lambda *a: (runner, native, SimpleNamespace(), ''))
-    monkeypatch.setattr(producer, '_predecessor_state', lambda *a: folder / 'state_in.json')
-    # Only the expensive native process/state preparation is substituted.
-    monkeypatch.setattr(producer, '_state_chain', lambda *a: (
-        native, {}, {'Vibeic.InsertSpareCells': folder}))
-    result = producer.produce_pnr(project, {'step_id': '18', 'top': 'neutral'})
-    assert result['verdict'] == 'PASS', result
-    handoff = json.loads((project / 'reports/phase3/librelane_spare_handoff.json').read_text())
-    assert handoff['insertion_provenance']['planned_not_inserted'] == ['future_alpha', 'future_beta']
-    assert handoff['insertion_provenance']['native_source']['plan_sha256'] == native.digest(plan)
-    assert (plan.read_bytes(), receipt.read_bytes()) == originals
-    assert (project / 'phase3/stage3/pnr/spare_cells.json').read_bytes() == plan.read_bytes()
-    assert 'insertion_provenance' not in json.loads(plan.read_text())

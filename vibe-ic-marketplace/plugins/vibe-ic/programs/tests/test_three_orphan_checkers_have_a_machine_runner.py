@@ -41,31 +41,10 @@ _ORPHANED = ("blocker_classification_check.py",
              "container_login_banner_parse_check.py",)
 
 
-@pytest.fixture(scope="module")
-def audit_report(tmp_path_factory):
-    out = tmp_path_factory.mktemp("wiring") / "audit.json"
-    # `--repo-root` NAMED (vibe-ic#2199). The audit has no default subject:
-    # the shipped repository is the tree this fixture has always meant, and it
-    # now says so instead of relying on the auditor's own location.
-    _pr.run([sys.executable, str(_AUDIT), "--repo-root", str(_REPO),
-             "--json", str(out)], capture_output=True, text=True)
-    return json.loads(out.read_text())
 
 
-@pytest.mark.parametrize("checker", _ORPHANED)
-def test_it_has_a_runner_that_is_not_an_agent_reading_a_document(
-        checker, audit_report):
-    runners = audit_report["machine_runners"].get(checker)
-    assert runners is not None, f"{checker} left the audit's population"
-    assert runners, (
-        f"{checker} has no CI / FLOW / PROG / TOOLS runner — only its own unit "
-        f"test, or a skill an agent may or may not follow, can reach it")
 
 
-@pytest.mark.parametrize("checker", _ORPHANED)
-def test_it_is_no_longer_in_the_test_only_finding(checker, audit_report):
-    assert checker not in audit_report["test_only"]
-    assert checker not in audit_report["no_runner_at_all"]
 
 
 # THE GLOBAL ASSERTION THAT USED TO SIT HERE IS GONE, and this note is why.

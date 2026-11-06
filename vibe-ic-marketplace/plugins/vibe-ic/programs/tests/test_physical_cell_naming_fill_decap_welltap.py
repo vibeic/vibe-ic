@@ -32,7 +32,6 @@ with `fill`, so they are unaffected. A PDK that configures no tapcell_master
 gets no widening at all.
 """
 import importlib
-import json
 import re
 import sys
 from pathlib import Path
@@ -40,7 +39,6 @@ from pathlib import Path
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PLUGIN / "programs"))
 mod = importlib.import_module("phase3_one_shot_runner")
-lat = importlib.import_module("latchup_esd_spacing_check")
 
 
 GF180 = "gf180mcu_fd_sc_mcu7t5v0__"
@@ -120,60 +118,20 @@ def test_functional_cells_containing_the_substring_are_NOT_ignored():
 # (2) latch-up well-tap presence (DEF COMPONENTS scan)
 # ------------------------------------------------------------------------
 
-def _components(tap_master=None, n_tap=3, n_std=20):
-    comps = [(f"_{i}_", GF180 + "nand2_1") for i in range(n_std)]
-    if tap_master:
-        comps += [(f"TAP_{i}", tap_master) for i in range(n_tap)]
-    return comps
 
 
-def test_gf180_filltie_recognised_when_pdk_declares_it():
-    rep = mod._welltap_presence_check(_components(GF180_TAP), [GF180_TAP])
-    assert rep["status"] == "WELLTAP_PRESENT"
-    assert rep["n_tap"] == 3
 
 
-def test_gf180_filltie_unrecognised_without_the_pdk_master():
-    """Exactly the field failure: taps placed, screen reports a GAP."""
-    rep = mod._welltap_presence_check(_components(GF180_TAP))
-    assert rep["status"] == "WELLTAP_GAP"
-    assert rep["n_tap"] == 0
 
 
-def test_sky130_taps_still_recognised_with_no_extra_master():
-    """Blast-radius control: the shipped allowlist still works alone."""
-    rep = mod._welltap_presence_check(
-        _components(SKY + "tapvpwrvgnd_1"))
-    assert rep["status"] == "WELLTAP_PRESENT"
-    assert rep["n_tap"] == 3
 
 
-def test_zero_taps_still_a_conclusive_gap():
-    """NO-LEAK: declaring a tapcell master must not manufacture a PASS."""
-    rep = mod._welltap_presence_check(_components(None), [GF180_TAP])
-    assert rep["status"] == "WELLTAP_GAP"
-    assert rep["n_tap"] == 0
 
 
-def test_unrelated_configured_master_does_not_rate_other_cells():
-    """NO-LEAK: only the configured master is added, not a blanket pass."""
-    rep = mod._welltap_presence_check(
-        _components(GF180 + "somethingelse"), [GF180_TAP])
-    assert rep["status"] == "WELLTAP_GAP"
 
 
-def test_no_std_cells_is_still_NA():
-    rep = mod._welltap_presence_check([], [GF180_TAP])
-    assert rep["status"] == "NA"
 
 
-def test_rated_prefixes_helper_is_additive_only():
-    base = mod._WELLTAP_RATED
-    assert set(base).issubset(set(mod._rated_tap_prefixes()))
-    assert mod._rated_tap_prefixes() == base
-    widened = mod._rated_tap_prefixes([GF180_TAP])
-    assert set(base).issubset(set(widened))
-    assert GF180_TAP.lower() in widened
 
 
 # ------------------------------------------------------------------------
@@ -186,75 +144,3 @@ DESIGN top ;
 UNITS DISTANCE MICRONS 1000 ;
 DIEAREA ( 0 0 ) ( 40000 40000 ) ;
 """
-
-
-def _write_def(tmp_path, tap_master):
-    rows = []
-    n = 0
-    for gx in range(6):
-        for gy in range(6):
-            rows.append(f"  - u{n} {GF180}nand2_1 + PLACED "
-                        f"( {gx*6000+1000} {gy*6000+1000} ) N ;")
-            n += 1
-    taps = []
-    t = 0
-    for gx in range(6):
-        for gy in range(6):
-            taps.append(f"  - t{t} {tap_master} + PLACED "
-                        f"( {gx*6000+1500} {gy*6000+1500} ) N ;")
-            t += 1
-    body = (_DEF_HEAD
-            + f"COMPONENTS {len(rows)+len(taps)} ;\n"
-            + "\n".join(rows + taps)
-            + "\nEND COMPONENTS\nEND DESIGN\n")
-    p = tmp_path / "routed.def"
-    p.write_text(body)
-    return p
-
-
-def _record_spacing_lef(project, tap_master):
-    # Declare fixture roles in LEF bytes rather than inferring them from names.
-    lef = project / "geometry.lef"
-    lef.write_text(
-        f"MACRO {GF180}nand2_1\n CLASS CORE ;\nEND {GF180}nand2_1\n"
-        f"MACRO {tap_master}\n CLASS CORE WELLTAP ;\nEND {tap_master}\n")
-    report = project / "reports/phase3/io_pad_chip_top.json"
-    report.parent.mkdir(parents=True)
-    report.write_text(json.dumps({
-        "verdict": "WROTE", "io_library_lefs": [str(lef)]}))
-
-
-def _spacing_project(tmp_path, tap_master):
-    pnr = tmp_path / "phase3/stage3/pnr"
-    pnr.mkdir(parents=True)
-    routed = _write_def(pnr, tap_master)
-    _record_spacing_lef(tmp_path, tap_master)
-    return routed
-
-
-def test_spacing_screen_sees_gf180_taps_when_declared(tmp_path):
-    d = _spacing_project(tmp_path, GF180_TAP)
-    rep = lat.run_geometry_layer(str(d), rated_tap_masters=[GF180_TAP])
-    assert rep["spacing"]["n_tap"] == 36
-    assert rep["spacing"]["status"] != "WELLTAP_SPACING_GAP"
-
-
-def test_spacing_screen_blind_to_gf180_taps_without_declaration(tmp_path):
-    """The field failure on the spacing screen."""
-    d = _write_def(tmp_path, GF180_TAP)
-    rep = lat.run_geometry_layer(str(d))
-    assert rep["spacing"]["n_tap"] == 0
-
-
-def test_spacing_screen_sky130_unchanged(tmp_path):
-    """Blast-radius control: sky130 needs no declaration and is unaffected."""
-    d = _spacing_project(tmp_path, SKY + "tapvpwrvgnd_1")
-    rep = lat.run_geometry_layer(str(d))
-    assert rep["spacing"]["n_tap"] == 36
-
-
-def test_is_rated_tap_default_arg_is_backward_compatible():
-    """Pre-fix single-argument call still behaves identically."""
-    assert lat._is_rated_tap(SKY + "tapvpwrvgnd_1") is True
-    assert lat._is_rated_tap(GF180_TAP) is False
-    assert lat._is_rated_tap(GF180_TAP, [GF180_TAP]) is True

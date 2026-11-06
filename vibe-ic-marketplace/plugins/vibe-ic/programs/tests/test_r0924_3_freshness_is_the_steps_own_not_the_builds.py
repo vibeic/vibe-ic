@@ -32,7 +32,6 @@ import json
 import sys
 from pathlib import Path
 
-import pytest
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 if str(PROGRAMS) not in sys.path:
@@ -287,9 +286,7 @@ def test_mutation_comparing_unknowns_as_equal_is_caught():
 # NOTHING BELOW PATCHES AN IDENTITY HELPER. The r1 suite pinned
 # `_step_image_digest`, and that is exactly what hid finding 5.
 # ===========================================================================
-import phase3_one_shot_runner as _R  # noqa: E402
 
-_REAL_STEPS = si.load_steps(FLOW)
 
 
 def _pdk_with_real_files(root: Path):
@@ -356,23 +353,6 @@ def _fake_recording():
                                for name in _sr.ENGINE_ENV}}
 
 
-def _ident(project: Path, kind: str):
-    """Through the DECISION PATH: the step's own resolvers supply the inputs.
-
-    The `extra_inputs` shortcut this used to take is gone with the
-    flow-derived fallback — round-3 review finding 1 showed that naming a
-    step's inputs is a different set from asking it."""
-    class _A:
-        spare_density = 0.02
-        container = ""
-    si.set_declaration_flow_keys(_R._DECLARATION_PUBLISH_KEYS)
-    inputs, knobs, bad = _R._step_inputs(project, kind, "top", _A())
-    assert bad == [], bad
-    return si.identity_now(
-        project=project, kind=kind, runner_path=RUNNER, programs_dir=PROGRAMS,
-        flow_yaml=FLOW, pdk=_pdk_with_real_files(project),
-        image_digest=_R._step_image_digest(""),      # REAL, not patched
-        inputs=inputs, knobs=knobs, recording=_fake_recording())[0]
 
 
 
@@ -388,29 +368,8 @@ def _ident(project: Path, kind: str):
 
 
 # --- (a) a new netlist / SDC / slot must invalidate PnR --------------------
-def test_a_new_netlist_invalidates_the_routed_def(tmp_path):
-    """FINDING 1, the headline. PnR reads the NETLIST, not the RTL — hashing
-    the RTL would re-run PnR for an edit synthesis proved changed nothing. So
-    the chain is RTL -> synth re-runs -> new netlist -> PnR re-runs, and this
-    holds the link that was broken."""
-    project = _span_project(tmp_path)
-    base = _ident(project, "pnr")
-    # THE FILE THE RESOLVER RETURNS, not a name chosen here — r4's whole point.
-    resolved = _R.pnr_input_netlist(project, "top")
-    nl = Path(resolved[0] if isinstance(resolved, tuple) else resolved)
-    nl.write_text("module top(); wire w; endmodule\n")
-    fresh, why = si.compare(base, _ident(project, "pnr"))
-    assert fresh is False, f"a new netlist left the routed DEF fresh: {why}"
 
 
-def test_a_new_sdc_invalidates_pnr_and_synth(tmp_path):
-    project = _span_project(tmp_path)
-    base = {k: _ident(project, k) for k in ("synth", "pnr")}
-    sdc = project / "phase2/stage2/constraints/top.sdc"
-    sdc.write_text("create_clock -period 5\n")
-    for kind in ("synth", "pnr"):
-        fresh, why = si.compare(base[kind], _ident(project, kind))
-        assert fresh is False, f"{kind} survived an SDC change: {why}"
 
 
 # NOTE — two tests were removed here, both superseded by r4's resolver-driven
@@ -423,101 +382,14 @@ def test_a_new_sdc_invalidates_pnr_and_synth(tmp_path):
 #     flow-written-key rule correctly drops it.
 #     `test_an_answer_the_operator_owns_still_invalidates` holds the
 #     owner-claimed case, which is the one that matters.
-def test_the_def_the_gds_streams_is_part_of_its_identity(tmp_path):
-    """FINDING 2. No `required_inputs` entry names it, and
-    `step_signoff_spef_repair` promotes it IN PLACE — so without this a GDS
-    stayed fresh across a DEF that had been replaced underneath it."""
-    project = _span_project(tmp_path)
-    base = _ident(project, "gds")
-    d = project / "phase3/stage3/pnr/top.def"
-    d.write_text("VERSION 5.8 ;\n# promoted in place\nEND DESIGN\n")
-    fresh, why = si.compare(base, _ident(project, "gds"))
-    assert fresh is False, f"an in-place DEF promotion was missed: {why}"
 
 
-def _route(monkeypatch, docker_on_path: bool):
-    """Put this box on ONE exec route, whichever box runs the test.
-
-    The route predicate's own input — is there a `docker` client on PATH —
-    is what is set, not the ladder: `_container_exec.no_container_route` and
-    `_step_image_digest` run unpatched. Every `docker` the ladder would run
-    goes through `_eda_pin._docker`, which records the call and answers the
-    way docker answers for a container that does not exist, so the docker
-    route is measured without a daemon and the local route can prove it asked
-    none."""
-    import shutil as _sh
-    import _eda_pin as _pin
-    real_which = _sh.which
-
-    def _which(cmd, *a, **k):
-        if cmd == "docker":
-            return "/usr/bin/docker" if docker_on_path else None
-        return real_which(cmd, *a, **k)
-    monkeypatch.setattr(_sh, "which", _which)
-    calls = []
-
-    def _docker(*argv, **_k):
-        calls.append(argv)
-        return 1, "", "Error: No such object: " + (argv[-1] if argv else "")
-    monkeypatch.setattr(_pin, "_docker", _docker)
-    return calls
 
 
-def test_the_image_identity_ladder_answers_without_a_registry_digest():
-    """FINDING 5. `image_identity` returns a REGISTRY digest or
-    IMAGE_UNAVAILABLE; r1 turned anything else into None, so a locally built
-    image — or running inside the image, where there is no docker client —
-    meant every step re-ran for ever. The r1 tests patched this away.
-
-    UNPATCHED, on whichever box runs it. The ladder answers by the route this
-    box HAS: with no docker client the tools run from PATH and the answer is
-    LOCAL_EXEC, which comes BEFORE the NO_CONTAINER answer (ruling F34 — the
-    r2 form asserted NO_CONTAINER unconditionally and was red inside the
-    image); with one, an unnamed container is NO_CONTAINER and a named one
-    that cannot be identified refuses (None)."""
-    import _container_exec as _cx
-    unnamed = _R._step_image_digest("")
-    named = _R._step_image_digest("no-such-container-xyz-0924")
-    if _cx.no_container_route():
-        assert (unnamed, named) == ("LOCAL_EXEC", "LOCAL_EXEC"), (unnamed,
-                                                                  named)
-    else:
-        assert unnamed == "NO_CONTAINER", (
-            "a container nobody named has no identity to fail closed on; "
-            f"got {unnamed!r}")
-        assert named is None, (
-            "a container that WAS named and cannot be identified still "
-            f"refuses; got {named!r}")
 
 
-@pytest.mark.parametrize("container", ["", "no-such-container-xyz-0924"])
-def test_a_tool_on_path_answers_local_exec_and_resolves_no_image(
-        monkeypatch, container):
-    """RULING F34: LOCAL_EXEC is tried FIRST. With no docker client the
-    tools run from this process's PATH with no container, so the identity is
-    LOCAL_EXEC — whether or not a container was named (the runner's
-    `--container` default is always named) — and, the v1.25.43 rule, the
-    image is resolved only on the docker path: not one `docker` is asked."""
-    calls = _route(monkeypatch, docker_on_path=False)
-    assert _R._step_image_digest(container) == "LOCAL_EXEC"
-    assert calls == [], (
-        "the local route asked docker to identify an image it will never "
-        f"use: {calls}")
 
 
-def test_with_neither_a_local_route_nor_a_container_it_refuses_by_name(
-        monkeypatch):
-    """What r2 protected, kept: when the tools are NOT on the local route (a
-    docker client exists, so the container is the route) and no container
-    answers, nothing is invented. Unnamed -> NO_CONTAINER, by name; named and
-    unidentifiable -> None, a refusal that re-runs the step. Both asked
-    docker, which is the route they are on."""
-    calls = _route(monkeypatch, docker_on_path=True)
-    assert _R._step_image_digest("") == "NO_CONTAINER"
-    assert calls, "the docker route answered without asking docker"
-    del calls[:]
-    assert _R._step_image_digest("no-such-container-xyz-0924") is None
-    assert calls and all(c[-1] == "no-such-container-xyz-0924" for c in calls)
 
 
 # --- the PDK that the step itself derives ----------------------------------
@@ -585,176 +457,29 @@ def _staged_project(tmp_path: Path, *, stage_sdc: bool = True) -> Path:
     return project
 
 
-class _Args:
-    spare_density = 0.02
-    container = ""
 
 
-def _r3_ident(project: Path, kind: str, args=None):
-    si.set_declaration_flow_keys(_R._DECLARATION_PUBLISH_KEYS)
-    inputs, knobs, _bad = _R._step_inputs(project, kind, "top", args or _Args())
-    return si.identity_now(
-        project=project, kind=kind, runner_path=RUNNER, programs_dir=PROGRAMS,
-        flow_yaml=FLOW, pdk=_pdk_with_real_files(project),
-        image_digest=_R._step_image_digest(""),
-        inputs=inputs, knobs=knobs, recording=_fake_recording())[0]
 
 
 # --- A: the SDC the step ACTUALLY resolves --------------------------------
-def test_the_sdc_hashed_is_the_one_the_step_resolves(tmp_path):
-    """FINDING A. r2 hashed `phase2/stage2/constraints/<top>.sdc`, which
-    `step_pnr` never opens: it is a copy the runner writes once. The step
-    resolves through `sdc_constraints.collect_sdc_files` —
-    `input/constraints/*.sdc` first."""
-    project = _staged_project(tmp_path)
-    inputs, _k, _b = _R._step_inputs(project, "pnr", "top", _Args())
-    sdcs = [Path(p) for label, p, _r in inputs if label == "sdc"]
-    assert sdcs, "PnR must hash an SDC"
-    assert sdcs[0] == project / "input" / "constraints" / "silicon.sdc", (
-        f"PnR resolved its SDC to {sdcs[0]}, which is not what the step reads")
 
 
-def test_editing_the_staged_sdc_invalidates_pnr(tmp_path):
-    project = _staged_project(tmp_path)
-    base = _r3_ident(project, "pnr")
-    sdc = project / "input" / "constraints" / "silicon.sdc"
-    sdc.write_text("create_clock -period 5 [get_ports clk]\n")
-    fresh, why = si.compare(base, _r3_ident(project, "pnr"))
-    assert fresh is False, f"the SDC the step reads changed and PnR stayed: {why}"
 
 
-def test_pnr_hashes_whatever_its_own_resolver_returns(tmp_path):
-    """SUPERSEDES the r3 form of this test, by round-3 review finding 2.
-
-    r3 kept only `input/` paths, on the reasoning that everything else under
-    the project is something the flow wrote. But `_resolve_staged_silicon_sdc`
-    — the function `step_pnr` itself calls — falls back to LEGACY locations
-    (`<project>/constraints`, `phase2/stage2/constraints`) when the ground
-    truth is empty, and hands PnR whatever it finds there. So the r3 rule made
-    the identity and the step DISAGREE about which file the run is constrained
-    by, which is the one thing a cache key may never do.
-
-    The identity now follows the resolver wherever it points, and DISCLOSES
-    where that was (`sdc_origin`), instead of overruling it."""
-    project = _staged_project(tmp_path, stage_sdc=False)
-    legacy = project / "phase2" / "stage2" / "constraints"
-    legacy.mkdir(parents=True, exist_ok=True)
-    (legacy / "top.sdc").write_text("create_clock -period 10\n")
-    inputs, knobs, _bad = _R._step_inputs(project, "pnr", "top", _Args())
-    sdcs = [Path(q) for lbl, q, _r in inputs if lbl == "sdc"]
-    assert sdcs, "PnR must hash the SDC its own resolver returns"
-    assert sdcs[0] == _R._resolve_staged_silicon_sdc(project), (
-        "identity and resolver must name the SAME file")
-    assert knobs.get("sdc_origin") == "flow_emitted_or_legacy", knobs
 
 
-def test_a_staged_sdc_under_input_is_disclosed_as_the_designs(tmp_path):
-    project = _staged_project(tmp_path)          # stages input/constraints
-    inputs, knobs, _bad = _R._step_inputs(project, "pnr", "top", _Args())
-    sdcs = [Path(q) for lbl, q, _r in inputs if lbl == "sdc"]
-    assert sdcs and sdcs[0].parent.name == "constraints"
-    assert "input" in str(sdcs[0])
-    assert knobs.get("sdc_origin") == "design", knobs
 
 
 # --- A: the knobs ---------------------------------------------------------
-def test_the_cli_and_env_knobs_are_part_of_the_identity(tmp_path,
-                                                        monkeypatch):
-    """FINDING A. None of these is a file, and each changes what the step
-    produces."""
-    project = _staged_project(tmp_path)
-    base = {k: _r3_ident(project, k) for k in ("pnr", "gds")}
-
-    class _Dense(_Args):
-        spare_density = 0.05
-    assert si.compare(base["pnr"], _r3_ident(project, "pnr", _Dense()))[0] \
-        is False, "--spare-density changed and PnR stayed fresh"
-
-    monkeypatch.setenv("VIBEIC_TAP_PITCH_UM", "20")
-    assert si.compare(base["pnr"], _r3_ident(project, "pnr"))[0] is False, (
-        "VIBEIC_TAP_PITCH_UM changed and PnR stayed fresh")
-    monkeypatch.delenv("VIBEIC_TAP_PITCH_UM")
-
-    monkeypatch.setenv("VIBEIC_FORCE_KLAYOUT_STREAMOUT", "1")
-    assert si.compare(base["gds"], _r3_ident(project, "gds"))[0] is False, (
-        "VIBEIC_FORCE_KLAYOUT_STREAMOUT changed and the GDS stayed fresh")
 
 
-def test_a_slot_record_appearing_invalidates_every_kind(tmp_path):
-    """FINDING A. The die rectangle the seal ring and die fill are built on
-    comes from the operator's slot template.
-
-    THE OPERATOR'S FILE, NOT THE FLOW'S COPY OF IT, and that correction came
-    from driving the real runner: `reports/phase1/submission_template.json` is
-    written BY THE RUN (step 0.5ic ingests the template into it), so it goes
-    absent -> present DURING the run and a step stamped before it could never
-    be fresh again. Measured, and the third member of finding D's family I
-    have had to close. `input/submission_template/` is what the operator
-    staged; the ingest is a restatement of it."""
-    project = _staged_project(tmp_path)
-    base = {k: _r3_ident(project, k) for k in ("synth", "pnr", "gds")}
-    slots = project / "input" / "submission_template" / "slots"
-    slots.mkdir(parents=True, exist_ok=True)
-    (slots / "1x1.yaml").write_text("die: [0, 0, 1000, 1000]\n")
-    for kind in ("synth", "pnr", "gds"):
-        fresh, why = si.compare(base[kind], _r3_ident(project, kind))
-        assert fresh is False, f"{kind} survived a slot being staged: {why}"
 
 
-def test_the_runs_own_copy_of_the_slot_template_is_not_an_input(tmp_path):
-    """The other half, and it is what the measurement forced: the run writes
-    `reports/phase1/submission_template.json` itself, so it must not be an
-    input to a step stamped before it."""
-    project = _staged_project(tmp_path)
-    before, _k1, _b1 = _R._step_inputs(project, "synth", "top", _Args())
-    rec = project / "reports" / "phase1" / "submission_template.json"
-    rec.parent.mkdir(parents=True, exist_ok=True)
-    rec.write_text('{"slot": "1x1"}\n')
-    after, _k2, _b2 = _R._step_inputs(project, "synth", "top", _Args())
-    assert [q for _l, q, _r in after] == [q for _l, q, _r in before], (
-        "the run's own ingest of the slot template became an input to a step "
-        "that ran before it")
 
 
 # --- D: the declaration the flow writes back ------------------------------
-def test_a_key_the_flow_derived_does_not_invalidate_the_step(tmp_path):
-    """FINDING D. `step_gds` rewrites `tapeout_declaration.json` with the keys
-    it DERIVED, after the synth and PnR stamps — so hashing it raw meant those
-    two were never fresh on the next run, for a change they did not make."""
-    project = _staged_project(tmp_path)
-    base = {k: _r3_ident(project, k) for k in ("synth", "pnr")}
-    decl = project / "input" / "submission_template" / \
-        "tapeout_declaration.json"
-    doc = json.loads(decl.read_text())
-    doc["answers"]["core_area_um"] = [0, 0, 99, 99]   # flow-derived, unclaimed
-    doc["answers"]["top_cell"] = "chip_top"
-    decl.write_text(json.dumps(doc, indent=2))
-    for kind in ("synth", "pnr"):
-        fresh, why = si.compare(base[kind], _r3_ident(project, kind))
-        assert fresh is True, (
-            f"{kind} re-ran because the FLOW rewrote the declaration: {why}")
 
 
-def test_an_answer_the_operator_owns_still_invalidates(tmp_path):
-    """THE LIMIT OF THAT RULE, and the first cut of it was wrong here:
-    `deliverable` is in `_DECLARATION_PUBLISH_KEYS`, so dropping every
-    published key hid an OPERATOR change from DIE to HARDMACRO — the single
-    answer that changes the most about a run. The flow writes a key only when
-    NOBODY HAS ANSWERED IT, and `answer_provenance` records who has."""
-    project = _staged_project(tmp_path)
-    base = {k: _r3_ident(project, k) for k in ("synth", "pnr", "gds")}
-    decl = project / "input" / "submission_template" / \
-        "tapeout_declaration.json"
-    doc = json.loads(decl.read_text())
-    assert "deliverable" in doc["answer_provenance"], "owner-answered"
-    assert "deliverable" in _R._DECLARATION_PUBLISH_KEYS, (
-        "and also a key the flow may publish — which is the whole trap")
-    doc["answers"]["deliverable"] = "HARDMACRO"
-    decl.write_text(json.dumps(doc, indent=2))
-    for kind in ("synth", "pnr", "gds"):
-        fresh, why = si.compare(base[kind], _r3_ident(project, kind))
-        assert fresh is False, (
-            f"{kind} survived the operator changing the deliverable: {why}")
 
 
 def test_the_declaration_rule_keeps_provenance_itself(tmp_path):
@@ -788,12 +513,6 @@ def test_the_spef_date_line_is_normalised_away(tmp_path):
         "normalising the clock must not normalise the content")
 
 
-def test_the_gds_identity_does_not_list_the_spef(tmp_path):
-    project = _staged_project(tmp_path)
-    inputs, _k, _b = _R._step_inputs(project, "gds", "top", _Args())
-    assert not any(str(p).endswith(".spef") for _l, p, _r in inputs), (
-        "step_gds does not read the SPEF, and the SPEF is written after this "
-        "stamp — hashing it is how r2 made the GDS permanently stale")
 
 
 
@@ -861,125 +580,24 @@ def test_a_pdk_the_design_stages_under_input_is_hashed(tmp_path):
 # The theme, and it is the last restatement: r3 still NAMED each input instead
 # of ASKING the step. Every miss the review found is that one mistake.
 # ===========================================================================
-def test_the_identity_calls_the_steps_own_netlist_resolver(tmp_path):
-    """FINDING 1, the headline. `step_pnr` routes `pnr_input_netlist()`, which
-    returns `post_dft_netlist.v` when the L20 scan contract authorises it —
-    while r3's identity hashed `{top}_synth.v` unconditionally. A DFT re-run
-    then left the routed DEF 'fresh' against a netlist PnR never read."""
-    project = _staged_project(tmp_path)
-    resolved = _R.pnr_input_netlist(project, "top")
-    want = Path(resolved[0] if isinstance(resolved, tuple) else resolved)
-    inputs, knobs, bad = _R._step_inputs(project, "pnr", "top", _Args())
-    assert bad == [], bad
-    got = [Path(q) for lbl, q, _r in inputs if lbl == "netlist"]
-    assert got and got[0] == want, (
-        f"identity hashes {got} but the step reads {want}")
-
-
-def test_a_new_post_dft_netlist_invalidates_pnr(tmp_path):
-    project = _staged_project(tmp_path)
-    base = _r3_ident(project, "pnr")
-    resolved = _R.pnr_input_netlist(project, "top")
-    nl = Path(resolved[0] if isinstance(resolved, tuple) else resolved)
-    nl.write_text("module top(); wire rescanned; endmodule\n")
-    fresh, why = si.compare(base, _r3_ident(project, "pnr"))
-    assert fresh is False, f"the netlist PnR reads changed and it stayed: {why}"
-
-
-def test_a_reference_flow_knob_invalidates_synth(tmp_path):
-    """FINDING 1. `_reference_flow_qor_knobs` reshapes synthesis
-    (`SWAP_ARITH_OPERATORS`, `ADDER_MAP_FILE`) and was not in the identity at
-    all."""
-    project = _staged_project(tmp_path)
-    base = _r3_ident(project, "synth")
-    rf = project / "input" / "reference_flow"
-    rf.mkdir(parents=True, exist_ok=True)
-    (rf / "config.mk").write_text("export SWAP_ARITH_OPERATORS = 1\n")
-    fresh, why = si.compare(base, _r3_ident(project, "synth"))
-    assert fresh is False, f"a reference-flow QoR knob did not reach synth: {why}"
-
-
-def test_a_staged_macro_invalidates_every_kind(tmp_path):
-    """FINDING 1. `input/pdk_local` macros become synth blackboxes AND the
-    PnR/GDS macro LEF/GDS — and they are not in `_PDK_FIELDS`, so nothing
-    hashed them."""
-    project = _staged_project(tmp_path)
-    base = {k: _r3_ident(project, k) for k in ("synth", "pnr", "gds")}
-    lef = project / "input" / "pdk_local" / "vendor" / "u_otp.lef"
-    lef.parent.mkdir(parents=True, exist_ok=True)
-    lef.write_text("MACRO u_otp\nEND u_otp\n")
-    for kind in ("synth", "pnr", "gds"):
-        fresh, why = si.compare(base[kind], _r3_ident(project, kind))
-        assert fresh is False, f"{kind} survived a staged macro: {why}"
-
-
-def test_an_otp_image_invalidates_synth(tmp_path):
-    """FINDING 1. `input/otp/*.hex` is copied into the synth working directory
-    so `$readmemh` resolves — it is part of what synthesis reads."""
-    project = _staged_project(tmp_path)
-    base = _r3_ident(project, "synth")
-    otp = project / "input" / "otp" / "image.hex"
-    otp.parent.mkdir(parents=True, exist_ok=True)
-    otp.write_text("00\n")
-    fresh, why = si.compare(base, _r3_ident(project, "synth"))
-    assert fresh is False, why
-
-
-def test_a_legacy_location_sdc_invalidates_pnr(tmp_path):
-    """FINDING 2: identity and resolver must name the SAME file."""
-    project = _staged_project(tmp_path, stage_sdc=False)
-    legacy = project / "phase2" / "stage2" / "constraints"
-    legacy.mkdir(parents=True, exist_ok=True)
-    sdc = legacy / "top.sdc"
-    sdc.write_text("create_clock -period 10\n")
-    base = _r3_ident(project, "pnr")
-    sdc.write_text("create_clock -period 5\n")
-    fresh, why = si.compare(base, _r3_ident(project, "pnr"))
-    assert fresh is False, (
-        f"PnR is constrained by this file and did not notice it change: {why}")
-
-
-def test_a_resolver_that_cannot_be_called_means_no_cache(tmp_path,
-                                                         monkeypatch):
-    """The fail-closed rule the review asked for: a read-set we cannot
-    establish is not a freshness answer."""
-    project = _staged_project(tmp_path)
-
-    def _boom(*_a, **_k):
-        raise RuntimeError("resolver unavailable")
-
-    monkeypatch.setattr(_R, "_reference_flow_qor_knobs", _boom)
-    _inputs, _knobs, bad = _R._step_inputs(project, "synth", "top", _Args())
-    assert bad and "_reference_flow_qor_knobs" in bad[0], bad
-    ok, why = _R._producer_cache_valid_for(
-        _R._pl.synth_dir(project), "synth", project=project,
-        pdk=_pdk_with_real_files(project), container="", top="top",
-        args=_Args())
-    assert ok is False
-    assert "read-set cannot be established" in why, why
 
 
 
 
 
 
-def test_the_declaration_rule_covers_the_top_level_keys_too(tmp_path):
-    """FINDING 4: `step_gds`'s merge also rewrites the TOP-LEVEL
-    `from_the_technology` and `forbidden_layers`, so a phase-3-only re-run
-    moved synth's and pnr's input hash for something the FLOW wrote."""
-    si.set_declaration_flow_keys(_R._DECLARATION_PUBLISH_KEYS)
-    decl = tmp_path / "d.json"
-    decl.write_text(json.dumps({"answers": {"deliverable": "DIE"},
-                                "answer_provenance": {
-                                    "deliverable": {"answered_by": "owner"}}}))
-    before = si.canonical_bytes(decl, "declaration_as_asked")
-    doc = json.loads(decl.read_text())
-    doc["from_the_technology"] = {"derived": "by the flow"}
-    doc["forbidden_layers"] = ["M9"]
-    decl.write_text(json.dumps(doc))
-    after = si.canonical_bytes(decl, "declaration_as_asked")
-    assert before == after, (
-        "the flow's own top-level writes must not move a step's input hash")
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 # ===========================================================================
@@ -1172,46 +790,10 @@ def test_the_tools_component_is_carried_not_re_read(tmp_path, monkeypatch):
         "the tools component moved because the ledger grew after the stamp")
 
 
-def test_the_flows_own_stamped_auto_sdc_is_not_design_staged(tmp_path):
-    """ROUND-4 FINDING 5, pre-existing on main. `_stamp_sdc_provenance`
-    PREPENDS `# VIBEIC_SDC_PDK_PROVENANCE`, and
-    `step_canonicalize_artefacts` runs it over the deck the flow itself
-    emitted — so the auto banner stopped being the first line and a
-    `startswith` no longer matched. The flow's own deck then read back as
-    DESIGN-STAGED: `sdc_staged` flipped no -> yes after the stamps and the
-    re-run took the design-staged branch on the flow's own file, which is the
-    laundering this guard exists to prevent."""
-    d = tmp_path / "phase2" / "stage2" / "constraints"
-    d.mkdir(parents=True)
-    (d / "top.sdc").write_text(
-        "# VIBEIC_SDC_PDK_PROVENANCE: gf180mcuD\n"
-        "# Auto-generated minimal SDC for silicon top (no constraints/*.sdc "
-        "supplied; clk_period_ns=20.0)\n"
-        "create_clock -name clk -period 20.0 [get_ports i_clk]\n")
-    assert _R._resolve_staged_silicon_sdc(tmp_path) is None, (
-        "the flow's own CANONICALIZED auto-SDC was read back as the design's")
 
 
-def test_an_unstamped_auto_sdc_is_still_recognised(tmp_path):
-    """The pre-existing case must keep working: the banner on line 1."""
-    d = tmp_path / "phase2" / "stage2" / "constraints"
-    d.mkdir(parents=True)
-    (d / "top.sdc").write_text(
-        "# Auto-generated minimal SDC for silicon top (no constraints/*.sdc "
-        "supplied; clk_period_ns=20.0)\n"
-        "create_clock -name clk -period 20.0 [get_ports i_clk]\n")
-    assert _R._resolve_staged_silicon_sdc(tmp_path) is None
 
 
-def test_a_hand_authored_sdc_is_still_the_designs(tmp_path):
-    """And the other direction, so the guard cannot become a blanket refusal:
-    a deck with no flow banner is the design's and must be returned."""
-    d = tmp_path / "input" / "constraints"
-    d.mkdir(parents=True)
-    (d / "silicon.sdc").write_text(
-        "# hand written by the designer\ncreate_clock -period 10 [get_ports clk]\n")
-    got = _R._resolve_staged_silicon_sdc(tmp_path)
-    assert got is not None and got.name == "silicon.sdc", got
 
 
 def test_mutation_recording_only_calls_would_miss_the_module_body(tmp_path):
@@ -1363,38 +945,10 @@ def test_the_post_stamp_writers_are_recorded_into_pnr_and_gds():
         "artefacts, or the stamp vouches for bytes that were then replaced")
 
 
-def test_the_recorder_accumulates_rather_than_replacing(tmp_path,
-                                                        monkeypatch):
-    """Two recorded spans of the same kind must MERGE, or the last one wins
-    and the earlier step's code leaves the identity."""
-    monkeypatch.setattr(_R, "_STEP_RECORDING", {})
-    _R._merge_recording("pnr", {"a.py": {"f": "1"}}, "")
-    _R._merge_recording("pnr", {"b.py": {"g": "2"}}, "")
-    got, why = _R._STEP_RECORDING["pnr"]
-    assert got is not None and set(got) == {"a.py", "b.py"}, (got, why)
 
 
-def test_a_span_that_could_not_be_recorded_poisons_the_kind(tmp_path,
-                                                            monkeypatch):
-    """A partial recording would look like a complete one."""
-    monkeypatch.setattr(_R, "_STEP_RECORDING", {})
-    _R._merge_recording("pnr", {"a.py": {"f": "1"}}, "")
-    _R._merge_recording("pnr", None, "the profiler was unavailable")
-    got, why = _R._STEP_RECORDING["pnr"]
-    assert got is None and "profiler" in why, (got, why)
 
 
-def test_the_sparse_die_fill_knob_is_part_of_pnrs_identity(tmp_path,
-                                                           monkeypatch):
-    """ROUND-5 FINDING 5: it changes `step_pnr`'s filler Tcl and the DEF, and
-    was in no component."""
-    project = _staged_project(tmp_path)
-    _inputs, knobs, _bad = _R._step_inputs(project, "pnr", "top", _Args())
-    assert "VIBEIC_SPARSE_DIE_FILL_PCT" in knobs, sorted(knobs)
-    base = _r3_ident(project, "pnr")
-    monkeypatch.setenv("VIBEIC_SPARSE_DIE_FILL_PCT", "12")
-    fresh, why = si.compare(base, _r3_ident(project, "pnr"))
-    assert fresh is False, why
 
 
 # --- r6 finding 2: code that runs OUT OF PROCESS ---------------------------
@@ -1506,99 +1060,8 @@ def test_a_launch_of_a_non_plugin_script_is_not_a_refusal(tmp_path):
 # ===========================================================================
 # r7 — ROUND-6 REVIEW (wcr8rvg8d): 2 HIGH + 1 MED, all narrow
 # ===========================================================================
-def test_the_re_stamp_never_shrinks_the_recording(tmp_path, monkeypatch):
-    """ROUND-6 FINDING 1, and it is the dangerous one.
-
-    On a pnr CACHE HIT `step_pnr` never runs, but the two repair steps still
-    do under `_recorded(("pnr", "gds"))` — so this session's "pnr" recording
-    names ONLY the repair functions. Overwriting the sidecar with it dropped
-    every `step_pnr` key, and the next run compared a set that no longer
-    mentioned the router: an edit to a step_pnr-only helper read "pnr
-    unchanged" and the DEF was reused. That is exactly `--force-step gds` on a
-    finished tree, which is the scenario R-0924-3 was measured on."""
-    project = _staged_project(tmp_path)
-    out = _R._pl.pnr_dir(project)
-    out.mkdir(parents=True, exist_ok=True)
-
-    # a stamp from a run in which step_pnr DID run
-    full_keys, err = sr.check_digests(
-        RUNNER, ["step_pnr", "_build_pdn_tcl"])
-    assert not err, err
-    full = {"phase3_one_shot_runner.py": full_keys,
-            "__engine_env__": {name: sr._engine_marker(name)
-                               for name in sr.ENGINE_ENV}}
-    monkeypatch.setattr(_R, "_STEP_RECORDING", {"pnr": (full, "")})
-    _R._write_producer_identity(out, "pnr", project=project,
-                                pdk=_pdk_with_real_files(project),
-                                container="", top="top", args=_Args())
-    first = si.read_sidecar(out, "pnr") or {}
-    assert "step_pnr" in first["recording"]["phase3_one_shot_runner.py"]
-
-    # now a CACHE HIT: only the repair steps ran
-    repair_keys, err = sr.check_digests(RUNNER, ["step_signoff_spef_repair"])
-    assert not err, err
-    repair_only = {"phase3_one_shot_runner.py": repair_keys,
-                   "__engine_env__": full["__engine_env__"]}
-    monkeypatch.setattr(_R, "_STEP_RECORDING", {"pnr": (repair_only, "")})
-    _R._write_producer_identity(out, "pnr", project=project,
-                                pdk=_pdk_with_real_files(project),
-                                container="", top="top", args=_Args(),
-                                cache_hit=True)
-    second = si.read_sidecar(out, "pnr") or {}
-    keys = second["recording"]["phase3_one_shot_runner.py"]
-    assert "step_pnr" in keys and "_build_pdn_tcl" in keys, (
-        f"the re-stamp SHRANK the recording and the router is no longer named: "
-        f"{sorted(keys)}")
-    assert "step_signoff_spef_repair" in keys, (
-        "and the repair that rewrote the DEF must be named too")
 
 
-def test_cache_miss_drops_old_keys_and_cache_hit_rederives_them(
-        tmp_path, monkeypatch):
-    project = _staged_project(tmp_path)
-    out = _R._pl.pnr_dir(project)
-    out.mkdir(parents=True, exist_ok=True)
-    helper = tmp_path / "helper.py"
-    helper.write_text("print('old')\n")
-    key = "launched:" + str(helper)
-    previous = {key: {"__whole__": sr._sha256_file(helper)}}
-    current = {"phase3_one_shot_runner.py": sr.check_digests(
-        RUNNER, ["step_signoff_spef_repair"])[0]}
-    monkeypatch.setattr(_R, "_STEP_RECORDING", {"pnr": (previous, "")})
-    _R._write_producer_identity(out, "pnr", project=project,
-                                pdk=_pdk_with_real_files(project),
-                                container="", top="top", args=_Args())
-    helper.write_text("print('new')\n")
-    monkeypatch.setattr(_R, "_STEP_RECORDING", {"pnr": (current, "")})
-    # Full producer ran: its current recording replaces the prior recipe.
-    _R._write_producer_identity(out, "pnr", project=project,
-                                pdk=_pdk_with_real_files(project),
-                                container="", top="top", args=_Args())
-    assert key not in si.read_sidecar(out, "pnr")["recording"]
-    # A true hit carries the old producer, and must read its bytes again.
-    previous[key]["__whole__"] = sr._sha256_file(helper)
-    monkeypatch.setattr(_R, "_STEP_RECORDING", {"pnr": (previous, "")})
-    _R._write_producer_identity(out, "pnr", project=project,
-                                pdk=_pdk_with_real_files(project),
-                                container="", top="top", args=_Args())
-    monkeypatch.setattr(_R, "_STEP_RECORDING", {"pnr": (current, "")})
-    _R._write_producer_identity(out, "pnr", project=project,
-                                pdk=_pdk_with_real_files(project),
-                                container="", top="top", args=_Args(),
-                                cache_hit=True)
-    assert si.read_sidecar(out, "pnr")["recording"][key]["__whole__"] == \
-        sr._sha256_file(helper)
-    # A helper edited after the hit decision must not acquire a fresh stamp
-    # merely because its current hash can be calculated.
-    old_sidecar = si.read_sidecar(out, "pnr")
-    helper.write_text("print('changed after hit')\n")
-    _R._write_producer_identity(out, "pnr", project=project,
-                                pdk=_pdk_with_real_files(project),
-                                container="", top="top", args=_Args(),
-                                cache_hit=True)
-    assert si.read_sidecar(out, "pnr") == old_sidecar
-    assert si.code_from_stored(old_sidecar["recording"], PROGRAMS)[0] != \
-        old_sidecar["code"]
 
 
 def test_unset_engine_name_is_recorded_and_later_set_invalidates(

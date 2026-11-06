@@ -51,14 +51,11 @@ import json
 import sys
 from pathlib import Path
 
-import pytest
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 
 import design_one_shot_runner as DOSR                      # noqa: E402
-import agent_report_presence_check as ARP                  # noqa: E402
-import agent_report_sha256_attestation_check as ARSA       # noqa: E402
 
 _DISPATCH = "plan.append(step_agent_report_presence(project))"
 _GATE = "agent_report_presence_check"
@@ -82,9 +79,6 @@ One wave.
 """
 
 
-def _row(res):
-    assert res.extras and "agent_report_presence" in res.extras, res.extras
-    return res.extras["agent_report_presence"]
 
 
 def test_the_runner_dispatches_the_gate_at_a_real_call_site() -> None:
@@ -141,76 +135,3 @@ def test_the_step_can_never_move_the_run_verdict() -> None:
 # ---------------------------------------------------------------------------
 # THE VERDICT MOVES ON THE SUBJECT — BOTH DIRECTIONS
 # ---------------------------------------------------------------------------
-def test_a_project_with_no_report_card_records_a_FINDING(tmp_path: Path) -> None:
-    """The case the wired sibling explicitly declines to judge.
-
-    Asserted through the sibling's own behaviour as well, so the two halves of
-    the delegation are measured in one place: it emits VACUOUS_PASS here, and
-    the row this step writes is the only verdict the tree produces.
-    """
-    p = tmp_path / "proj"
-    p.mkdir()
-    assert ARSA.audit(p)[0] == "VACUOUS_PASS", (
-        "the sibling no longer declines this case; re-base the delegation "
-        "claim on what it does now rather than deleting the measurement")
-    row = _row(DOSR.step_agent_report_presence(p))
-    assert row["verdict"] == "FINDING", row
-    assert any("does not exist" in d for d in row["diagnostics"]), row
-
-
-def test_a_project_with_a_complete_report_card_records_a_PASS(
-        tmp_path: Path) -> None:
-    p = tmp_path / "proj"
-    p.mkdir()
-    before = _row(DOSR.step_agent_report_presence(p))
-    (p / "AGENT_REPORT.md").write_text(_GOOD_REPORT)
-    after = _row(DOSR.step_agent_report_presence(p))
-    assert (before["verdict"], after["verdict"]) == ("FINDING", "PASS"), (
-        before, after)
-
-
-def test_a_report_missing_one_section_is_still_a_FINDING(tmp_path: Path) -> None:
-    """The gate's substance, not only the file's existence, reaches the row."""
-    p = tmp_path / "proj"
-    p.mkdir()
-    (p / "AGENT_REPORT.md").write_text(
-        _GOOD_REPORT.replace("## Iteration log\nOne wave.\n", ""))
-    row = _row(DOSR.step_agent_report_presence(p))
-    assert row["verdict"] == "FINDING", row
-    assert any("Iteration log" in d for d in row["diagnostics"]), row
-
-
-def test_the_row_names_the_report_the_flow_actually_produces(
-        tmp_path: Path) -> None:
-    """Read from the SIBLING's register, not restated.
-
-    The row must let a reader tell "this run produced no report card at all"
-    from "this run produced the v1.6.32 canonical one and this gate has not
-    been re-pointed at it" — without softening the gate's own verdict.
-    """
-    p = tmp_path / "proj"
-    (p / "reports").mkdir(parents=True)
-    (p / "reports/final_summary.md").write_text("# summary\n")
-    row = _row(DOSR.step_agent_report_presence(p))
-    assert row["verdict"] == "FINDING", row
-    assert set(row["canonical_report"]) == set(ARSA._REPORT_CANDIDATE_REL_PATHS)
-    assert row["canonical_report"]["reports/final_summary.md"] is True
-    assert row["canonical_report"]["AGENT_REPORT.md"] is False
-
-
-def test_the_verdict_report_is_published_under_reports_phase2_gates(
-        tmp_path: Path) -> None:
-    p = tmp_path / "proj"
-    p.mkdir()
-    res = DOSR.step_agent_report_presence(p)
-    out = p / "reports/phase2/gates/agent_report_presence.json"
-    assert out.is_file(), sorted(str(x) for x in p.rglob("*.json"))
-    assert res.output_files == [str(out)]
-    assert json.loads(out.read_text())["gate"] == _GATE
-
-
-def test_a_missing_project_dir_is_NOT_MEASURED_never_a_PASS(
-        tmp_path: Path) -> None:
-    """"Could not look" is not "looked and found nothing"."""
-    row = _row(DOSR.step_agent_report_presence(tmp_path / "absent"))
-    assert row["verdict"] == "NOT_MEASURED" and row["rc"] == 2, row

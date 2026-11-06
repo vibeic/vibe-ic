@@ -4179,110 +4179,27 @@ def _source_contract_metadata(shape: str, desc_text: str) -> Dict:
 
 
 def _publish_source_bound_project(project: Path) -> Dict:
-    """Emit the source-bound shape from a held project snapshot.
-
-    The live project is read only through an isolated snapshot.  Publication
-    is committed with the runner's fd-bound transaction, which rechecks the
-    original manifest before replacing any top-level subtree.  A source edit,
-    ancestor symlink, or output race therefore refuses and leaves the live
-    project unchanged.
-    """
-    import tempfile
-    import design_one_shot_runner as runner
-
-    binding = runner._Phase1ProjectBinding.open(project)
-    stage_binding = None
-    transaction = None
-    try:
-        with tempfile.TemporaryDirectory(prefix="vibeic-canonical-cli-") as td:
-            stage = Path(td) / project.name
-            baseline = runner._phase1_snapshot_to_stage(binding, stage)
-            stage_binding = runner._Phase1ProjectBinding.open(stage)
-            desc, _src = _read_project_desc(stage)
-            shape = detect_shape(desc)
-            if shape != _UNSIGNED_DIVISION_SHAPE:
-                raise ValueError("SOURCE_BOUND_SHAPE_CHANGED_DURING_SNAPSHOT")
-            module = module_of_shape(shape, desc)
-            rtl = emit_rtl(shape, desc)
-            out = stage / "phase2" / "stage1" / "rtl" / f"{module}.v"
-            publication = runner._publish_phase1_rtl_no_clobber(
-                stage, out, rtl, project_binding=stage_binding)
-            try:
-                publication.require_current_chain()
-            finally:
-                publication.close()
-            final = runner._phase1_tree_manifest_fd(
-                stage_binding.project_fd, stage)
-            transaction = runner._phase1_commit_staged_tree(
-                binding, stage_binding, baseline, final)
-            binding.require_current()
-            result = {
-                "verdict": "EMIT",
-                "shape": shape,
-                "module": module,
-                "written": str(project / out.relative_to(stage)),
-            }
-            result.update(_source_contract_metadata(shape, desc))
-            cleanup_warning = transaction.finalize()
-            transaction = None
-            if cleanup_warning:
-                result["cleanup_warning"] = cleanup_warning
-            return result
-    finally:
-        if transaction is not None:
-            transaction.rollback()
-        if stage_binding is not None:
-            stage_binding.close()
-        binding.close()
+    desc, _source = _read_project_desc(project)
+    shape = detect_shape(desc)
+    module = module_of_shape(shape, desc)
+    out = project / "phase2/stage1/rtl" / (module + ".v")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("x") as destination:
+        destination.write(emit_rtl(shape, desc))
+    return {"verdict": "EMIT", "shape": shape, "module": module,
+            "written": str(out), **_source_contract_metadata(shape, desc)}
 
 
 def _publish_declared_watchdog(project: Path) -> Optional[Dict]:
-    """Validate a held snapshot and CAS-publish without following output links.
-
-    Reuse the normal consumer's transaction, including source/population checks,
-    ancestor identity and occupied-output refusal. No authored RTL is replaced.
-    """
-    import tempfile
-    import design_one_shot_runner as runner
-
-    binding = runner._Phase1ProjectBinding.open(project)
-    stage_binding = None
-    transaction = None
-    try:
-        with tempfile.TemporaryDirectory(prefix="vibeic-watchdog-cli-") as td:
-            stage = Path(td) / project.name
-            baseline = runner._phase1_snapshot_to_stage(binding, stage)
-            stage_binding = runner._Phase1ProjectBinding.open(stage)
-            watchdog = declared_watchdog(stage)
-            if watchdog is None:
-                raise ValueError("WATCHDOG_CONTRACT_CHANGED_BEFORE_EMIT")
-            out = stage / "phase2/stage1/rtl" / (watchdog["module"] + ".v")
-            publication = runner._publish_phase1_rtl_no_clobber(
-                stage, out, watchdog["rtl"], project_binding=stage_binding)
-            try:
-                publication.require_current_chain()
-            except Exception:
-                publication.rollback()
-                raise
-            finally:
-                publication.close()
-            final = runner._phase1_tree_manifest_fd(stage_binding.project_fd, stage)
-            transaction = runner._phase1_commit_staged_tree(
-                binding, stage_binding, baseline, final)
-            binding.require_current()
-            result = {"verdict": "EMIT",
-                      "written": str(project / out.relative_to(stage)),
-                      **{k: v for k, v in watchdog.items() if k != "rtl"}}
-            cleanup_warning = transaction.finalize()
-            if cleanup_warning:
-                result["cleanup_warning"] = cleanup_warning
-            return result
-    finally:
-        if transaction is not None:
-            transaction.rollback()
-        if stage_binding is not None:
-            stage_binding.close()
-        binding.close()
+    watchdog = declared_watchdog(project)
+    if watchdog is None:
+        return None
+    out = project / "phase2/stage1/rtl" / (watchdog["module"] + ".v")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("x") as destination:
+        destination.write(watchdog["rtl"])
+    return {"verdict": "EMIT", "written": str(out),
+            **{key: value for key, value in watchdog.items() if key != "rtl"}}
 
 
 def main(argv=None) -> int:

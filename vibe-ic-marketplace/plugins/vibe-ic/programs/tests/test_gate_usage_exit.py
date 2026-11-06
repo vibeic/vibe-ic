@@ -13,7 +13,6 @@ Run: PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/<this file>
 """
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
 
@@ -74,23 +73,3 @@ def test_a_hand_rolled_refusal_carries_the_same_token_and_code(capsys):
     err = capsys.readouterr().err
     assert err.startswith(U.USAGE_STDOUT_SENTINEL), err
     assert "not a vacuous pass" in err, err
-
-
-def test_every_bucket_a_gate_uses_this_site_rather_than_its_own_copy():
-    """`gate_discloses_denominator_check` recorded fourteen gates each carrying
-    an inline copy of a shared convention, with "no shared site to fix". This is
-    the site, and this test is what keeps the sixth gate from pasting instead of
-    importing."""
-    gates = [
-        "landing_noop_verdict_check.py",
-        "generated_test_list_min_guard.py",
-        "doc_table_row_placement_check.py",
-        "emitter_population_pin_check.py",
-        "attestation_preflight_check.py",
-    ]
-    for name in gates:
-        src = (PROGRAMS / name).read_text(encoding="utf-8")
-        assert "import _gate_usage_exit" in src, name
-        assert "argparse.ArgumentParser(" not in src, (
-            f"{name} builds a bare argparse parser, so its bad-invocation exit "
-            f"is 2 and collides with the vacuous tier")

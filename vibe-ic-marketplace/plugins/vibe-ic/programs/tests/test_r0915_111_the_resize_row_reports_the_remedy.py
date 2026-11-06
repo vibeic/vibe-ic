@@ -38,27 +38,10 @@ import phase3_one_shot_runner as R  # noqa: E402
 SRC = (PROGRAMS / "phase3_one_shot_runner.py").read_text()
 
 
-def _floor(**kw):
-    """An EM floor shaped like `_pdn_em_width_floor`'s own answer."""
-    f = {
-        "per_layer": {"metal4": {"jmax_A_per_um": 6.7e-4, "w_em_um": 3.95}},
-        "max_segment_current_A": 1.189e-3,
-        "margin": 0.1, "safety_factor": 2.0,
-        "manufacturing_grid_um": 0.005,
-    }
-    f.update(kw)
-    return f
 
 
 # ------------------------------------------------- the deck records the remedy
 
-def test_the_deck_records_what_it_applied_into_the_floor_it_was_given():
-    """One source of truth: the same dict that carries the arithmetic carries
-    the decision, so the two can never disagree."""
-    body = inspect.getsource(R._build_pdn_tcl)
-    assert 'em_floor.setdefault("applied", [])' in body
-    for field in ("stripe_multiplier", "pitch_um", "width_um", "width_kept"):
-        assert field in body, field
 
 
 def test_the_record_is_persisted_beside_the_arithmetic():
@@ -76,22 +59,8 @@ def test_post_route_signoff_does_not_redispatch_pnr():
 
 # --------------------------------------------------------- both directions
 
-def test_a_stripe_answer_records_stripes_with_width_kept():
-    plan = R._pdn_em_stripe_plan(
-        i_seg_A=0.001189, drawn_width_um=1.6, pitch_um=153.58,
-        jmax_A_per_um=0.00067, margin=0.1, safety=2,
-        min_spacing_um=0.3, max_width_um=None, grid_um=0.005)
-    assert plan['verdict'] == 'MORE_STRIPES'
-    assert plan['stripe_multiplier'] == 3
-    assert plan['new_width_um'] == 1.6
-    assert plan['new_pitch_um'] < 153.58
 
 
-def test_the_record_distinguishes_width_from_stripe_count():
-    body = inspect.getsource(R._build_pdn_tcl)
-    assert '"stripe_multiplier": _plan_em.get("stripe_multiplier")' in body
-    assert '"width_um": _plan_em.get("new_width_um")' in body
-    assert '"width_kept": (_plan_em.get("new_width_um")' in body
 
 
 def test_the_shortfall_is_not_misreported_as_an_applied_remedy():

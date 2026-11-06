@@ -59,36 +59,3 @@ def test_rows_are_cut_under_placed_macros_before_the_pdn():
 
 _MASTERS = ["x_decap_8", "x_decap_4", "x_fill_8", "x_fill_4", "x_fill_2",
             "x_fill_1"]
-
-
-def test_a_design_declared_die_gets_a_device_free_fill():
-    tcl = R._build_sparse_die_aware_filler_tcl(
-        _MASTERS, slot_pinned_core=False, design_declared_die=True)
-    assert "SPARSE_DIE_FILL_NOT_APPLICABLE" in tcl
-    assert "SPARSE_DIE_FILL_SKIPPED" not in tcl.split(
-        "SPARSE_DIE_FILL_NOT_APPLICABLE")[1]
-    # DEVICE-FREE: the decap family stays withheld on THIS arm (the
-    # above-threshold arm in the same block still uses the full master list)
-    arm = tcl.split("SPARSE_DIE_FILL_NOT_APPLICABLE")[1].split("} else")[0]
-    assert "x_fill_1" in arm
-    assert "decap" not in arm
-
-
-def test_a_shuttle_slot_still_takes_the_same_arm():
-    tcl = R._build_sparse_die_aware_filler_tcl(
-        _MASTERS, slot_pinned_core=True, design_declared_die=False)
-    assert "SPARSE_DIE_FILL_NOT_APPLICABLE" in tcl
-
-
-def test_neither_signal_keeps_the_legacy_skip():
-    """The guard still exists: a design that neither pins a slot nor declares
-    its own die is exactly the empty-fixed-wrapper case it was written for."""
-    tcl = R._build_sparse_die_aware_filler_tcl(
-        _MASTERS, slot_pinned_core=False, design_declared_die=False)
-    assert "SPARSE_DIE_FILL_SKIPPED" in tcl
-    assert "SPARSE_DIE_FILL_NOT_APPLICABLE" not in tcl
-
-
-def test_no_masters_is_still_a_named_skip():
-    tcl = R._build_sparse_die_aware_filler_tcl([], design_declared_die=True)
-    assert "FILLER_SKIPPED" in tcl

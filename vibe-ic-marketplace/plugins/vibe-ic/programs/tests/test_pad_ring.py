@@ -58,7 +58,7 @@ import _pad_ring as PR            # noqa: E402
 import pad_ring_check as CHK      # noqa: E402
 import pad_ring_gen as GEN        # noqa: E402
 from _hostpaths import require_repo  # noqa: E402
-from not_verified_tier import (   # noqa: E402
+from _tool_probes import (   # noqa: E402
     not_verified_reason,
     skip_not_verified,
 )

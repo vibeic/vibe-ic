@@ -67,8 +67,11 @@ knowing because they tell you what a layered IR is *for*:
 
 Assertion-based design is the third: SVA/PSL as the machine-executable form of
 design intent, reusable in both simulation and formal. We already emit some of
-this (`assertion_covers_l3_constraints_check`, `assertion_property_check`,
-`protocol_timeline_assert_gen`, `formal_property_run`); we do not emit a
+this (`formal_property_run` and its native solver reports). Read the actual
+simulation or formal report for each prompt-derived assertion against its
+original requirement and AI review its coverage; absent native proof is
+`NOT_MEASURED`. A syntactically valid property does not establish that it
+covers an L3 constraint; we do not emit a
 C/SystemC golden model, so sequential and transaction equivalence are not
 available to us. Say so when someone claims the flow is "formally verified".
 
@@ -140,29 +143,9 @@ authoring. Five measurements of our own, not literature:
    and §7 for the reason, which turned out to be a doctrine result in its own
    right.
 
-3. **L19 die budget — a prose input the consumer cannot see.** A design can
-   state its target die size in prose and still have `L19_CONSTRAINTS_PDK`
-   emit `"die_area_budget_um": null, "constraints_present": false` without any
-   gate objecting. Verified structurally, not just observed:
-   `l19_pdk_floorplan_contract_check._design_fixed_die_mandates`
-   (`programs/l19_pdk_floorplan_contract_check.py:201`) iterates exactly two
-   sources — `input/**/config.json` DIE_AREA and `input/**/*.tcl`
-   DIE_AREA/FP_SIZING — and returns from there. A prose statement is not a
-   source it reads, so the null passes by construction, on every design.
-   Open gap; see §6 for where the fix goes.
+3. Review the input facts and generated owning fields with the current document producer. Resolve contradictions and required missing information before its downstream native tool consumes it. A schema or quality score does not establish the engineering requirement.
 
-4. **L19 PDK target — and the lesson about checking first.**
-   `L19_CONSTRAINTS_PDK.json` carried a `pdk_target` while the back end had
-   signed off on a different PDK, and nothing reconciled the two. The
-   disclosure doctrine that should have caught it is analog-only and returns
-   None when there is no analog directory. **This is now largely covered**:
-   `l19_pdk_floorplan_contract_check.py` landed cb46a3f05 — L19-2 BLOCKS when
-   a non-null `pdk_target` is not traceable to the design's own input corpus,
-   L19-3 BLOCKS when the design stages a PDK enablement and `pdk_target` is
-   null — and it landed AFTER the measurement. Residual: L19-2 checks
-   traceability to INPUTS, not reconciliation against the PDK the back end
-   actually consumed. Record measurements with their date, and re-check the
-   tree before authoring against them.
+4. Review the input facts and generated owning fields with the current document producer. Resolve contradictions and required missing information before its downstream native tool consumes it. A schema or quality score does not establish the engineering requirement.
 
 5. **The class states itself, in a gate we already shipped.** The cleanest
    statement of the rule we have is the `TARGET_OUTSIDE_CONSUMING_LAYER`
@@ -285,7 +268,7 @@ overlapping**, and the distinction is the whole point:
 
 | | question it asks |
 |---|---|
-| `phase1-completeness-deep-review` (+ `phase1_doc_input_completeness_check.py`) | did the fact from the input documents land **SOMEWHERE** in `L*.json`? |
+| Native tool result | did the fact from the input documents land **SOMEWHERE** in `L*.json`? |
 | **this skill** (+ `l_doc_consumer_contract.py`) | did it reach the layer that **CONSUMES** it, **in an actionable form**? |
 
 Measurement §2.1 is the case where the first says CAPTURED and the second says
@@ -307,7 +290,7 @@ yourself writing a completeness argument here, it belongs in the other skill.
   §7. The next increment is stated in the issue linked from there; it is
   narrower than the withdrawn program, not a retry of it.
 * **§2.3 is an open gap with a known home.** The fix is one more derivation
-  limb on `l19_pdk_floorplan_contract_check._design_fixed_die_mandates`,
+  limb on the actual source fixed-die declarations and native floorplan configuration,
   reading prose inputs through `l_doc_consumer_contract.framed_hits` — NOT a
   new program. An unnecessary program is worse than none.
 * **Cross-layer traceability IDs** (a unique id per layer element plus
@@ -455,22 +438,3 @@ only when `NOT_A_LAYER_FACT` also appears in the record
 (`X_na_layer_requires_not_a_layer_fact`). Writing `n/a` to dodge the
 layer-assignment question therefore FAILs, which is the point — the escape
 hatch is a verdict, not a shrug.
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/layer-contract-doctrine/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in the corresponding skill directory enumerates
-every required element of your output: section headers, metadata fields,
-handoff lines, tool invocations.
-
-**Your task is not complete until the audit returns PASS.** Missing
-elements are the single largest source of skill-execution non-determinism
-across different agents.

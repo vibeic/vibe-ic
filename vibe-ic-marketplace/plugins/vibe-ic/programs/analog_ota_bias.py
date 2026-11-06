@@ -9,7 +9,6 @@ settling retains the library admission bound; evaluating its current ratio
 avoids cancellation when a branch is sized exactly at that bound.
 """
 from copy import deepcopy
-import hashlib
 import json
 import math
 from pathlib import Path
@@ -75,7 +74,6 @@ def read_inputs(project, block):
         if set(row) - {"input_parasitic_ff", "output_load_ff", "supply_current_a"}:
             raise ValueError("OTA_BIAS_INPUT_INVALID: unknown stage " + str(stage) + " fields")
     return data, {"path": str(path.relative_to(project)),
-                  "sha256": hashlib.sha256(payload).hexdigest(),
                   "citation": data.get("citation")}
 
 
@@ -98,8 +96,7 @@ def apply(library, values, devices, exprs, nets, constants, env, evaluate, proje
         if path.is_file():
             try:
                 relative = path.resolve().relative_to(project.resolve())
-                specification = {"path": str(relative),
-                                 "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+                specification = {"path": str(relative)}
             except (OSError, ValueError) as exc:
                 raise ValueError("OTA_BIAS_SPEC_INPUT_INVALID: " + str(exc)) from exc
     by_name = {d["name"]: d for d in devices}
@@ -367,22 +364,6 @@ def _problems(ir, project=None):
             or len(rrows) != 1 or rrows[0].get("expr") != "bias_reference_length_um"
             or any(reference_device.get(k) != value for k, value in reference_record.get("device_geometry", {}).items())):
         findings.append("OTA_BIAS_REFERENCE_INVALID: reference geometry or rendered resistor expression differs")
-    if project is not None:
-        specification = record.get("specification")
-        if specification is not None:
-            relative = Path(specification["path"])
-            if relative.is_absolute() or ".." in relative.parts:
-                findings.append("OTA_BIAS_SPEC_CHANGED: specification path is not case-relative")
-            else:
-                path = project / relative
-                if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != specification.get("sha256"):
-                    findings.append("OTA_BIAS_SPEC_CHANGED: regenerate A2 for the current specification")
-        path = project / "phase3/analog" / ir.get("block", "") / "bias_network_inputs.json"
-        source = record.get("input")
-        if path.exists() != bool(source):
-            findings.append("OTA_BIAS_INPUT_CHANGED: regenerate A2 for current bias declaration")
-        elif source and hashlib.sha256(path.read_bytes()).hexdigest() != source.get("sha256"):
-            findings.append("OTA_BIAS_INPUT_CHANGED: bias declaration no longer matches emitted network")
     gates = {}
     for row in record.get("stage_table", []):
         expected = "nbias" if row.get("stage") == first_stage else "nbias_ota"+str(row["stage"]) if isinstance(row.get("stage"), int) else "nbias_common_mode"

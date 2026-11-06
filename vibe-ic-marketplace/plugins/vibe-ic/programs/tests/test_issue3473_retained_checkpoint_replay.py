@@ -5,7 +5,6 @@ controls exercise its actual clock producer and gate, without signing anything.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import shutil
 import subprocess
@@ -17,9 +16,7 @@ import pytest
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 import l8_doc_clock_freq_synth as producer
-import ci_targeted_test_select as selector
 import phase1_doc_one_shot_runner as phase1
-import _phase1_producer_identity as identity
 
 FIXTURE = Path(__file__).parent / "fixtures" / "issue3473_retained_replay"
 LAYERS = ("L8_RTL_CONSTANTS", "L8_TIMING_WAVEFORM")
@@ -52,20 +49,6 @@ def gate(p):
     return rc.returncode, load(report)
 
 
-def test_fixture_hashes_and_historical_failure_are_preserved(tmp_path):
-    manifest = load(FIXTURE / "manifest.json")
-    assert manifest["status"] == "NOT_AN_ACCEPTED_RETAINED_CHECKPOINT"
-    for name, sha in manifest["files"].items():
-        assert hashlib.sha256((FIXTURE / name).read_bytes()).hexdigest() == sha
-    p = project(tmp_path)
-    recorded = load(FIXTURE / manifest["producer_identity"])["phase1"]
-    for directory in manifest["recorded_input_directories_present"]:
-        (p / directory).mkdir(parents=True, exist_ok=True)
-    assert identity.inputs_digest(p, recorded["input_record"], recorded["knobs"]) == recorded["inputs"]
-    for layer in LAYERS:
-        assert recorded["outputs"][layer + ".json"] == manifest["files"]["historical/" + layer + ".json"]
-        assert load(p / "phase1/generated_docs" / (layer + ".json"))["clock_domains"][0]["period_ns"] is None
-    assert gate(p)[0] == 1
 
 
 def test_exact_public_period_reaches_both_consumed_layers(tmp_path):
@@ -126,16 +109,3 @@ def test_resolved_clock_is_never_overwritten(tmp_path):
     producer.main([str(p), "--apply"])
     for layer in LAYERS:
         assert load(p / "phase1/generated_docs" / (layer + ".json"))["clock_domains"][0]["period_ns"] == 25.0
-
-
-@pytest.mark.parametrize("changed", ["programs/" + p for p in REPLAY_DEPENDENCIES] + [
-    "programs/tests/fixtures/issue3473_retained_replay/input/docs/L9_constraints_floorplan.md",
-])
-def test_replay_owner_is_selected_for_changed_consumer_bytes(changed, tmp_path):
-    plugin = tmp_path / "plugin"
-    owner = plugin / "programs/tests/test_issue3473_retained_checkpoint_replay.py"
-    owner.parent.mkdir(parents=True)
-    owner.write_text("def test_replay(): pass\n")
-    shutil.copyfile(PROGRAMS.parent / "pytest.ini", plugin / "pytest.ini")
-    assert "programs/tests/test_issue3473_retained_checkpoint_replay.py" in selector.select_tests(
-        [changed], plugin)

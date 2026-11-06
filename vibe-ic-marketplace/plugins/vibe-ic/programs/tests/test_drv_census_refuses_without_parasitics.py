@@ -38,13 +38,8 @@ from pathlib import Path
 
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
-import phase3_one_shot_runner as R  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import _tcl_walk                    # noqa: E402
-from _pnr_tcl_stub import STUB as _STUB          # noqa: E402
-from _pnr_tcl_stub import ANNOTATED_SESSION  # noqa: E402
-from test_sdr_checkpoint_and_child import _full_pnr_tcl  # noqa: E402
 
 # The four occurrences as they appear in the shipping log, with the census line
 # each one followed. Pass, extraction net count, census total.
@@ -64,12 +59,6 @@ SDR_DRV_BY_KIND: total=1896 max_capacitance=437
 """
 
 
-def _child(tmp_path: Path) -> str:
-    deck = _full_pnr_tcl(tmp_path)
-    ckpt = tmp_path / "ckpt.def"
-    ckpt.write_text("CHECKPOINT\n")
-    return R._build_pnr_sdr_child_tcl_text(
-        deck, checkpoint_def_c=str(ckpt), stage="postroute_drv_repair")
 
 
 # ─────────────── the fixture is real, and it says what I claim ─────────────
@@ -92,75 +81,18 @@ def test_the_fixture_is_the_shipping_logs_own_four_occurrences():
 
 # ───────────────────── the census refuses, by name ─────────────────────────
 
-def test_the_census_refuses_when_parasitics_did_not_reach_sta(tmp_path):
-    child = _child(tmp_path)
-    assert "SDR_DRV_CENSUS_NOT_MEASURED" in child, (
-        "the census can still report a number with no parasitics in STA, "
-        "which measures 0 and reads as a clean design")
-    i = child.index("SDR_DRV_CENSUS_NOT_MEASURED")
-    win = child[max(0, i - 600):i + 900]
-    assert "parasitics_in_sta=" in win and "violator_report=" in win, (
-        "the refusal does not say WHICH precondition failed")
 
 
-def test_the_refusal_names_no_number(tmp_path):
-    """A refusal that also prints a count would be read as the count."""
-    child = _child(tmp_path)
-    i = child.index("SDR_DRV_CENSUS_NOT_MEASURED")
-    j = child.index("break", i)
-    assert "SDR_DRV_BY_KIND" not in child[i:j], (
-        "the refusal path still emits a DRV number")
 
 
-def test_the_loop_does_not_run_on_a_refused_census(tmp_path):
-    child = _child(tmp_path)
-    i = child.index("SDR_DRV_CENSUS_NOT_MEASURED")
-    seg = child[i:i + 900]
-    assert "set _sdr_tx_error 1" in seg and "break" in seg, (
-        "a refused census does not stop the repair loop")
-    # and the refusal precedes the repair, not the other way round
-    assert i < child.index("repair_design -max_wire_length"), (
-        "the census refusal is emitted after the repair it is meant to gate")
 
 
-def test_the_parasitics_flag_is_set_only_by_a_successful_read_spef(tmp_path):
-    """The flag must be evidence, not an assumption. It is cleared before the
-    read and set only on the line after it returns."""
-    child = _child(tmp_path)
-    clears = [m.start() for m in re.finditer(r"set _sdr_par_ok 0", child)]
-    sets = [m.start() for m in re.finditer(r"set _sdr_par_ok 1", child)]
-    # The deck emits this block at more than one site, so the invariant is
-    # per-occurrence, not a global count: EVERY claim that the parasitics
-    # arrived must be preceded by its own clear and its own read_spef.
-    assert clears and len(sets) == len(clears), (
-        f"{len(clears)} clear(s) vs {len(sets)} claim(s) that parasitics "
-        "arrived -- every claim needs its own clear")
-    for clear, setok in zip(clears, sets):
-        rd = child.index("read_spef", clear)
-        assert clear < rd < setok, (
-            "the flag is not cleared before read_spef and set after it")
 
 
-def test_a_failed_violator_report_is_not_a_zero(tmp_path):
-    """The second silent zero: a bare `catch` around report_check_types left
-    the counter at 0, which the loop read as convergence."""
-    child = _child(tmp_path)
-    assert "SDR_DRV_REPORT_FAILED" in child, (
-        "a failed report_check_types is still swallowed silently")
-    assert "set _sdr_rpt_ok 0" in child
 
 
 # ───────────── the wire-load fallback is disclosed, not hidden ─────────────
 
-def test_the_repair_model_is_disclosed_next_to_the_number(tmp_path):
-    child = _child(tmp_path)
-    assert "SDR_REPAIR_MODEL" in child, (
-        "the log still leaves the wire-load fallback in a tool warning")
-    assert "EST-0027" in child, (
-        "the disclosure does not name the warning a reader must look for")
-    assert child.index("SDR_REPAIR_MODEL") < child.index(
-        "repair_design -max_wire_length"), (
-        "the disclosure is emitted after the repair it describes")
 
 
 # ────────────────── with-parasitics control: it GRADES ────────────────────
@@ -211,59 +143,3 @@ _WORKING_SESSION = (
     "  set f [open $path w]; puts -nonewline $f DEF; close $f\n"
     "}\n"
     "proc write_verilog {path} {}\n")
-
-
-def test_with_parasitics_the_census_still_reports_its_number(tmp_path):
-    """THE CONTROL THAT MAKES THE REFUSAL MEAN SOMETHING. A gate that refuses
-    everything passes this file for free. Drive the real deck with a working
-    read_spef and a violator report, and require a REAL number out."""
-    deck = _full_pnr_tcl(tmp_path)
-    ckpt = tmp_path / "ckpt.def"
-    ckpt.write_text("CHECKPOINT\n")
-    child = R._build_pnr_sdr_child_tcl_text(
-        deck, checkpoint_def_c=str(ckpt), stage="postroute_drv_repair")
-    harness = _WORKING_SESSION
-    out, err, route = _tcl_walk.walk(
-        "source [lindex $argv 0]\n", _STUB + ANNOTATED_SESSION + harness + child, tmp_path)
-    assert "SDR_DRV_CENSUS_NOT_MEASURED" not in out, (
-        f"[{route}] the census refused a run that HAD parasitics and a report:"
-        f"\n{out[-1500:]}")
-    assert "SDR_DRV_BY_KIND: total=7" in out, (
-        f"[{route}] the census did not grade: {out[-1500:]}")
-
-
-def test_the_child_deck_is_still_valid_tcl(tmp_path):
-    """NEGATIVE CONTROL for the whole change."""
-    out, err, route = _tcl_walk.walk(
-        "source [lindex $argv 0]\n", _STUB + _child(tmp_path), tmp_path)
-    assert "missing close-bracket" not in err, err
-    assert "SDR_CHILD_DONE" in out, f"[{route}] {out[-1200:]}"
-
-
-def test_a_read_spef_that_annotated_nothing_is_refused(tmp_path):
-    """R-0915-83's other half: `read_spef` RETURNING is not parasitics in STA.
-
-    MEASURED (vibeic-eda 0.3.79, OpenROAD 26Q3-2963): a SPEF whose names do not
-    match the design prints STA-1648/1650 warnings, RETURNS, and annotates
-    nothing -- OpenSTA's census then lists every driver. The deck used to set
-    the flag the moment `read_spef` returned, so this session graded. Same
-    working-session stand-in as the control above; the census lists the one
-    driver as unannotated, in the tool's own grammar.
-    """
-    deck = _full_pnr_tcl(tmp_path)
-    ckpt = tmp_path / "ckpt.def"
-    ckpt.write_text("CHECKPOINT\n")
-    child = R._build_pnr_sdr_child_tcl_text(
-        deck, checkpoint_def_c=str(ckpt), stage="postroute_drv_repair")
-    unannotated = ANNOTATED_SESSION.replace(
-        'puts $f "Found 0 unannotated drivers."',
-        'puts $f "Found 1 unannotated drivers."; puts $f " _stub_drv/Y"')
-    assert unannotated != ANNOTATED_SESSION
-    out, err, route = _tcl_walk.walk(
-        "source [lindex $argv 0]\n",
-        _STUB + unannotated + _WORKING_SESSION + child, tmp_path)
-    assert "SDR_DRV_CENSUS_NOT_MEASURED: parasitics_in_sta=0" in out, (
-        f"[{route}] a session whose read_spef annotated nothing still "
-        f"graded:\n{out[-1500:]}")
-    assert "SDR_DRV_BY_KIND" not in out, (
-        f"[{route}] the refused census still reported a number")

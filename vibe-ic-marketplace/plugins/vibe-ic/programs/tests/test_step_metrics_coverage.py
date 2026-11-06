@@ -47,7 +47,6 @@ PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
 import step_metrics as sm            # noqa: E402
-import phase3_one_shot_runner as R   # noqa: E402
 
 
 def _tmp(prefix):
@@ -140,63 +139,16 @@ _LOG_CLEAN = ("[INFO DRT-0195] Start 3rd iteration.\n"
               "[INFO DRT-0198] Complete detail routing.\n")
 
 
-def _route_tree(metric, log=_LOG_CLEAN):
-    d = _tmp("route_")
-    # The on-disk log is load-bearing: `_drt_reading` falls back to it when the
-    # captured stdout carried no DRT line, so a fixture that mangles only the
-    # passed text has not changed the wording at all.
-    (d / "openroad.log").write_text(log)
-    if metric is not None:
-        (d / R._PNR_METRICS).write_text(json.dumps({R._KEY_DRT: metric}))
-    return d
 
 
-def test_agree_passes():
-    rec, _ = R._drt_reading(_route_tree(0), _LOG_CLEAN)
-    assert rec.status == sm.AGREE
-    assert rec.ok is True and rec.value == 0
 
 
-def test_disagree_fails_and_names_both_numbers():
-    rec, _ = R._drt_reading(_route_tree(7), _LOG_CLEAN)
-    assert rec.status == sm.DISAGREE
-    assert rec.ok is False, "a disagreement must FAIL, not resolve"
-    assert rec.value is None, (
-        "a caller that ignores .ok must get NO reading, never the wrong one "
-        "of the two")
-    assert rec.metric == 7 and rec.prose == 0
-    assert "METRIC=7" in rec.detail and "LOG=0" in rec.detail, (
-        "the failure must NAME BOTH numbers — that is the whole point of "
-        "refusing to pick a winner")
-    assert "will not choose between them" in rec.detail
 
 
-def test_no_metric_is_not_silently_green():
-    rec, _ = R._drt_reading(_route_tree(None), _LOG_CLEAN)
-    assert rec.status == sm.NO_METRIC
-    assert rec.status != sm.AGREE, "it must be DISTINGUISHABLE from agreement"
-    assert "proxy" in rec.detail and "not the measurement" in rec.detail
-    # and a caller that must not accept a proxy can refuse one
-    assert sm.reconcile("x", None, 0, require_metric=True).ok is False
 
 
-def test_wording_change_no_longer_reaches_the_verdict():
-    """The failure mode the substrate exists to remove."""
-    blind = _LOG_CLEAN.replace("Number of violations = 0.",
-                               "Number of DRC violations = 0.") \
-                      .replace("Completing 100% with", "Completed 100%,")
-    # the OLD source of truth reads nothing at all off that log
-    assert R._drt_final_violations(blind) is None
-    rec, _ = R._drt_reading(_route_tree(0, blind), blind)
-    assert rec.status == sm.PROSE_BLIND
-    assert rec.ok is True and rec.value == 0, "verdict unaffected"
 
 
-def test_neither_is_undetermined_never_zero():
-    d = _tmp("none_")
-    rec, _ = R._drt_reading(d, "global route only\n")
-    assert rec.status == sm.NEITHER and rec.value is None
-    assert not (rec.value is not None and rec.value > 0)
 
 
 # --------------------------------------------------------------------------

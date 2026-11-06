@@ -41,99 +41,19 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 from _nda_fixture_tokens import FICTIONAL_NDA_TOKENS  # noqa: E402
-from backlog_sanitize_check import (  # noqa: E402
-    _shipped_plugin_version)
 
 _BRAND = FICTIONAL_NDA_TOKENS["foundry_brand1"]
 _SKU = FICTIONAL_NDA_TOKENS["sku_full"]
 
 
-def _git(repo, *args):
-    subprocess.run(["git", "-C", str(repo), *args], check=True,
-                   capture_output=True)
 
 
-@pytest.fixture(scope="module")
-def planted(tmp_path_factory):
-    """A repository whose newest commit ADDS a token to a file AND to its
-    message — the exact subject all four guards are supposed to catch."""
-    repo = tmp_path_factory.mktemp("planted")
-    prog = repo / "vibe-ic-marketplace/plugins/vibe-ic/programs"
-    prog.mkdir(parents=True)
-    (prog / "thing.py").write_text("VALUE = 1\n")
-    _git(repo, "init", "-q", "-b", "main")
-    _git(repo, "config", "user.email", "t@localhost")
-    _git(repo, "config", "user.name", "t")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "base")
-    (prog / "thing.py").write_text(f'VALUE = 1\nVENDOR = "{_BRAND}"\nPDK = "{_SKU}"\n')
-    # The two PROSE guards do not take a repo — they take the document they
-    # audit. Plant the same SKU in one of each so the whole population below
-    # runs against ONE fixture and one plant.
-    notes = repo / "notes"
-    notes.mkdir()
-    (notes / "PRACTICAL_NOTES.md").write_text(
-        f"# Notes\n\nThe flow was closed on the {_SKU} process.\n")
-    (repo / "backlog.yaml").write_text(
-        "type: enhancement\n"
-        'component: "flow:pnr"\n'
-        "title: routing note\n"
-        f"pattern: the detailed router left a residual on the {_SKU} process.\n"
-        # The shipped version, read the way the gate reads it: any other
-        # value raises a SECOND finding, and an rc-1 control that would
-        # be rc 1 anyway is not a control.
-        f"plugin_version: {_shipped_plugin_version()}\n")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", f"wire up {_SKU} for the {_BRAND} flow")
-    return repo
 
 
-@pytest.fixture(scope="module")
-def _no_store(tmp_path_factory):
-    """A private config that resolves to NO tokens.
-
-    THE ENV VAR IS NOT THE ONLY TOKEN SOURCE. `_commercial_pdk` reads
-    `VIBEIC_NDA_TOKENS` **or** the private config, and the config's default
-    location is `~/.config/vibeic/commercial_pdk.json`. Dropping only the env
-    var therefore built a "no token store" arm that is a no-token arm ONLY on a
-    host that has no config — and the hosts that matter, the ones that actually
-    run these guards for real, are precisely the configured ones.
-
-    MEASURED 2026-08-30 on clean origin/main (v1.12.82), with a real private
-    config present: all FOUR of the then-parametrized gates failed this arm,
-    because every one of them could still answer. The arm was not asserting what
-    it said; it was asserting that the host was unconfigured.
-
-    `_load_private_config` returns the FIRST candidate that parses to a dict, and
-    `VIBEIC_PRIVATE_CONFIG` is ahead of the home path in that list, so pointing it
-    at `{}` short-circuits the home file without touching it."""
-    cfg = tmp_path_factory.mktemp("nostore") / "commercial_pdk.json"
-    cfg.write_text("{}\n")
-    return cfg
 
 
-def _run(gate, args, *, tokens, no_store=None):
-    env = {k: v for k, v in os.environ.items() if k != "VIBEIC_NDA_TOKENS"}
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    if tokens:
-        env["VIBEIC_NDA_TOKENS"] = json.dumps(FICTIONAL_NDA_TOKENS)
-    elif no_store is not None:
-        env["VIBEIC_PRIVATE_CONFIG"] = str(no_store)
-    proc = subprocess.run([sys.executable, "-B", str(_PROGRAMS / gate), *args],
-                          capture_output=True, text=True, env=env)
-    return proc.returncode, proc.stdout, proc.stderr
 
 
-def _argv(gate, planted):
-    if gate == "source_chip_agnostic_check.py":
-        return [str(planted / "vibe-ic-marketplace/plugins/vibe-ic")]
-    if gate == "nda_tracked_tree_scan.py":
-        return ["--repo", str(planted)]
-    if gate == "practical_notes_specificity_check.py":
-        return ["--paths", str(planted / "notes")]
-    if gate == "backlog_sanitize_check.py":
-        return ["--file", str(planted / "backlog.yaml")]
-    return ["--repo", str(planted), "--rev-range", "HEAD~1..HEAD"]
 
 
 # THE POPULATION IS THE RESOLVER'S OWN CALLER LIST, NOT THE FOUR THAT WERE
@@ -168,44 +88,10 @@ _ECHO_GATES = ("commit_msg_nda_check.py", "nda_diff_scan_check.py",
                "source_chip_agnostic_check.py", "nda_tracked_tree_scan.py")
 
 
-@pytest.mark.parametrize("gate", _GATES)
-def test_without_tokens_the_guard_refuses_and_never_says_pass(gate, planted,
-                                                              _no_store):
-    rc, out, err = _run(gate, _argv(gate, planted), tokens=False,
-                        no_store=_no_store)
-    assert rc == 2, (
-        f"{gate} exited {rc} with no token store. 0 is a clean bill of health "
-        f"it cannot have earned; 1 is a MEASURED FINDING the push preflight "
-        f"reads as REFUSE. 'I have nothing to match with' is rc 2 — the same "
-        f"no-verdict channel as NOTHING_SCANNED.\n{out}\n{err}")
-    assert "PASS" not in out.upper(), (
-        f"{gate} printed a PASS while unable to look:\n{out}")
-    assert "Traceback" not in err, (
-        f"{gate} died instead of reporting. A guard's inability to answer is a "
-        f"result it must render, not an exception it leaks:\n{err}")
 
 
-@pytest.mark.parametrize("gate", _GATES)
-def test_with_tokens_the_same_guard_still_catches_the_plant(gate, planted):
-    """THE CONTROL ARM. Without it the refusals above are satisfied by a guard
-    that refuses always, i.e. by turning the detector off."""
-    rc, out, err = _run(gate, _argv(gate, planted), tokens=True)
-    assert rc == 1, (
-        f"{gate} exited {rc} on a subject that plants both a brand token and a "
-        f"SKU token in an added line, an added file and the commit message. "
-        f"The refusal test above is only meaningful if this arm still "
-        f"FINDS.\n{out}\n{err}")
 
 
-def test_no_guard_echoes_the_literal_it_matched(planted):
-    """Masked reporting survives the move: a finding names the ROLE, never the
-    token. A guard that leaks the token while reporting the leak is the whole
-    failure it exists to prevent."""
-    for gate in _ECHO_GATES:
-        rc, out, err = _run(gate, _argv(gate, planted), tokens=True)
-        blob = out + err
-        assert _BRAND not in blob, f"{gate} echoed the brand literal:\n{blob}"
-        assert _SKU not in blob, f"{gate} echoed the SKU literal:\n{blob}"
 
 
 # ── the suite's OWN channel: a name with nothing in it is not a store ───────

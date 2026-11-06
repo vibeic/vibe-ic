@@ -4,7 +4,7 @@
 
 > From natural-language dialogue (or existing design documents) to a GDS
 > hand-off, driven by AI agents with EDA tools as callable execution engines —
-> **with machine gates that catch fabricated artefacts**.
+> **with each verdict taken from the tool's native result and original limit**.
 
 This repository is the **marketplace**: the `.claude-plugin/marketplace.json`
 catalogue, the plugin itself, reference plugins for third-party publishers,
@@ -13,14 +13,14 @@ and the contribution guides for extending it.
 | | |
 |---|---|
 | Plugins in this marketplace | **1** — [`plugins/vibe-ic`](plugins/vibe-ic/) |
-| Plugin version | **1.39.55** |
-| Deterministic programs | **1654** top level (`plugins/vibe-ic/programs/*.py`), of which **1481** are catalogued in [`INDEX.md`](plugins/vibe-ic/programs/INDEX.md) |
+| Plugin version | **1.39.56** |
+| Deterministic programs | **779** top level (`plugins/vibe-ic/programs/*.py`), of which **670** are catalogued in [`INDEX.md`](plugins/vibe-ic/programs/INDEX.md) |
 | Skills | **60** (`plugins/vibe-ic/skills/*/SKILL.md`, each with a `compliance.yaml`) |
 | Slash commands | **7** (`plugins/vibe-ic/commands/*.md`) |
 | Agents | **9** (`plugins/vibe-ic/agents/*.md`) |
 | MCP-EDA tools | **56** (48 EDA + 7 lab-device + 1 health) |
-| Canonical flow | **68 steps** across **8 stages** (`plugins/vibe-ic/flow/phase1_phase2_phase3.yaml`) — 26 of them conditional, including the cell/IP vs chip/IC split |
-| Test files | **4896** under `plugins/vibe-ic/programs/tests/` + **57** under `plugins/vibe-ic/mcp-eda/test/` (`test_*.py`, any depth) |
+| Executable flow | [`flow/steps.json`](plugins/vibe-ic/flow/steps.json), including conditional IC/IP, analog and hardware paths |
+| Test files | **3267** under `plugins/vibe-ic/programs/tests/` + **54** under `plugins/vibe-ic/mcp-eda/test/` (`test_*.py`, any depth) |
 | License | Apache-2.0 |
 
 Every count above is generated, not typed: `python3 plugins/vibe-ic/programs/gen_program_inventory.py` writes [`PROGRAM_INVENTORY.json`](plugins/vibe-ic/programs/PROGRAM_INVENTORY.json), and `--check` fails when a stated count drifts from the tree. Several of these populations are simultaneously true and count different things — the artefact carries a `definition` for each, so quote the key, not a bare number.
@@ -38,22 +38,24 @@ and an AI agent orchestrates the entire spec-to-GDSII flow.
 Design**: the AI agent is the core decision-maker; EDA tools are callable
 execution engines.
 
-It is also **program-first**. The product is the deterministic runner chain
-(`vibe_ic_one_shot_runner.py` → `phase1/phase2/phase3` runners → 1654 top-level programs
-→ MCP-EDA), not a prompt. **60 of the 63 flow steps are gated by a program
-whose exit code is the verdict**; the AI is the fall-through when a program
-cannot decide, never the thing that declares PASS.
+It is also **program-first**. The public entry `vibe_ic_one_shot_runner.py`
+uses `flow_engine_frontend.py` and `flow_engine.py` to run the selected rows in
+`flow/steps.json`. Each row names a tool command or adapter; its native report
+is compared with the original limits in `flow/native_limits.json`. AI runs the
+flow, reviews every result and fixes problems in the design, tool or plugin.
 
-```
-                     ┌─────────────────────────────────────┐
-                     │  flow_compliance_check.py --strict  │
-                     │           exit 0 = PASS             │
-                     └─────────────────────────────────────┘
+```text
+public entry → Router → step-table runners → 779 top-level programs → native tools
 ```
 
-**This is the plugin's public contract with agents**: if
-`flow_compliance_check --strict` exits non-zero, the design is not signed off.
-Period.
+PASS means a measured result meets its original limit. FAIL means it violates
+the limit. A tool that did not run or left no usable report is NOT_MEASURED.
+Bounded RTL results apply to their selected window, not to whole-chip delivery.
+The owner's [design charter](plugins/vibe-ic/CHARTER.md) defines these rules.
+
+Earlier documentation described **60 of the 63 flow steps are gated by a program**.
+That historical count is retained for inventory bookkeeping; the current executable
+step table is linked below.
 
 Provenance — the discipline was extracted from **real** debug sessions, not
 designed in the abstract:
@@ -66,183 +68,50 @@ designed in the abstract:
 
 ---
 
-## The canonical flow (68 steps, 8 stages)
+## The canonical flow
 
-**Source of truth**:
-[`plugins/vibe-ic/flow/phase1_phase2_phase3.yaml`](plugins/vibe-ic/flow/phase1_phase2_phase3.yaml)
+The executable sequence is [`flow/steps.json`](plugins/vibe-ic/flow/steps.json),
+with original numerical limits in
+[`flow/native_limits.json`](plugins/vibe-ic/flow/native_limits.json).
+[`flow/phase1_phase2_phase3.yaml`](plugins/vibe-ic/flow/phase1_phase2_phase3.yaml)
+provides the canonical user-facing step names and positions. Report a step's
+1-based position and name, and retain that numbering on conditional paths.
 
-**Entry point for agents**: [`AGENT_USAGE_GUIDE.md`](AGENT_USAGE_GUIDE.md) —
-mandatory first read.
-
-The flow covers **Phase 1 (spec extraction) as well as Phase 2 and Phase 3**.
-Four of the eight stages are **conditional** — the analog and mixed-signal
-stages activate only for designs with analog content, and the manufacturing
-stage only once real silicon comes back. Every step declares
-`required_outputs` plus a machine `gate` (`files_exist` and/or
-`program_exit_zero`); `↻` marks a close-loop step that re-runs until its gate
-is satisfied.
-
-Run the whole thing:
+**Entry point for agents**: [`AGENT_USAGE_GUIDE.md`](AGENT_USAGE_GUIDE.md).
+Run from the marketplace directory:
 
 ```bash
-python3 plugins/vibe-ic/programs/flow_compliance_check.py <project_dir> \
-        --flow phase1_phase2_phase3 --strict
-# exit 0 is the only PASS
+python3 plugins/vibe-ic/programs/vibe_ic_one_shot_runner.py <project_dir> \
+  --route ic --delivery-target shippable_gds
 ```
 
-#### `stage_phase1` — Phase 1, Spec Extraction (input → L1-L27 structured JSON) — 2 steps
+The Router selects the task's delivery endpoint and applicable window. For an
+IP hardmacro use `--route ip --delivery-target ip_hardmacro`; bounded RTL work
+uses `--delivery-target rtl`. An explicit window supplies both `--entry-step`
+and `--exit-step`, using names from the current table. No feature manifest or
+engine selector is required.
 
-End-of-stage gate: `phase1_compliance`
+| Engineering area | Work covered by the selected native steps |
+|---|---|
+| Requirements | Natural-language input or design documents to layered design specifications; operator submission geometry when supplied |
+| RTL and verification | RTL authoring, lint, CDC/RDC, simulation, formal verification and FPGA work when applicable |
+| Synthesis and constraints | SDC, synthesis, timing analysis, DFT/ATPG, equivalence and synthesis handoff |
+| Analog | Specifications, topology, sizing, SPICE/PVT simulation, layout, DRC/LVS, parasitic extraction, resimulation and hardmacro views |
+| Physical implementation | Floorplan/PDN, pad ring, placement, CTS, hold repair, routing and extraction |
+| Electrical and physical verification | STA, IR drop, EM, antenna, signal integrity, reliability, DRC/LVS/ERC and density |
+| Mixed signal | Macro integration, co-simulation, supplies/domains and analog/digital physical checks |
+| Finishing and delivery | Fill, seal ring, final GDS checks, hardmacro packaging, provider precheck and foundry handoff |
+| Hardware and manufacturing | Board measurements and post-fabrication work when the required hardware or silicon is available |
 
-| # | Step | Machine gate |
-|---|---|---|
-| `D1` | Phase 1 doc extraction — dialogue **or** existing documents → the L1-L27 layered JSON set | program |
-| `0.5ic` | Submission template ingest — the operator's slot geometry and identity fixtures, **read** rather than computed. Chooses the path: a template present ⇒ chip/IC, `NO_TEMPLATE.txt` ⇒ cell/IP | program |
-
-#### `stage1` — RTL Generation + Verification — 7 steps
-
-End-of-stage gate: `stage1_compliance` (`stage1_compliance.py`)
-
-| # | Step | Machine gate |
-|---|---|---|
-| `1` | Spec-to-RTL | artifact |
-| `2` | ↻ Lint (RTL hygiene + Quartus-unsafe patterns + RTL-bug claim schema) | program |
-| `3` | ↻ CDC / RDC check | program |
-| `4` | ↻ Simulation (testbench-based + L10/L12 coverage + Verilator coverage) | program |
-| `5` | ↻ Formal verification (assertions proved + bit-level full-stack TB) | program |
-| `6` | FPGA early prototype + verification-report audit | program |
-| `P0` | Structural-RTL pre-flight (77 chip-AGNOSTIC structural gates) | pre-flight |
-
-#### `stage2` — Synthesis + DFT — 12 steps
-
-End-of-stage gate: `stage2_compliance` (`stage2_compliance.py`)
-
-| # | Step | Machine gate |
-|---|---|---|
-| `7` | Constraint setup (SDC + PVT matrix) | program |
-| `8` | ↻ SDC validation | program |
-| `9` | Synthesis (Yosys → mapped netlist) | program |
-| `10` | ↻ Pre-layout STA (multi-corner) | program |
-| `11` | DFT insertion (scan chain + ATPG + at-speed + BSDL) | program |
-| `FS1` | ISO-26262 FMEDA diagnostic coverage (fault injection; safety designs only) | program |
-| `DT1` | Transition-delay-fault (at-speed LOC) ATPG | program |
-| `DT2` | Path-delay-fault (at-speed, timing-graded) ATPG | program |
-| `DT3` | Small-delay-defect (SDD) at-speed grade | program |
-| `12` | Post-DFT optimization (resynth / buffering) | artifact |
-| `13` | ↻ Equivalence check (RTL ≡ post-DFT netlist) | program |
-| `14` | ↻ Synthesis handoff gate (pre-PnR Yosys script + netlist audit) | program |
-
-#### `stage_analog` — Analog Design Pipeline — 9 steps *(conditional)*
-
-Runs in parallel with stages 1-2, only when `phase1/analog/analog_block_list.json`
-is present. End-of-stage gate: `analog_compliance`
-(`analog_flow_compliance_check.py`)
-
-| # | Step | Machine gate |
-|---|---|---|
-| `A1` | Analog spec extraction | program |
-| `A2` | Analog topology selection | program |
-| `A3` | Analog netlist generation | program |
-| `A4` | Analog corner sweep (PVT) | program |
-| `A5` | Analog layout | program |
-| `A6` | Analog physical verification (per-block DRC + LVS before merge) | program |
-| `A7` | ↻ Post-layout resimulation | program |
-| `A8` | Hardmacro generation (LEF + Liberty + GDS + Verilog) | program |
-| `A9` | ↻ Co-simulation / hardware verification | program |
-
-#### `stage3` — Physical Design + Sign-off — 20 steps
-
-End-of-stage gate: `stage3_compliance` (`stage3_compliance.py`)
-
-| # | Step | Machine gate |
-|---|---|---|
-| `15` | Floorplan + PDN | program |
-| `15.5ic` | Pad ring — the I/O pads, corner cells and filler that form the die's edge *(chip/IC path only)*. Precedes routing because the pads **are** the top-level ports | program |
-| `16` | Clock planning | program |
-| `17` | Placement (global + detailed) | program |
-| `18` | Spare-cell + ECO-prep insertion (Design-for-ECO) | program |
-| `19` | CTS (clock tree synthesis) | program |
-| `20` | ↻ Post-CTS hold fixing | program |
-| `21` | Routing (global + detailed) | program |
-| `22` | Parasitic extraction (RC → SPEF) | program |
-| `23` | ↻ Post-route STA (multi-corner multi-mode sign-off) | program |
-| `24` | ↻ IR drop (static + dynamic) | program |
-| `25` | ↻ EM check (electromigration lifetime) | program |
-| `26` | ↻ Antenna check (gate-oxide protection) | program |
-| `26.5ic` | Die finishing — seal ring and die identification *(chip/IC path only)* | program |
-| `27` | ↻ Signal integrity (crosstalk / noise / glitch + crosstalk-delay) | program |
-| `28` | ↻ PERC / reliability sign-off (ESD + latch-up + cross-domain) | program |
-| `29` | Post-layout gate-level simulation (post-sim + SDF) | program |
-| `30` | Post-layout SPICE verification (critical-path correlation + analog) | program |
-| `31` | ↻ Physical verification (DRC + LVS + ERC + density) | program |
-| `32` | ↻ Post-route timing repair pass (multi-corner `repair_design` + `repair_timing` + reroute) | program |
-
-#### `stage_mixed_signal` — Mixed-Signal Integration — 4 steps *(conditional)*
-
-Runs only when `phase1/analog/analog_block_list.json` is present.
-End-of-stage gate: `mixed_signal_compliance`
-
-| # | Step | Machine gate |
-|---|---|---|
-| `M1` | Mixed-signal top-level integration (A+D GDS merge + macro placement) | program |
-| `M2` | Mixed-signal power domain + level-shifter / isolation verification | program |
-| `M3` | Mixed-signal verification (AMS co-sim + RNM + interface signal integrity) | program |
-| `M4` | Mixed-signal sign-off (top-level PV + final verdict) | program |
-
-#### `stage4` — Output + Validation — 9 steps
-
-End-of-stage gate: `stage4_compliance` (`stage4_compliance.py`)
-
-| # | Step | Machine gate |
-|---|---|---|
-| `33` | Power analysis (pre / post-layout) | program |
-| `34` | Metal fill (ECO-aware density fill insertion) | program |
-| `35` | DFM screen (CMP density + redundant-via ratio + foundry-side OPC/RET disclosure) | program |
-| `36` | Tapeout checklist (final sign-off confirmation) | program |
-| `37` | GDSII output (**only if step 31 PV is fully clean**) | program |
-| `37.5ip` | Digital hardmacro generation — LEF + Liberty + GDS + Verilog, and they must **agree**. The cell/IP path's terminal step | program |
-| `37.5ic` | Shuttle precheck — the operator's own refusal, run before submission *(chip/IC path only)*. The one gate in this flow whose verdict the project does not write | program |
-| `38` | Foundry handoff (mask spec + WAT plan + scribe layout + corner test kit) | program |
-| `39` | FPGA final sign-off (recompile + on-board test) | program |
-
-#### `stage5_manufacturing` — Manufacturing & Test — 5 steps *(conditional)*
-
-Runs only when `phase3/stage5_manufacturing/silicon_received.json` is present.
-End-of-stage gate: `manufacturing_compliance`
-
-| # | Step | Machine gate |
-|---|---|---|
-| `40` | Fabrication (mask set + wafer fab — external) | program |
-| `41` | Wafer sort / probe test (ATE + probe card) | program |
-| `42` | Packaging (wirebond / FC-CSP / WLCSP) | program |
-| `43` | Final test (ATE: functional + parametric + burn-in) | program |
-| `44` | Reliability qualification (HTOL / FIT attestation) | program |
-
-### Waivers (the ONLY legitimate way to skip a step)
-
-```json
-{
-  "waived_steps": [
-    {
-      "id": 39,
-      "reason": "No physical FPGA board in sub-agent env; benchmark IC session already validated the same BIST-on-hardware workflow with matching pass_flags",
-      "approver": "reyerchu",
-      "ticket": "N/A-pilot"
-    }
-  ]
-}
-```
-
-Rubber-stamp waivers are rejected: the reason must be ≥ 20 characters and not
-a placeholder (`TODO`, `n/a`, `skip`); the approver must not be `agent` /
-`self` / `claude`. Enforced by
-[`programs/waivers_schema_check.py`](plugins/vibe-ic/programs/waivers_schema_check.py).
+A conditional row runs only when its design predicate applies. Missing tools,
+inputs or native reports remain visible as unmeasured work. AI reviews the
+actual result and addresses design or tool defects without changing a limit.
 
 ---
 
 ## Toolchain — `vibeic-eda`
 
-The flow executes inside the **`vibeic-eda` 0.2.24** container image, which
+The flow executes inside the configured **`vibeic-eda`** container image, which
 layers **13 vibeic EDA forks** on top of the `iic-osic-tools` base:
 
 | | Forked and enhanced |
@@ -362,7 +231,7 @@ claude plugin install vibe-ic
 
 The MCP-EDA server lives **inside** the plugin
 (`plugins/vibe-ic/mcp-eda/`), so one install gets the skills, the agents,
-the 1654 top-level programs, and all 56 EDA/device tools. See
+the 779 top-level programs, and all 56 EDA/device tools. See
 [`plugins/vibe-ic/mcp-eda/INSTALL_GUIDE.md`](plugins/vibe-ic/mcp-eda/INSTALL_GUIDE.md)
 for the container prerequisites.
 
@@ -389,11 +258,10 @@ for the container prerequisites.
 "Ready for tapeout?"                          → skill: tapeout-checklist
 ```
 
-Each slash command drives a deterministic one-shot runner
-(`vibe_ic_one_shot_runner.py`, `phase1_one_shot_runner.py`,
-`design_one_shot_runner.py`, `phase23_one_shot_runner.py`,
-`phase3_one_shot_runner.py`, `analog_one_shot_runner.py`) and then runs the
-compliance gate over the artefacts it produced.
+The slash commands enter the same step-table engine through the public
+runner and its phase frontends. Analog execution uses its native tool path.
+Each result names what actually ran and the measured values against the
+original limits.
 
 **The canonical rule**: for any task that touches downstream EDA (synth, PnR,
 GDS, sign-off), go through the runner — do not let an agent call Quartus /
@@ -464,7 +332,7 @@ auto-registered on install. Inventory of record:
 
 ---
 
-## Deterministic programs (1654 top level)
+## Deterministic programs (779 top level)
 
 ```bash
 cd plugins/vibe-ic && python3 -m pytest programs/tests/ -q
@@ -472,29 +340,21 @@ cd plugins/vibe-ic && python3 -m pytest programs/tests/ -q
 
 **Headline programs**:
 
-*Canonical flow + gates*
-
 | Program | Role |
 |---|---|
-| **`flow_compliance_check.py`** | Strict 70-step gate — reads `flow/phase1_phase2_phase3.yaml`, validates every step's outputs + gate predicate, rejects rubber-stamp waivers. **Exit 0 is the only PASS.** |
-| `stage{1,2,3,4}_compliance.py` | Per-stage interim gates |
-| `analog_flow_compliance_check.py` | A1-A9 analog-stage gate |
-| **`waivers_schema_check.py`** | Rejects placeholder reasons (`TODO`, `n/a`), self-approvers (`agent`, `claude`), duplicate ids |
-| **`fault_atpg_run.py`** | Open-source stuck-at ATPG inside the `vibeic-eda` container |
-| **`rom_init_lint.py`** | Catches Quartus-unsafe `initial begin for(i=0;...) rom[i]=...` (silent-failure class surfaced 2026-04-21) |
-| **`quartus_map_audit.py`** | Scans `.map.rpt` for `Stuck at GND/VCC`, Warning 10030/10855, lost fanout |
-| `bist_window_calculator.py` | Computes sample-window size for BIST responses |
-| `otp_image_check.py` | Validates OTP-content generator outputs |
+| `vibe_ic_one_shot_runner.py` | Public entry for the Router-selected delivery endpoint and window |
+| `task_nature_route.py`, `route_decision.py` | Task-nature routing and bounded RTL dependency selection |
+| `flow_engine_frontend.py`, `flow_engine.py` | Run applicable rows of the executable step table |
+| `flow_native_adapters.py`, `flow_native_verification.py` | Invoke native EDA commands and read their reports |
+| `analog_native_flow.py` | Run native analog and mixed-signal work |
+| `benchmark_dispatch.py`, `benchmark_io_adapter.py` | Program-first benchmark dispatch, blind AI review/backup and result collection |
+| `fault_atpg_run.py` | Native stuck-at ATPG execution |
+| `gen_program_inventory.py` | Regenerate the program inventory, catalogue and documented counts |
 
-*Anti-fabrication layer*
-
-| Program | Role |
-|---|---|
-| **`def_stage_progression_check.py`** | Rejects byte-identical stage DEFs (the "`cp routed.def` five times" cheat). Requires SHA uniqueness + size monotonicity + instance-count non-regression + `+ ROUTED` geometry. |
-| **`provenance_logger.py`** | Wraps ANY tool invocation; records `{tool, version, argv, input/output hashes, exit, duration}` to `<project>/provenance.jsonl`. |
-| **`provenance_check.py`** | Gate verifier: does `provenance.jsonl` contain an exit-0 entry, from an allow-listed tool, declaring this output, whose logged hash still matches the file on disk? |
-| **`fpga_on_board_attestation_check.py`** | Rejects pure-JSON self-attestation on the FPGA sign-off step. Requires pass.json + bitstream-hash match + programmer log + ≥ 1 non-JSON hardware artefact (webcam / UART / scope). |
-| `pdk_consistency_check.py` | Cross-checks the resolved PDK's decks, Liberty, LEF, and device models against `pdk_registry.json` |
+The complete generated catalogue is
+[`plugins/vibe-ic/programs/INDEX.md`](plugins/vibe-ic/programs/INDEX.md).
+Native measurements do not require a hash, identity, provenance or receipt
+layer to qualify their result.
 
 ---
 
@@ -546,10 +406,11 @@ vibe-ic-marketplace/
 ├── templates/partner-plugin-skeleton/
 ├── community/backlogs/
 └── plugins/
-    └── vibe-ic/                         ← the single plugin (v1.39.55)
+    └── vibe-ic/                         ← the single plugin (v1.39.56)
         ├── .claude-plugin/plugin.json
         ├── flow/
-        │   └── phase1_phase2_phase3.yaml   ← 70-step source of truth
+        │   ├── steps.json, native_limits.json ← executable rows and original limits
+        │   └── phase1_phase2_phase3.yaml ← canonical display order
         ├── commands/                    ← 7 slash commands
         ├── agents/
         │   ├── ic-expert-agent.md       ← assembles JSON from answers + defaults
@@ -558,11 +419,11 @@ vibe-ic-marketplace/
         │       ├── ic_expert_L1..L9.md  ← prose lessons per layer
         │       └── manifests/L1_manifest.json  ← 40-fact Q-bank (PoC)
         ├── skills/                      ← 70 skills, each + compliance.yaml
-        ├── programs/                    ← 6707 *.py at any depth (1654 top level)
-        │   ├── flow_compliance_check.py ← final gate
-        │   ├── stage{1,2,3,4}_compliance.py
+        ├── programs/                    ← 4180 *.py at any depth (779 top level)
+        │   ├── vibe_ic_one_shot_runner.py ← public entry
+        │   ├── flow_engine.py, flow_native_adapters.py
         │   ├── pdk_registry.json, ic_class_registry.json
-        │   └── tests/                   ← 4896 test files
+        │   └── tests/                   ← 3267 test files
         ├── mcp-eda/                     ← bundled MCP server, 56 tools
         ├── ip-catalog/                  ← reusable open-source IP index
         └── hooks/

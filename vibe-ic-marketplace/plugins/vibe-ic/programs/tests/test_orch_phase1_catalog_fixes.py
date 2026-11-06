@@ -22,8 +22,6 @@ import pytest
 _PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROGRAMS))
 
-import vibe_ic_one_shot_runner as orch          # noqa: E402
-import phase1_one_shot_runner as p1             # noqa: E402
 import phase1_doc_one_shot_runner as p1doc      # noqa: E402
 import ip_catalog_query as cat                  # noqa: E402
 
@@ -31,116 +29,29 @@ import ip_catalog_query as cat                  # noqa: E402
 # ===========================================================================
 # Fix 1 — orchestrator auto-runs phase1 docs mode for Path-B
 # ===========================================================================
-def _mk_project(tmp_path: Path) -> Path:
-    proj = tmp_path / "proj"
-    (proj / "input" / "docs").mkdir(parents=True)
-    return proj
 
 
-def test_fix1_pathb_vendor_docs_triggers_phase1_docs(tmp_path):
-    """Populated input/docs/ with no L docs → run phase1 in docs mode."""
-    proj = _mk_project(tmp_path)
-    (proj / "input" / "docs" / "datasheet.md").write_text("# Spec\nfoo")
-    run, mode = orch._phase1_decision(proj, force_skip=False)
-    assert run is True
-    assert mode == "docs"
 
 
-def test_fix1_pathb_input_doc_dir_triggers_docs(tmp_path):
-    """phase1/input_doc/ populated → run phase1 in docs mode."""
-    proj = tmp_path / "proj"
-    idoc = proj / "phase1" / "input_doc"
-    idoc.mkdir(parents=True)
-    (idoc / "an.txt").write_text("application note")
-    run, mode = orch._phase1_decision(proj, force_skip=False)
-    assert run is True
-    assert mode == "docs"
 
 
-def test_fix1_pathA_structured_yaml_uses_docs(tmp_path):
-    # Unified DOC->JSON backend (2026-06-20): a dialogue convergence fact-graph
-    # is render-bridged into a freestyle document and flows through the doc
-    # track, so the orchestrator resolves it to docs mode (not the legacy
-    # engine "prompt" path).
-    proj = tmp_path / "proj"
-    (proj / "input").mkdir(parents=True)
-    (proj / "input" / "phase1_structured.yaml").write_text("ic_name: x")
-    run, mode = orch._phase1_decision(proj, force_skip=False)
-    assert run is True
-    assert mode == "docs"
 
 
-def test_fix1_pathA_prompt_md_uses_docs(tmp_path):
-    # A free-text prompt is itself a document -> doc track (unified backend).
-    proj = tmp_path / "proj"
-    (proj / "input").mkdir(parents=True)
-    (proj / "input" / "phase1_prompt.md").write_text("Design a 4-bit counter.")
-    run, mode = orch._phase1_decision(proj, force_skip=False)
-    assert run is True
-    assert mode == "docs"
 
 
-def test_fix1_existing_l_docs_skip(tmp_path):
-    """13 L docs already present → no phase1 run."""
-    proj = _mk_project(tmp_path)
-    (proj / "input" / "docs" / "ds.md").write_text("x")
-    gd = p1._pl.generated_docs_dir(proj) if hasattr(p1, "_pl") else None
-    gd = orch._pl.generated_docs_dir(proj)
-    gd.mkdir(parents=True, exist_ok=True)
-    for i in range(1, 14):
-        (gd / f"L{i}_DOC.json").write_text("{}")
-    # FX_STALE_LDOCS (orchestrator ruling 2026-09-28): "13 L docs present" now
-    # means 13 docs the CURRENT producer wrote -- the identity phase 1 stamps.
-    import _p1_identity_fixture
-    _p1_identity_fixture.stamp_current(proj)
-    run, mode = orch._phase1_decision(proj, force_skip=False)
-    assert run is False
-    assert mode == ""
 
 
-def test_fix1_empty_project_no_run(tmp_path):
-    proj = tmp_path / "proj"
-    (proj / "input" / "docs").mkdir(parents=True)  # empty dir
-    run, mode = orch._phase1_decision(proj, force_skip=False)
-    assert run is False
 
 
-def test_fix1_force_skip(tmp_path):
-    proj = _mk_project(tmp_path)
-    (proj / "input" / "docs" / "ds.md").write_text("x")
-    run, mode = orch._phase1_decision(proj, force_skip=True)
-    assert run is False
 
 
 # ===========================================================================
 # Fix 2 — input-mode detector: raw docs = docs mode unless layer-JSON
 # ===========================================================================
-def test_fix2_raw_docs_is_docs_mode(tmp_path):
-    proj = tmp_path / "proj"
-    docs = proj / "input" / "docs"
-    docs.mkdir(parents=True)
-    (docs / "datasheet.pdf").write_text("binary-ish prose")
-    (docs / "README.md").write_text("# overview")
-    assert p1._detect_input_mode(proj) == "docs"
 
 
-def test_fix2_layer_json_dir_is_prompt_mode(tmp_path):
-    proj = tmp_path / "proj"
-    docs = proj / "input" / "docs"
-    docs.mkdir(parents=True)
-    (docs / "L1_DATASHEET.json").write_text("{}")
-    (docs / "L2_FRS.json").write_text("{}")
-    assert p1._detect_input_mode(proj) == "prompt"
 
 
-def test_fix2_mixed_with_layer_json_is_prompt(tmp_path):
-    """If ANY L*.json present, it's the reverse-extract/prompt path."""
-    proj = tmp_path / "proj"
-    docs = proj / "input" / "docs"
-    docs.mkdir(parents=True)
-    (docs / "L9_IFC.json").write_text("{}")
-    (docs / "extra_notes.md").write_text("prose")
-    assert p1._detect_input_mode(proj) == "prompt"
 
 
 # ===========================================================================

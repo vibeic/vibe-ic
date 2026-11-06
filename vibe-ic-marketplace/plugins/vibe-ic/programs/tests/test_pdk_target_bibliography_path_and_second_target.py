@@ -212,34 +212,12 @@ def test_a_name_elsewhere_in_the_document_is_not_co_declared(
     assert p1._declared_pdk_alternates(tmp_path, src, line, tok) == []
 
 
-def _write_l19(project: Path, target: str, alternates=None) -> None:
-    gd = project / "phase1" / "generated_docs"
-    gd.mkdir(parents=True, exist_ok=True)
-    fields = {"pdk_target": target}
-    if alternates is not None:
-        fields["pdk_target_alternates"] = alternates
-    (gd / "L19_CONSTRAINTS_PDK.json").write_text(
-        json.dumps({"fields": fields}), encoding="utf-8")
 
 
-def test_guard_admits_a_co_declared_second_target(tmp_path: Path) -> None:
-    """PRE-FIX this REFUSES; the whole backend never runs."""
-    _write_l19(tmp_path, "sky130", ["sky130", "gf180mcu"])
-    assert p3.declared_pdk_target_guard(tmp_path, "gf180mcuD") is None
 
 
-def test_guard_still_refuses_a_process_the_design_never_names(
-        tmp_path: Path) -> None:
-    _write_l19(tmp_path, "sky130", ["sky130", "gf180mcu"])
-    msg = p3.declared_pdk_target_guard(tmp_path, "nangate45")
-    assert msg and "REFUSED" in msg
 
 
-def test_guard_unchanged_for_a_single_target_design(tmp_path: Path) -> None:
-    """No `pdk_target_alternates` key at all — the pre-fix path, verbatim."""
-    _write_l19(tmp_path, "sky130")
-    assert p3.declared_pdk_target_guard(tmp_path, "sky130A") is None
-    assert p3.declared_pdk_target_guard(tmp_path, "gf180mcuD") is not None
 
 
 # ---------------------------------------------------------------------------

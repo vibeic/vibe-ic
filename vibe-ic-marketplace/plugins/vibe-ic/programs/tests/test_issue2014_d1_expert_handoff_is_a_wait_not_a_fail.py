@@ -64,7 +64,6 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import phase1_expert_parse_track as T          # noqa: E402
-import phase1_one_shot_runner as R             # noqa: E402
 import flow_compliance_check as F              # noqa: E402
 import _path_layout as _pl                     # noqa: E402
 import _progress_run as _pr                    # noqa: E402
@@ -154,22 +153,6 @@ def test_the_wait_says_what_it_is_waiting_for(tmp_path):
                for line in out.splitlines()), out
 
 
-def test_waiting_is_still_not_credit(tmp_path):
-    """The half #1973 was right about. Passing D1's clause must not turn into
-    the expert track being reported as having run."""
-    p = _project(tmp_path)
-    _rc, out, _ = _run_track(p)
-    rep = _report(p)
-
-    assert rep["verdict"] == "INCOMPLETE"
-    assert rep["execution"]["complete"] is False
-    assert rep["execution"]["disposition"] == T.DISPOSITION_AWAITING
-    assert rep["denominator"]["total"] == 0
-    assert rep["ai_convergence"]["consumed"] == 0
-    assert "INCOMPLETE:" in out
-    assert "VACUOUS_PASS" not in out
-    # the runner's own published summary, which is where #1973's lie lived
-    assert R._expert_track_summary(p).startswith("INCOMPLETE — ")
 
 
 def test_an_unreadable_answer_is_a_defect_and_still_exits_one(tmp_path):
@@ -251,16 +234,6 @@ def test_a_bare_rc_four_with_no_sentinel_is_still_a_failure(tmp_path):
         "bare PASS for an unaudited half")
 
 
-def test_the_runner_accepts_the_wait_without_crediting_it(tmp_path):
-    """The runner's own contract. rc 4 is 'the track ran to a state it
-    defines'; whether it is CREDITED is still decided from the REPORT."""
-    assert R._EXPERT_TRACK_AWAITING_RC == T.AWAITING_EXIT_CODE, (
-        "the runner and the producer disagree about the code")
-    disp, _ = R._expert_track_disposition(
-        {"ai_subtrack": {"status": T.AI_HANDOFF_EMITTED},
-         "ai_convergence": {"consumed": 0},
-         "denominator": {"ai": 0, "total": 0}})
-    assert disp == R._EXPERT_PENDING, "the rc granted credit"
 
 
 # ── negative controls: the gate must still bite ────────────────────────────

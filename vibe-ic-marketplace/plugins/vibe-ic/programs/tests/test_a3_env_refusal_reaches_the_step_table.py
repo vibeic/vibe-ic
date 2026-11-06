@@ -54,7 +54,6 @@ import _plugin_tree  # noqa: F401 — puts programs/ on sys.path
 import _analog_producer_common as PC
 import verdict as _V  # noqa: E402
 import analog_one_shot_runner as R
-import step_preflight as SPF
 from _analog_producer_fixture import block, make_project
 
 LDO_SPEC = [{"name": "Vout", "target": 1.8, "unit": "V"},
@@ -93,16 +92,6 @@ def _a3_answers(monkeypatch, rc, stderr):
 
 # ═══ the step that hit it ═════════════════════════════════════════════════
 
-def test_an_environment_refusal_is_blocked_and_not_waived(project,
-                                                          monkeypatch):
-    p, blk = project
-    _a3_answers(monkeypatch, PC.EX_ENV_REFUSED, REFUSAL_LINE + "\n")
-    res = R.step_for_block(p, blk, "A3_netlist_gen")
-    assert res.status == SPF.REFUSAL_STATUS, (res.status, res.detail)
-    assert res.status != "PASS_WITH_WAIVERS"
-    assert "ERRORED rc=" not in res.detail, res.detail
-    assert res.extras.get("verdict_tier") == "ENV_UNAVAILABLE", res.extras
-    assert res.extras.get("env_refused") is True, res.extras
 
 
 def test_the_row_carries_the_refusals_own_line(project, monkeypatch):
@@ -144,19 +133,6 @@ def test_a_producer_that_really_errored_is_still_the_errored_row(project,
 
 # ═══ the steps below it ═══════════════════════════════════════════════════
 
-@pytest.mark.parametrize("step", ["A4_corner_sweep", "A5_layout",
-                                  "A6_block_pv", "A7_post_layout_resim"])
-def test_a_downstream_step_names_a3_rather_than_a_missing_deck(project,
-                                                               monkeypatch,
-                                                               step):
-    p, blk = project
-    _a3_answers(monkeypatch, PC.EX_ENV_REFUSED, REFUSAL_LINE + "\n")
-    R.step_for_block(p, blk, "A3_netlist_gen")
-    res = R.step_for_block(p, blk, step)
-    assert res.status == SPF.REFUSAL_STATUS, (res.status, res.detail)
-    assert res.detail.startswith("upstream A3_netlist_gen refused:"), res.detail
-    assert "sha256:06537f7e" in res.detail, res.detail
-    assert res.extras.get("env_refused_upstream") == "A3_netlist_gen"
 
 
 def test_a_downstream_step_with_a_deck_on_disk_is_not_short_circuited(

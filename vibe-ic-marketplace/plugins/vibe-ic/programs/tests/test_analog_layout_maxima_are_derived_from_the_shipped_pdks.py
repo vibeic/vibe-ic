@@ -23,7 +23,7 @@ import pytest
 
 import _plugin_tree  # noqa: F401  — puts programs/ on sys.path
 
-from not_verified_tier import not_verified_reason  # noqa: E402
+from _tool_probes import not_verified_reason  # noqa: E402
 
 import analog_a5_pdk_device_limits as LIM
 import pdk_analog_layout_minima as M

@@ -20,7 +20,7 @@ sys.path.insert(0, str(PROGRAMS))
 import formal_structural_check as fsc  # noqa: E402
 import formal_harness_gen as fhg  # noqa: E402
 import formal_property_run as fpr  # noqa: E402
-from not_verified_tier import skip_not_verified  # noqa: E402
+from _tool_probes import skip_not_verified  # noqa: E402
 
 
 HIER = '''module neutral_leaf(input wire clk, rst, clear, enable, data, output wire value);

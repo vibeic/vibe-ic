@@ -539,14 +539,6 @@ def test_no_real_in_repo_module_gains_or_loses_a_port_from_the_comment_fix():
 # `hdl_declaration_scan_strips_comments_check`'s question, asked locally
 # instead of only in a 300-second suite.
 
-def test_no_declaration_regex_in_this_file_scans_unstripped_text():
-    import hdl_declaration_scan_strips_comments_check as H
-    src = Path(S.__file__).read_text(encoding="utf-8")
-    findings = H.scan_source(src, "slot_pad_budget_check")
-    assert findings == [], (
-        "a declaration regex here scans a local no stripper touched: "
-        f"{findings}. Strip on the value that REACHES the scan — stripping a "
-        "sibling does not make this one safe.")
 
 
 # --------------------------------------------------------------------------- #

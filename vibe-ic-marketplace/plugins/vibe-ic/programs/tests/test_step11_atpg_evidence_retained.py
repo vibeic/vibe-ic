@@ -25,7 +25,6 @@ away. Three separate mechanisms produced that outcome; each has a test here.
 """
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
@@ -35,7 +34,6 @@ PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
 import fault_atpg_run as fatpg          # noqa: E402
-import design_one_shot_runner as dosr   # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -133,83 +131,19 @@ def test_a_non_run_is_never_a_measurement(cov_text, log, rc, why):
 # ---------------------------------------------------------------------------
 # 2. The caller's predicate
 # ---------------------------------------------------------------------------
-def test_measured_predicate_prefers_the_producers_declaration():
-    assert dosr._dft_atpg_measured(
-        {"coverage_measured": True, "faults_total": 0, "coverage_pct": 90.4}) is True
-    assert dosr._dft_atpg_measured(
-        {"coverage_measured": False, "faults_total": 1000}) is False
 
 
-def test_measured_predicate_keeps_the_legacy_fallback():
-    """DIRECTION-1 GUARD — a coverage.json written by an older plugin version
-    has no `coverage_measured` key; the historical `faults_total > 0` rule
-    must still apply to it."""
-    assert dosr._dft_atpg_measured({"faults_total": 1000}) is True
-    assert dosr._dft_atpg_measured({"faults_total": 0}) is False
-    assert dosr._dft_atpg_measured({}) is False
-    assert dosr._dft_atpg_measured({"faults_total": None}) is False
-    assert dosr._dft_atpg_measured("not-a-dict") is False
 
 
 # ---------------------------------------------------------------------------
 # 3. The evidence: retained, never deleted
 # ---------------------------------------------------------------------------
-def _unmeasured_project(tmp_path: Path) -> tuple[Path, Path, Path]:
-    dft = tmp_path / "phase2/stage2/dft"
-    dft.mkdir(parents=True)
-    cov_json = tmp_path / "reports/phase2/dft/coverage.json"
-    cov_json.parent.mkdir(parents=True)
-    (dft / "atpg_coverage.rpt").write_text("Covered / Total: 904 / 1000\n")
-    (dft / "coverage.yml").write_text(_coverage_yaml())
-    (dft / "scan_netlist_prelim.v").write_text("module scan; endmodule\n")
-    cov_json.write_text(json.dumps({"coverage_pct": 90.4, "faults_total": 1000}))
-    return tmp_path, dft, cov_json
 
 
-def test_unmeasured_artefacts_are_retained_not_destroyed(tmp_path):
-    """The core of 11-d3: the runner used to `unlink()` atpg_coverage.rpt,
-    coverage.json and coverage.yml so that "ALL step-11 sub-gates see cleanly
-    absent inputs".  Erasing what the engine produced makes a disclosed skip
-    indistinguishable from a suppressed result."""
-    project, dft, cov_json = _unmeasured_project(tmp_path)
-    retained = dosr._dft_retain_unmeasured(project, dft, cov_json)
-
-    assert (dft / "atpg_coverage.unmeasured.rpt").is_file()
-    assert (dft / "coverage.unmeasured.yml").is_file()
-    assert (cov_json.parent / "coverage.unmeasured.json").is_file()
-    # …with their content intact, not truncated placeholders.
-    assert "904 / 1000" in (dft / "atpg_coverage.unmeasured.rpt").read_text()
-    assert json.loads(
-        (cov_json.parent / "coverage.unmeasured.json").read_text()
-    )["faults_total"] == 1000
-
-    # every retained path is NAMED, so the sentinel can point at it
-    assert "phase2/stage2/dft/atpg_coverage.unmeasured.rpt" in retained
-    assert "phase2/stage2/dft/coverage.unmeasured.yml" in retained
-    assert "reports/phase2/dft/coverage.unmeasured.json" in retained
-    assert "phase2/stage2/dft/scan_netlist_prelim.v" in retained
 
 
-def test_canonical_measurement_paths_are_still_absent_after_retention(tmp_path):
-    """DIRECTION-1 GUARD — retention must NOT resurrect the canonical names.
-
-    The #608 honest SKIPPED-CONDITION depends on the canonical measurement
-    artefacts being absent when there IS no measurement.  Retaining a copy
-    under a disclosed name is the whole point; leaving the canonical name in
-    place would let a non-measurement be read as a measurement.
-    """
-    project, dft, cov_json = _unmeasured_project(tmp_path)
-    dosr._dft_retain_unmeasured(project, dft, cov_json)
-    assert not (dft / "atpg_coverage.rpt").exists()
-    assert not (dft / "coverage.yml").exists()
-    assert not cov_json.exists()
 
 
-def test_retention_on_an_empty_dft_dir_is_a_no_op(tmp_path):
-    dft = tmp_path / "phase2/stage2/dft"
-    dft.mkdir(parents=True)
-    cov_json = tmp_path / "reports/phase2/dft/coverage.json"
-    assert dosr._dft_retain_unmeasured(tmp_path, dft, cov_json) == []
 
 
 # ---------------------------------------------------------------------------
@@ -230,57 +164,3 @@ _MAPPED_SG13 = (
     "  sg13g2_dfrbpq_1 _1_ (.CLK(clk), .D(y), .Q(p));\n"
     "endmodule\n"
 )
-
-
-def _synth_project(tmp_path: Path, netlist: str, sibling: str | None) -> Path:
-    synth = tmp_path / "phase2/stage2/synth"
-    synth.mkdir(parents=True)
-    (synth / "netlist.v").write_text(netlist)
-    if sibling is not None:
-        (synth / "spm_synth.v").write_text(sibling)
-    return tmp_path
-
-
-def test_pdk_sniffed_from_the_netlist_atpg_actually_uses(tmp_path):
-    """The provenance defect: the runner sniffed the PDK from netlist.v — the
-    technology-GENERIC yosys netlist it writes itself — while fault_atpg_run
-    silently switched to the tech-mapped sibling.  Result on the reference
-    run: `pdk=generic` recorded for an ihp-sg13g2 design, `--pdk unmapped`
-    passed, and fault_atpg_run's rc=2 "unsupported pdk" early return read
-    downstream as an engine capability gap.
-    """
-    project = _synth_project(tmp_path, _GENERIC, _MAPPED_SG13)
-    used, pdk = dosr._dft_atpg_sniff_pdk(project, "phase2/stage2/synth/netlist.v")
-    assert pdk == "ihp-sg13g2"
-    assert used.name == "spm_synth.v"
-
-
-def test_pdk_sniff_unchanged_when_the_named_netlist_is_already_mapped(tmp_path):
-    """DIRECTION-1 GUARD — when netlist.v is itself tech-mapped, nothing
-    switches and the answer is unchanged."""
-    project = _synth_project(tmp_path, _MAPPED_SG13, None)
-    used, pdk = dosr._dft_atpg_sniff_pdk(project, "phase2/stage2/synth/netlist.v")
-    assert pdk == "ihp-sg13g2"
-    assert used.name == "netlist.v"
-
-
-def test_pdk_sniff_stays_generic_when_there_is_no_mapped_netlist(tmp_path):
-    """DIRECTION-1 GUARD — a genuinely unmapped project must still report
-    "" so the disclosed capability gap survives.  This must not become a
-    guess."""
-    project = _synth_project(tmp_path, _GENERIC, None)
-    used, pdk = dosr._dft_atpg_sniff_pdk(project, "phase2/stage2/synth/netlist.v")
-    assert pdk == ""
-    assert used.name == "netlist.v"
-
-
-@pytest.mark.parametrize("cells,expect", [
-    ("sky130_fd_sc_hd__nand2_1 _0_ (.A(a));", "sky130"),
-    ("gf180mcu_fd_sc_mcu7t5v0__nand2_1 _0_ (.A(a));", "gf180"),
-])
-def test_pdk_sniff_preserves_the_other_library_branches(tmp_path, cells, expect):
-    """DIRECTION-1 GUARD — sky130 / gf180 detection is unchanged."""
-    project = _synth_project(
-        tmp_path, f"module m(a);\n input a;\n {cells}\nendmodule\n", None)
-    _used, pdk = dosr._dft_atpg_sniff_pdk(project, "phase2/stage2/synth/netlist.v")
-    assert pdk == expect

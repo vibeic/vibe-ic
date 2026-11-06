@@ -34,7 +34,7 @@ def test_public_variants_select_by_passing_rows_area_then_power(
     entry.write_text('''import json, os, sys, time
 from pathlib import Path
 p=Path(sys.argv[1])
-assert sys.argv[-2:]==['--engine','native']
+assert sys.argv[2:]==['--route','ip']
 assert not (p/'reports/original.txt').exists()
 c=json.loads((p/'input/case.json').read_text())
 overrides=json.loads((p/'work/flow/native_overrides.json').read_text())

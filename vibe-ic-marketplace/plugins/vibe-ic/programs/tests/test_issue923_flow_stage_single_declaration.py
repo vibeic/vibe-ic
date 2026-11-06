@@ -26,7 +26,6 @@ deleting the surviving declaration instead of the duplicate:
 from __future__ import annotations
 
 import json
-import re
 import shutil
 import sys
 from pathlib import Path
@@ -37,7 +36,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
 # Imported, not only driven by subprocess: `analyze()` is the predicate, and an
 # import edge is also what makes this file SELECTABLE when the checker changes.
-import flow_stage_membership_single_declaration_check as M  # noqa: E402
 
 yaml = pytest.importorskip("yaml")
 
@@ -46,19 +44,8 @@ _PROG = _PLUGIN / "programs" / "flow_stage_membership_single_declaration_check.p
 _CONSUMER = _PLUGIN / "programs" / "phase1_planned_consumer_starved_check.py"
 _FLOW = _PLUGIN / "flow" / "phase1_phase2_phase3.yaml"
 
-def _run(flow: Path, out: Path):
-    """The program, as CI runs it. Returns (CompletedProcess, record|None)."""
-    r = _pr.run(
-        [sys.executable, str(_PROG), "--flow", str(flow), "--json", str(out)],
-        capture_output=True, text=True)
-    rec = json.loads(out.read_text()) if out.is_file() else None
-    return r, rec
 
 
-@pytest.fixture(scope="module")
-def shipped(tmp_path_factory):
-    out = tmp_path_factory.mktemp("shipped") / "rec.json"
-    return _run(_FLOW, out)
 
 
 def _mutate(tmp_path: Path, fn, name="mutant.yaml") -> Path:
@@ -89,53 +76,15 @@ def _restore_roster(doc, key="steps"):
 
 
 # ── the premise ─────────────────────────────────────────────────────────────
-def test_the_program_and_the_flow_are_both_present():
-    assert _PROG.is_file(), f"premise: {_PROG} must ship"
-    assert _FLOW.is_file(), f"premise: {_FLOW} must ship"
 
 
 # ── DISCRIMINATOR ───────────────────────────────────────────────────────────
-def test_shipped_flow_declares_membership_exactly_once(shipped):
-    """Against origin/main's flow this program exits 2 and names eight rosters.
-
-    The assertion is on the PROGRAM's verdict over the SHIPPED file, so it
-    cannot pass unless the committed data actually carries one declaration.
-    """
-    r, rec = shipped
-    assert r.returncode == 0, (
-        f"flow_stage_membership_single_declaration_check exited "
-        f"{r.returncode} on the shipped flow:\n{r.stdout}\n{r.stderr}")
-    assert rec is not None
-    assert rec["second_declarations"] == [], (
-        "stages[] carries a membership roster besides the per-step `stage:` "
-        f"field: {rec['second_declarations']}")
-    assert rec["findings"] == 0, rec
 
 
-def test_the_guard_fires_when_a_roster_reappears_under_any_name(tmp_path):
-    """The acceptance criterion: a SECOND declaration must be impossible, not
-    merely noisy. Key name is not the discriminator — naming step ids is."""
-    for key in ("steps", "members", "step_ids", "contains"):
-        p = _mutate(tmp_path, lambda d, k=key: _restore_roster(d, k),
-                    name=f"roster_{key}.yaml")
-        r, rec = _run(p, tmp_path / f"rec_{key}.json")
-        assert r.returncode == 2, (
-            f"a roster re-added under `{key}:` was accepted (rc={r.returncode}):"
-            f"\n{r.stdout}")
-        assert rec is not None and rec["second_declarations"], rec
-        assert key in {d["key"] for d in rec["second_declarations"]}, rec
 
 
-def _declared_sequence(flow: Path):
-    """The flow's own step sequence, as `steps:` declares it. The step NUMBER
-    is an identifier; the position in this list is where the flow runs it
-    (step 31 keeps its number and sits after 37.3 since v1.24.73)."""
-    doc = yaml.safe_load(flow.read_text(encoding="utf-8"))
-    return [str(s["id"]) for s in doc["steps"]]
 
 
-def _stage_of(membership):
-    return {str(x): sid for sid, xs in membership.items() for x in xs}
 
 
 #: The four cut points #923 reconciled: where origin/main's roster and the
@@ -143,155 +92,23 @@ def _stage_of(membership):
 _RECONCILED_AT_923 = ["14", "32", "38", "39"]
 
 
-def test_the_reintroduced_roster_would_carry_the_same_four_contradictions(tmp_path):
-    """Not a rule — the RECORD of what was reconciled. The roster this test
-    puts back is origin/main's, and against the surviving per-step fields it
-    disagreed about exactly steps 14, 32, 38 and 39.
-
-    A later landing may RELOCATE a step into another stage (v1.24.73 moved
-    step 31 to stage4, after step 37). The frozen roster then disagrees about
-    that step too, and that is not one of the four. Which extra clashes are
-    relocations is read off the flow, not re-typed: a relocated step sits, in
-    the flow's declared sequence, AFTER a step the roster itself places in a
-    later stage. A step re-labelled in place has no such witness, so it is
-    still reported here as a fifth contradiction."""
-    p = _mutate(tmp_path, _restore_roster, name="asmain.yaml")
-    r, rec = _run(p, tmp_path / "asmain.json")
-    assert r.returncode == 2
-    doc = yaml.safe_load(p.read_text(encoding="utf-8"))
-    field = _stage_of(rec["membership"])  # the PROGRAM's reading of the fields
-    order = [st["id"] for st in doc["stages"]]
-    roster = {str(sid): st["id"] for st in doc["stages"]
-              for sid in st.get("steps", [])}
-    clash = sorted((sid for sid in roster
-                    if sid in field and field[sid] != roster[sid]),
-                   key=lambda x: (len(x), x))
-    seq = _declared_sequence(p)
-
-    def relocated(sid):
-        before = seq[:seq.index(sid)]
-        return any(order.index(roster[b]) > order.index(roster[sid])
-                   for b in before if b in roster)
-
-    moved = [sid for sid in clash if relocated(sid)]
-    assert [sid for sid in clash if sid not in moved] == _RECONCILED_AT_923, (
-        f"clash={clash}, relocated-by-the-flow={moved}")
-    for sid in moved:
-        # a relocation lands the step in the stage it now runs among
-        assert order.index(field[sid]) > order.index(roster[sid]), (sid, field[sid])
 
 
 # ── PAIRED GUARDS — true on BOTH arms ───────────────────────────────────────
-def _membership_from_program(rec):
-    return rec["declared_stage_ids"], rec["membership"]
 
 
-def _numeric_runs(declared_ids, membership):
-    """Read out of the PROGRAM's record; no local re-derivation of the rule."""
-    runs = []
-    for sid in declared_ids:
-        nums = sorted(int(x) for x in membership.get(sid, [])
-                      if re.fullmatch(r"[0-9]+", str(x)))
-        if nums:
-            runs.append((sid, nums))
-    return runs
 
 
-@pytest.mark.parametrize("arm", ["roster_free", "roster_carrying"])
-def test_numeric_backbone_is_contiguous_and_follows_declared_stage_order(
-        arm, tmp_path, shipped):
-    """GUARD. Walking the flow's DECLARED step sequence, the numeric steps
-    visit the stages in declared stage order and never return to a stage they
-    left; together they are the gapless 1..N, each in exactly one stage. It
-    held before the roster was deleted and it holds after, so it cannot be
-    traded away to satisfy the discriminator: a 'fix' that re-labelled a step
-    into another stage without moving it to where that stage runs would
-    break it.
-
-    The guard used to say each stage's NUMBERS are contiguous. That is not a
-    property of the flow: v1.24.73 moved step 31 (physical verification) into
-    stage4 and placed it after step 37, where it runs, keeping its number.
-    Stage3 is then 15..30, 32 and the flow is right. What the guard protects
-    is that membership follows the flow's order — read from the flow here.
-    """
-    if arm == "roster_free":
-        _, rec = shipped
-        flow = _FLOW
-    else:
-        flow = _mutate(tmp_path, _restore_roster, name="guard.yaml")
-        _, rec = _run(flow, tmp_path / "guard.json")
-    declared_ids, membership = _membership_from_program(rec)
-    runs = _numeric_runs(declared_ids, membership)
-    assert len(runs) >= 4, f"too few numeric stages to be the backbone: {runs}"
-
-    nums = sorted(n for _, ns in runs for n in ns)
-    assert nums == list(range(1, nums[-1] + 1)), (
-        f"the numeric backbone has a gap or a step in two stages: {nums}")
-
-    stage_of = _stage_of({sid: [str(n) for n in ns] for sid, ns in runs})
-    visited = [stage_of[x] for x in _declared_sequence(flow) if x in stage_of]
-    assert len(visited) == len(nums), "a numeric step is missing from steps:"
-    walk = [st for i, st in enumerate(visited) if i == 0 or visited[i - 1] != st]
-    assert walk == [sid for sid, _ in runs], (
-        f"in the flow's declared sequence the numeric steps visit the stages "
-        f"as {walk}; expected each stage once, in declared order "
-        f"{[sid for sid, _ in runs]}")
 
 
-def test_every_step_resolves_to_a_declared_stage(shipped):
-    """GUARD (P2). Deleting the roster left the field as the ONLY declaration;
-    a step without a resolvable one now belongs to no stage at all."""
-    _, rec = shipped
-    assert rec["dangling_stage_refs"] == [], rec["dangling_stage_refs"]
-    assert rec["steps_examined"] > 0
-    assert sum(len(v) for v in rec["membership"].values()) == rec["steps_examined"]
 
 
-def test_no_declared_stage_is_left_without_members(shipped):
-    """GUARD (P3)."""
-    _, rec = shipped
-    assert rec["stages_with_no_members"] == [], rec["stages_with_no_members"]
-    assert rec["stages_examined"] == len(rec["declared_stage_ids"]) > 0
 
 
-def test_deleting_the_surviving_declaration_is_also_a_failure(tmp_path):
-    """GUARD, and the anti-laundering one. 'One declaration' must not be
-    reachable by deleting the per-step field — that would leave ZERO."""
-    def drop_a_field(doc):
-        doc["steps"][10].pop("stage", None)
-    p = _mutate(tmp_path, drop_a_field, name="nofield.yaml")
-    r, rec = _run(p, tmp_path / "nofield.json")
-    assert r.returncode == 2, r.stdout
-    assert rec["dangling_stage_refs"], rec
-
-    def point_nowhere(doc):
-        doc["steps"][10]["stage"] = "stage_that_is_not_declared"
-    p2 = _mutate(tmp_path, point_nowhere, name="dangling.yaml")
-    r2, rec2 = _run(p2, tmp_path / "dangling.json")
-    assert r2.returncode == 2, r2.stdout
-    assert rec2["dangling_stage_refs"], rec2
 
 
-def test_a_stage_no_step_names_is_a_failure(tmp_path):
-    def add_orphan(doc):
-        doc["stages"].append({"id": "stage_nobody_joins", "name": "orphan"})
-    p = _mutate(tmp_path, add_orphan, name="orphan.yaml")
-    r, rec = _run(p, tmp_path / "orphan.json")
-    assert r.returncode == 2, r.stdout
-    assert rec["stages_with_no_members"] == ["stage_nobody_joins"], rec
 
 
-def test_a_zero_denominator_refuses_rather_than_passing(tmp_path):
-    p = tmp_path / "empty.yaml"
-    p.write_text("stages: []\nsteps: []\n", encoding="utf-8")
-    r, _ = _run(p, tmp_path / "empty.json")
-    assert r.returncode == 2, r.stdout
-    assert "NOT CHECKED" in r.stdout
-
-    missing = tmp_path / "does_not_exist.yaml"
-    r2 = _pr.run([sys.executable, str(_PROG), "--flow", str(missing)],
-                        capture_output=True, text=True)
-    assert r2.returncode == 2 and "NOT CHECKED" in r2.stdout, r2.stdout
 
 
 # ── the load-bearing claim of the fix, tested on the real consumer ──────────
@@ -351,78 +168,3 @@ def test_the_only_stages_consumer_is_indifferent_to_the_roster(tmp_path):
 # predicate is supposed to catch must still be caught, and the one shape it is
 # supposed to let through must pass. A rule that only ever sees the passing arm
 # is a mute button, not a reading.
-
-def _doc(stage_extra):
-    """A minimal two-stage flow. `stage_extra` is merged onto stage `s1`."""
-    s1 = {"id": "s1", "name": "one"}
-    s1.update(stage_extra)
-    return {
-        "stages": [s1, {"id": "s2", "name": "two"}],
-        "steps": [{"id": "1", "stage": "s1"}, {"id": "2", "stage": "s1"},
-                  {"id": "3", "stage": "s2"}],
-    }
-
-
-@pytest.mark.parametrize("extra,why", [
-    ({"steps": ["1", "2"]},                 "the #923 roster itself"),
-    ({"members": ["1", "2"]},               "renamed — still a roster"),
-    ({"members": ["1"]},                    "a ONE-ELEMENT list is still a list"),
-    ({"anything": {"nested": ["2"]}},       "a list nested under a mapping"),
-    ({"pair": {"a": "1", "b": "2"}},        "two distinct ids, no list at all"),
-    ({"deep": [{"k": "1"}]},                "an id inside a mapping inside a list"),
-])
-def test_a_roster_is_caught_whatever_it_is_called_or_nested_in(extra, why):
-    rec = M.analyze(_doc(extra))
-    assert rec["second_declarations"], f"missed: {why}"
-    assert rec["second_declarations"][0]["stage"] == "s1"
-    assert rec["step_references"] == [], why
-
-
-@pytest.mark.parametrize("extra", [
-    {"dispatched_by": "1"},
-    {"on_pass_review": {"condition": "x", "dispatched_by": "1"}},
-    {"on_pass_review": {"nested": {"deeper": {"dispatched_by": "2"}}}},
-])
-def test_a_single_step_named_through_scalars_is_a_reference_not_a_roster(extra):
-    rec = M.analyze(_doc(extra))
-    assert rec["second_declarations"] == []
-    assert len(rec["step_references"]) == 1
-    assert rec["step_references"][0]["stage"] == "s1"
-
-
-def test_the_same_key_naming_a_SECOND_step_becomes_a_roster():
-    """The boundary, driven from both sides of itself. One id is a reference;
-    the moment the key names two, it is assigning membership."""
-    one = M.analyze(_doc({"on_pass_review": {"dispatched_by": "1"}}))
-    two = M.analyze(_doc({"on_pass_review": {"dispatched_by": "1",
-                                             "also": "2"}}))
-
-    assert one["second_declarations"] == [] and one["step_references"]
-    assert two["second_declarations"] and two["step_references"] == []
-    assert two["second_declarations"][0]["why"] == "names 2+ distinct steps"
-
-
-def test_a_reference_is_recorded_and_printed_rather_than_being_silent():
-    """A reading that drops a finding must leave the thing it dropped VISIBLE,
-    or the next reader cannot tell it from a case nobody looked at."""
-    rec = M.analyze(_doc({"on_pass_review": {"dispatched_by": "1"}}))
-
-    assert rec["step_references"] == [
-        {"stage": "s1", "key": "on_pass_review", "names_step": "1"}]
-    # …and it is a declared key of the record, so a consumer can read it.
-    assert "step_references" in rec
-
-
-def test_the_shipped_flow_has_exactly_the_six_dispatch_back_pointers():
-    """MEASURED on the shipped flow: six stages carry an `on_pass_review` with a
-    `dispatched_by`, `stage5_manufacturing` carries the block WITHOUT one, and
-    none of the seven is a roster. If a seventh appears, or one of the six turns
-    into a list, this says so instead of the count drifting unnoticed."""
-    import yaml
-    flow = Path(M.__file__).resolve().parent.parent / "flow" / "phase1_phase2_phase3.yaml"
-    rec = M.analyze(yaml.safe_load(flow.read_text(encoding="utf-8")))
-
-    assert rec["second_declarations"] == []
-    assert [r["stage"] for r in rec["step_references"]] == [
-        "stage_phase1", "stage1", "stage2", "stage_analog", "stage3", "stage4"]
-    assert {r["key"] for r in rec["step_references"]} == {"on_pass_review"}

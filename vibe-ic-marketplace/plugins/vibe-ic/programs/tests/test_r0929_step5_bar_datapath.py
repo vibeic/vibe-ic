@@ -38,7 +38,7 @@ sys.path.insert(0, str(PROGRAMS))
 sys.path.insert(0, str(TESTS))
 
 import test_fullstacktb_functional_population as base  # noqa: E402
-from not_verified_tier import skip_not_verified  # noqa: E402
+from _tool_probes import skip_not_verified  # noqa: E402
 
 
 def _fsf():

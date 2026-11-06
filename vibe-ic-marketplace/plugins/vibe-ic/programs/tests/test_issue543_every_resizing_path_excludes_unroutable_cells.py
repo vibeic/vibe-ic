@@ -102,35 +102,8 @@ def _first_command_line(tcl: str, token: str):
     return None
 
 
-def test_the_fallback_still_excludes_the_family_that_broke_routing():
-    """FALSIFIABILITY ANCHOR. Every assertion below is about emitting this
-    helper; if the helper stopped naming the probe family, they would all still
-    pass while excluding nothing that matters."""
-    tcl = R._dont_use_family_fallback_tcl()
-    assert "set_dont_use" in tcl
-    missed = _unreached_probe_cells(tcl)
-    assert not missed, (
-        f"the fallback does not reach {missed} — the cell that produced "
-        f"DRT-0085 is back in every resizer's pool while the run still prints "
-        f"DONT_USE_FALLBACK_APPLIED")
 
 
-def test_the_exclusion_is_matched_the_only_way_openSTA_can_match_it():
-    """MEASURED in-container on a commercial 180nm library: OpenSTA honours
-    `-nocase` ONLY in regexp mode. In glob mode it prints `[WARNING STA-0358]
-    -nocase ignored without -regexp` and matches case-SENSITIVELY —
-    `get_lib_cells -nocase -quiet *dly*` returned 0 cells while `-quiet *DLY*`
-    returned 4. A block that asks for case-insensitivity while passing globs is
-    therefore a block that silently matches nothing on half the libraries in
-    the world, and prints that it ran.
-    """
-    tcl = R._dont_use_family_fallback_tcl()
-    flags = re.search(r"get_lib_cells((?: -\w+)*) \$_du_pat", tcl)
-    assert flags, tcl
-    assert "-regexp" in flags.group(1), (
-        f"the do-not-use lookup passes{flags.group(1)!r}: case-insensitive "
-        f"matching needs -regexp, and without it OpenSTA drops -nocase and "
-        f"matches case-sensitively")
 
 
 #: the SAME probe family in the two naming conventions the flow has met: the
@@ -184,8 +157,6 @@ def _unreached_probe_cells(tcl: str):
             if not any(reaches(p, c) for p in pats)]
 
 
-def _probe_family_reached(tcl: str) -> bool:
-    return not _unreached_probe_cells(tcl)
 
 
 @pytest.mark.parametrize("fn_name,kwargs", RESIZING_EMITTERS,

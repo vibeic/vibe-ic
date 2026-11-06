@@ -52,9 +52,7 @@ for _p in (str(PROGRAMS), str(PLUGIN_ROOT)):
         sys.path.insert(0, _p)
 
 import l9_rtl_pin_consistency_check as GATE  # noqa: E402
-from programs.phase1_one_shot_runner import (  # noqa: E402
-    gen_l9_integration_spec,
-)
+from programs.phase1_doc_one_shot_runner import gen_l9_integration_spec
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402

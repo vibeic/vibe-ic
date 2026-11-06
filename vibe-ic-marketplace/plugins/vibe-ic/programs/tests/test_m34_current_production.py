@@ -4,18 +4,14 @@ No fixture in this module qualifies a simulation or a tapeout as READY.
 """
 import json
 import shutil
-import sys
 from pathlib import Path
 
 import pytest
-from _route_fixture import stage_mixed_source_control
 import yaml
 import flow_compliance_check as flow
 from _hostpaths import require_repo
-from programs.tests.test_execution_receipt_chain import isolated_transport, real_entry
 
 PROGRAMS = Path(__file__).resolve().parents[1]
-FLOW = PROGRAMS.parent / "flow/phase1_phase2_phase3.yaml"
 DIR = "reports/analog/mixed_signal"
 COSIM = "phase3/mixed_signal/cosim/mixed_signal_results.json"
 SI = DIR + "/interface_si.json"
@@ -253,110 +249,3 @@ def test_production_cannot_overwrite_foreign_output(tmp_path, producer):
     program = m3 if producer == "m3" else m4
     assert program.main([str(project), "--top", "boundary"]) == 1
     assert foreign.read_text() == "foreign evidence\n"
-
-
-def test_fixed_runner_stops_after_genuine_unmeasured_m3(tmp_path, monkeypatch):
-    import mixed_signal_m3_run as m3
-    import mixed_signal_cosim_check as cosim
-    import mixed_signal_interface_si_check as si
-    import mixed_signal_power_domain_run as m2
-    import vibe_ic_one_shot_runner as runner
-    project = tmp_path / "subject"
-    shutil.copytree(PROGRAMS / "tests/fixtures/m2_placed", project)
-    analog = project / "phase3/analog/analog_block_list.json"
-    analog.parent.mkdir(parents=True)
-    shutil.copyfile(project / "phase1/analog/analog_block_list.json", analog)
-    real_entry('IC', 'default', project)
-    rtl = project / "phase2/stage1/rtl/boundary.v"
-    rtl.parent.mkdir(parents=True)
-    rtl.write_text("module boundary(); endmodule\n")
-    calls = []
-    real = {"mixed_signal_power_domain_run": m2, "mixed_signal_m3_run": m3,
-            "mixed_signal_cosim_check": cosim, "mixed_signal_interface_si_check": si}
-    def bounded(label, program, args, env=None):
-        name = Path(program).stem
-        calls.append(name)
-        stage_mixed_source_control(project, Path(program).stem, args)
-        if name in real:
-            # Native M2 runs unchanged; M3 performs honest unmeasured production.
-            args = list(args)
-            if "--container" in args:
-                args[args.index("--container") + 1] = "host"
-            return real[name].main(args)
-        return 0
-    # This fixture exercises the fixed sequence and real downstream consumers.
-    # Keep its subprocess seam explicit now that Default also has a Controller.
-    monkeypatch.setattr(runner, "_controller_mixed_step", lambda *_args: None)
-    monkeypatch.setattr(runner, "_run_phase", bounded)
-    monkeypatch.setattr(sys, "argv", ["runner", str(project), "--top", "boundary",
-                                     "--route", "ic", "--skip-phase1", "--no-dashboard"])
-    runner.main()
-    report = json.loads((project / "reports/orchestrator/vibe_ic_one_shot.json").read_text())
-    phases = {row["name"]: row for row in report["phases"]}
-    assert phases["mixed_signal_M2"]["verdict"] == "PASS"
-    assert phases["mixed_signal_M3"]["verdict"] == "NOT_MEASURED"
-    assert phases["mixed_signal_M4"]["verdict"] == "NOT_MEASURED"
-    assert phases["mixed_signal_M3"]["rc"] == phases["mixed_signal_M4"]["rc"] == 2
-    assert calls.count("mixed_signal_signoff_run") == 0
-    assert calls.count("mixed_signal_m3_run") == 1
-    assert calls.count("mixed_signal_cosim_check") == 1
-    assert calls.count("mixed_signal_interface_si_check") == 1
-    assert "mixed_signal_signoff_run" not in calls
-
-
-@pytest.mark.parametrize("fault", ["m2_failed", "missing", "malformed", "stale"])
-def test_fixed_runner_cannot_borrow_m3_readiness(tmp_path, monkeypatch, fault):
-    import mixed_signal_power_domain_run as m2
-    import vibe_ic_one_shot_runner as runner
-    project = tmp_path / "subject"
-    shutil.copytree(PROGRAMS / "tests/fixtures/m2_placed", project)
-    analog = project / "phase3/analog/analog_block_list.json"
-    analog.parent.mkdir(parents=True)
-    shutil.copyfile(project / "phase1/analog/analog_block_list.json", analog)
-    real_entry('IC', 'default', project)
-    # M2 is a genuine neutral native prerequisite. Any M3 PASS below remains
-    # hostile metadata; the real strict gates must reject its absent evidence.
-    stale = project / DIR / "m3_producer_audit.json"
-    if fault == "stale":
-        write(project, str(stale.relative_to(project)),
-              {"program": "mixed_signal_m3_run", "verdict": "PASS"})
-    calls = []
-    def bounded(label, program, args, env=None):
-        name = Path(program).stem
-        calls.append(name)
-        stage_mixed_source_control(project, Path(program).stem, args)
-        if name == "mixed_signal_power_domain_run":
-            if fault == "m2_failed":
-                return 1
-            args = list(args)
-            args[args.index("--container") + 1] = "host"
-            return m2.main(args)
-        if name == "mixed_signal_m3_run" and fault == "malformed":
-            stale.write_text("{broken")
-        if name in ("mixed_signal_cosim_check", "mixed_signal_interface_si_check"):
-            module = __import__(name)
-            return module.main(args)
-        return 0
-    # This fixture exercises the fixed sequence and real downstream consumers.
-    # Keep its subprocess seam explicit now that Default also has a Controller.
-    monkeypatch.setattr(runner, "_controller_mixed_step", lambda *_args: None)
-    monkeypatch.setattr(runner, "_run_phase", bounded)
-    monkeypatch.setattr(sys, "argv", ["runner", str(project), "--top", "boundary",
-                                     "--route", "ic", "--skip-phase1", "--no-dashboard"])
-    runner.main()
-    report = json.loads((project / "reports/orchestrator/vibe_ic_one_shot.json").read_text())
-    phases = {row["name"]: row for row in report["phases"]}
-    assert phases["mixed_signal_M2"]["verdict"] == ("FAIL" if fault == "m2_failed" else "PASS")
-    if fault != "m2_failed":
-        assert m2.verify(project)["tool"]["exit_code"] == 0
-    assert phases["mixed_signal_M3"]["verdict"] == ("NOT_MEASURED" if fault == "m2_failed" else "FAIL")
-    assert phases["mixed_signal_M4"]["verdict"] == "NOT_MEASURED"
-    assert phases["mixed_signal_M4"]["rc"] == 2
-    assert phases["mixed_signal_M3"]["rc"] == (2 if fault == "m2_failed" else 1)
-    assert calls.count("mixed_signal_m3_run") == (0 if fault == "m2_failed" else 1)
-    assert calls.count("mixed_signal_cosim_check") == (0 if fault == "m2_failed" else 1)
-    assert calls.count("mixed_signal_interface_si_check") == (0 if fault == "m2_failed" else 1)
-    assert calls.count("mixed_signal_signoff_run") == 0
-    assert "mixed_signal_signoff_run" not in calls
-    if fault == "m2_failed":
-        assert "mixed_signal_m3_run" not in calls

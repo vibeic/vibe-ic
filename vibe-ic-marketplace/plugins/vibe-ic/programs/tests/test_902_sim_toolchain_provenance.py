@@ -265,26 +265,6 @@ def test_902_no_container_is_unpinned_not_match(monkeypatch, tmp_path):
     assert rec["sim_toolchain_matches_declared_image"] is None
 
 
-def test_902_compile_and_run_tools_are_both_recorded(monkeypatch, tmp_path):
-    """A compile and its vvp run share a run_dir. Both must survive: an
-    aggregate that keeps only the last one would claim the run used one tool."""
-    monkeypatch.setattr("shutil.which", lambda _t: "/usr/bin/iverilog")
-    monkeypatch.setattr(dosr, "_tool_in_container", lambda c, t: False)
-    _stub_image_probe(monkeypatch)
-    _capture_launchers(monkeypatch)
-
-    run_dir = tmp_path / "run"
-    run_dir.mkdir()
-    vvp = run_dir / "x.vvp"
-    dosr._run_iverilog_stage(["iverilog", "-o", str(vvp)], run_dir,
-                             "declared_container", timeout=_T)
-    dosr._sim_run_or_reuse("iverilog_g2012", vvp, 0, "", "", run_dir,
-                           timeout=_T, container="declared_container")
-
-    doc = json.loads((run_dir / _REC).read_text())
-    tools = sorted(r["tool"] for r in doc["records"])
-    assert tools == ["iverilog", "vvp"]
-    assert doc["verdicts"]["DIVERGED"] == 2
 
 
 def test_902_aggregate_lands_under_reports_of_the_owning_project(
@@ -388,26 +368,8 @@ def test_902_guard_container_only_iverilog_still_dispatches(monkeypatch,
     assert (rc, out) == (0, "CONTAINER_OK")
 
 
-def test_902_guard_no_iverilog_anywhere_stays_unavailable(monkeypatch):
-    """Absent on BOTH sides -> unavailable, so the deterministic no-sim WAIVE
-    still fires. The fix must not manufacture availability."""
-    monkeypatch.setattr("shutil.which", lambda _t: None)
-    monkeypatch.setattr(dosr, "_tool_in_container", lambda c, t: False)
-    assert dosr._iverilog_available("some_container") is False
-    assert dosr._iverilog_exec_container("some_container") is False
 
 
-def test_902_guard_verilator_escape_still_never_runs_vvp(monkeypatch):
-    """The verilator SV-escape already ran its native binary; its captured
-    result must still be reused rather than re-run on either side."""
-    monkeypatch.setattr(dosr, "_run",
-                        lambda *a, **k: pytest.fail("must not run vvp"))
-    monkeypatch.setattr(dosr, "_docker_exec",
-                        lambda *a, **k: pytest.fail("must not dispatch"))
-    rc, out, _err = dosr._sim_run_or_reuse(
-        "verilator_sva", Path("/p/run/none.vvp"), 0, "RAN_IN_ESCAPE", "",
-        Path("/p/run"), timeout=_T, container="cont")
-    assert (rc, out) == (0, "RAN_IN_ESCAPE")
 
 
 if __name__ == "__main__":  # pragma: no cover

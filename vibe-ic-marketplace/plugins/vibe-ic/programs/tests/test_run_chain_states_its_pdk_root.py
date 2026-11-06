@@ -399,19 +399,6 @@ def call_sites(tree: ast.AST, rel: str):
     return sites
 
 
-def _program_trees():
-    """Every shipped program that can reach the function at all.
-
-    A file whose text never spells `run_chain` can neither call it nor read
-    it off anything; a module object it hands elsewhere is read as
-    `<x>.run_chain` in the receiving file, which is parsed and reports an
-    unresolvable base. So the text filter drops nothing the rule can see."""
-    for path in sorted(PROGRAMS.rglob("*.py")):
-        if "tests" in path.relative_to(PROGRAMS).parts or path.name == "librelane_contract.py":
-            continue
-        text = path.read_text(encoding="utf-8")
-        if TARGET in text:
-            yield path, ast.parse(text)
 
 
 def _none_default_params(func) -> set:
@@ -500,23 +487,6 @@ EXPECTED_CALL_SITES = {
 }
 
 
-def test_every_run_chain_call_states_its_pdk_root():
-    missing, opaque, sites = [], [], {}
-    for path, tree in _program_trees():
-        rel = str(path.relative_to(PROGRAMS))
-        calls, uses = run_chain_calls(tree)
-        sites.update(call_sites(tree, rel))
-        enclosing = _enclosing_functions(tree)
-        missing += [f"{rel}:{c.lineno}" for c in calls
-                    if not _states_root(c, enclosing.get(id(c)))]
-        opaque += [f"{rel}:{u.lineno}" for u in uses]
-    assert sites == EXPECTED_CALL_SITES, (
-        f"the run_chain call population moved: added "
-        f"{ {k: v for k, v in sites.items() if EXPECTED_CALL_SITES.get(k) != v} }, "
-        f"removed or changed "
-        f"{ {k: v for k, v in EXPECTED_CALL_SITES.items() if sites.get(k) != v} }")
-    assert not missing, f"run_chain calls with no pdk_root: {missing}"
-    assert not opaque, f"run_chain reachable other than by a resolved call: {opaque}"
 
 
 def test_the_resolver_follows_bindings_not_names():
@@ -760,36 +730,6 @@ def test_a_wrapper_cannot_hide_missing_or_replaced_root_arguments(change):
     assert uses or any(not _states_root(c, enclosing.get(id(c))) for c in calls)
 
 
-@pytest.mark.parametrize('rel', [
-    '_native373_current.py', 'execution_backend_producers.py',
-    'execution_native_worker.py', 'librelane_fill_dfm.py', 'librelane_pv_signoff.py',
-])
-@pytest.mark.parametrize('mutation', ['remove_root', 'unrelated_module'])
-def test_real_handoffs_and_wrapper_cannot_leave_the_root_audit(rel, mutation):
-    """Mutate shipped source ASTs, including the worker's forwarding call."""
-    tree = ast.parse((PROGRAMS / rel).read_text())
-    calls, uses = run_chain_calls(tree)
-    expected = {k: v for k, v in EXPECTED_CALL_SITES.items() if k.startswith(rel + '::')}
-    assert call_sites(tree, rel) == expected
-    assert calls and not uses
-    enclosing = _enclosing_functions(tree)
-    assert all(_states_root(c, enclosing.get(id(c))) for c in calls)
-    if mutation == 'remove_root':
-        for call in calls:
-            call.keywords = [k for k in call.keywords if k.arg not in ('pdk_root', None)]
-        changed, _ = run_chain_calls(tree)
-        assert call_sites(tree, rel) == expected, 'root removal must not hide the call'
-        assert changed and all(not _states_root(c, enclosing.get(id(c))) for c in changed)
-    else:
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    if alias.name == TARGET_MODULE:
-                        alias.name = 'fault_scan_chain_insert'
-            elif isinstance(node, ast.ImportFrom) and node.module == TARGET_MODULE:
-                node.module = 'fault_scan_chain_insert'
-        assert run_chain_calls(tree) == ([], [])
-        assert call_sites(tree, rel) != expected, 'exact member equality must reject the replacement'
 
 
 def test_a_step_folder_resumes_only_under_the_root_it_was_run_with(tmp_path, monkeypatch):

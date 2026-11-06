@@ -149,37 +149,13 @@ When `design_one_shot_runner.step_rtl_gen` WAIVES with the message:
      a supplied nonzero startup value rather than resetting it to zero.
    - `case`: include `default`; rewrite overlapping `casez` priority encoders
      as `if/else-if`.
-6. **Self-verify with the HARNESS-EXACT toolchain BEFORE emit (MANDATORY —
-   ORGANIC #688)**. A host-only / RTL+TB-together self-check passes code the
-   scorer rejects, because the scorer (a) pins a specific tool version, (b)
-   compiles the RTL **alone** under the harness top flag `-s <module>` (full
-   codegen, not a `-t null` elaborate), and (c) runs a lint gate. Run the
-   deterministic gate program — it is the gate, not a suggestion:
+6. **Run native validation before handoff.** Compile the RTL with the actual
+   selected top, source set, include paths, defines and parameters. Use full
+   native simulator code generation and native lint. Run a functional testbench
+   derived only from the prompt's worked examples, tables, boundaries and error
+   behavior. Missing execution remains NOT_MEASURED. Preserve benchmark actor
+   isolation; the author does not read the hidden harness or oracle.
 
-   ```bash
-   python3 plugins/vibe-ic/programs/harness_exact_selfverify.py \
-       --rtl <project>/phase2/stage1/rtl/<module_name>.v \
-       --top <module_name> \
-       --tb  <your_functional_tb.sv>   \  # optional gate C (see below)
-       --report harness_exact_selfverify.json
-   ```
-
-   The program runs THREE gates and exits 0 only when every enforced gate
-   passes:
-   - **Gate A (deterministic)** — `iverilog -g2012 -o sim.vvp -s <top> rtl`
-     standalone full codegen (catches ELAB-only + standalone-top fail
-     classes). This is the harness-exact flag, NOT a `-t null` elaborate.
-   - **Gate B (deterministic)** — `verilator --lint-only -Wall` clean.
-   - **Gate C (you author, the program RUNS)** — a functional TB whose golden
-     vectors are the **prompt's OWN worked examples / tables** (+ random +
-     boundary). Extracting those examples is YOUR judgment; pass the TB via
-     `--tb` and the program compiles+runs it and parses the verdict. No `--tb`
-     → gate C is reported `skipped`, never silently passed.
-
-   The program DISCLOSES any host/scorer tool-version skew and does NOT claim
-   to catch spec-INTERPRETATION mismatches (it cannot — that residual stays an
-   authoring judgment). When a tool is absent it discloses and skips (or, under
-   `--require-tools`, hard-refuses) — it never fakes a pass.
 6b. **Prompt→interface conformance pre-emit check (ORGANIC #695)**. Before
    handing back, run the deterministic interface gate — it reads ONLY the
    prompt + your RTL (BLIND; never the oracle/hidden TB) and flags the three
@@ -237,27 +213,14 @@ When `design_one_shot_runner.step_rtl_gen` WAIVES with the message:
    a genuine floor. The structural extraction + routing is deterministic;
    deciding whether a prose sentence is a distinct *testable* requirement (so
    you can author its stimulus) is your LLM judgment.
-7. **Tell the orchestrator you're done, then stop**. Public D09 position 17
-   completes its author-self-validation component only from the same invocation's
-   authored RTL, D11 position 19 validation/lint, D12 position 20 CDC/RDC, and
-   D13 position 21 reference-testbench receipts, with the exact child invocation
-   and report publication bound to the public flow entry.
-
-   Until that public path produces a current completed component `PASS`, preserve
-   the authored RTL and handoff as **unconsumed**. Missing, stale, foreign, or
-   changed evidence must refuse or remain `NOT_MEASURED`; a bound failing check
-   remains `FAIL`, according to the accepted consumer contract. Component
-   completion grants no D11 position 19, D12 position 20, or D13 position 21 row
-   credit, metrics, delivery acceptance, downstream acceptance, or whole-flow
-   acceptance.
-
-   The only permitted continuation contract is the sole public
-   `vibe_ic_one_shot_runner.py` entry with the original project and route, exact
-   validated `--flow109-manifest`, `--flow 109`, the selected current D09
-   position 17 stable-ID window, and `--execution-mode default`. The public
-   resolver must accept that window before work begins. Never call
-   `design_one_shot_runner.py` directly as a public substitute, never invoke a
-   native helper directly, and never pass a flow D-id to a native helper.
+7. Return the authored RTL and handoff to the public
+   `vibe_ic_one_shot_runner.py` entry using the original project, route, and
+   Router-selected evidence window. The native runner executes the applicable
+   validation, CDC, simulation, and formal tools. Read each native result
+   against its original limit. Missing measurements remain `NOT_MEASURED`, and
+   tool failures remain `FAIL`. Authoring alone does not establish downstream
+   or whole-chip acceptance. For benchmarks, independent blind AI review and
+   official scoring remain required.
 
 ## What this skill IS NOT
 
@@ -276,10 +239,7 @@ When `design_one_shot_runner.step_rtl_gen` WAIVES with the message:
 ## Quality bar
 
 A "good" spec-to-rtl emission means:
-- `harness_exact_selfverify.py` exits 0 (gate A standalone `-s <top>` codegen
-  + gate B verilator lint both pass — see step 6; this subsumes "compiles
-  standalone" and "lint clean" with the SCORER's exact flags, so the host-only
-  accept-set cannot diverge).
+- Read the native simulation or formal result for the selected source, top and configuration. Do not add a separate harness-identity or source-hash requirement.
 - `eda_synth` gf180 emits ≥1 cell (not pure-passthrough; not optimised to nothing).
 - The module name + port list match the description verbatim.
 - No latches inferred (or, if a latch IS intended per the description,
@@ -308,8 +268,7 @@ ships this skill so the WAIVE → handoff is unambiguous + reproducible.
 When you author RTL that raises an error flag on an undefined-access /
 illegal-command / out-of-range path, decide from the **L3/L5 protocol prose**
 (not from convenience) whether the FSM should **recover** or **halt**, and encode
-that decision so the downstream `fsm_error_invariant` gate and `/rtl-review` can
-audit it:
+that decision in RTL behavior and document it for `/rtl-review`:
 
 - **recoverable** — if L3 (transaction protocol) / L5 (error-handling spec) says the
   block sets the error flag and **continues serving the next transaction** (returns to
@@ -320,12 +279,17 @@ audit it:
   **requires a reset (or explicit clear) to clear**, implement the halt and do NOT add
   the recoverable annotation; the FSM stays in the error state until reset.
 
-**FORBIDDEN:** annotating a site `// fsm_error: recoverable` (or, in review, silencing
-the gate) **without** the L3/L5 sentence(s) that establish the halt-vs-continue
+**FORBIDDEN:** annotating a site `// fsm_error: recoverable` (or, in review, dismissing
+a behavioral failure) **without** the L3/L5 sentence(s) that establish the halt-vs-continue
 behavior. The annotation is a claim about the spec and must be backed by spec text.
 
-**why_not_bucket_a:** the gate program already does its half — it flags the
-error-flag sites structurally. The recoverable-vs-fatal call is a semantic judgment
+Verify the decision with a prompt-derived executable challenge: trigger the
+error, offer the next legal transaction and check either the specified recovery
+or the required halt until reset/clear. Read the native simulation or formal
+result against the unchanged requirement and AI review it. Missing evidence is
+`NOT_MEASURED`. A hygiene lint result does not prove error recovery or fatality.
+
+**why_not_bucket_a:** the recoverable-vs-fatal call is a semantic judgment
 that lives in protocol prose (L3/L5), not in RTL structure; the identical
 `error <= 1'b1` line means "keep going" in one protocol and "lock until reset" in
 another, so no deterministic rule over the RTL can decide it. This is the residual LLM
@@ -379,69 +343,19 @@ as combinational in one problem and as registered in another; no regex over the
 RTL or the prompt reliably separates the two, so this stays an LLM authoring
 judgment.
 
+## Independent differential self-verification
 
-## Independent differential self-verification (N-version) — break the single-self-TB circularity (#700)
+When the RTL and its testbench share one interpretation, both can repeat the
+same semantic mistake. Derive an independent reference from the actual input,
+including clock-edge timing, reset values, latency, signedness, bit order,
+overflow and default/error behavior. Preserve benchmark blindness.
 
-If you author BOTH the RTL **and** its self-testbench from ONE reading of the
-spec, the self-verification is **circular**: a misread baked into that one
-reading lands in BOTH surfaces, so the TB happily confirms the wrong behaviour.
-Empirically this passed a real oversight (an hmac write-data **live-read vs
-latched-read**: 3471 diffs once an independent check was added → fixed to 0).
-
-**Break the circularity with a SECOND, INDEPENDENT derivation** and
-cross-check it against the RTL every cycle with `diff_verify_harness.py`:
-
-1. **Derive a reference model INDEPENDENTLY** — fresh reasoning, **without
-   reusing your RTL derivation**. Author a Python module exposing `ref(seq)`
-   (input-sequence → expected-output-sequence). It must be a behavioural
-   transfer function, not a copy of the RTL's structure.
-
-2. **EXPLICITLY enumerate every ambiguous quantity and PIN each via the spec's
-   worked examples** before writing `ref`:
-   - **latency** (count the pipeline stages → the leading-prefix length, e.g.
-     `[0,0]+seq[:-2]` for an exactly-2-cycle delay);
-   - **registered-vs-comb** output;
-   - **off-by-one** (pulse offset / first-vs-last / wrap / inclusive-exclusive);
-   - **bit/byte packing** and **encoding** (MSB/LSB-first, sub-byte width).
-   Pin each to a concrete spec worked example so the reference is grounded, not
-   guessed.
-
-3. **Run the differential harness** — it generates and runs a cycle-accurate
-   differential testbench (directed + random + boundary vectors), driving the
-   RTL and comparing every cycle to your independent `ref`:
-
-   ```bash
-   python3 plugins/vibe-ic/programs/diff_verify_harness.py \
-       --rtl <your_rtl.sv> --ref <your_ref.py> --top <module> \
-       --vectors directed+random+boundary
-   ```
-
-   `AGREE` (rc 0) = the two independent derivations match every cycle.
-   A first-mismatch line (rc 1, `cycle`/`signal`) = a **designer-vs-reference
-   DIFF**: one derivation noticed a clause the other missed.
-
-4. **Adjudicate every mismatch by RE-READING the spec** — decide which
-   derivation is correct, fix the wrong one, re-run. **Emit only after RTL and
-   the independent reference AGREE.**
-
-**Honest SCOPE (this is a COMPLEMENT, not a silver bullet):** it catches
-**OVERSIGHT misreads** (one derivation noticed a clause the other missed). It
-does **NOT** catch **genuine ambiguity** where the spec wording biases ALL
-independent blind readings the **same** way (an exact-latency phrase both you
-and the reference read identically-but-wrong), nor benchmark spec↔TB
-contradictions — those are **FLOOR** (on the hardest CVDP ambiguity residual it
-recovered 0/8 per #697). Its value is on FRESH runs preventing oversight bugs
-**before** the scorer. It is the differential complement to the deterministic
-**#697 `spec_coverage_check`** (force the self-TB to COVER each dimension) and
-the **#699** timing/encoding reading disciplines — not a replacement for either.
-
-**why_not_bucket_a:** authoring the independent reference and adjudicating a
-designer-vs-reference mismatch require reading and interpreting the spec; no
-regex derives the reference. The DETERMINISTIC half — generating and running
-the differential harness over directed/random/boundary vectors and reporting
-per-cycle mismatches — IS the program (`diff_verify_harness`); this step records
-the judgment residual (deriving the reference + adjudicating).
-
+Drive the RTL and reference with the same directed, random and boundary
+stimuli using the selected native simulator. Compare every required output at
+the source-defined sampling event. Retain the first mismatching cycle, signal
+and input sequence. Read the source to decide which implementation is wrong,
+then add that input-derived case to the regression and rerun. Agreement on a
+bounded test set does not establish complete correctness.
 
 ## Latency/timing conformance — the PROGRAM measures, not your self-TB (#705)
 
@@ -487,7 +401,6 @@ the timing complement to **#697** (coverage attribution — force the self-TB to
 COVER each dimension) and **#700** (independent differential verify — cross-check
 a second derivation): #705 supplies the absolute latency yard-stick those two do
 not.
-
 
 ## "Read the simulation waveform" tables — the PROGRAM replays the published table (#716)
 
@@ -537,7 +450,6 @@ is circular here because a stage-count misread biases BOTH the RTL and a
 hand-derived `ref`) and **#705** (which needs a prose latency literal a
 waveform-only prompt does not supply).
 
-
 ## Behavioral-prose Moore FSM — extract the table, let the PROGRAM emit (2026-06-23)
 
 Most FSMs whose states + transitions are stated in NARRATIVE PROSE (Lemmings with
@@ -572,7 +484,6 @@ mis-extraction becomes a SKIP, never a wrong-but-plausible machine. Proven
 counter), PS/2 (`in[3]`), the 3-cycle window counter, and the multi-phase motor
 controller. If your first table mismatches its self-TB, RE-READ THE PROMPT (never
 the hidden reference) to fix the offending transition/output.
-
 
 ## Target-conditional variant recommendations — pick by the DECLARED target, or say why not (#2089)
 
@@ -646,7 +557,6 @@ this refusal on a design whose variant the resolver could work out. When you do
 meet it, the fix is to DECLARE the coupled parameter — with the value this
 section's rows recommend for the declared target — never to weaken the check.
 
-
 ## Guard every declared legal parameter range at elaboration
 
 Before authoring a parameterized module, read every explicit legal range in
@@ -658,39 +568,14 @@ without a stated range needs no invented limit. The deterministic
 
 ## The sign-off corner is the SLOW corner, and a chain of adds is what misses it (#2081)
 
-### How this finding REACHES you (#2081, second half)
+### Route an architectural timing failure
 
-Until v1.19.x nothing routed a Phase-3 timing verdict here. The current flow
-responsibility map is: candidate timing closure at D49 position 71; post-route
-timing repair at D41 position 63; pre-layout timing at D26 position 38; and
-mode/constraint planning at D19 position 31. A user/operator selects the stable
-ID through the public entry; the paired position is display identity. Current
-registry dispatch metadata connects D49 position 71 to D41 position 63, and D26
-position 38 to D19 position 31, as physical remedies. Neither remedy is this
-skill.
-`benchmark/CAPTURE_ROUTING.json`'s `phase3.sta` pointed at the STA runner and
-`sta-review`, also physical. So a run could prove at sign-off that the
-ARCHITECTURE cannot meet the period and have nowhere to put the discovery.
-
-`programs/sta_architectural_residual_check.py`, blocking inside the D49 position
-71 responsibility, is that route. It reads the run's own
-post-route sign-off report and, per violating
-setup path, bounds what any physical remedy could still recover — the delay on
-buffer/inverter arcs, plus the adverse clock-tree insertion a perfectly
-balanced tree would remove. Slack beyond that bound is delay on LOGIC arcs, and
-`reports/phase3/sta/architectural_residual.json` names it as `residual_ns`,
-under routing key `phase3.sta.architectural_residual`, addressed to this skill.
-
-Read it as an INSTRUCTION with data, not as a number: the record carries the
-corner, both endpoints, the arc count, and the residual. `residual_ns` is the
-minimum you must remove from the path's combinational depth — the rewrites
-below are what removes it.
-
-The gate is ONE-SIDED. Firing proves the violation is architectural. NOT firing
-proves nothing: a violation it passes may still be architectural by a mechanism
-this bound does not see, so a silent gate is not a licence to keep the depth.
-And the residual is NAMED, never waived — do not answer it by re-declaring the
-period, dropping the sign-off corner, or moving the target to one that passes.
+Read the selected native STA reports, constraints, corners and the path's
+cell/interconnect breakdown. If physical repair cannot meet the original
+period, explain why the limiting logic depth requires an architecture or RTL
+change. A wrapper's silence does not prove that the architecture is adequate.
+Keep the signoff corner and original period, and verify the proposed change
+through native functional/equivalence and timing tools.
 
 A single-cycle datapath authored so that it "looks like the algorithm" reads as
 correct and closes at the typical corner. The corner the design input declares
@@ -783,8 +668,6 @@ observable output EVERY CYCLE, and count the command-to-done latency in BOTH --
 then break one deliberately and confirm the comparison goes red. A comparison
 that has never failed has not been shown to be a comparison.
 
-
-
 The same craft is now a `### Skill:` section of `agents/ic-expert-agent.md`,
 so it reaches every author through the mandatory rendered lessons digest and
 not only the reader of this file. The design-specific worked numbers that used
@@ -793,21 +676,3 @@ one of them back, which makes the text a hint sheet for one design rather than
 craft that transfers. `arith_ss_corner_risk_check` names the chains in YOUR
 RTL, and `gate_directed_rtl_repair` routes them here as
 `slow-corner-wide-arithmetic`.
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/SKILL_NAME/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in this skill directory enumerates every required
-element of your output: section headers, handoff lines, summary blocks.
-
-**Your task is not complete until the audit returns PASS.** Missing
-elements are the single largest source of skill-execution non-determinism
-across different agents.

@@ -123,23 +123,10 @@ def test_the_owner_names_the_two_non_verdicts():
 
 # ═══ reader 1 — the step table ════════════════════════════════════════════
 
-def _final_audit(monkeypatch, tmp_path, rc, out):
-    (tmp_path / "reports").mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(D, "_run", lambda *a, **k: (rc, out, ""))
-    return D.step_final_audit(tmp_path, phase=3)
 
 
-def test_reader_one_still_refuses_and_now_asks_the_owner(monkeypatch, tmp_path):
-    r = _final_audit(monkeypatch, tmp_path, 1, canary("PASS"))
-    assert r.status == _V.Verdict.NOT_MEASURED.value, r.status
-    assert (r.extras or {}).get("finding") == "AUDIT_DID_NOT_CERTIFY", r.extras
 
 
-def test_reader_one_clean_run_is_unchanged(monkeypatch, tmp_path):
-    assert _final_audit(monkeypatch, tmp_path, 0, clean("PASS")).status == "PASS"
-    assert _final_audit(monkeypatch, tmp_path, 0,
-                        clean("PASS_WITH_WAIVERS")).status == "PASS_WITH_WAIVERS"
-    assert _final_audit(monkeypatch, tmp_path, 1, clean("FAIL")).status == "FAIL"
 
 
 def test_reader_one_no_longer_owns_the_rule():

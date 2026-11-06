@@ -3,8 +3,9 @@ layer: L12
 # L12 BEHAVIORAL_SEQUENCES — multi-step protocols (engineer-mode unlock,
 # CC reset, TestMode HV entry, RX 9-step validation chain, etc.) Each
 # sequence has an id, category, ordered steps, and optional pre/postconditions.
-# `layer_extension_presence_check.py` enforces presence of required
-# CATEGORIES per the class template's spec_floor.L12_required_sequence_categories.
+# During the Phase 1 completeness review, compare sequence categories with
+# the class template's spec_floor.L12_required_sequence_categories; document
+# any missing applicable category before generating its stimulus and assertions.
 # Path convention: L12.sequences[i].{id, category, description, steps, preconditions, postconditions}
 qbank:
   sequences[0].id:

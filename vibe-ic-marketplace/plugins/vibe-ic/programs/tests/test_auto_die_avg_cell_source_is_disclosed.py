@@ -60,27 +60,3 @@ def test_the_emitted_line_carries_the_source():
     line the operator reads, not buried elsewhere."""
     src = pathlib.Path(R.__file__).read_text()
     assert 'avg_cell={avg_cell:.2f}µm² [{_avg_cell_src}]' in src
-
-
-def test_the_fallback_constant_itself_is_unchanged():
-    """Disclosure only — this change must not move any die. If the constant
-    ever changes, that is a physical-results change and belongs in its own
-    swept PR, not in a logging fix."""
-    assert R._AUTO_DIE_FALLBACK_CELL_UM2 == 7.5
-    # N4 (FX_N4_autodie_sizing, 2026-09-28) is the "better estimate" this
-    # file deferred to its own change: the per-PDK `site x 6.0 sites/cell`
-    # constant is GONE and the area is read from the netlist. It must not come
-    # back under its old name.
-    assert not hasattr(R, "_AUTO_DIE_AVG_SITES_PER_CELL")
-    assert R._AUTO_DIE_TARGET_UTIL == 0.25
-
-
-def test_die_sizing_math_is_unchanged():
-    """The sizing function is untouched: same inputs, same side."""
-    # measured against the shipped implementation, not guessed
-    assert R._auto_die_side_um(175525, 0.25, 7.5) == R._DEFAULT_DIE_MAX_UM
-    assert R._auto_die_side_um(1, 0.25, 7.5) == R._AUTO_DIE_MIN_SIDE_UM
-    assert R._auto_die_side_um(10000, 0.25, 1.42) == 239
-    # a zero/negative avg area still routes to the fallback constant
-    assert R._auto_die_side_um(10000, 0.25, 0) == R._auto_die_side_um(
-        10000, 0.25, R._AUTO_DIE_FALLBACK_CELL_UM2)

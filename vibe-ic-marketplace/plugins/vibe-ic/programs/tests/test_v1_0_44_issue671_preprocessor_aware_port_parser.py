@@ -28,15 +28,12 @@ is transitively `define-d under a taken gate) still exposes its ports.
 chip-AGNOSTIC: pure `ifdef/`define grammar + abstract SIMULATION/SYNTHESIS
 define-set — no chip / vendor / macro literal (no RVFI / RISCV_FORMAL string).
 """
-import json
 import sys
 from pathlib import Path
 
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 import reset_clock_variant_alias as RCV  # noqa: E402
-import design_one_shot_runner as R  # noqa: E402
-import _path_layout as _pl  # noqa: E402
 
 
 # A CPU-core-shaped RTL: base ports + a conditional formal/debug interface gated
@@ -146,70 +143,12 @@ endmodule
 
 # ── compile-define resolver mirrors decide_sv2v_tb_define ───────────────────
 
-def _scaffold(tmp_path, extra_rtl=""):
-    proj = tmp_path / "proj"
-    rtl = _pl.rtl_dir(proj)
-    rtl.mkdir(parents=True, exist_ok=True)
-    (rtl / "the_core.sv").write_text(_CORE)
-    if extra_rtl:
-        (rtl / "extra.sv").write_text(extra_rtl)
-    gd = _pl.generated_docs_dir(proj)
-    gd.mkdir(parents=True, exist_ok=True)
-    (gd / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({
-        "top_module": "the_core",
-        "top_ports": [
-            {"name": "clk_i", "direction": "input"},
-            {"name": "rst_ni", "direction": "input"},
-            {"name": "core_sleep_o", "direction": "output"},
-        ],
-    }))
-    return proj
 
 
-def test_tb_compile_defines_default_simulation(tmp_path):
-    proj = _scaffold(tmp_path)
-    # No include-closure hole → decide_sv2v_tb_define keeps SIMULATION.
-    assert R._v671_tb_compile_defines(proj) == {"SIMULATION"}
 
 
-def test_v629_rtl_top_ports_excludes_conditional_under_compile_set(tmp_path):
-    proj = _scaffold(tmp_path)
-    defines = R._v671_tb_compile_defines(proj)
-    ports = R._v629_rtl_top_ports(proj, "the_core", defines)
-    names = {n for _d, n, _w in ports}
-    assert _BASE <= names
-    # NO-LEAK on the DUT surface: conditional formal/debug ports excluded.
-    assert not (names & _COND)
 
 
-def test_v629_rtl_top_ports_legacy_none_keeps_all(tmp_path):
-    proj = _scaffold(tmp_path)
-    # No define-set → legacy behaviour (every arm) — proves the new arg is
-    # opt-in and #629's positive case is untouched.
-    ports = R._v629_rtl_top_ports(proj, "the_core")
-    names = {n for _d, n, _w in ports}
-    assert _COND <= names
 
 
 # ── end-to-end: emitted full-stack TB binds only the unconditional ports ────
-
-def test_emitted_tb_does_not_bind_conditional_ports(tmp_path):
-    proj = _scaffold(tmp_path)
-    res = R.step_full_stack_tb_gen(proj, "the_core")
-    # R-0915-85 — the step emits `NOT_MEASURED(no_population)` where it used
-    # to emit `SKIP`: a CONNECTIVITY-ONLY skeleton golden-compares NOTHING, so
-    # functional correctness was not measured. The detail said so already; the
-    # word says it now. This test's subject is the EMITTED TB, so what it
-    # needs is that the step did not FAIL.
-    assert res.status in ("PASS", "NOT_MEASURED"), res.detail
-    assert res.status != "FAIL", res.detail
-    sim = _pl.sim_full_stack_dir(proj)
-    tb = sim / "tb_the_core_full.v"
-    assert tb.is_file(), sorted(p.name for p in sim.glob("*"))
-    txt = tb.read_text()
-    # The DUT instantiation must NOT reference any conditional port.
-    for cond in _COND:
-        assert f".{cond}(" not in txt, \
-            f"conditional port {cond} leaked into the TB DUT binding"
-    # the base ports ARE present.
-    assert ".instr_req_o(" in txt

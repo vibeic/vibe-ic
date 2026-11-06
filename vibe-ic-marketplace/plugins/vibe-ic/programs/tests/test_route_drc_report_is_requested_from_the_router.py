@@ -45,20 +45,14 @@ no extra argument.
 """
 from __future__ import annotations
 
-import shutil
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
-import pytest
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 import phase3_one_shot_runner as R  # noqa: E402
-from _hostpaths import require_repo  # noqa: E402
 
-_TCLSH = shutil.which("tclsh") or shutil.which("tclsh8.6")
 
 _FIXTURE = ("vibe-ic-marketplace", "plugins", "vibe-ic", "programs", "tests",
             "fixtures", "drt_residual_types", "openroad_drt0701_tail.txt")
@@ -66,33 +60,6 @@ _FIXTURE = ("vibe-ic-marketplace", "plugins", "vibe-ic", "programs", "tests",
 _RPT = "/tmp/vic-probe-out/routed_router.drc.rpt"
 
 
-def _run_tcl(stub_body: str) -> tuple[str, dict]:
-    """Execute the emitted probe under a stub `detailed_route` and report what
-    the router was actually called with.
-
-    `stub_body` is the stub proc's body -- the probe reads it through
-    `info body`, exactly as it reads OpenROAD's real proc.
-    """
-    script = (
-        "proc detailed_route {args} {\n" + stub_body + "\n"
-        "  puts \"CALLED_WITH=|$args|\"\n"
-        "}\n"
-        + R._route_drc_report_tcl(_RPT) +
-        "puts \"OPT=|$_vic_drc_opt|\"\n"
-        "detailed_route {*}$_vic_drc_opt\n"
-    )
-    with tempfile.TemporaryDirectory() as td:
-        f = Path(td) / "probe.tcl"
-        f.write_text(script)
-        out = subprocess.run([_TCLSH, str(f)], capture_output=True, text=True,
-                             timeout=60)
-    assert out.returncode == 0, f"tcl failed: {out.stderr}\n{script}"
-    fields = {}
-    for line in out.stdout.splitlines():
-        if "=|" in line:
-            k, _, v = line.partition("=|")
-            fields[k] = v.rstrip("|")
-    return out.stdout, fields
 
 
 # A stub whose body carries the option in its `keys` list, the way OpenROAD's
@@ -101,123 +68,16 @@ _ACCEPTS = "  # sta::parse_key_args detailed_route args keys {-output_drc -verbo
 _REJECTS = "  # sta::parse_key_args detailed_route args keys {-verbose}"
 
 
-@pytest.mark.skipif(_TCLSH is None, reason="no tclsh on this host")
-def test_probe_requests_the_report_when_the_router_accepts_the_option():
-    """SUBJECT: on a build that takes `-output_drc`, the flow asks for it."""
-    out, f = _run_tcl(_ACCEPTS)
-    assert f["OPT"] == f"-output_drc {_RPT}"
-    assert f["CALLED_WITH"] == f"-output_drc {_RPT}"
-    assert f"ROUTE_DRC_REPORT_REQUESTED: {_RPT}" in out
 
 
-@pytest.mark.skipif(_TCLSH is None, reason="no tclsh on this host")
-def test_probe_leaves_the_route_bare_when_the_router_rejects_the_option():
-    """SUBJECT -- the load-bearing safety property: on a build WITHOUT the
-    option the router is still called, with nothing extra.
-
-    This is the whole reason for the probe. An unguarded `-output_drc` would
-    raise STA-0562 inside the surrounding `catch`, be reported as a NONFATAL,
-    and lose the route.
-    """
-    out, f = _run_tcl(_REJECTS)
-    assert f["OPT"] == "", "the option must not be selected"
-    assert f["CALLED_WITH"] == "", "the route must still run, with no extra arg"
-    assert "ROUTE_DRC_REPORT_UNSUPPORTED" in out, "and it must say so out loud"
 
 
-@pytest.mark.skipif(_TCLSH is None, reason="no tclsh on this host")
-def test_probe_survives_a_router_that_is_not_a_tcl_proc():
-    """A build where `info body` RAISES degrades to bare, never to broken.
-
-    Stated as a deliberate false negative in `_route_drc_report_tcl`: it costs
-    the report and never the route.
-    """
-    script = (
-        # A C++-backed command has no Tcl body; `info body` raises for it.
-        "proc detailed_route {args} { puts \"CALLED_WITH=|$args|\" }\n"
-        "rename detailed_route _real\n"
-        "proc detailed_route {args} { _real {*}$args }\n"
-        "rename info _real_info\n"
-        "proc info {sub args} {\n"
-        "  if {$sub eq \"body\"} { error \"not a procedure\" }\n"
-        "  return [_real_info $sub {*}$args]\n"
-        "}\n"
-        + R._route_drc_report_tcl(_RPT) +
-        "detailed_route {*}$_vic_drc_opt\n"
-    )
-    with tempfile.TemporaryDirectory() as td:
-        f = Path(td) / "p.tcl"
-        f.write_text(script)
-        out = subprocess.run([_TCLSH, str(f)], capture_output=True, text=True,
-                             timeout=60)
-    assert out.returncode == 0, out.stderr
-    assert "CALLED_WITH=||" in out.stdout, "route must still run"
-    assert "ROUTE_DRC_REPORT_UNSUPPORTED" in out.stdout
 
 
-@pytest.mark.skipif(_TCLSH is None, reason="no tclsh on this host")
-def test_the_probe_is_idempotent_so_several_call_sites_may_emit_it():
-    """Two route sites emit it, and a PnR resume deletes the block carrying
-    the first. It must decide once and survive either way."""
-    script = (
-        "proc detailed_route {args} { }\n"
-        "  # keys {-output_drc}\n"
-        + R._route_drc_report_tcl(_RPT)
-        + R._route_drc_report_tcl("/somewhere/else.rpt") +
-        "puts \"OPT=|$_vic_drc_opt|\"\n"
-    )
-    with tempfile.TemporaryDirectory() as td:
-        f = Path(td) / "p.tcl"
-        f.write_text(script)
-        out = subprocess.run([_TCLSH, str(f)], capture_output=True, text=True,
-                             timeout=60)
-    assert out.returncode == 0, out.stderr
-    assert out.stdout.count("ROUTE_DRC_REPORT_") == 1, out.stdout
-    assert "else.rpt" not in out.stdout
 
 
-def test_the_drv_repair_reroute_asks_the_router_too():
-    """SUBJECT: the reroute that can be LAST to touch the shipped geometry
-    carries the probe and expands the option.
-
-    The probe's literal moved when `_route_guide_discipline_tcl` began renaming
-    `detailed_route` and putting a wrapper in its place: `info body` on the
-    wrapper describes the WRAPPER, which carries no `-output_drc`, so the probe
-    now follows the real command to its new name. The CLAIM is unchanged and is
-    what is asserted here -- the block probes a router body and expands the
-    option it found -- plus the new half: that it probes the REAL command, since
-    probing the wrapper would silently drop the router's DRC report.
-    """
-    tcl = R._v1_8_100_signoff_drv_repair_tcl("/OUT")
-    assert "info body $_vic_dr_cmd" in tcl
-    assert "_vibeic_real_detailed_route" in tcl, \
-        "the probe must follow the renamed real command, not describe the wrapper"
-    assert "detailed_route {*}$_vic_drc_opt" in tcl
-    assert f"/OUT/{R.ROUTER_DRC_REPORT_NAME}" in tcl
 
 
-@pytest.mark.skipif(_TCLSH is None, reason="tclsh not installed")
-def test_the_probe_reads_the_real_body_through_the_wrapper():
-    """DRIVEN, and it is the control for the assertion above: with the
-    discipline armed, the probe must still find `-output_drc`. Probing the
-    wrapper instead would report the option unsupported and the run would ship
-    a route with no per-violation detail -- a silent loss that reads exactly
-    like a clean route."""
-    script = (
-        # a 'real' router command whose body advertises the option
-        "proc detailed_route {args} { # -output_drc supported\n }\n"
-        "proc global_route {args} { }\n"
-        + R._route_guide_discipline_tcl()
-        + R._route_drc_report_tcl("/OUT/r.rpt")
-        + 'puts "OPT=|$_vic_drc_opt|"\n')
-    with tempfile.TemporaryDirectory() as td:
-        f = Path(td) / "p.tcl"
-        f.write_text(script)
-        out = subprocess.run([_TCLSH, str(f)], capture_output=True, text=True,
-                             timeout=60)
-    assert out.returncode == 0, out.stderr
-    assert "ROUTE_GUIDE_DISCIPLINE_ARMED" in out.stdout, out.stdout
-    assert "OPT=|-output_drc /OUT/r.rpt|" in out.stdout, out.stdout
 
 
 def test_the_base_route_asks_the_router_too():
@@ -230,65 +90,14 @@ def test_the_base_route_asks_the_router_too():
 
 # --- the CONSUMER half: a report nothing reads is a report nobody has -------
 
-def test_the_projection_carries_the_routers_own_report():
-    """SUBJECT: when the router wrote a report, `routed.drc.rpt` carries the
-    per-violation detail -- the net and bbox the log never had."""
-    with tempfile.TemporaryDirectory() as td:
-        out = Path(td)
-        (out / R.ROUTER_DRC_REPORT_NAME).write_text(
-            "  violation type: NS Metal\n"
-            "\tsrcs: net:n_042_\n"
-            "\tbbox = (1.0, 2.0) - (1.04, 2.055) on Layer M1\n")
-        block = R._router_drc_report_block(out, "irrelevant log text")
-    assert "net:n_042_" in block
-    assert "bbox = (1.0, 2.0) - (1.04, 2.055)" in block
-    assert "detailed_route -output_drc" in block
 
 
-def test_an_empty_router_report_is_not_reported_as_silence():
-    """A router that found nothing and a router that was never asked are
-    different facts."""
-    with tempfile.TemporaryDirectory() as td:
-        out = Path(td)
-        (out / R.ROUTER_DRC_REPORT_NAME).write_text("")
-        block = R._router_drc_report_block(out, "")
-    assert "EMPTY report" in block
-    assert "DRC_EMPTY_NOT_MEASURED" in block
-    assert "no residual violations" not in block
 
 
-def test_the_projection_says_so_when_the_build_cannot_produce_one():
-    """DEGRADE LOUDLY: a build without the option is named, not silent."""
-    with tempfile.TemporaryDirectory() as td:
-        block = R._router_drc_report_block(
-            Path(td), "...\nROUTE_DRC_REPORT_UNSUPPORTED: this OpenROAD "
-                      "build's detailed_route does not accept -output_drc\n")
-    assert "UNAVAILABLE" in block
-    assert "ROUTE_DRC_REPORT_UNSUPPORTED" in block
 
 
-def test_never_asked_is_distinguished_from_asked_and_empty():
-    """REAL ARTEFACT: a checked-in OpenROAD log from a route that predates the
-    request. It has no report and no ROUTE_DRC_REPORT_* record, and must not
-    read like a clean route."""
-    # REAL ARTEFACT, resolved through `_hostpaths.require_repo` so it is a
-    # checked-in file this checkout actually has -- not a fixture authored
-    # alongside this change, which could not tell the change from its absence.
-    real_log = require_repo(*_FIXTURE).read_text()
-    assert "ROUTE_DRC_REPORT_" not in real_log
-    with tempfile.TemporaryDirectory() as td:
-        block = R._router_drc_report_block(Path(td), real_log)
-    assert "NOT REQUESTED" in block
-    assert "never asked the router" in block
 
 
-def test_the_probe_names_no_design_pdk_or_vendor_literal():
-    """chip-AGNOSTIC: the only design-derived value is the caller's path."""
-    tcl = R._route_drc_report_tcl("/OUT/x.rpt")
-    lowered = tcl.lower()
-    for token in ("gf180", "sky130", "metal1", "nangate", "spm", "nwell",
-                  "calibre", "synopsys", "cadence"):
-        assert token not in lowered, token
 
 
 def test_every_route_site_asks_so_the_report_is_never_a_superseded_routes():

@@ -85,10 +85,27 @@ import gatekeeper_assign_version as _gav        # noqa: E402  the one writer
 import plugin_manifest_discovery as _pmd        # noqa: E402
 import plugin_version_prose_sync_check as _prose  # noqa: E402
 import version_bump_monotonic_check as _vbm     # noqa: E402
-import gatekeeper_review as _gr                 # noqa: E402  derive_cadence
 
 RC_OK, RC_REFUSED, RC_BAD_INPUT = 0, 1, 2
 _SKIP_DIRS = {".git", "node_modules", "__pycache__", ".pytest_cache"}
+
+
+
+def derive_cadence(cur: Optional[str], prev: Optional[str]) -> Tuple[str, str]:
+    """Return (cadence, version_bump_label).
+
+    cadence ∈ {"FULL", "TARGETED", "NONE"}; FULL for an x.y.0 milestone,
+    TARGETED for an x.y.Z patch (Z>0). NONE when there is no parseable bump
+    (no version change in the diff)."""
+    cur_t = _vbm.parse_semver(cur) if cur else None
+    prev_t = _vbm.parse_semver(prev) if prev else None
+    if cur_t is None:
+        return "NONE", f"unparseable/none (current={cur!r})"
+    label = f"{prev}->{cur}" if prev else f"-> {cur}"
+    # An x.y.0 patch component is a MINOR/major milestone -> FULL suite.
+    if cur_t[2] == 0:
+        return "FULL", label
+    return "TARGETED", label
 
 
 def next_version(cur: str, part: str) -> Optional[str]:
@@ -312,7 +329,7 @@ def assign(repo: Path, part: str, dry_run: bool = False) -> Tuple[dict, int]:
                 "diff": [l for l in difflib.unified_diff(
                     snap_text[p].splitlines(), now.splitlines(), lineterm="", n=0)
                     if l[:1] in "+-" and l[:3] not in ("+++", "---")]})
-    cadence, label = _gr.derive_cadence(new, old)
+    cadence, label = derive_cadence(new, old)
     report = {"from": old, "assigned": new, "next": part, "cadence": cadence,
               "bump": label, "dry_run": dry_run, "changed": changed,
               "declared_positions": [str(p.relative_to(repo)) for p in declared],

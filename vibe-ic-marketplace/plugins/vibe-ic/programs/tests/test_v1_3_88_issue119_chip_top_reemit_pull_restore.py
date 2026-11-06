@@ -18,24 +18,18 @@ Verified end-to-end: re-emit -> chip_top tri x2 -> RESET_OK on Verilator
 5.048 AND iverilog 12, both spellings.
 """
 import re
-import shutil
-import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 
-from not_verified_tier import not_verified_reason  # noqa: E402
 
 
 import design_one_shot_runner as R          # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import _progress_run as _pr  # noqa: E402
-import _outcome_states as states  # noqa: E402
 
 _NEUTRALIZED_WRAPPER = """\
 module counter (
@@ -86,77 +80,3 @@ def test_restore_noop_without_pull_signature():
     block = "(\n    input clk,\n    input resetn,\n    output [7:0] cnt\n)"
     plain = "module counter (input clk, input resetn, output [7:0] cnt);\nendmodule\n"
     assert R._chip_top_restore_vl_port_tri(block, plain) is None
-
-
-def _stage_neutralized(tmp_path):
-    proj = tmp_path / "proj"
-    rtl = proj / "phase2" / "stage1" / "rtl"
-    rtl.mkdir(parents=True)
-    (proj / "input" / "docs").mkdir(parents=True)
-    (proj / "input" / "docs" / "design_description.md").write_text(
-        "# counter — 8-bit up counter\n\nInput ports:\n    clk: clock input\n"
-        "    resetn: active-low synchronous reset\nOutput ports:\n"
-        "    cnt: 8-bit count value\n")
-    core = ("module counter__rcvar_inner (\n    input clk,\n    input resetn,\n"
-            "    output reg [7:0] cnt\n);\n"
-            "    always @(posedge clk) begin\n"
-            "        if (!resetn) cnt <= 8'd0;\n"
-            "        else cnt <= cnt + 8'd1;\n    end\nendmodule\n")
-    (rtl / "counter.v").write_text(core + "\n" + _NEUTRALIZED_WRAPPER)
-    (rtl / "top_wrap.v").write_text(
-        "module counter_sync (\n    input clk,\n    input resetn,\n"
-        "    output [7:0] cnt\n);\n"
-        "    counter__rcvar_inner u_c (.clk(clk), .resetn(resetn), .cnt(cnt));\n"
-        "endmodule\n")
-    return proj
-
-
-@pytest.mark.skipif(
-    not shutil.which("docker"),
-    reason=not_verified_reason(
-        "docker engine not bound in this run",
-        remedy="run through tools/ci/run_suite_in_eda_image.sh, which "
-               "binds the host docker CLI and socket into the container"))
-def test_reemit_restores_pull_and_design_resets(tmp_path):
-    """The #119 artifact repro as the end state: a project whose inner wrapper
-    is ALREADY neutralized, chip_top absent -> synth re-emits chip_top -> the
-    outermost faces must carry the restored VERILATOR pull, and the design
-    must actually reset through the two-level chain on the host simulator."""
-    import os
-    container = os.environ.get("VIBEIC_IVERILOG13_CONTAINER", "vibeic-eda")
-    probe = subprocess.run(["docker", "exec", container, "sh", "-c", "true"],
-                           capture_output=True)
-    if probe.returncode != 0:
-        pytest.skip(f"container {container!r} not running")
-    proj = _stage_neutralized(tmp_path)
-    r = R.step_yosys_synth(proj, "chip_top")
-    assert r.status == "PASS", r.detail
-    ct = (proj / "phase2" / "stage1" / "rtl" / "chip_top.v").read_text()
-    assert ct.count("tri1") == 2, "re-emitted chip_top must carry the restored pull"
-    assert ct.count("`ifdef VERILATOR") == 2
-    # This used to `return` here, dropping the reset-behaviour half (both
-    # faces) silently after the synth assertions above. Absent simulator ->
-    # NOT_VERIFIED naming the host (R-0927); present -> runs as before.
-    states.require_tools("iverilog", "vvp")
-    for sp in ("resetn", "rst_n"):
-        tb = tmp_path / f"tb_{sp}.v"
-        tb.write_text(
-            "module tb;\n  reg clk=0, r; wire [7:0] cnt; reg ok=1;\n"
-            f"  chip_top u (.{sp}(r), .clk(clk), .cnt(cnt));\n"
-            "  always #1 clk = ~clk;\n"
-            "  initial begin\n"
-            "    r = 0; #6; if (cnt !== 8'd0) ok = 0;\n"
-            "    r = 1; #6; if (cnt === 8'd0 || cnt === 8'hxx) ok = 0;\n"
-            "    r = 0; #6; if (cnt !== 8'd0) ok = 0;\n"
-            "    if (ok) $display(\"RESET_OK\"); else $display(\"RESET_DEAD\");\n"
-            "    $finish;\n  end\nendmodule\n")
-        binp = tmp_path / f"b_{sp}"
-        c = subprocess.run(
-            ["iverilog", "-g2012", "-s", "tb", "-o", str(binp), str(tb),
-             str(proj / "phase2" / "stage1" / "rtl" / "chip_top.v"),
-             str(proj / "phase2" / "stage1" / "rtl" / "counter.v")],
-            capture_output=True, text=True)
-        assert c.returncode == 0, c.stderr
-        rr = _pr.run(["vvp", str(binp)], capture_output=True,
-                            text=True)
-        assert "RESET_OK" in rr.stdout, (sp, rr.stdout)

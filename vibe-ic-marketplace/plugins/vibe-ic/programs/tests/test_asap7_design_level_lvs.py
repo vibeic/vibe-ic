@@ -12,17 +12,13 @@ Two dimensions, both container-free (no `pya`):
 """
 from __future__ import annotations
 
-import json
 import sys
-import types
 from pathlib import Path
 
 _PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROGRAMS))
 
-import phase3_one_shot_runner as R      # noqa: E402
 import asap7_finfet_lvs as A            # noqa: E402
-from _finished_gds_fixture import publish_finished_gds
 
 
 # ------------------------------------------------------------ golden-expander unit
@@ -96,109 +92,3 @@ _ASAP7_REG = {
     "klayout_lvs_tech": "libs.tech/klayout/lvs/asap7.lyt",
     "device_lvs_verified": {"compared": 208, "match": 159, "proven_negative": True},
 }
-
-
-def _routed_project(tmp_path, top="tiny"):
-    proj = tmp_path / "proj"
-    (proj / "phase3/stage3/pnr").mkdir(parents=True)
-    (proj / "phase2/stage2/synth").mkdir(parents=True)
-    (proj / "phase3/stage3/pnr" / f"{top}.gds").write_bytes(b"\x00\x06\x00\x02GDS")
-    (proj / "phase3/stage3/pnr" / f"{top}.def").write_text(
-        "DESIGN tiny ;\nCOMPONENTS 1 ;\n- i0 INVX ;\nEND COMPONENTS\nEND DESIGN\n")
-    (proj / "phase2/stage2/synth" / f"{top}_synth.v").write_text(
-        "module tiny(); INVX i0 (); endmodule\n")
-    (proj / "state_out.json").write_text(json.dumps({
-        "gds": str(proj / "phase3/stage3/pnr" / f"{top}.gds"),
-        "def": str(proj / "phase3/stage3/pnr" / f"{top}.def"),
-        "nl": str(proj / "phase2/stage2/synth" / f"{top}_synth.v")}))
-    publish_finished_gds(proj)
-    return proj
-
-
-def _mock_common(monkeypatch, verdict_json):
-    monkeypatch.setattr(R, "_pdk_registry_entry",
-                        lambda n: _ASAP7_REG if n == "asap7" else None)
-    monkeypatch.setattr(R, "_tool_in_path", lambda c, t: True)   # klayout present
-    monkeypatch.setattr(R, "_to_container_path", lambda p, c: p)
-    monkeypatch.setattr(R, "_docker_exec",
-                        lambda container, cmd, **kw: (0, verdict_json, ""))
-
-
-def test_step_lvs_design_match_returns_pass(tmp_path, monkeypatch):
-    proj = _routed_project(tmp_path)
-    _mock_common(monkeypatch,
-                 'A7_DESIGN_LVS {"top":"tiny","verdict":"MATCH","layout_devices":30,'
-                 '"golden_devices":30,"mismatch_msgs":0,"power_shorts":0,'
-                 '"power_short_locations":[],"restored_pin_labels":6}')
-    pdk = types.SimpleNamespace(name="asap7", calibre_lvs=None)
-    res = R.step_lvs(proj, "tiny", pdk, "vibeic-eda", upstream_pnr=None, _direct=True)
-    assert res.status == "PASS"
-    assert res.extras.get("finding") == "LVS_MATCH"
-    assert res.extras.get("lvs_engine") == "asap7_device_klayout"
-    assert res.extras.get("layout_devices") == 30
-    # verdict artifact persisted PASS
-    vj = (proj / "reports/phase3/lvs_verdict.json").read_text()
-    assert '"status": "PASS"' in vj and "LVS_MATCH" in vj
-
-
-def test_step_lvs_design_mismatch_returns_fail(tmp_path, monkeypatch):
-    proj = _routed_project(tmp_path)
-    _mock_common(monkeypatch,
-                 'A7_DESIGN_LVS {"top":"tiny","verdict":"MISMATCH","layout_devices":30,'
-                 '"golden_devices":30,"mismatch_msgs":12,"power_shorts":0,'
-                 '"power_short_locations":[],"restored_pin_labels":6}')
-    pdk = types.SimpleNamespace(name="asap7", calibre_lvs=None)
-    res = R.step_lvs(proj, "tiny", pdk, "vibeic-eda", upstream_pnr=None, _direct=True)
-    assert res.status == "FAIL"
-    assert res.extras.get("finding") == "LVS_MISMATCH"
-    assert res.extras.get("mismatch_msgs") == 12
-
-
-def test_step_lvs_design_power_short_returns_fail(tmp_path, monkeypatch):
-    proj = _routed_project(tmp_path)
-    _mock_common(monkeypatch,
-                 'A7_DESIGN_LVS {"top":"tiny","verdict":"MISMATCH","layout_devices":19,'
-                 '"golden_devices":30,"mismatch_msgs":5,"power_shorts":1,'
-                 '"power_short_locations":[{"net":"VDD","vdd_at":[1,1],"vss_at":[1,0.5]}],'
-                 '"restored_pin_labels":6}')
-    pdk = types.SimpleNamespace(name="asap7", calibre_lvs=None)
-    res = R.step_lvs(proj, "tiny", pdk, "vibeic-eda", upstream_pnr=None, _direct=True)
-    assert res.status == "FAIL"
-    assert res.extras.get("finding") == "LVS_POWER_SHORT"
-    assert res.extras.get("power_shorts") == 1
-
-
-def test_step_lvs_no_verdict_marker_returns_fail(tmp_path, monkeypatch):
-    # a crashed / silent in-container run (no A7_DESIGN_LVS marker) must FAIL, never
-    # be swallowed as clean.
-    proj = _routed_project(tmp_path)
-    _mock_common(monkeypatch, "some noise but no marker\n")
-    pdk = types.SimpleNamespace(name="asap7", calibre_lvs=None)
-    res = R.step_lvs(proj, "tiny", pdk, "vibeic-eda", upstream_pnr=None, _direct=True)
-    assert res.status == "FAIL"
-    assert res.extras.get("finding") == "LVS_DESIGN_NO_VERDICT"
-
-
-def test_step_lvs_missing_state_is_not_measured(tmp_path, monkeypatch):
-    # no routed GDS + gate netlist -> library-only WAIVE (the v1.4.70 behavior stays
-    # as the fallback), NOT the false netgen/magic ENV message.
-    monkeypatch.setattr(R, "_pdk_registry_entry",
-                        lambda n: _ASAP7_REG if n == "asap7" else None)
-    monkeypatch.setattr(R, "_tool_in_path", lambda c, t: True)
-    empty = tmp_path / "empty_proj"
-    empty.mkdir()
-    pdk = types.SimpleNamespace(name="asap7", calibre_lvs=None)
-    res = R.step_lvs(empty, "tiny", pdk, "vibeic-eda", upstream_pnr=None, _direct=True)
-    assert res.status == "NOT_MEASURED"
-    assert "CURRENT_FINAL_STATE_MISSING" in res.detail
-
-
-def test_step_lvs_klayout_missing_names_klayout(tmp_path, monkeypatch):
-    proj = _routed_project(tmp_path)
-    monkeypatch.setattr(R, "_pdk_registry_entry",
-                        lambda n: _ASAP7_REG if n == "asap7" else None)
-    monkeypatch.setattr(R, "_tool_in_path", lambda c, t: False)   # klayout absent
-    pdk = types.SimpleNamespace(name="asap7", calibre_lvs=None)
-    res = R.step_lvs(proj, "tiny", pdk, "vibeic-eda", upstream_pnr=None, _direct=True)
-    assert res.status == "NOT_MEASURED"
-    assert res.extras.get("missing_tool") == "klayout"

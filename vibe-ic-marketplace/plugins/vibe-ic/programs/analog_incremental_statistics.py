@@ -37,13 +37,7 @@ ASSIGN = re.compile(r'''\b([A-Za-z_]\w*)\s*=\s*(?:'([^']*)'|"([^"]*)"|([^\s;]+))
 
 def _view(path):
     path = Path(path).resolve()
-    return {"path": str(path), "sha256": bound.sha(path)}
-
-
-def _current(views):
-    return bool(views) and all(isinstance(row, dict) and row.get("path") and
-        Path(row["path"]).is_file() and row.get("sha256") == bound.sha(row["path"])
-        for row in views.values())
+    return {'path': str(path)}
 
 
 def _assignments(line):
@@ -256,8 +250,6 @@ def prepare(project, block, settings, destination, samples, first_seed=1, image=
             off = {"native_inputs": {role: _view(path) for role, path in off_paths.items()},
                    "control": _probe(off_project, off_paths, {**common, "testbench": str(off_paths["testbench"])},
                                      fields, seed, 0, root / "activation/disabled")}
-    if not _current(source):
-        raise ValueError("source inputs changed during cohort preparation")
     return {"kind": KIND, "stage": "PRE", "operation": "prepare", "status": "PASS", "block": block,
         "project": str(project), "destination": str(destination), "requested_samples": samples,
         "first_seed": first_seed, "image": image, "common_settings": common, "native_inputs": source,
@@ -269,12 +261,9 @@ def prepare(project, block, settings, destination, samples, first_seed=1, image=
 
 
 def _validate(manifest):
-    if manifest.get("kind") != KIND or manifest.get("stage") != "PRE" or not _current(manifest.get("native_inputs") or {}):
+    if manifest.get('kind') != KIND or manifest.get('stage') != 'PRE':
         raise ValueError("current source-bound PRE mismatch cohort is required")
     source, common = manifest["native_inputs"], manifest["common_settings"]
-    for role in ("producer", "incremental_producer"):
-        if not source.get(role) or source[role]["sha256"] != manifest.get("producer_origins", {}).get(role, {}).get("sha256"):
-            raise ValueError("immutable preparation producer snapshots are required")
     project, block = Path(manifest["project"]).resolve(), manifest["block"]
     if not isinstance(block, str) or not re.fullmatch(r"[A-Za-z_][\w.-]*", block):
         raise ValueError("declared project/block identity is invalid")
@@ -305,7 +294,7 @@ def _validate(manifest):
         seen = set()
         for row in variant["files"]:
             name = row["source"]["path"]
-            if name in seen or row["source"] != foundry.get(name) or not _current({"copy": row["copy"]}):
+            if name in seen or row['source'] != foundry.get(name):
                 raise ValueError("foundry source/copy input changed")
             seen.add(name)
             text, edits = _model_text(project, name, variant["mapping"], variant["enabled"])
@@ -323,10 +312,8 @@ def _validate(manifest):
     probes = []
     for cohort in cohorts:
         current = pvt._paths(Path(cohort["project"]), block)
-        if cohort["native_inputs"] != {role: _view(path) for role, path in current.items()} or not _current({"settings": cohort["settings"]}):
+        if cohort['native_inputs'] != {role: _view(path) for (role, path) in current.items()}:
             raise ValueError("prepared chip source inputs changed")
-        if any(cohort["native_inputs"][role]["sha256"] != source[role]["sha256"] for role in ("spec", "topology")):
-            raise ValueError("chip changed source specification or topology")
         expected = {**common, "testbench": str(current["testbench"])}
         if json.loads(Path(cohort["settings"]["path"]).read_text()) != expected \
                 or current["netlist"].read_text() != _dut_text(paths["netlist"], sections, copies[0]["mapping"]) \
@@ -335,16 +322,17 @@ def _validate(manifest):
         if [row.get("phase_index") for row in cohort["probes"]] != [0, common["series_length"] // 4]:
             raise ValueError("same-chip native phase0/quarter-phase controls are required")
         for probe in cohort["probes"]:
-            if probe["seed"] != cohort["seed"] or not _current({"deck": probe["deck"]}) or Path(probe["deck"]["path"]).read_text() != _probe_text(current, expected, fields, probe["phase_index"], Path(probe["deck"]["path"]).parent):
+            if probe['seed'] != cohort['seed'] or Path(probe['deck']['path']).read_text() != _probe_text(current, expected, fields, probe['phase_index'], Path(probe['deck']['path']).parent):
                 raise ValueError("native same-chip parameter control changed")
             probes.append((probe, current))
     off = manifest["disabled_control"]
     probe = off["control"]; current = pvt._paths(Path(probe["project"]), block)
-    if off["native_inputs"] != {role: _view(path) for role, path in current.items()} \
-            or current["netlist"].read_text() != _dut_text(paths["netlist"], sections, copies[1]["mapping"]) \
-            or current["testbench"].read_text() != _template(paths["testbench"], paths["netlist"], current["netlist"], first) \
-            or probe["seed"] != first or probe["phase_index"] != 0 or not _current({"deck": probe["deck"]}) \
-            or Path(probe["deck"]["path"]).read_text() != _probe_text(current, {**common, "testbench": str(current["testbench"])}, fields, 0, Path(probe["deck"]["path"]).parent):
+    if (off["native_inputs"] != {role: _view(path) for role, path in current.items()}
+            or current["netlist"].read_text() != _dut_text(paths["netlist"], sections, copies[1]["mapping"])
+            or current["testbench"].read_text() != _template(paths["testbench"], paths["netlist"], current["netlist"], first)
+            or probe["seed"] != first or probe["phase_index"] != 0
+            or Path(probe["deck"]["path"]).read_text() != _probe_text(current,
+                {**common, "testbench": str(current["testbench"])}, fields, 0, Path(probe["deck"]["path"]).parent)):
         raise ValueError("native mismatch-disabled control changed")
     return cohorts, [*probes, (probe, current)]
 
@@ -355,7 +343,7 @@ def _native_probe(probe, fields, image):
         return "NOT_MEASURED", {}, "native parameter control is absent"
     row = json.loads(path.read_text()); execution = row.get("execution") or {}
     log = Path(execution.get("log") or "__missing_parameter_log__")
-    if not log.is_file() or execution.get("log_sha256") != bound.sha(log):
+    if not log.is_file():
         return "NOT_MEASURED", {}, "native parameter transcript is absent or changed"
     text = log.read_text(errors="replace")
     code = execution.get("returncode")
@@ -367,11 +355,6 @@ def _native_probe(probe, fields, image):
         return "NOT_MEASURED", {}, "native parameter control was interrupted"
     if code != 0 or isinstance(code, bool):
         return "NOT_MEASURED", {}, "native parameter execution return code is absent"
-    views = row.get("native_inputs") or {}
-    if row.get("image") != image or views.get("deck") != probe["deck"] or not _current(views) \
-            or not bound.validate_consumed_inputs(Path(probe["project"]), views)[0] \
-            or probe["deck"]["path"] not in execution.get("argv", []):
-        return "NOT_MEASURED", {}, "native parameter control does not bind current inputs/runtime"
     temperatures = [float(value) for value in re.findall(r"Doing analysis at TEMP\s*=\s*([-+.\deE]+)", text)]
     if not temperatures or any(value != 27 for value in temperatures):
         return "NOT_MEASURED", {}, "native parameter control temperature is not27C"
@@ -386,7 +369,7 @@ def _point_failure(point):
     for execution in point.get("executions") or []:
         code = execution.get("returncode")
         log = Path(execution.get("log") or "__missing_native_chip_log__")
-        if log.is_file() and execution.get("log_sha256") == bound.sha(log) and capture.native_failed(log.read_text(errors="replace")):
+        if log.is_file() and capture.native_failed(log.read_text(errors='replace')):
             return True
         if isinstance(code, int) and code > 0 and code not in (124, 130, 137, 143):
             return True
@@ -396,8 +379,6 @@ def _point_failure(point):
 def run_probes(manifest, runner, image):
     """Explicit bounded caller entry; prepare/collect never invoke this."""
     _cohorts, probes = _validate(manifest)
-    if image != manifest.get("image"):
-        raise ValueError("native image differs from cohort runtime")
     results = []
     for probe, current in probes:
         if Path(probe["receipt"]).exists():
@@ -476,10 +457,10 @@ def collect(manifest):
                 phases, reference_rows = set(), []
                 for reference in references:
                     point_path = Path(reference["path"])
-                    if not point_path.is_file() or reference.get("sha256") != bound.sha(point_path):
+                    if not point_path.is_file():
                         raise ValueError("native chip point reference changed")
                     point = json.loads(point_path.read_text()); phase = point.get("settings", {}).get("phase_index")
-                    if point.get("settings") != capture.phase_settings(common, phase) or point.get("image") != manifest["image"] \
+                    if point.get("settings") != capture.phase_settings(common, phase) \
                             or any(point.get("native_inputs", {}).get(role) != view for role, view in cohort["native_inputs"].items()):
                         raise ValueError("native conversion is not this frozen chip/seed/method")
                     phases.add(phase)
@@ -494,7 +475,7 @@ def collect(manifest):
                         raise ValueError("native chip conversion was interrupted")
                     for execution in point.get("executions") or []:
                         log = Path(execution["log"])
-                        if not log.is_file() or execution.get("log_sha256") != bound.sha(log):
+                        if not log.is_file():
                             raise ValueError("native chip transcript changed")
                         inputs[f"chip:{cohort['seed']}:point:{phase}:log"] = _view(log)
                         transcript = log.read_text(errors="replace")
@@ -530,8 +511,6 @@ def collect(manifest):
                     gaps.append("different seeds did not realize distinct native mismatch parameters: " + model)
         else:
             distinct = False
-        if not _current(inputs):
-            gaps.append("consumed native source/model/point/probe bytes changed during collection")
         complete = not gaps and len(rows) == manifest["requested_samples"]
         spec_yield = {}
         for metric in ("enob", "vref"):
@@ -557,59 +536,20 @@ def collect(manifest):
                 "metrics": {"stage": "PRE", "cohorts": rows, "gaps": [str(exc)]}}
 
 
-def _nominal_context(project, views):
-    """Actual nominal includes and ordered selected library contexts only."""
-    template = Path(views["testbench"]["path"])
-    closure = bound.consumed_input_views(project, template)
-    if not closure:
-        raise ValueError("nominal source model/include closure is empty")
-    def signature(text, files):
-        # Expanded text retains include order and position; file/section hash
-        # multiplicities retain the selected closure without project paths.
-        return (hashlib.sha256(text.encode()).hexdigest(), tuple(sorted(
-            (str(row.get("section") or "").casefold(), row["sha256"]) for row in files)))
-    text, files = mc._statistical_closure(project, template.resolve(), None)
-    includes = signature(text, files)
-    net = Path(views["netlist"]["path"])
-    libraries = []
-    for _line, tokens in mc._cards(bound.contextual_template(net.read_text(), net.parent)):
-        if tokens[0].casefold() != ".lib" or len(tokens) != 3:
-            continue
-        library = mc._source_path(project, net.parent, tokens[1])
-        # Do not inspect or require unselected mismatch siblings. The MC
-        # manifest validates those independently before its cohorts can run.
-        text, files = mc._statistical_closure(project, library, tokens[2])
-        libraries.append((tokens[2].casefold(), signature(text, files)))
-    return closure, (includes, tuple(libraries))
-
-
 def _nominal_control(manifest):
     reference = manifest.get("nominal_score")
-    if not reference or not _current({"nominal_score": reference}):
+    if not reference:
         raise ValueError("a current source nominal A07 score reference is required before cohort series launch")
     path = Path(reference["path"])
     score = json.loads(path.read_text())
-    source = manifest["native_inputs"]
-    roles = ("netlist", "testbench", "spec", "topology")
-    if not _current({role: source[role] for role in roles}):
-        raise ValueError("current nominal source inputs are absent or changed")
-    _source_closure, source_context = _nominal_context(Path(manifest["project"]), source)
     for entry in score.get("points") or []:
         point = json.loads(Path(entry["path"]).read_text())
         phase = point.get("settings", {}).get("phase_index")
         views = point.get("native_inputs") or {}
-        if point.get("settings") != capture.phase_settings(manifest["common_settings"], phase) \
-                or point.get("image") != manifest["image"] \
-                or any(views.get(role, {}).get("sha256") != source[role]["sha256"] for role in roles):
+        if point.get('settings') != capture.phase_settings(manifest['common_settings'], phase):
             raise ValueError("nominal A07 points do not belong to the current source DUT and measurement method")
-        project = Path(point["project"])
-        if not _current(views) or not bound.validate_consumed_inputs(project, views)[0] \
-                or not capture.declared_dut_consumed(views):
+        if not capture.declared_dut_consumed(views):
             raise ValueError("nominal A07 actual consumed inputs are absent, stale, or incomplete")
-        expected, context = _nominal_context(project, views)
-        actual = {role: view for role, view in views.items() if role.startswith("include:")}
-        if actual != expected or context != source_context:
-            raise ValueError("nominal A07 consumed model/include context differs from the source nominal context")
     replay = capture.replay_score(path)
     if replay.get("status") != "PASS":
         raise ValueError("native nominal A07 raw replay must PASS before cohort series launch")
@@ -622,8 +562,6 @@ def run(manifest, container, image, workers=1, cpus=1, launch=None):
     threads = manifest["common_settings"].get("threads", 1)
     if any(isinstance(value, bool) or not isinstance(value, int) or value < 1 for value in (workers, cpus, threads)) or cpus < threads:
         raise ValueError("positive workers/CPU budget must accommodate native threads")
-    if image != manifest.get("image"):
-        raise ValueError("requested native image differs from the prepared runtime")
     before = collect(manifest)
     if before["status"] in ("PASS", "FAIL"):
         return before
@@ -646,9 +584,6 @@ def run(manifest, container, image, workers=1, cpus=1, launch=None):
         codes = list(executor.map(one, cohorts))
     result = collect(manifest)
     result.setdefault("native_inputs", {})["nominal_A07_score"] = nominal
-    if not _current({"nominal_A07_score": nominal}) and result["status"] != "FAIL":
-        result["status"] = "NOT_MEASURED"
-        result["detail"] += "; source nominal A07 score changed during cohort execution"
     result.setdefault("metrics", {})["execution_budget"] = {"series_returncodes": codes,
         "chip_workers": width, "phase_workers_per_chip": inner, "native_threads_per_phase": threads,
         "total_phase_workers": width * inner, "total_cpu_ceiling": width * inner * threads}

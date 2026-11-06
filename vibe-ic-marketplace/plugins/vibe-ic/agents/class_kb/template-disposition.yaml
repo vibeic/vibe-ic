@@ -9,8 +9,8 @@ _comment: 're #495 Stage 3 — the declared disposition of every class-tree node
   and crypto-engine children, stricter for the digital-ic children whose ancestors
   carry no floor at all. Since Stage 3 all three consumers walk. This file records
   the resulting disposition so ''no template'' is a declared state rather than an
-  accident, and programs/tests/test_v1_7_72_issue495_template_hole_inheritance.py
-  re-derives every entry from disk so it cannot drift.'
+  accident. For current review, compare class-tree.yaml with the actual templates,
+  walk the ancestor chain, and check each declared disposition against that data.'
 known_divergence:
   node: uart-peripheral
   rule: L3_opcode_count_min
@@ -24,8 +24,9 @@ known_divergence:
     on exactly this one node.
   not_fixed_here: Changing an inheritance rule is not a template hole, gap_detect's
     chain walk is the subject of the following stage, and gap_detect produces 0
-    gaps corpus-wide today so nothing is currently mis-scored. Pinned by programs/tests/test_v1_7_72_issue495_template_hole_inheritance.py
-    so it stays a decision rather than a rediscovery.
+    gaps corpus-wide in the recorded run. Preserve this explicit discrepancy when
+    reviewing the current chain-walk behavior; do not silently treat the consumers
+    as equivalent.
 nodes:
   analog-mixed-ic:
     disposition: inherit
@@ -166,8 +167,8 @@ orphan_templates:
       sentinel.'
   cable-side-id-ic-maxim-style:
     disposition: keep_explicit_only
-    reason: Reachable only by an explicit --class-path, and exercised that way by
-      programs/tests/test_phase1_quality_parity_check.py. A tightened variant of
+    reason: Available only through an explicit class selection. Review the actual
+      selected template rather than assuming taxonomy detection. A tightened variant of
       the cable-side-id-ic floor (L6_required_submodules plus higher submodule /
       port minimums) for one implementation style; it is a profile a user opts into,
       not a class the classifier can detect, so it does not belong in the detection

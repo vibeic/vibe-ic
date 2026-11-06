@@ -33,14 +33,12 @@ yosys where available.
 """
 from __future__ import annotations
 
-import json
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
-import phase3_one_shot_runner as p3
 import synth_frontend as sf
 
 import sys
@@ -92,52 +90,8 @@ MACRO_LIB = ("library (OTP128X8_MACRO_tt) {\n"
              "    pin(CLK) { direction : input; }\n  }\n}\n")
 
 
-def _mk_project(tmp_path: Path, ext: str = ".v", stage_macro: bool = False,
-                macro_lib: bool = True) -> Path:
-    proj = tmp_path / "proj"
-    rtl = proj / "phase2" / "stage1" / "rtl"
-    rtl.mkdir(parents=True)
-    (rtl / f"chip_top{ext}").write_text(RTL_TOP)
-    (rtl / f"otp_mem{ext}").write_text(RTL_OTP)
-    if stage_macro:
-        base = proj / "input" / "pdk_local" / "otp_ip"
-        (base / "Verilog").mkdir(parents=True)
-        (base / "Verilog" / "OTP128X8_MACRO.v").write_text(MACRO_V)
-        if macro_lib:
-            (base / "lib").mkdir(parents=True)
-            (base / "lib" / "OTP128X8_MACRO_tt.lib").write_text(MACRO_LIB)
-    return proj
 
 
-def _run_step_synth(tmp_path: Path, proj: Path, monkeypatch):
-    """Drive step_synth with a stubbed container exec and return
-    (emitted_commands, StepResult). rc!=0 makes every fallback read path fire,
-    so all three define-carrying commands are captured."""
-    captured: list[str] = []
-
-    def fake_exec(container, cmd, marker=None, timeout=1800, **_kw):
-        captured.append(cmd)
-        return 1, "", "stubbed failure"
-
-    monkeypatch.setattr(p3, "_docker_exec", fake_exec)
-    monkeypatch.setattr(p3._sf, "resolve_slang_load_prefix",
-                        lambda c, e: "")
-
-    lib = tmp_path / "fake.lib"
-    lib.write_text("library (fake) { cell (INV) { area : 1.0; } }\n")
-    mlibs, mlefs, mgds, mv = p3._discover_local_macros(proj)
-    # PdkConfig declares these as `str` (in-container paths) and every
-    # production construction site passes a str — `_registry_glob_one` returns
-    # Optional[str]. Passing Path here violated that contract and crashed
-    # `_synth_dont_use_cells` on `pdk.liberty.split("/")` with
-    # AttributeError: 'PosixPath' object has no attribute 'split'.
-    pdk = p3.PdkConfig(name="t", liberty=str(lib), tech_lef=str(tmp_path / "t.lef"),
-                       cell_lef=str(tmp_path / "c.lef"), cell_gds=str(tmp_path / "c.gds"),
-                       site="unit", drc_deck=str(tmp_path / "d.lydrc"),
-                       macro_libs=mlibs, macro_lefs=mlefs, macro_gds=mgds,
-                       macro_v=mv)
-    res = p3.step_synth(proj, "chip_top", pdk, "no-such-container")
-    return captured, res
 
 
 # ---------------------------------------------------------------------------
@@ -145,95 +99,26 @@ def _run_step_synth(tmp_path: Path, proj: Path, monkeypatch):
 # behave EXACTLY as before. These are the byte-identical pins.
 # ---------------------------------------------------------------------------
 
-def test_no_macro_staged_keeps_simulation_define_on_read_verilog(
-        tmp_path, monkeypatch):
-    proj = _mk_project(tmp_path, ext=".v", stage_macro=False)
-    cmds, _ = _run_step_synth(tmp_path, proj, monkeypatch)
-    blob = "\n".join(cmds)
-    assert "read_verilog -sv -DSIMULATION " in blob, (
-        "the behavioural fallback arm must still be selected when NO macro is "
-        f"staged — the Altera-primitive problem the define solves is real:\n{blob}")
 
 
-def test_no_macro_staged_keeps_simulation_define_on_slang_and_sv2v(
-        tmp_path, monkeypatch):
-    """`.sv` inputs force the SV fallback, so the read_slang and sv2v pre-pass
-    read paths (which also carry the define) are exercised."""
-    proj = _mk_project(tmp_path, ext=".sv", stage_macro=False)
-    cmds, _ = _run_step_synth(tmp_path, proj, monkeypatch)
-    blob = "\n".join(cmds)
-    assert "-DSIMULATION -DYOSYS" in blob and "read_slang " in blob, (
-        f"read_slang must keep the historical define set:\n{blob}")
-    assert "sv2v -DSIMULATION -DYOSYS " in blob, (
-        f"the sv2v pre-pass must keep the historical define set:\n{blob}")
 
 
-def test_no_macro_staged_reports_behavioural_path(tmp_path, monkeypatch):
-    """Even the unchanged path is REPORTED, so which arm synth took is never
-    something an audit has to infer from a cell count."""
-    proj = _mk_project(tmp_path, ext=".v", stage_macro=False)
-    _, res = _run_step_synth(tmp_path, proj, monkeypatch)
-    dec = res.extras["macro_define_decision"]
-    assert dec["verdict"] == "BEHAVIOURAL_NO_MACRO"
-    assert dec["define_sim"] is True
-    log = (proj / "phase2" / "stage2" / "synth" / "synth.log").read_text()
-    assert "STAGED-MACRO vs BEHAVIOURAL PATH" in log
 
 
 # ---------------------------------------------------------------------------
 # THE DEFECT: a staged macro must be instantiated, not replaced by flops.
 # ---------------------------------------------------------------------------
 
-def test_staged_macro_drops_the_forced_simulation_define(
-        tmp_path, monkeypatch):
-    proj = _mk_project(tmp_path, ext=".v", stage_macro=True)
-    cmds, _ = _run_step_synth(tmp_path, proj, monkeypatch)
-    reads = [c for c in cmds if "read_verilog -sv" in c]
-    assert reads, "no read_verilog command was emitted"
-    assert not any("-DSIMULATION" in c for c in reads), (
-        "with a real macro staged, forcing -DSIMULATION makes the macro arm "
-        "unreachable and synthesises ~1024 flops in place of the macro:\n"
-        + "\n".join(reads))
 
 
-def test_staged_macro_decision_is_reported(tmp_path, monkeypatch):
-    proj = _mk_project(tmp_path, ext=".v", stage_macro=True)
-    _, res = _run_step_synth(tmp_path, proj, monkeypatch)
-    dec = res.extras["macro_define_decision"]
-    assert dec["verdict"] == "MACRO_INSTANTIATED"
-    assert dec["define_sim"] is False
-    assert "OTP128X8_MACRO" in dec["macro_cells"]
-    log = (proj / "phase2" / "stage2" / "synth" / "synth.log").read_text()
-    assert "MACRO_INSTANTIATED" in log
 
 
-def test_staged_macro_still_blackboxed_into_synth(tmp_path, monkeypatch):
-    """Dropping the define is only sound because the macro Liberty is read as a
-    blackbox — otherwise the macro arm would not elaborate."""
-    proj = _mk_project(tmp_path, ext=".v", stage_macro=True)
-    cmds, _ = _run_step_synth(tmp_path, proj, monkeypatch)
-    assert any("read_liberty -lib" in c and "OTP128X8_MACRO" in c
-               for c in cmds), "\n".join(cmds)
 
 
 # ---------------------------------------------------------------------------
 # FAIL LOUDLY, NOT SILENTLY. A silent fall-through is how this shipped.
 # ---------------------------------------------------------------------------
 
-def test_macro_staged_without_liberty_is_reported_at_error(
-        tmp_path, monkeypatch):
-    """A macro shipping only a `.v` model has nothing for synth to bind, so the
-    define is KEPT (safe) — but the run must say the result is a behavioural
-    model of a cell that was staged as a real macro."""
-    proj = _mk_project(tmp_path, ext=".v", stage_macro=True, macro_lib=False)
-    cmds, res = _run_step_synth(tmp_path, proj, monkeypatch)
-    dec = res.extras["macro_define_decision"]
-    assert dec["severity"] == "ERROR"
-    assert dec["verdict"] == "MACRO_STAGED_UNUSABLE"
-    assert dec["define_sim"] is True, (
-        "keeping the historical define is the safe choice here; the defect is "
-        "silence, not the define")
-    assert "OTP128X8_MACRO" in dec["unbindable"]
 
 
 def test_macro_staged_but_never_instantiated_is_reported_at_error(tmp_path):

@@ -14,7 +14,6 @@ from pathlib import Path
 import pytest
 
 import _gds_admission as admission
-import flow109
 import gds_xor_check as g
 import signoff_metrics_aggregate as aggregate
 from _gdsii import minimal_gdsii_bytes
@@ -186,40 +185,3 @@ def test_a_stream_not_admitted_for_signoff_is_not_measured(tmp_path):
     report = g.native_delivered_xor(project, runner=_BrokenKLayout())
     assert report["verdict"] == "NOT_MEASURED"
     assert report["reason"].startswith("XOR_SIGNOFF_GDS_NOT_ADMITTED")
-
-
-def _context(tmp_path, profile: str) -> Path:
-    features = next(p["features"] for p in flow109.load_registry()["reference_profiles"]
-                    if p["name"] == profile)
-    context = flow109.execution_context(flow109.resolve_plan(features), "D77", "D77")
-    path = tmp_path / "context.json"
-    path.write_text(json.dumps(context))
-    return path
-
-
-@pytest.mark.parametrize("profile, owned", [
-    ("Small digital IC without DFT", True),     # D64 is the IC-refusing native adapter
-    ("Mixed IC on-chip digital trim", True),
-    ("Analog IC external trim", False),         # D64 runs step 37.3, which owns the report
-    ("Digital hard-IP", False),                 # not the IC front door
-])
-def test_only_the_ic_front_door_without_step_373_produces(tmp_path, monkeypatch, profile, owned):
-    monkeypatch.setenv(flow109.CONTEXT_ENV, str(_context(tmp_path, profile)))
-    assert g.ic_front_door_owns_xor() is owned
-
-
-def test_no_front_door_context_writes_nothing(tmp_path, monkeypatch):
-    monkeypatch.delenv(flow109.CONTEXT_ENV, raising=False)
-    assert g.ic_front_door_xor(_structure_only_carrier(tmp_path)) is None
-    assert not (tmp_path / g.REPORT_REL).exists()
-
-
-@needs_native
-def test_the_d77_step_measures_the_xor_before_it_aggregates(tmp_path, monkeypatch):
-    import phase3_one_shot_runner as runner
-    project = _carrier(tmp_path / "carrier")
-    monkeypatch.setenv(flow109.CONTEXT_ENV, str(_context(tmp_path, "Small digital IC without DFT")))
-    result = runner.step_signoff_metrics_aggregate(project)
-    assert result.extras["ic_front_door_gds_xor"]["verdict"] == "PASS"
-    metrics = json.loads((project / "phase3/final/metrics.json").read_text())
-    assert metrics["design__xor_difference__count"] == 0

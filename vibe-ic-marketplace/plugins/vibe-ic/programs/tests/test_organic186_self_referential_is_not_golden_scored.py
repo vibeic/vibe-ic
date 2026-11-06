@@ -91,17 +91,3 @@ def test_an_explicit_functional_coverage_block_still_wins(tmp_path):
     d = _results(tmp_path, [dict(_RO)] * 9,
                  fc={"scored_with_golden": 4})
     assert B.functional_coverage_scored(d) == 4
-
-
-def test_the_producer_splits_the_two_counts():
-    """The producer's own contract, asserted on its constant rather than on a
-    simulation: the exclusion list must exist and must name the oracle whose
-    expected value is the design's own read."""
-    import regmap_transaction_tb_gen as G
-    src = Path(G.__file__).read_text()
-    assert "scored_self_referential" in src
-    assert "_SELF_REF_KINDS" in src
-    assert "ro_write_ignore" in src
-    # ...and the two programs must agree on WHICH kinds are self-referential,
-    # or the producer and the fallback drift apart silently.
-    assert "ro_write_ignore" in B._SELF_REFERENTIAL_KINDS

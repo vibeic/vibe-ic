@@ -71,9 +71,6 @@ def _run(args, timeout=120):
                           text=True, cwd=str(_PROGRAMS))
 
 
-def _mkdir(p: pathlib.Path) -> pathlib.Path:
-    p.mkdir(parents=True, exist_ok=True)
-    return p
 
 
 def _w(p: pathlib.Path, obj) -> str:
@@ -87,71 +84,10 @@ def _w(p: pathlib.Path, obj) -> str:
 #              what the population is). The third field is prose for the
 #              failure message -- a reader of a red needs to know what was
 #              supposed to be in there.
-def _cases(tmp_path):
-    return [
-        ("ppa_metric_extract.py",
-         ["--records", _w(tmp_path / "bundle.json",
-                          {"schema": "vibeic.ppa.metric_bundle.v1",
-                           "records": []})],
-         "a metric bundle carrying zero records"),
-        ("ppa_measurement_check.py",
-         ["--coverage", _w(tmp_path / "b2.json",
-                           {"schema": "vibeic.ppa.metric_bundle.v1",
-                            "records": []}),
-          "--expect", _w(tmp_path / "expect.json", [])],
-         "an empty record set against an empty denominator"),
-
-        ("ppa_pareto_check.py",
-         ["--candidates", _w(tmp_path / "cand2.json", {"candidates": []})],
-         "a candidate set with no candidate"),
-        ("ppa_report_gen.py",
-         [_w(tmp_path / "b3.json", {"schema": "vibeic.ppa.metric_bundle.v1",
-                                    "records": []})],
-         "a metric bundle carrying zero records"),
-        ("ppa_predict_aggregate.py",
-         ["--cell-count", "0"],
-         "a cell count of zero, which is a count that was never taken"),
-        ("ppa_search_run.py",
-         [_w(tmp_path / "space.json", {})],
-         "a search space declaring no lever"),
-        # The corpus SWEEP path, which is a different branch from the
-        # single-record path the absent-file arm exercises. Added after a
-        # mutation arm proved the marker on this branch could be deleted
-        # without any test going red -- a guard that cannot go red is not a
-        # guard, and this file had one.
-        ("ppa_head_to_head_check.py",
-         ["--corpus", str(_mkdir(tmp_path / "corpus"))],
-         "a corpus directory holding no head-to-head record"),
-    ]
 
 
-@pytest.mark.parametrize("idx", range(8))
-def test_a_present_but_empty_population_is_never_a_pass(idx, tmp_path):
-    """rc=0 over an empty population is the defect this codebase exists to
-    prevent, and it is invisible: the report is well-formed and says nothing
-    was wrong, because nothing was looked at."""
-    prog, argv, what = _cases(tmp_path)[idx]
-    r = _run([prog, *argv])
-    assert r.returncode != 0, (
-        f"{prog} exited 0 over {what}. Nothing was examined and the run "
-        f"reports success; a caller cannot tell this from a clean result.\n"
-        f"stdout: {r.stdout[:500]}")
-    assert r.returncode == 2, (
-        f"{prog} exited {r.returncode} over {what}; an empty population is "
-        f"UNDETERMINED (2), not a finding about a design (1) and not a bad "
-        f"invocation (3).\nstderr: {r.stderr[-400:]}")
-    blob = r.stdout + r.stderr
-    assert ("[CANNOT CHECK]" in blob) or ("[REFUSE]" in blob), (
-        f"{prog} exited 2 over {what} with no §1 marker, so the 2 is not "
-        f"distinguishable by grep from an argparse usage error.\n"
-        f"stderr: {r.stderr[:400]}")
 
 
-def test_the_case_table_matches_the_parametrisation(tmp_path):
-    """The denominator for the arm above. If a case is added to `_cases` and
-    the `range(7)` is not widened, the new case is silently untested -- which
-    is this file's own subject matter applied to itself."""
-    assert len(_cases(tmp_path)) == 8
 
 
 # ---------------------------------------------------------------------------

@@ -45,8 +45,6 @@ each side of that line instead of re-rolling the die (`--cpus=1`, load 13):
 
 The RED arm reproduces the issue's own failure line to the third decimal.
 """
-import inspect
-import os
 import sys
 from pathlib import Path
 
@@ -56,7 +54,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import _session_floor as _floor            # noqa: E402
-import test_pytest_per_file_junit as _subject   # noqa: E402
 
 
 class _pinned:
@@ -172,24 +169,3 @@ def test_the_relay_floor_is_a_READING_of_a_real_nested_lane(tmp_path):
     assert reading <= wall, (reading, wall)
     assert reading >= 0.5 * _floor.trivial_session_s(), (
         reading, _floor.trivial_session_s())
-
-
-def test_the_nested_relay_test_takes_its_window_from_relay_window():
-    """THE CALL SITE, pinned by name.
-
-    Everything above proves `relay_window` is the right derivation; only this
-    proves the test that needed it is using it. Restoring
-    `stall_window(2.5, starts=2)` at that call site reddens exactly here.
-    """
-    src = inspect.getsource(
-        _subject.test_nested_validated_progress_is_relayed_to_the_outer_session)
-    # THE CODE, not the prose. The comment at that call site names the old
-    # expression on purpose -- so it must be excluded, or this guard would be
-    # reddened by its own explanation and greened by deleting it.
-    code = "\n".join(line for line in src.splitlines()
-                     if not line.lstrip().startswith("#"))
-    assert "relay_window(2.5)" in code, code
-    assert "stall_window(" not in code, code
-    # The lower bound travels with the window instead of standing still.
-    assert "1.8 * window" in code, code
-    assert "elapsed > 4.5" not in code, code

@@ -6,138 +6,77 @@ description: Canonical reference doc for the Analog A1-A9 track — spec extract
 # Analog Flow Orchestrate — **9-STEP ANALOG TRACK**
 
 > **Doctrine (v0.1.50):** 把修法寫進工具，而非寫進 prompt.
-> Programs first (runner + 9 A-step check gates); AI is the backstop.
+> Native tools supply the measurements; AI reviews every result.
 
-## Mandatory Deterministic Preflight
+## Read the native analog results
+
+Read the selected rows in `<project>/reports/flow_engine.json` and open their
+native `reports`. `flow/steps.json` names each current tool and
+`flow/native_limits.json` retains its original limits. Review `tool_ran`,
+`native_steps`, `native_metrics`, and each metric's value, operator and limit.
+A missing native measurement is `NOT_MEASURED`. AI reviews the engineering
+meaning of every result and fixes problems in the design, tool or plugin.
 
 ```bash
-# 1. Drive the deterministic runner first:
-python3 plugins/vibe-ic/programs/analog_one_shot_runner.py <project>
-
-# 2. After each A-step, the corresponding check gate runs deterministically:
-python3 plugins/vibe-ic/programs/analog_a1_spec_extract_check.py
-python3 plugins/vibe-ic/programs/analog_a2_topology_select_check.py
-python3 plugins/vibe-ic/programs/analog_a3_netlist_gen_check.py
-python3 plugins/vibe-ic/programs/analog_a4_corner_sweep_check.py
-python3 plugins/vibe-ic/programs/analog_a5_layout_check.py
-python3 plugins/vibe-ic/programs/analog_a6_block_pv_check.py
-python3 plugins/vibe-ic/programs/analog_a7_post_layout_resim_check.py
-python3 plugins/vibe-ic/programs/analog_a8_hardmacro_gen_check.py
-python3 plugins/vibe-ic/programs/analog_a9_hw_verify_check.py
-
-# 3. Ordering gate — A8 must finish before digital Step 15 floorplan
-#    (Hard rules #1 + #2), enforced deterministically:
-python3 plugins/vibe-ic/programs/analog_a8_before_floorplan_check.py <project>
+python3 programs/flow_engine.py report --project <project>
 ```
 
-The skill is the CANONICAL REFERENCE for A1-A9 semantics. **The runner
-+ 9 step-check programs are the source of truth for PASS / FAIL.**
-Refuse to override their verdicts.
-
-> **Merged into `/vibe-ic-analog` slash command (v1.6.13+).** This skill
-> remains as the canonical reference for the A1-A9 step semantics, the
-> per-step skill mapping, and the gate-predicate definitions. The slash
-> command implements the orchestration workflow described here so the
-> agent does not have to invoke skill + runner separately. Use this
-> skill directly when you want the A1-A9 plan without first running
-> the deterministic runner; otherwise prefer `/vibe-ic-analog`.
-
-The analog counterpart to `flow-orchestrate`. Manages the complete analog design pipeline from spec extraction through hardware-verified convergence to hardmacro packaging. Runs in parallel with the digital track (Steps 1-13), converging before digital Step 15 (Floorplan; was Step 14 pre-Wave-91).
+Use the analog steps selected by the current table. Open their actual SPICE,
+layout, DRC, LVS and extracted-model results for every declared block.
 
 ## Scope
 
 - Input: `generated_docs/L1_DATASHEET.json` + `generated_docs/L5_ADI_SPEC.json` + PDK
 - Output: `hardmacro/<block>/` deliverables (GDS + LEF + Liberty + behavioral Verilog) per analog block
-- Decision: PASS iff `analog_flow_compliance_check` exits 0
+- Decision: each selected native measurement meets its original limit and its engineering review is complete.
 
-## The 9 steps
+## Analog work and native evidence
 
-| # | Step | Skill | Gate |
-|---|------|-------|------|
-| A1 | Analog Spec Extraction | `analog-spec-extract` | `analog/<block>/spec.json` per detected block |
-| A2 | Topology + Initial Sizing | `analog-topology-select` + `analog-sizing` | `topology.md` + `sizing.md` per block |
-| A3 | Netlist Generation | `analog-netlist-gen` | `analog_netlist_pdk_check` exits 0 |
-| A4 | Corner Sweep + Optimization | `analog-sizing-loop` | `analog_corner_sweep_check` exits 0 |
-| A5 | Analog Layout | `analog-layout` + `eda_analog_layout` | `layout.mag` per block |
-| A6 | Per-Block Physical Verification (DRC + LVS) | `drc-fix` + `lvs-triage` | `analog_a6_block_pv_check` exits 0 |
-| A7 | Post-Layout Extraction + Resim | `analog-extraction-resim` | `analog_pre_vs_post_layout_check` exits 0 |
-| A8 | Hardmacro Generation | `analog-hardmacro-gen` | `analog_hardmacro_check` exits 0 |
-| A9 | HW Verification + Mixed-Signal | `analog-hw-tuning-loop` + `mixed-signal-cosim` | `analog_hw_spice_correlation_check` + `mixed_signal_cosim_check` exit 0 |
+| Work | Skill | Native evidence to review |
+|------|-------|---------------------------|
+| Specification | `analog-spec-extract` | Required blocks, electrical limits and conditions |
+| Topology and sizing | `analog-topology-select`, `analog-sizing` | Circuit choice and sized netlist |
+| Netlist | `analog-netlist-gen` | Native simulator elaboration and operating point |
+| PVT optimization | `analog-sizing-loop` | Per-corner SPICE values against original bounds |
+| Layout | `analog-layout` | Actual placed geometry |
+| Physical verification | `drc-fix`, `lvs-triage` | Native DRC and LVS results |
+| Extraction and re-simulation | `analog-extraction-resim` | Extracted parasitics and post-layout SPICE |
+| Hardmacro | `analog-hardmacro-gen` | LEF, Liberty, GDS and behavioral views for their consumers |
+| Hardware and mixed signal | `analog-hw-tuning-loop`, `mixed-signal-cosim` | Actual waveform/ADC and mixed-signal results |
 
-> **v1.6.14 Wave 90 — step renumber.** Pre-release decimal/sub-step
-> ids were integerised; the analog track is now A1-A9 (A1-A5 unchanged,
-> per-block PV is A6, Resim/Hardmacro/Cosim are A7/A8/A9).
+The current step table selects execution and user-facing numbering. This
+reference does not create an additional nine-row acceptance layer.
 
-## Hard rules
+## Track dependencies and scope
 
-1. **A8 must complete BEFORE digital Step 15 (Floorplan).** Digital PnR
-   needs the LEF/Liberty/GDS to place analog blocks. *Enforced by
-   `programs/analog_a8_before_floorplan_check.py`* — FAILs when a floorplan
-   DEF exists but any analog block is still missing its A8 hardmacro LEF.
-2. **A9 (and only A9) can run in parallel with digital Steps 15+.** Hardware
-   verification doesn't block physical design. *Corollary enforced by the
-   same `analog_a8_before_floorplan_check.py` ordering gate* (every step ≤ A8
-   must precede floorplan; A9 is the sole exception).
-3. **No step is optional.** If hardware is unavailable for A9, write a waiver.
-   *Enforced by `programs/analog_flow_compliance_check.py`* (every step is
-   PASS or carries a waiver in `analog/waivers.json`).
-4. **Emit the 9-row plan table BEFORE any step runs.** User must see all 9
-   steps up front. This is an interaction/presentation rule (LLM-driven) —
-   the deliverable-presence half is covered by `analog_flow_compliance_check.py`.
+Analog hardmacro LEF, Liberty, GDS and behavioral models must exist before a
+digital tool consumes them. Follow the current table's dependencies rather
+than adding a separate ordering gate. Hardware verification may proceed in
+parallel when it does not supply an input to the physical tool.
+
+Show the selected plan and every block's measured, failed or unmeasured work.
+Unavailable hardware leaves its measurement open. A waiver records scope; it
+does not make an unexecuted measurement pass.
 
 ## Orchestration workflow
 
-```
-plan → execute_step_AN → gate_AN → observe → (retry ≤3 or abort) → next step
-                                                ↓
-                                       final: analog_flow_compliance_check
-```
+1. Read the source documents and enumerate the required analog blocks.
+2. Show the selected native steps, dependencies and original requirements.
+3. Execute each owning tool through the normal public runner.
+4. Read its native measurements and review their engineering meaning.
+5. Fix the design, tool or plugin when a result exposes a problem, then rerun
+   the affected native work without changing limits.
+6. Report every measured, failed or unavailable result for each block.
 
-1. **Detect**: Read `generated_docs/L5_ADI_SPEC.json` or scan RTL for analog
-   modules. *Enforced by `programs/analog_block_coverage_check.py` +
-   `programs/analog_content_detected_must_emit_l5_check.py`* (deterministic
-   JSON-read / module-scan; FAILs if docs document analog content but L5 omits it).
-2. **Plan**: Emit 9-row table with all blocks × 9 steps (LLM presentation step).
-3. **Execute**: Walk A1→A9 in order. For each block, run the named skill.
-   The A1→A9 dispatch table + state machine is the deterministic
-   `programs/analog_one_shot_runner.py` (source of truth, not this prose).
-4. **Gate**: After each step, run its A-step gate program. **Retry decision
-   on failure — what to change before retry, and abort-vs-continue — is the
-   LLM backstop (see "Per-step retry / abort" below).**
-5. **Report**: Write `analog/status.json` (program-emittable) +
-   `analog/flow_summary.md` (LLM narrative).
-6. **Final gate**: `programs/analog_flow_compliance_check.py` must exit 0,
-   and the ordering gate `programs/analog_a8_before_floorplan_check.py`
-   must not FAIL.
+Choose a different sizing, topology or layout only when the circuit and native
+results support it. Keep source limits and PDK constraints unchanged.
 
-### Per-step retry / abort (LLM backstop — KEEP)
+## Timing integration with digital work
 
-When an A-step gate FAILs, the deterministic runner reports *which* gate
-failed; deciding *what to change* before the retry (resize a device, pick a
-different topology, relax a corner, loosen a layout constraint) and *whether
-to abort vs continue* after ≤3 retries is genuine engineering judgment that
-cannot be reduced to a fixed program. The same applies to the **STOP-and-ask**
-branch under "Inputs to gather" — clarifying ambiguous / missing PDK, block
-list, HW availability or target specs from a human is interaction, not a check.
-
-## Timing integration with digital track
-
-```
-Digital Track            Analog Track
-Step 1: spec-to-rtl      A1: spec extraction    ← both start from L1-L27
-Step 2: lint              A2: topology + sizing
-Step 3: CDC/RDC           A3: netlist gen
-Step 4: simulation        A4: corner sweep
-Step 5: formal            A5: analog layout
-Step 6: FPGA proto        A6: per-block DRC/LVS
-Step 7-13: synth+DFT      A7: extraction + resim
-                          A8: hardmacro gen
-                                ↓ A8 DONE
-Step 14: pre-PnR Yosys gate (Wave 91 sentinel)
-Step 15: Floorplan  ◄─── hardmacro LEF/GDS placed
-Step 16-28: PnR+STA       A9: HW verification (parallel)
-Step 29-36: signoff       A9: mixed-signal cosim
-```
+Follow the dependencies in the current step table. A physical tool needs the
+actual hardmacro views before it can place or analyze those blocks. Hardware
+work can run independently when it does not provide an input to the selected
+physical step. Report the current table position and step name to the user.
 
 ## Inputs to gather (must be explicit before starting)
 
@@ -177,30 +116,12 @@ If any input is missing, STOP and ask.
 
 - Do not skip A1-A4 (SPICE convergence) and jump to hardware (A9)
 - Do not generate hardmacros (A8) before post-layout verification (A7)
-- Do not declare PASS without `analog_flow_compliance_check` exit 0
+- Do not declare PASS without the applicable native measurement meeting its original limit and its engineering review being complete.
 - Do not block the digital track — A9 is the only step that can run past Step 15
 
-## Compliance gate (MANDATORY)
+## Review completion
 
-At end of analog flow, run:
-
-```bash
-python3 plugins/vibe-ic/programs/analog_flow_compliance_check.py \
-    <project_dir> --json <project_dir>/reports/analog_compliance.json
-```
-
-Exit 0 → declare PASS. Exit 1 → list failures and recommend next action.
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/analog-flow-orchestrate/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-
-**Your task is not complete until the audit returns PASS.**
+Read each selected native result against its original limit and review every
+block. Report failed and unmeasured items with their actual scope. Native
+measurements determine completion; a separate compliance or ordering receipt
+does not.

@@ -80,7 +80,6 @@ _FLOW = _PLUGIN / "flow" / "phase1_phase2_phase3.yaml"
 sys.path.insert(0, str(_PROGRAMS))
 
 import flow_compliance_check as FCC          # noqa: E402
-import design_one_shot_runner as DOSR        # noqa: E402
 
 #: The declared output at the centre of the measurement, and the step that
 #: declares it. Both are re-derived from the yaml below rather than trusted
@@ -178,37 +177,6 @@ def test_the_production_runner_still_produces_it_during_the_run():
 # ===========================================================================
 # POSITIVE — the run produced it, the audit overwrote it, it still counts
 # ===========================================================================
-def test_a_run_produced_output_survives_the_audit_overwriting_it(workdir):
-    project = _project(workdir)
-    step = _isolated_step()
-
-    run = DOSR.step_crosslayer_rewrite_fidelity(project)
-    assert run.status == "PASS" and _REL in run.output_files, (
-        f"fixture defect: the production producer did not produce {_REL} "
-        f"({run.status}: {run.detail}) — nothing below would be measuring a "
-        f"run artefact")
-    before = (project / _REL).read_bytes()
-    assert before, "fixture defect: the producer wrote an empty artefact"
-
-    first = FCC.check_step(project, _isolated_step(), {})
-    assert first.status not in ("FAIL",), (
-        f"the RUN produced {_REL} before this audit began and the audit's own "
-        f"gate then rewrote the same path; reporting {first.status!r} says the "
-        f"step has no run evidence for an artefact the run demonstrably "
-        f"produced. Reasons: {[str(r)[:200] for r in first.reasons]}")
-    assert _REL in first.evidence, (
-        f"{_REL} was produced by the run and is not in the credited evidence "
-        f"{list(first.evidence)!r}")
-    assert not any("audit_created" in str(r) and _REL in str(r)
-                   for r in first.reasons), (
-        f"{_REL} is still reported as audit-created: "
-        f"{[str(r)[:200] for r in first.reasons]}")
-
-    second = FCC.check_step(project, _isolated_step(), {})
-    assert second.status == first.status and _REL in second.evidence, (
-        f"pass 1 credited {_REL} and pass 2 reported {second.status!r} with "
-        f"evidence {list(second.evidence)!r} — a verdict that depends on how "
-        f"many times the auditor has run is not a measurement")
 
 
 # ===========================================================================

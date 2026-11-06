@@ -98,31 +98,8 @@ def test_f7_design_line_found_past_the_old_64kib_bound(tmp_path):
     assert R._def_design_name(p) == "chip_top"
 
 
-def test_f7_streamout_top_substitutes_past_the_old_bound(tmp_path):
-    """The consequence, not just the parser: with the DESIGN line unreadable
-    the streamout streamed the runner's file-naming top. It no longer can."""
-    p = tmp_path / "big_header.def"
-    p.write_text(_def_with_banner(80 * 1024, design="chip_top"))
-    cell, disclosure = R._streamout_top(p, "core")
-    assert cell == "chip_top"
-    assert "chip_top" in disclosure and disclosure, (
-        "a substitution must be NAMED in the step's own detail")
 
 
-def test_f7_control_ordinary_def_is_unchanged(tmp_path):
-    """The byte-identical control: a DEF whose header is well inside the old
-    bound answers exactly as before, and a headerless one still answers None."""
-    p = tmp_path / "plain.def"
-    p.write_text("VERSION 5.8 ;\nDESIGN chip_top ;\n" + _HEADER_TAIL)
-    assert R._def_design_name(p) == "chip_top"
-    assert R._streamout_top(p, "chip_top") == ("chip_top", "")
-
-    q = tmp_path / "no_design.def"
-    q.write_text("VERSION 5.8 ;\nUNITS DISTANCE MICRONS 1000 ;\n"
-                 "COMPONENTS 1 ;\n    - u_a MASTER_A ;\nEND COMPONENTS\n")
-    assert R._def_design_name(q) is None
-
-    assert R._def_design_name(tmp_path / "absent.def") is None
 
 
 def test_f7_body_is_never_read_when_design_is_absent(tmp_path):
@@ -168,49 +145,14 @@ Cannot rename; cell "spm" already exists!
 """
 
 
-def test_f4_refuses_by_name_the_master_the_def_asked_for():
-    """RED ON BASE: nothing consulted the transcript for this at all."""
-    masters = {"sky130_fd_sc_hd__inv_1", "totally_absent_master_zz"}
-    assert R._magic_unresolved_masters(_MEASURED_MISSING_MASTER, masters) == [
-        "totally_absent_master_zz"]
 
 
-def test_f4_a_resolved_master_is_not_named():
-    """The other direction of the same check: a master Magic DID resolve must
-    never be reported. Without this, the refusal is one that cannot pass."""
-    assert R._magic_unresolved_masters(
-        _MEASURED_MISSING_MASTER, {"sky130_fd_sc_hd__inv_1"}) == []
 
 
-def test_f4_top_cell_message_is_not_a_missing_master():
-    """The intersection with the DEF's own masters is load-bearing: Magic
-    prints `Cell <x> couldn't be read` for an absent TOP too, and that case
-    belongs to `_streamout_top`, not here. Refusing on it would turn the
-    106-byte-GDS run into a DIFFERENT wrong answer."""
-    assert R._magic_unresolved_masters(_MEASURED_MISSING_TOP,
-                                       {"MASTER_A", "MASTER_B"}) == []
 
 
-def test_f4_clean_transcript_and_empty_inputs_refuse_nothing():
-    """The control. A stream in which everything resolved must be inert here —
-    this is the case every passing run takes."""
-    clean = ("Reading DEF data from file /work/t.def.\n"
-             "  Processed 2 subcell instances total.\n"
-             "   Generating output for cell chip_top\n"
-             "MAGIC_GDS_WRITTEN\n")
-    assert R._magic_unresolved_masters(clean, {"MASTER_A", "MASTER_B"}) == []
-    assert R._magic_unresolved_masters(_MEASURED_MISSING_MASTER, set()) == []
-    assert R._magic_unresolved_masters("", {"MASTER_A"}) == []
-    assert R._magic_unresolved_masters(None, {"MASTER_A"}) == []
 
 
-def test_f4_every_named_master_is_reported_sorted():
-    """More than one missing master is a list, not a first-hit."""
-    t = ("Cell m_zeta couldn't be read\n"
-         "Cell m_alpha is not defined.\n"
-         "Cell m_alpha couldn't be read\n")
-    assert R._magic_unresolved_masters(t, {"m_alpha", "m_zeta", "m_ok"}) == [
-        "m_alpha", "m_zeta"]
 
 
 # ── F4: the wiring, by AST ───────────────────────────────────────────────

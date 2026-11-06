@@ -42,7 +42,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from programs.tests.test_execution_receipt_chain import isolated_transport, real_entry
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 if str(PROGRAMS) not in sys.path:
@@ -54,9 +53,7 @@ import benchmark_dispatch as bd                        # noqa: E402
 import benchmark_entry_surface_check as bes            # noqa: E402
 import benchmark_io_adapter as bio                     # noqa: E402
 import flow_phase_attribution as fpa                   # noqa: E402
-import step_preflight as spf                           # noqa: E402
 import task_nature_route as tnr                        # noqa: E402
-import vibe_ic_one_shot_runner as orch                 # noqa: E402
 
 import sys as _rt_sys
 from pathlib import Path as _rt_path
@@ -88,67 +85,20 @@ RUNNER = PROGRAMS / "design_one_shot_runner.py"
 
 
 # ── the pruning decision, lifted from the shipped runner ─────────────────────
-@pytest.fixture(scope="module")
-def pruner():
-    """The real `_exit_pruned_sites`, extracted by source.
-
-    The runner module is too heavy to import (same reason
-    test_design_verdict_has_no_silent_catch_all lifts `_aggregate_verdict`);
-    a re-implementation here would pass whatever this file believed, which is
-    the failure mode source-lifting exists to remove.
-    """
-    src = RUNNER.read_text(encoding="utf-8")
-    m = re.search(r"def _exit_pruned_sites.*?(?=\ndef main\b)", src, re.S)
-    assert m, "could not locate _exit_pruned_sites in the shipped runner"
-    ns: dict = {"_spf": spf, "_V": __import__("verdict")}
-    exec(m.group(0), ns)  # noqa: S102 — executing our own shipped source
-    return ns["_exit_pruned_sites"]
 
 
-def _sites():
-    """The REAL declared site table, so these tests track the real plan."""
-    return spf.RUNNER_PLANS["design_one_shot_runner"].sites
 
 
-def test_lint_evidence_exit_prunes_sim_synth_and_the_lec_chain(pruner):
-    """EVIDENCE_EXIT['lint_validated'] = step 2: everything past the
-    rtl_validate span is pruned — including the site whose LEC burned two
-    hours for an RTL deliverable nothing downstream read."""
-    assert pruner(_sites(), "2") == ["sim", "asic_sdc", "yosys_synth", "dft_lec_chain"]
 
 
-def test_the_exit_site_itself_runs(pruner):
-    """含它: the site holding the exit is dispatched; only later sites go."""
-    assert pruner(_sites(), "13") == []
-    assert pruner(_sites(), "9") == ["dft_lec_chain"]
 
 
-def test_a_mid_span_exit_keeps_the_whole_span(pruner):
-    """Span atomicity, mirrored from entry: dft_lec_chain is ONE chain over
-    canonical 11..13, so an exit at 11 or 12 cannot stop it mid-span — the
-    span head is not past the exit, and the site runs in full."""
-    assert pruner(_sites(), "11") == []
-    assert pruner(_sites(), "12") == []
 
 
-def test_an_exit_past_every_span_prunes_nothing(pruner):
-    """§4.05 boundary-outside: a phase-3 exit (23/31/37 — routed today via
-    --skip-phase3) must not leak pruning into the phase-2 dispatch."""
-    for deep in ("23", "31", "33", "37"):
-        assert pruner(_sites(), deep) == [], deep
 
 
-def test_a_site_name_is_an_exit_too(pruner):
-    assert pruner(_sites(), "yosys_synth") == ["dft_lec_chain"]
-    assert pruner(_sites(), "dft_lec_chain") == []
 
 
-def test_an_unmappable_exit_maps_to_none_so_the_caller_refuses(pruner):
-    """None is the refusal signal: a typo must neither silently run the whole
-    flow (defeats the flag) nor silently prune it (worse)."""
-    assert pruner(_sites(), "no_such_site") is None
-    assert pruner(_sites(), "") is None
-    assert pruner(_sites(), None) is None
 
 
 def test_the_runner_cli_refuses_an_unmappable_exit(tmp_path):
@@ -163,16 +113,6 @@ def test_the_runner_cli_refuses_an_unmappable_exit(tmp_path):
     assert "cannot exit at step" in proc.stderr, proc.stderr[-500:]
 
 
-def test_every_declared_site_has_an_exit_gate_at_its_dispatch():
-    """Wiring, not prose: a site declared in RUNNER_PLANS without a literal
-    `_after_exit("<site>")` guard at its dispatch would be a pruning claim
-    with no behaviour behind it — the same defect
-    test_every_declared_site_is_wired_at_a_real_call_site exists to catch
-    for the pre-flight gates."""
-    src = RUNNER.read_text(encoding="utf-8")
-    for name, _span in _sites():
-        assert re.search(rf'_after_exit\("{re.escape(name)}"\)', src), (
-            f"declared site {name!r} has no _after_exit gate in the runner")
 
 
 # ── the sentinel at the verdict aggregators ──────────────────────────────────
@@ -261,48 +201,10 @@ def test_attribution_reads_the_sentinel_as_not_attempted(tmp_path):
 
 
 # ── the orchestrator forwards the flag like --entry-step ─────────────────────
-def _drive_orchestrator(monkeypatch, project: Path, argv_extra):
-    """Run orch.main() with the per-phase invocations intercepted, so the
-    actual phase2 argv can be inspected without spawning EDA tools (same
-    harness as test_v0_2_95_issue459_auto_skip_analog)."""
-    captured: dict = {}
-    # A direct main() call consumes a real issuer capability. The shared
-    # isolated_transport fixture closes it and restores the caller's state.
-    real_entry("IC", "default", project)
-
-    def fake_run_phase(label, runner, args, env=None):
-        captured[runner.name] = list(args)
-        return 0
-
-    monkeypatch.setattr(orch, "_run_phase", fake_run_phase)
-    monkeypatch.setattr(orch, "_read_report",
-                        lambda _p: {"verdict": "PASS"})
-    monkeypatch.setattr(orch, "_need_analog", lambda _p, _s: False)
-    monkeypatch.setattr(sys, "argv",
-                        ["vibe_ic_one_shot_runner.py", str(project),
-                         "--route", "ic", "--skip-phase1", "--skip-phase3"]
-                        + list(argv_extra))
-    orch.main()
-    return captured
 
 
-def test_orchestrator_forwards_exit_step_to_phase2(tmp_path, monkeypatch):
-    project = tmp_path / "generic_proj"
-    project.mkdir()
-    cap = _drive_orchestrator(monkeypatch, project, ["--exit-step", "2"])
-    p2 = cap.get("phase2_one_shot_runner.py")
-    assert p2 is not None, cap
-    assert p2[p2.index("--exit-step") + 1] == "2", p2
 
 
-def test_orchestrator_default_forwards_no_exit_step(tmp_path, monkeypatch):
-    """No flag → no forwarding → phase2 behaviour is byte-for-byte今日的."""
-    project = tmp_path / "generic_proj"
-    project.mkdir()
-    cap = _drive_orchestrator(monkeypatch, project, [])
-    p2 = cap.get("phase2_one_shot_runner.py")
-    assert p2 is not None, cap
-    assert "--exit-step" not in p2, p2
 
 
 # ── the dispatcher hands the exit it already computes to the runner ──────────

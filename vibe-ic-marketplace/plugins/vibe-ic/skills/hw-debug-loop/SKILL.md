@@ -1,8 +1,7 @@
 ---
 name: hw-debug-loop
-description: Closed-loop hardware debug methodology for half-duplex protocol ICs when BFM passes but real-silicon connect_test FAILs (Category B/C from the A/B/C extraction-gap analysis). Use after spec-to-rtl + flow_compliance_check have all PASSed, the SOF has been burned to FPGA, and the host-side acceptance test (e.g., <half-duplex-tester> byte[6]=0x02) is FAILing. The skill drives a deterministic bisect using scope capture + oracle bytewise dump + controlled wrapper-flip experiments until byte[6]=0xF2 PASS or until the failing item is recorded as an irreducible Category-B silicon discrepancy. Triggers on "byte[6]=0x02 FAIL", "BFM passes HW fails", "connect_test FAIL", "silicon-vs-spec mismatch", or "I have an oracle SOF and need to bisect".
+description: Closed-loop hardware debug methodology for half-duplex protocol ICs when BFM passes but real-silicon connect_test FAILs (Category B/C from the A/B/C extraction-gap analysis). Use after spec-to-rtl and the selected native tool results meet their original requirements, the SOF has been burned to FPGA, and the host-side acceptance test (e.g., <half-duplex-tester> byte[6]=0x02) is FAILing. The skill drives a deterministic bisect using scope capture + oracle bytewise dump + controlled wrapper-flip experiments until byte[6]=0xF2 PASS or until the failing item is recorded as an irreducible Category-B silicon discrepancy. Triggers on "byte[6]=0x02 FAIL", "BFM passes HW fails", "connect_test FAIL", "silicon-vs-spec mismatch", or "I have an oracle SOF and need to bisect".
 ---
-
 
 <!-- WAVE_76_CHIP_AGNOSTIC_BANNER -->
 
@@ -50,7 +49,7 @@ named evidence file, each leading to a deterministic next step.
 
 Trigger when ALL of:
 
-  - `flow_compliance_check.py` reports `Overall: PASS`.
+  - Selected native tool results in `reports/flow_engine.json` meet their original limits and have been AI reviewed; unmeasured work is disclosed as `NOT_MEASURED`.
   - BFM `eda_simulate` shows `verdict: PASS opcodes=N fails=0`.
   - SOF burned successfully, FPGA JTAG verifies the device.
   - Host acceptance test (e.g. `device_tester_md905_connect_test`)
@@ -58,7 +57,7 @@ Trigger when ALL of:
 
 Do NOT trigger if:
 
-  - Any `flow_compliance_check` gate FAILs — fix the gate first.
+  - A selected native tool result FAILs — fix the responsible design or tool behavior first.
   - BFM is not yet at 12/12 — fix the byte-level model first.
 
 ## When NOT to Use
@@ -195,10 +194,7 @@ verdict, the frame bytes, the SOF sha256.
 
 After byte[6]=0xF2 PASS:
 
-```bash
-python3 plugins/vibe-ic/programs/hw_acceptance_test_passed_check.py \
-    <project_dir>
-```
+Run the requested hardware acceptance test against the actual device and original requirements. Read the captured waveform, transaction or measurement result; a test name or report presence does not establish success.
 
 This gate verifies:
 
@@ -208,10 +204,13 @@ This gate verifies:
   - Every `oracle_referenced_fix` waiver has a corresponding
     artifact under `input/oracle/`.
 
-Only when this gate PASSes is Phase 2c complete. Re-run
-`flow_compliance_check.py --strict` to confirm overall verdict is
-`PASS_WITH_WAIVERS` (the waivers being the Category-B oracle
-references), and Phase 2+3 is closed.
+Read the actual host acceptance frames and scope evidence against the original
+requirements, then AI review each selected native result in
+`reports/flow_engine.json`. Identify rows by current position and `name` from
+`flow/steps.json`. A Category-B reference explains only the measured hardware
+discrepancy; it cannot convert deferred or unmeasured work into PASS. The
+hardware result establishes only its exercised scope, not completion of all
+Phase 2+3 obligations. Missing native evidence is `NOT_MEASURED`.
 
 ## Output Files
 
@@ -237,23 +236,26 @@ references), and Phase 2+3 is closed.
    waiver IS the spec correction; the agent who reads the spec
    next must see why the L1-L27 → RTL flow needed a delta.
 
-3. **Adding fixes without a structural gate** — every C-class fix
-   must be accompanied by a structural gate (or an extension of an
-   existing one). Otherwise the next fresh agent silently
-   re-introduces the bug.
+3. **Adding fixes without verifying the behavior** — reproduce each C-class
+   defect with an input-derived executable challenge, fix its cause in the
+   design, local tool fork or existing producer, and rerun the actual native
+   simulation or hardware test. A relevant behavioral regression can retain
+   that proof without adding a permanent policy checker.
 
-4. **Declaring PASS without re-running gates** — after every fix,
-   re-run `flow_compliance_check.py --strict`. The gate that
-   catches your fix should now PASS; gates that did not catch it
-   should also still PASS.
+4. **Declaring PASS without re-running the affected native tool** — after
+   every fix, rerun the actual simulation or hardware test and compare its
+   report with the unchanged original requirement. AI review that result and
+   affected rows in `reports/flow_engine.json`; disclose anything left
+   `NOT_MEASURED`.
 
-## Compliance gate
+## Native evidence review
 
-After every Step-6 PASS, the convergence audit (Step 7) is
-mandatory. The audit's gate is named
-`hw_acceptance_test_passed_check.py` and is included in
-`_STRUCTURAL_RTL_GATES`. Phase 2+3 is closed when that gate AND
-`flow_compliance_check --strict` both PASS.
+After every Step-6 PASS, perform the Step-7 hardware evidence review. Keep the
+actual tester frames, scope capture and SOF identity available. Review every
+selected tool result against its original limit through the existing
+`reports/flow_engine.json`; no aggregate or format-policy result substitutes
+for an unexecuted native tool. A missing value or original limit remains
+`NOT_MEASURED`.
 
 ## Handoff
 

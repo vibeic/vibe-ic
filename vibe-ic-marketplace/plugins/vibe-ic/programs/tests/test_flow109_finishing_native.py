@@ -7,8 +7,6 @@ import pytest
 
 import librelane_contract as contract
 import librelane_fill_dfm as fill
-import flow109_density_fill as density
-import phase3_one_shot_runner as runner
 
 
 def put(path, value):
@@ -63,14 +61,6 @@ def test_default_stream_reuses_unchanged_native_stream(tmp_path, monkeypatch):
     assert result['receipt'] == str(tmp_path / fill.DEFAULT_STREAM_REL)
 
 
-@pytest.mark.parametrize('count,status', [(0, 'PASS'), (3, 'FAIL')])
-def test_d62_completes_from_its_native_owner_without_manual_manifest(tmp_path, count, status):
-    density_case(tmp_path, count)
-    result = density.execute(tmp_path, {'requested_step': 'D62'})
-    assert result['default_row_status'] == status
-    assert result['completed'] == (status == 'PASS')
-    assert result['native_started'] is False
-    assert result['metrics'][fill.DENSITY_METRIC] == count
 
 
 def test_public_stream_entry_uses_native_owner(tmp_path, monkeypatch):
@@ -110,23 +100,3 @@ def test_public_dfm_entry_preserves_native_density_result(tmp_path, monkeypatch,
     assert result['default_row_status'] == status
     assert result['metrics'][fill.DENSITY_METRIC] == count
     assert result['advisories'] == ['router advisory']
-
-
-def test_dfm_runs_its_native_deck_once_when_fill_has_no_density(tmp_path, monkeypatch):
-    import dfm_screen_check
-    arm = density_case(tmp_path)
-    monkeypatch.setattr(fill, 'tool_density', lambda project: None)
-    monkeypatch.setattr(fill, 'validate_default_stream', lambda project: {'canonical': arm['subject']})
-    monkeypatch.setattr(runner, '_detect_pdk', lambda project: SimpleNamespace(name='unit'))
-    monkeypatch.setattr(runner, '_librelane_step_ctx', lambda *args: ('image', tmp_path))
-    monkeypatch.setattr(dfm_screen_check, 'audit', lambda project: {'findings': []})
-    calls = []
-    def native(*args, **kwargs):
-        calls.append(kwargs)
-        return arm
-    monkeypatch.setattr(fill, 'run_density', native)
-    first = fill.execute(tmp_path, {'requested_step': 'D63'})
-    second = fill.execute(tmp_path, {'requested_step': 'D63'})
-    assert first['completed'] and second['completed']
-    assert first['native_started'] and not second['native_started']
-    assert calls == [{'gds': Path(arm['subject']), 'lane': '35-dfm'}]

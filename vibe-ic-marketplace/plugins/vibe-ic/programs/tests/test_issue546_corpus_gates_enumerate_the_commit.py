@@ -46,7 +46,6 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 PLUGIN = PROGRAMS.parent
 sys.path.insert(0, str(PROGRAMS))
 
-import dead_plugin_path_check as dpp          # noqa: E402
 import shipped_path_portability_check as spp  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -152,31 +151,8 @@ def test_portability_scan_ignores_generated_residue(ignored_residue):
         "vanished — the gate is reading the disk, not the commit")
 
 
-def test_dead_plugin_scan_ignores_generated_residue(ignored_residue):
-    _repo, plugin, residue = ignored_residue
-    _, with_residue = dpp.scan(str(plugin))
-    assert with_residue["enumeration"] == "git-tracked"
-    residue.unlink()
-    _, without = dpp.scan(str(plugin))
-    assert without["files_considered"] == with_residue["files_considered"], (
-        "the considered population changed with an IGNORED file — same defect")
 
 
-def test_both_gates_name_their_enumeration_in_the_printed_verdict():
-    """A fallback nobody can see is how this survived. The tracked set and the
-    walk print the same sentence, so the sentence must say which one ran."""
-    buf = io.StringIO()
-    with redirect_stdout(buf):
-        spp.main([str(PLUGIN)])
-    assert "git-tracked" in buf.getvalue(), (
-        "shipped_path_portability_check's verdict does not name its "
-        "enumeration; a silent fallback would be indistinguishable from this")
-
-    buf = io.StringIO()
-    with redirect_stdout(buf):
-        dpp.main([str(PLUGIN)])
-    assert "git-tracked" in buf.getvalue(), (
-        "dead_plugin_path_check's verdict does not name its enumeration")
 
 
 def test_outside_a_published_tree_the_walk_still_runs_and_says_so(tmp_path):

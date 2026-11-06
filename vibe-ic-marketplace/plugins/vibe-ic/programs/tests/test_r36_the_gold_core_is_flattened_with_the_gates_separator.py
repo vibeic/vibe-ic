@@ -18,7 +18,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import lec_post_layout_check as L  # noqa: E402
-import phase3_one_shot_runner as R  # noqa: E402
 
 WRAPPER = """module chip_top(input i_clk, output o);
   wire o__core;
@@ -30,22 +29,8 @@ GATE_SLASH = "module chip_top(i_clk, o);\n dffq_1 \\u_core/_3306_ (.CLK(i_clk));
 GATE_DOT = "module chip_top(i_clk, o);\n dffq_1 \\u_core._3306_ (.CLK(i_clk));\nendmodule\n"
 
 
-def test_instance_and_separator_are_read_from_the_netlists():
-    assert R._lec_gold_core_flatten(WRAPPER, GATE_SLASH, "core") == ("core", "u_core", "/")
-    assert R._lec_gold_core_flatten(WRAPPER, GATE_DOT, "core") == ("core", "u_core", ".")
 
 
-def test_nothing_is_guessed():
-    # the core is not instantiated in the wrapper
-    assert R._lec_gold_core_flatten(WRAPPER, GATE_SLASH, "other") is None
-    # two instances of the core: which one is ambiguous
-    two = WRAPPER.replace("endmodule", "  core u_core2 (.i_clk(i_clk));\nendmodule")
-    assert R._lec_gold_core_flatten(two, GATE_SLASH, "core") is None
-    # the gate never writes the instance name with any separator
-    assert R._lec_gold_core_flatten(WRAPPER, "module chip_top(); endmodule", "core") is None
-    # the gate writes it with two different separators
-    both = GATE_SLASH + GATE_DOT
-    assert R._lec_gold_core_flatten(WRAPPER, both, "core") is None
 
 
 def _ys(**kw):

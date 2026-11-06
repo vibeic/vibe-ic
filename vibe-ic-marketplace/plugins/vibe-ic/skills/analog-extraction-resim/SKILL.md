@@ -69,9 +69,7 @@ After analog layout in Magic, extracts parasitic RC and re-simulates across PVT 
    - Output: `analog/<block>/post_layout_corner_results.json`
 
 3. **Compare pre vs post** — run the deterministic checker; do not re-grade by hand:
-   ```bash
-   python3 programs/analog_pre_vs_post_layout_check.py <project> --json
-   ```
+Compare native pre-layout and extracted post-layout simulations at matching corners and stimuli. Keep the original spec limits and declared degradation bands; report missing parasitics, models or simulated corners explicitly.
    It computes per-metric per-corner degradation `(post - pre) / pre × 100%` and
    classifies it against the **canonical degradation bands, which the program owns**
    (single source of truth — see "Degradation thresholds" below). Do NOT hardcode a
@@ -88,13 +86,7 @@ After analog layout in Magic, extracts parasitic RC and re-simulates across PVT 
 Write it at `phase3/analog/<block>/pre_vs_post.json` — the canonical analog
 dir (`_path_layout.analog_dir`), which is what the A7 gate globs.
 
-**The container key is `comparisons` (plural).** This doc used to show
-`comparison` (singular); `analog_pre_vs_post_layout_check.py` has only ever
-read `comparisons` or `specs`, so a file authored exactly per the old example
-was parsed as zero comparable specs and the gate FAILed it
-`PRE_VS_POST_ZERO_COMPARED` — a correct result authored per its own
-instructions was rejected. The program is the single source of truth here, as
-it already is for the thresholds below.
+Compare native pre-layout and extracted post-layout simulations at matching corners and stimuli. Keep the original spec limits and declared degradation bands; report missing parasitics, models or simulated corners explicitly.
 
 ```json
 {
@@ -166,11 +158,6 @@ artefact that says it has is worse than an absent one.
 
 ## Degradation thresholds
 
-Enforced by `programs/analog_pre_vs_post_layout_check.py` (single source of
-truth — `≤20%` OK / `>20%` WARNING / `>30%` ERROR→NEEDS_RELAYOUT). Quote the
-program's verdict; do not restate a conflicting cutoff. If the policy must
-change, change it in the program (one place) so SKILL.md and runtime never drift.
-
 ## Do not
 
 - Do not skip extraction and go straight to hardmacro — parasitic RC is the #1 cause of analog silicon failure
@@ -179,23 +166,6 @@ change, change it in the program (one place) so SKILL.md and runtime never drift
 
 ## Handoff
 
-Branch on the `overall_status` field emitted by
-`programs/analog_pre_vs_post_layout_check.py` (deterministic, not a judgment call):
-
 - `OK` / `WARNING` → `analog-hardmacro-gen` (Step A8)
 - `NEEDS_RELAYOUT` → back to `analog-layout` (Step A5)
-- `post_layout_corner_results.json` → `analog_pre_vs_post_layout_check` gate
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/analog-extraction-resim/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-
-**Your task is not complete until the audit returns PASS.**
+- `post_layout_corner_results.json` → native post-layout versus pre-layout result review

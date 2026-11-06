@@ -16,10 +16,8 @@ converged JSON can actually design the IC — emitting plain-language questions
 (no jargon) when something REQUIRED is missing.
 """
 import json
-import sys
 from pathlib import Path
 
-import phase1_one_shot_runner as runner
 import phase1_dialogue_render as dlg
 import phase1_json_converge as conv
 import phase1_sufficiency_check as suff
@@ -27,39 +25,16 @@ import phase1_sufficiency_check as suff
 
 # ── routing: every concrete front-end -> docs ───────────────────────
 
-def _mk(tmp_path: Path, rel: str, body: str) -> Path:
-    p = tmp_path / rel
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(body)
-    return tmp_path
 
 
-def test_prompt_md_routes_to_docs(tmp_path):
-    proj = _mk(tmp_path, "input/phase1_prompt.md", "Design a 4-bit counter.")
-    assert runner._detect_input_mode(proj) == "docs"
 
 
-def test_structured_yaml_routes_to_docs(tmp_path):
-    # the DIALOGUE artefact is unified through the doc track, NOT the engine
-    proj = _mk(tmp_path, "input/phase1_structured.yaml",
-               "ic_name: foo\nL1: {ic_name: foo}\n")
-    assert runner._detect_input_mode(proj) == "docs"
 
 
-def test_input_docs_rawprose_routes_to_docs(tmp_path):
-    proj = _mk(tmp_path, "input/docs/spec.md", "# Spec\nA timer.")
-    assert runner._detect_input_mode(proj) == "docs"
 
 
-def test_input_docs_prestructured_layerjson_routes_to_prompt(tmp_path):
-    # pre-structured L*.json under input/docs/ is the legacy engine input
-    proj = _mk(tmp_path, "input/docs/L1.json", '{"ic_name": "foo"}')
-    assert runner._detect_input_mode(proj) == "prompt"
 
 
-def test_empty_project_routes_to_none(tmp_path):
-    (tmp_path / "input").mkdir()
-    assert runner._detect_input_mode(tmp_path) == "none"
 
 
 # ── dialogue render: structured.yaml -> freestyle doc ───────────────

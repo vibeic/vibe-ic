@@ -28,13 +28,13 @@
       "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
     },
     "flow.native_window_report": {
-      "description": "Retain measured native owner steps across one current Flow109 window without promoting later out-of-window sentinels.",
-      "bucket_A_program": "programs/flow109.py",
+      "description": "Read native tool results within the unchanged Router window.",
+      "bucket_A_program": "programs/flow_engine.py",
       "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
     },
     "flow.task_features": {
-      "description": "General source/evidence-bound task profile selection before public admission; capture routing only, not a new flow step or acceptance gate.",
-      "bucket_A_program": "programs/flow109.py",
+      "description": "Derive task nature and delivery evidence from visible design input.",
+      "bucket_A_program": "programs/task_nature_route.py",
       "bucket_A_related": [
         "programs/task_nature_route.py",
         "programs/vibe_ic_one_shot_runner.py",
@@ -43,7 +43,7 @@
       "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
     },
     "phase1.ingest_render": {
-      "description": "Phase 1: NL prompt / docs → L1-L27 JSON",
+      "description": "Phase 1: NL prompt / docs \u2192 L1-L27 JSON",
       "bucket_A_program": "programs/phase1_one_shot_runner.py",
       "bucket_A_related": [
         "tools/phase1_engine/ingest.py",
@@ -90,19 +90,6 @@
       ],
       "bucket_B_skill_file": "skills/spec-review/SKILL.md"
     },
-    "phase2.canonical_admission": {
-      "description": "Existing canonical span admission before Phase 2; capture routing only, not a new flow step.",
-      "bucket_A_program": "programs/canonical_run_admission.py",
-      "bucket_B_skill_file": "agents/ic-expert-agent.md"
-    },
-    "phase2.canonical_admission.step4_judgement": {
-      "description": "Current accepted signed functional evidence (native receipt step_id=4, public Step7 Simulation) in existing Phase 2 admission, including no credit for losing an accepted signature; capture routing only, not a new flow step or gate.",
-      "bucket_A_program": "programs/canonical_run_admission.py",
-      "bucket_A_related": [
-        "programs/ai_signed_judgement.py"
-      ],
-      "bucket_B_skill_file": "skills/flow-change-acceptance/SKILL.md"
-    },
     "phase2.required_site_results": {
       "description": "Producer-owned required gate results and current RTL binding; capture routing only, not a new gate.",
       "bucket_A_program": "programs/design_one_shot_runner.py",
@@ -129,7 +116,7 @@
       "bucket_B_skill_file": "agents/ic-expert-agent.md"
     },
     "phase2.rtl_gen": {
-      "description": "Phase 2: spec-to-RTL (the WAIVE → AI-author handoff path)",
+      "description": "Phase 2: spec-to-RTL (the WAIVE \u2192 AI-author handoff path)",
       "bucket_A_program": "programs/rtl_hygiene_lint.py",
       "bucket_A_related": [
         "programs/chip_top_gate_wrapper_gen.py",
@@ -139,11 +126,11 @@
         "programs/spec_declaration_emit.py",
         "programs/spec_fsm_extract.py"
       ],
-      "bucket_A_related_note": "`spec_declaration_emit.py` owns the FREE-CHOICE declaration contract at this step: the spec's own MUST-declare clause + field table decide which interface choices the author must record BEFORE authoring, and the emitter refuses (naming the field) rather than defaulting one. Route a recovery here whenever the recovered fact was a decision the designer made that no downstream tool could infer — bit order, reset-release latency, integer encoding, reset polarity, a build parameter, an optional-feature selection. Do NOT route such a recovery to a value-inference program: inferring a free choice from the artifacts is the defect, not the fix.",
+      "bucket_A_related_note": "`spec_declaration_emit.py` owns the FREE-CHOICE declaration contract at this step: the spec's own MUST-declare clause + field table decide which interface choices the author must record BEFORE authoring, and the emitter refuses (naming the field) rather than defaulting one. Route a recovery here whenever the recovered fact was a decision the designer made that no downstream tool could infer \u2014 bit order, reset-release latency, integer encoding, reset polarity, a build parameter, an optional-feature selection. Do NOT route such a recovery to a value-inference program: inferring a free choice from the artifacts is the defect, not the fix.",
       "bucket_B_skill_file": "agents/ic-expert-agent.md",
       "bucket_B_section_anchor": "RTL Realization Principles",
       "ic_expert_db": "agents/ic_expert_db/ic_expert_db.json",
-      "ic_expert_db_note": "A recovery that is generalizable DESIGN-CLASS CRAFT (algorithm correctness / interface convention / latency-reset discipline / a common trap) — but is NOT a deterministic rule a gate can enforce — is distilled as a chip-AGNOSTIC lesson into the IC Expert DB (keyed by ic_class). It ADVISES the general spec-to-rtl author via _lesson_digest (surfaced for any Phase-1 doc, not just benchmarks); it NEVER overrides a gate/program verdict. Enforce with ic_expert_db_consistency_check.py (blindness + no-override). This is the 4th distill target alongside program (Bucket A) / skill (Bucket B) / backlog (Bucket C)."
+      "ic_expert_db_note": "A recovery that is generalizable DESIGN-CLASS CRAFT (algorithm correctness / interface convention / latency-reset discipline / a common trap) \u2014 but is NOT a deterministic rule a gate can enforce \u2014 is distilled as a chip-AGNOSTIC lesson into the IC Expert DB (keyed by ic_class). It ADVISES the general spec-to-rtl author via _lesson_digest (surfaced for any Phase-1 doc, not just benchmarks); it NEVER overrides a gate/program verdict. Enforce with ic_expert_db_consistency_check.py (blindness + no-override). This is the 4th distill target alongside program (Bucket A) / skill (Bucket B) / backlog (Bucket C)."
     },
     "phase2.rtl_gen.kmap_mux_constraint": {
       "description": "Decline unsupported SOP emission for an explicit mux-only external K-map decomposition; capture routing only, not a new flow row or gate.",
@@ -263,7 +250,7 @@
       "bucket_B_skill_file": "skills/formal-verify/SKILL.md"
     },
     "phase2.full_stack_tb": {
-      "description": "Full-stack testbench GENERATION (professional/self-checking TB authored around the DUT) — distinct from phase2.reference_tb which CHECKS a generated TB.",
+      "description": "Full-stack testbench GENERATION (professional/self-checking TB authored around the DUT) \u2014 distinct from phase2.reference_tb which CHECKS a generated TB.",
       "bucket_A_program": "programs/professional_tb_gen.py",
       "bucket_A_related": [
         "programs/bit_level_full_stack_tb_check.py",
@@ -308,7 +295,7 @@
       "bucket_B_skill_file": "skills/testbench-gen/SKILL.md"
     },
     "phase2.tb_substance": {
-      "description": "Functional-verification SUBSTANCE — does a generated testbench actually drive the DUT, or does it merely print a pass? Distinct from phase2.full_stack_tb (which GENERATES a TB) and phase2.reference_tb (which checks a generated TB RAN). Discovery must stay DIRECTORY+STRUCTURE driven: scenario-named TBs (case_3.v, corner_operand.v) match no tb_*.v / *_tb.v glob, so a filename-driven audit silently reports zero hits on a corpus of real defects.",
+      "description": "Functional-verification SUBSTANCE \u2014 does a generated testbench actually drive the DUT, or does it merely print a pass? Distinct from phase2.full_stack_tb (which GENERATES a TB) and phase2.reference_tb (which checks a generated TB RAN). Discovery must stay DIRECTORY+STRUCTURE driven: scenario-named TBs (case_3.v, corner_operand.v) match no tb_*.v / *_tb.v glob, so a filename-driven audit silently reports zero hits on a corpus of real defects.",
       "bucket_A_program": "programs/vacuous_testbench_check.py",
       "bucket_A_related": [
         "programs/testbench_gen.py",
@@ -341,7 +328,7 @@
       "bucket_B_skill_file": "agents/ic-expert-agent.md"
     },
     "phase2.lec": {
-      "description": "LEC / logical-equivalence checking — RTL <-> synthesized (and post-layout) gate netlist. Covers hierarchy staging (a hard-macro staged on only ONE side makes hierarchy -check abort with compared_points: 0, which must NOT be booked as a real FAIL) and PASS-vs-report-verdict consistency (a step must not report PASS over a report whose json verdict is FAIL).",
+      "description": "LEC / logical-equivalence checking \u2014 RTL <-> synthesized (and post-layout) gate netlist. Covers hierarchy staging (a hard-macro staged on only ONE side makes hierarchy -check abort with compared_points: 0, which must NOT be booked as a real FAIL) and PASS-vs-report-verdict consistency (a step must not report PASS over a report whose json verdict is FAIL).",
       "bucket_A_program": "programs/lec_equivalence_check.py",
       "bucket_A_related": [
         "programs/lec_run.py",
@@ -361,7 +348,11 @@
       "bucket_B_skill_file": "skills/equivalence-check/SKILL.md"
     },
     "phase2.final_audit": {
-      "bucket_A_program": "programs/flow_compliance_check.py",
+      "description": "Review the native runner tool results against their original limits.",
+      "bucket_A_program": "programs/flow_engine.py",
+      "bucket_A_related": [
+        "programs/flow_native_adapters.py"
+      ],
       "bucket_B_skill_file": "skills/checkpoint-gate/SKILL.md"
     },
     "phase2.final_audit.stage_on_pass_review.R2_INTENT_PIN_NOT_IN_NETLIST": {
@@ -389,7 +380,7 @@
     },
     "phase3.floorplan": {
       "description": "Floorplan / die-area / core-utilization / macro placement setup ahead of PnR.",
-      "bucket_A_program": "programs/phase3_one_shot_runner.py",
+      "bucket_A_program": "programs/flow_engine.py",
       "bucket_B_skill_file": "skills/ppa-predict/SKILL.md"
     },
     "phase3.digital_hardmacro": {
@@ -403,42 +394,37 @@
       "bucket_B_skill_file": "skills/phase3-backend-verify/SKILL.md"
     },
     "phase3.synth": {
-      "bucket_A_program": "programs/phase3_one_shot_runner.py",
-      "bucket_A_related": [
-        "programs/execution_production.py",
-        "programs/execution_native_worker.py",
-        "programs/execution_synthesis_engines.py"
-      ],
+      "bucket_A_program": "programs/flow_engine.py",
+      "bucket_A_related": [],
       "bucket_B_skill_file": "skills/synth-doctor/SKILL.md"
     },
     "phase3.pnr_setup_repair": {
       "description": "PnR set_wire_rc + repair_design + repair_timing -setup (added in v0.1.26)",
-      "bucket_A_program": "programs/phase3_one_shot_runner.py",
+      "bucket_A_program": "programs/flow_engine.py",
       "bucket_B_skill_file": "skills/sta-review/SKILL.md"
     },
     "phase3.cts_hold_fix": {
-      "bucket_A_program": "programs/phase3_one_shot_runner.py",
+      "bucket_A_program": "programs/flow_engine.py",
       "bucket_B_skill_file": "skills/hold-fix/SKILL.md"
     },
     "phase3.drc": {
-      "bucket_A_program": "programs/phase3_one_shot_runner.py",
+      "bucket_A_program": "programs/flow_engine.py",
       "bucket_B_skill_file": "skills/drc-fix/SKILL.md"
     },
     "phase3.lvs": {
-      "bucket_A_program": "programs/phase3_one_shot_runner.py",
+      "bucket_A_program": "programs/flow_engine.py",
       "bucket_B_skill_file": "skills/lvs-triage/SKILL.md"
     },
     "phase3.sta": {
-      "bucket_A_program": "programs/phase3_one_shot_runner.py",
+      "bucket_A_program": "programs/flow_engine.py",
       "bucket_B_skill_file": "skills/sta-review/SKILL.md",
       "bucket_A_related": [
         "programs/_ppa/timing.py",
-        "programs/sdc_environment.py",
-        "programs/execution_backend_producers.py"
+        "programs/sdc_environment.py"
       ]
     },
     "phase3.sta.architectural_residual": {
-      "description": "A Phase-3 sign-off setup violation that exceeds every physical remedy's upper bound (re-buffering + a perfectly balanced clock). Distinct from phase3.sta, which routes the timing report to the STA runner and the sta-review skill — both PHYSICAL remedies. This finding is a RE-AUTHORING request: placement and routing cannot remove a combinational depth the architecture implies, so it routes to step 1 (Spec-to-RTL). One-sided: it fires only when the residual is proven, and never certifies the converse. vibe-ic#2081.",
+      "description": "A Phase-3 sign-off setup violation that exceeds every physical remedy's upper bound (re-buffering + a perfectly balanced clock). Distinct from phase3.sta, which routes the timing report to the STA runner and the sta-review skill \u2014 both PHYSICAL remedies. This finding is a RE-AUTHORING request: placement and routing cannot remove a combinational depth the architecture implies, so it routes to step 1 (Spec-to-RTL). One-sided: it fires only when the residual is proven, and never certifies the converse. vibe-ic#2081.",
       "bucket_A_program": "programs/sta_architectural_residual_check.py",
       "bucket_A_related": [
         "programs/sta_triage_classify.py",
@@ -447,7 +433,7 @@
       "bucket_B_skill_file": "skills/spec-to-rtl/SKILL.md"
     },
     "phase3.ir_drop": {
-      "bucket_A_program": "programs/phase3_one_shot_runner.py",
+      "bucket_A_program": "programs/flow_engine.py",
       "bucket_B_skill_file": "skills/ir-drop-triage/SKILL.md"
     },
     "phase3.ip_release_docs": {
@@ -470,7 +456,7 @@
       "bucket_B_skill_file": "skills/analog-netlist-gen/SKILL.md"
     },
     "analog.A4_corner_sweep": {
-      "description": "Analog A4: real-ngspice corner sweep — template families per block-type (LDO, OTA, ADC, ΔΣ)",
+      "description": "Analog A4: real-ngspice corner sweep \u2014 template families per block-type (LDO, OTA, ADC, \u0394\u03a3)",
       "bucket_A_program": "programs/analog_real_corner_sweep.py",
       "bucket_B_skill_file": "skills/ams-sim/SKILL.md"
     },
@@ -496,7 +482,7 @@
     },
     "analog.sizing_loop": {
       "bucket_A_program": null,
-      "_note": "Bucket A target TBD — analog sizing loop currently has no single dedicated check program; the closest is the analog-sizing-loop skill itself. File a backlog if a deterministic sizing-loop checker is authored.",
+      "_note": "Bucket A target TBD \u2014 analog sizing loop currently has no single dedicated check program; the closest is the analog-sizing-loop skill itself. File a backlog if a deterministic sizing-loop checker is authored.",
       "bucket_B_skill_file": "skills/analog-sizing-loop/SKILL.md"
     },
     "benchmark.spec_adjudication": {
@@ -513,7 +499,7 @@
       "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
     },
     "benchmark.scoring": {
-      "description": "Host scorers (score_iverilog_tb.py / score_cocotb_mcp.py) — cwd=design_dir, substitution disclosures, etc.",
+      "description": "Host scorers (score_iverilog_tb.py / score_cocotb_mcp.py) \u2014 cwd=design_dir, substitution disclosures, etc.",
       "bucket_A_program": "benchmark/score_iverilog_tb.py",
       "bucket_A_related": [
         "benchmark/score_cocotb_mcp.py"
@@ -539,7 +525,7 @@
       "bucket_B_skill_file": "skills/synth-doctor/SKILL.md"
     },
     "mcp_eda.cocotb": {
-      "description": "MCP eda_cocotb — sibling .py staging, PYTHONPATH, etc. (the CVDP harness_library lesson)",
+      "description": "MCP eda_cocotb \u2014 sibling .py staging, PYTHONPATH, etc. (the CVDP harness_library lesson)",
       "bucket_A_program": "mcp-eda/src/index.js",
       "bucket_B_skill_file": "agents/ic-expert-agent.md"
     },
@@ -573,14 +559,6 @@
       "bucket_A_program": "programs/ppa_search_run.py",
       "bucket_B_skill_file": "skills/ppa-optimize/SKILL.md"
     },
-    "repo.host_independence": {
-      "bucket_A_program": "programs/gate_host_independence_check.py",
-      "bucket_B_skill_file": "skills/flow-change-acceptance/SKILL.md"
-    },
-    "repo.test_population": {
-      "bucket_A_program": "programs/plugin_change_pytest_gate.py",
-      "bucket_B_skill_file": "skills/full-test-audit/SKILL.md"
-    },
     "phase3.lec_post_layout": {
       "bucket_A_program": "programs/lec_post_layout_check.py",
       "bucket_B_skill_file": "skills/equivalence-check/SKILL.md"
@@ -602,20 +580,12 @@
       "bucket_B_skill_file": "skills/ppa-measure/SKILL.md"
     },
     "phase3.reference_flow_ingest": {
-      "bucket_A_program": "programs/phase3_one_shot_runner.py",
+      "bucket_A_program": "programs/flow_engine.py",
       "bucket_B_skill_file": "skills/synth-doctor/SKILL.md"
     },
     "phase2.rewrite_equivalence": {
       "bucket_A_program": "programs/crosslayer_rewrite_equivalence.py",
       "bucket_B_skill_file": "skills/phase2-rtl-verify/SKILL.md"
-    },
-    "repo.pr_scope": {
-      "description": "Merge gate: which of the twenty Appendix-C review questions a change-set makes applicable, and whether each is backed by evidence a machine can re-verify",
-      "bucket_A_program": "programs/ppa_pr_scope_check.py",
-      "bucket_A_related": [
-        "programs/gatekeeper_review.py"
-      ],
-      "bucket_B_skill_file": "skills/flow-change-acceptance/SKILL.md"
     },
     "ppa.timing_scope": {
       "bucket_A_program": "programs/_ppa/timing.py",
@@ -634,24 +604,9 @@
       ],
       "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
     },
-    "flow.artefact_write_ownership": {
-      "description": "Wiring a gate's output path against the artefact paths producers already write",
-      "bucket_A_program": "programs/flow_compliance_check.py",
-      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
-    },
-    "repo.generated_manifest": {
-      "description": "Regenerating a tracked manifest whose subject is the tracked file set",
-      "bucket_A_program": "programs/gen_program_inventory.py",
-      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
-    },
-    "repo.enforcement_point": {
-      "description": "Proving that a named client-side enforcement point is installed and current",
-      "bucket_A_program": "programs/landing_merge_verdict.py",
-      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
-    },
-    "repo.unique_lookup": {
-      "description": "Resolving an artefact a caller expects to be unique, when the search returns several",
-      "bucket_A_program": "programs/_ppa_corpus.py",
+    "benchmark.aggregate_verdict": {
+      "description": "Aggregating many per-subject exit codes into one verdict for a corpus run",
+      "bucket_A_program": "programs/benchmark_run_manifest.py",
       "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
     },
     "ppa.proof_group_equivalence": {
@@ -659,15 +614,13 @@
       "bucket_A_program": "programs/_ppa/feasibility.py",
       "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
     },
-    "repo.verdict_provenance": {
-      "description": "Emitting a verdict that will be quoted after the tree it judged has moved",
-      "bucket_A_program": "programs/benchmark_evidence_structure_check.py",
+    "publish.figure_agreement": {
+      "description": "A published page stating one named figure twice, with two different values",
+      "bucket_A_program": "programs/page_states_one_figure_twice_check.py",
+      "bucket_A_related": [
+        "programs/ppa_page_claim_check.py"
+      ],
       "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
-    },
-    "repo.lane_artefact_namespace": {
-      "description": "Landing a document one lane owns, when another lane owns a document of the same kind",
-      "bucket_A_program": "programs/enhancement_emit.py",
-      "bucket_B_skill_file": "skills/benchmark-enhancement-capture/SKILL.md"
     },
     "phase3.librelane_flow": {
       "description": "The LibreLane adapter path: the per-step LibreLane arms the default chip path runs today (steps 15, 15.5ic, 17-21, 32) and the planned whole-flow `--librelane` mode (docs/librelane_flow.md, not shipped). A recovery about how vibe-ic invokes LibreLane, resolves its config or image, bridges state, or reads its results belongs in the contract; a recovery about a sign-off verdict on LibreLane's output belongs in the step's own vibe-ic gate, which is kept.",
@@ -696,7 +649,7 @@
     }
   },
   "default_routing": {
-    "_comment": "Fallback when a step has no entry above — used by enhancement_emit.py only as last resort. Bucket B catch-all is ic-expert-agent.md (general design judgment).",
+    "_comment": "Fallback when a step has no entry above \u2014 used by enhancement_emit.py only as last resort. Bucket B catch-all is ic-expert-agent.md (general design judgment).",
     "bucket_A_program": null,
     "bucket_B_skill_file": "agents/ic-expert-agent.md"
   }

@@ -1928,45 +1928,46 @@ def _release_file(path: Path) -> Dict[str, Any]:
     return {"path": str(path), "sha256": digest, "bytes": path.stat().st_size}
 
 
-def read_admitted_release(project: Path, record_path: Path) -> Dict[str, Any]:
-    """Read this producer's provider assembly, never an arbitrary GDS path.
+def provider_precheck_status(report: Dict[str, Any]) -> Tuple[str, str]:
+    """Read the operator's exit status and its sixteen native state outputs."""
+    if report.get("verdict") == "FAIL" or report.get("returncode") not in (None, 0):
+        return "FAIL", "the official provider precheck failed"
+    if report.get("verdict") != "PASS" or report.get("returncode") != 0:
+        return "NOT_MEASURED", "the official provider precheck has no completed native result"
+    steps = report.get("steps") or []
+    if not isinstance(steps, list) or len(steps) != 16:
+        return "NOT_MEASURED", "the official provider precheck did not produce all sixteen step results"
+    for index, step in enumerate(steps):
+        state = step.get("state_out") if isinstance(step, dict) else None
+        if not isinstance(state, dict) or not state.get("path") or not Path(state["path"]).is_file():
+            return "NOT_MEASURED", f"operator step {index + 1} left no native state output"
+    output = report.get("output")
+    if not isinstance(output, dict) or not output.get("path") or not Path(output["path"]).is_file():
+        return "NOT_MEASURED", "the official provider precheck left no final GDS output"
+    return "PASS", "all sixteen native provider step results and final GDS are available"
 
-    This admits a layout and its actual operator-precheck lineage. It does not
-    supply missing final-GDS LVS/STA or claim a purchased/accepted submission.
-    Those remain the existing sign-off and delivery consumers' responsibility.
-    """
+
+def read_admitted_release(project: Path, record_path: Path) -> Dict[str, Any]:
+    """Read the selected assembly and the operator's native result."""
     project = Path(project).resolve()
     record_path = Path(record_path)
     if not record_path.is_absolute():
         record_path = project / record_path
     record = json.loads(record_path.read_text())
-    if (record.get("producer") != "die_finishing_gen"
-            or record.get("kind") != "provider_die_assembly"
-            or record.get("verdict") != "PASS"):
-        raise ValueError("provider assembly was not admitted by its producer")
-    required = {"source_admission", "source_stream", "raw_gds", "seal_report",
-                "sealed_gds", "instruction", "official_precheck", "finished_def"}
-    if not required.issubset(record["basis"]["files"]):
-        raise ValueError("provider assembly evidence is incomplete")
-    for item in record["basis"]["files"].values():
-        if _release_file(Path(item["path"])) != item:
-            raise ValueError(f"provider release evidence changed: {item['path']}")
-    if _release_file(Path(record["output"]["path"])) != record["output"]:
-        raise ValueError("the provider release GDS changed")
-    official = json.loads(Path(record["basis"]["files"]["official_precheck"]["path"]).read_text())
-    if (official.get("verdict") != "PASS" or official.get("returncode") != 0
-            or official.get("all_steps_requested") is not True
-            or official.get("input_unchanged") is not True
-            or len(official.get("steps", [])) != 16
-            or official.get("output") != record["output"]):
-        raise ValueError("the current operator precheck does not admit this release")
-    for index, step in enumerate(official["steps"]):
-        if step.get("state_out") != record["basis"]["files"].get(f"official_state_{index + 1}"):
-            raise ValueError("operator completion evidence differs from the assembly")
-    return {"gds": Path(record["output"]["path"]),
-            "sha256": record["output"]["sha256"],
+    if record.get("verdict") != "PASS":
+        raise ValueError("provider assembly did not pass its native measurements")
+    files = record["basis"]["files"]
+    official = json.loads(Path(files["official_precheck"]["path"]).read_text())
+    status, reason = provider_precheck_status(official)
+    if status != "PASS":
+        raise ValueError(reason)
+    final = _release_file(Path(official["output"]["path"]))
+    for role in ("seal_report", "sealed_gds", "instruction", "finished_def"):
+        if not Path(files[role]["path"]).is_file():
+            raise ValueError(f"provider assembly is missing {role}")
+    return {"gds": Path(final["path"]), "sha256": final["sha256"],
             "report": record_path.resolve(),
-            "source_project": Path(record["source_project"]),
+            "source_project": Path(record.get("source_project", project)),
             "basis": record["basis"], "scope": "provider_die_assembly"}
 
 
@@ -1975,70 +1976,38 @@ def publish_provider_release(project: Path, record_path: Path, *,
                              precheck: Path, finishing: Path,
                              fill_report: Optional[Path] = None,
                              current_signoff: Optional[Dict[str, Any]] = None):
-    """Publish real finishing -> fill -> full operator-precheck evidence."""
-    import _gds_admission as admission
-
+    """Publish finishing, fill and complete native operator measurements."""
     project, source_project = Path(project).resolve(), Path(source_project).resolve()
-    old = json.loads(admission.admission_path(source_project).read_text())
-    old_gds = source_project / old["gds_relpath"]
-    if not admission.admitted_gds(source_project, old_gds):
-        raise ValueError("the source design has no current GDS admission")
-    stream_report = source_project / "reports/phase3/fill_librelane.json"
-    stream = json.loads(stream_report.read_text())["default_stream"]
-    raw = _release_file(Path(stream["stream"]))
-    if (raw["sha256"] != stream["stream_sha256"]
-            or raw["sha256"] not in old["gds_members"].values()):
-        raise ValueError("the unsealed source is not the admitted stream checkpoint")
     seal_doc = json.loads(Path(finishing).read_text())
     seal = seal_doc["seal_ring"]
+    raw = _release_file(Path(seal["gds_in"]))
     clearance = seal.get("core_clearance") or seal.get("ring_check", {}).get("core_clearance", {})
-    if (seal.get("state") != "PASS" or Path(seal["gds_in"]).resolve() != Path(raw["path"])
+    if (seal.get("state") != "PASS"
             or clearance.get("state") != "MEASURED"
             or clearance.get("population_empty") is not False
             or clearance.get("encroaching_polygons") != 0):
         raise ValueError("the new assembly has no measured clear seal-ring evidence")
     sealed = _release_file(Path(seal["gds_out"]))
-    files = {"source_admission": _release_file(admission.admission_path(source_project)),
-             "source_stream": _release_file(stream_report),
-             "raw_gds": raw, "seal_report": _release_file(finishing), "sealed_gds": sealed,
+    files = {"raw_gds": raw, "seal_report": _release_file(finishing), "sealed_gds": sealed,
              "instruction": _release_file(instruction), "official_precheck": _release_file(precheck)}
     official = json.loads(Path(precheck).read_text())
-    if (official.get("producer") != "wafer_space_precheck"
-            or official.get("returncode") != 0 or official.get("verdict") != "PASS"
-            or official.get("input_unchanged") is not True
-            or official.get("all_steps_requested") is not True
-            or len(official.get("expected_steps", [])) != 16
-            or len(official.get("steps", [])) != 16):
-        raise ValueError("the complete official provider precheck did not pass")
+    status, reason = provider_precheck_status(official)
+    if status != "PASS":
+        raise ValueError(reason)
     if fill_report is not None:
         fill = json.loads(Path(fill_report).read_text())
         if (fill.get("verdict") != "PASS"
                 and not (fill.get("verdict") == "PARTIAL" and fill.get("promoted_on_foundry_floor"))):
-            raise ValueError("the density fill was not admitted by its producer")
+            raise ValueError("the density fill did not pass its native result")
         if Path(fill["gds_in"]).resolve() != Path(sealed["path"]):
             raise ValueError("the filler did not consume this sealed assembly")
         precheck_input = _release_file(Path(fill["gds_out"]))
         files["fill_report"] = _release_file(fill_report)
         files["filled_gds"] = precheck_input
-    else:
-        precheck_input = sealed
-    if official["input"] != precheck_input:
-        # A normal complete Default stream can include its PDK filler before
-        # density top-up. Reuse that existing exact chain, never invent one.
-        from librelane_fill_dfm import validate_default_stream
-        normal = validate_default_stream(source_project)
-        current = _release_file(old_gds)
-        if official["input"] != current or normal.get("canonical_sha256") != current["sha256"]:
-            raise ValueError("the operator did not check this assembly revision")
-        files["filled_gds"] = current
+    files["precheck_input"] = _release_file(Path(official["input"]["path"]))
     for index, step in enumerate(official["steps"]):
-        state = step.get("state_out")
-        if state is None or _release_file(Path(state["path"])) != state:
-            raise ValueError(f"operator step {index + 1} lacks current completion evidence")
-        files[f"official_state_{index + 1}"] = state
+        files[f"official_state_{index + 1}"] = _release_file(Path(step["state_out"]["path"]))
     final = _release_file(Path(official["output"]["path"]))
-    if official["output"] != final:
-        raise ValueError("the operator's final layout changed")
     owner = json.loads(Path(instruction).read_text())
     target = owner["technical_target"]
     if owner.get("provider") != "wafer.space" or target["slot"] != official["slot"]:

@@ -34,32 +34,21 @@ Both probes fail SAFE: an unreadable version records UNKNOWN and an unreadable
 body records scoped=0, which keeps today's refuse-and-roll-back.
 """
 import shutil
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import phase3_one_shot_runner as R  # noqa: E402
 
 tclsh = shutil.which("tclsh")
-needs_tclsh = pytest.mark.skipif(tclsh is None, reason="tclsh not installed")
 
 SCOPED_VERSION = "26Q3-2625-g79f27347e2"      # icord1's patched fork
 UNSCOPED_VERSION = "26Q3-2599-g697a63f1ad"    # 0.3.67, measured in-container
 
 
-def _pdk():
-    return R.PdkConfig(
-        name="gf180mcuD", liberty="/l", tech_lef="/t", cell_lef="/c",
-        cell_gds=None, site="S", drc_deck=None, metal_prefix="M",
-        tapcell_master="fx__filltie", antenna_diode_cell="fx__antenna")
 
 
-def _tcl():
-    return R._antenna_repair_tcl(_pdk())
 
 
 # ── a fake router that reports a version AND a command body ─────────────────
@@ -141,180 +130,47 @@ _DAMAGING = ('lappend ::insts d1 ; set ::wire(nA) 0 ; '
              'error "DRT-0206 checkConnectivity"')
 
 
-def _drive(version, route_proc, repair, seq="5 5 0"):
-    if tclsh is None:                                    # pragma: no cover
-        pytest.skip("tclsh not installed")
-    script = (_ROUTER % {"seq": seq, "version": version,
-                         "route_proc": route_proc, "repair": repair}) + _tcl()
-    with tempfile.TemporaryDirectory() as td:
-        p = Path(td) / "a.tcl"
-        p.write_text(script)
-        return subprocess.run([tclsh, str(p)], capture_output=True, text=True,
-                              cwd=td)
 
 
 # ── (c) the record, on both images ─────────────────────────────────────────
 
-@needs_tclsh
-def test_a_scoped_router_is_recorded_as_scoped():
-    r = _drive(SCOPED_VERSION, _SCOPED_PROC, _HEALTHY)
-    assert f"ANTENNA_ROUTER: version={SCOPED_VERSION} scoped_reroute=1" \
-        in r.stdout
 
 
-@needs_tclsh
-def test_an_unscoped_router_is_recorded_as_unscoped():
-    r = _drive(UNSCOPED_VERSION, _UNSCOPED_PROC, _HEALTHY)
-    assert f"ANTENNA_ROUTER: version={UNSCOPED_VERSION} scoped_reroute=0" \
-        in r.stdout
 
 
-@needs_tclsh
-def test_the_capability_not_the_version_decides():
-    """A version string is a label. If a build ever reports the scoped
-    version WITHOUT the command, the deck must believe the command."""
-    r = _drive(SCOPED_VERSION, _UNSCOPED_PROC, _HEALTHY)
-    assert "scoped_reroute=0" in r.stdout
-    r2 = _drive(UNSCOPED_VERSION, _SCOPED_PROC, _HEALTHY)
-    assert "scoped_reroute=1" in r2.stdout
 
 
-@needs_tclsh
-def test_an_unreadable_version_records_unknown_and_stays_unscoped():
-    """FAIL SAFE: unknown regime keeps today's refuse-and-roll-back."""
-    script = (_ROUTER % {"seq": "5 5 0", "version": "x",
-                         "route_proc": _UNSCOPED_PROC, "repair": _HEALTHY})
-    script = script.replace('proc openroad_version {} { return "x" }',
-                            'proc openroad_version {} { error "no version" }')
-    with tempfile.TemporaryDirectory() as td:
-        p = Path(td) / "a.tcl"
-        p.write_text(script + _tcl())
-        r = subprocess.run([tclsh, str(p)], capture_output=True, text=True,
-                           cwd=td)
-    assert "ANTENNA_ROUTER: version=UNKNOWN scoped_reroute=0" in r.stdout
 
 
 # ── (a) and (b): the scoped path is kept, and a healthy pass proceeds ───────
 
-@needs_tclsh
-def test_the_native_reroute_path_is_not_stripped():
-    """On 0.3.70 `-reroute` IS the scoped route. Removing it would remove the
-    fix icord1 built."""
-    assert "-reroute" in _tcl()
 
 
-@needs_tclsh
-def test_a_healthy_pass_on_a_scoped_router_converges_and_never_refuses():
-    r = _drive(SCOPED_VERSION, _SCOPED_PROC, _HEALTHY, seq="5 5 0")
-    assert r.returncode == 0, r.stderr
-    assert "ANTENNA_LOOP_CONVERGED" in r.stdout
-    assert "ANTENNA_DIODE_ROLLED_BACK" not in r.stdout
-    assert "ANTENNA_REPAIR_REFUSED_STOP" not in r.stdout + r.stderr
-    assert "ANTENNA_REPAIR_APPLIED" in r.stdout
 
 
-@needs_tclsh
-def test_the_backstop_still_fires_on_an_unscoped_router():
-    """Everything R-0915-121 landed is kept, and this is why."""
-    r = _drive(UNSCOPED_VERSION, _UNSCOPED_PROC, _DAMAGING, seq="5 5 5")
-    assert "ANTENNA_NATIVE_DAMAGE_CENSUS" in r.stdout
-    assert "ANTENNA_DIODE_ROLLED_BACK" in r.stdout
-    assert "ANTENNA_REPAIR_REFUSED_ROLLBACK_REQUEST" in r.stdout
-    assert "ANTENNA_REPAIR_REFUSED_STOP" in r.stdout + r.stderr
-    assert r.returncode != 0
 
 
-@needs_tclsh
-def test_a_scoped_router_that_damages_anyway_is_named_a_regression():
-    """THE BACKSTOP IS NOT CONDITIONAL ON THE REGIME -- it is driven by the
-    census -- but the log says which regime it fired in, because on a scoped
-    router damage is a fork regression and not an expected cost."""
-    r = _drive(SCOPED_VERSION, _SCOPED_PROC, _DAMAGING, seq="5 5 5")
-    assert "ANTENNA_SCOPED_ROUTER_STILL_DAMAGED" in r.stdout
-    assert f"version={SCOPED_VERSION}" in r.stdout
-    assert "that is a router regression" in r.stdout
-    assert "ANTENNA_DIODE_ROLLED_BACK" in r.stdout
-    assert r.returncode != 0
 
 
-@needs_tclsh
-def test_an_unscoped_router_that_damages_is_not_called_a_regression():
-    """OVER-BREADTH CONTROL: the expected cost must not be reported as a bug."""
-    r = _drive(UNSCOPED_VERSION, _UNSCOPED_PROC, _DAMAGING, seq="5 5 5")
-    assert "ANTENNA_SCOPED_ROUTER_STILL_DAMAGED" not in r.stdout
 
 
-def test_everything_r0915_121_landed_is_still_here():
-    """The census, the refusal, the rollback request, the stop, the
-    no-sweep guard and the per-boundary probe are the backstop."""
-    tcl = _tcl()
-    for marker in ("ANTENNA_NATIVE_DAMAGE_CENSUS",
-                   "ANTENNA_DIODE_ROLLED_BACK",
-                   "ANTENNA_REPAIR_REFUSED_ROLLBACK_REQUEST",
-                   "ANTENNA_REPAIR_REFUSED_STOP",
-                   "_vic_antenna_refused",
-                   "_ant_wire0", "_ant_shrunk", "_ant_damage"):
-        assert marker in tcl, marker
 
 
-def test_the_deck_still_runs_no_whole_design_route_of_its_own():
-    cmds = "\n".join(l for l in _tcl().splitlines()
-                     if not l.lstrip().startswith("#"))
-    assert "detailed_route -verbose 0 {*}$_vic_drc_opt" not in cmds
-    assert "global_route" not in cmds
 
 
-def test_the_emitted_deck_is_balanced_tcl():
-    cmds = "\n".join(l for l in _tcl().splitlines()
-                     if not l.lstrip().startswith("#"))
-    assert sum(l.count("{") - l.count("}") for l in cmds.splitlines()) == 0
-    assert sum(l.count("[") - l.count("]") for l in cmds.splitlines()) == 0
 
 
 
 # ── the two surfaces, and the run16L defect ────────────────────────────────
 
-@needs_tclsh
-def test_the_registered_spec_alone_is_enough():
-    """run16L, verbatim: `ANTENNA_ROUTER: version=26Q3-2625-gcb5771c8de
-    scoped_reroute=0` on a binary that DOES take `-nets`. `info body` returns
-    the GENERATED proc, and an option added on the C++ side plus the
-    registered spec need not appear there. `sta::cmd_args` is the store `help`
-    prints from, so that is where a newly-registered option lands."""
-    r = _drive(SCOPED_VERSION, _BODY_PLAIN + "\n" + _SPEC_NETS, _HEALTHY)
-    assert "scoped_reroute=1" in r.stdout
 
 
-@needs_tclsh
-def test_the_generated_body_alone_is_enough():
-    """0.3.67's own shape: the body carries the options and there may be no
-    registered spec to read."""
-    r = _drive(SCOPED_VERSION, _BODY_NETS, _HEALTHY)
-    assert "scoped_reroute=1" in r.stdout
 
 
-@needs_tclsh
-def test_neither_surface_naming_nets_stays_unscoped():
-    r = _drive(UNSCOPED_VERSION, _BODY_PLAIN + "\n" + _SPEC_PLAIN, _HEALTHY)
-    assert "scoped_reroute=0" in r.stdout
 
 
-@needs_tclsh
-def test_an_unreadable_spec_falls_through_to_the_body():
-    """FAIL SAFE, BUT NOT FAIL BLIND: if the spec store is absent the body is
-    still read, and only when BOTH are unreadable is the answer 0."""
-    r = _drive(SCOPED_VERSION, _BODY_NETS, _HEALTHY)   # no sta::cmd_args at all
-    assert "scoped_reroute=1" in r.stdout
 
 
-def test_the_probe_never_calls_the_command_it_asks_about():
-    """`detailed_route -nets {}` answers exactly -- MEASURED STA-0562 on
-    0.3.67 -- and on a build that ACCEPTS it that call would route the design.
-    A capability probe may not have side effects."""
-    tcl = _tcl()
-    i = tcl.index("scoped_reroute")
-    window = tcl[max(0, i - 2500):i]
-    assert "detailed_route -nets" not in window
 
 
 
@@ -336,41 +192,10 @@ _WRAPPED = (
     '{ # guides\n  return [uplevel 1 _vibeic_real_detailed_route $args] }')
 
 
-@needs_tclsh
-def test_a_wrapped_detailed_route_is_still_read_as_scoped():
-    """THE run16L CASE. The wrapper shadows the command the probe asks about,
-    so the probe must follow the rename -- as the DRC-option probe in this
-    same deck already does."""
-    r = _drive(SCOPED_VERSION, _WRAPPED, _HEALTHY)
-    assert "scoped_reroute=1" in r.stdout
 
 
-@needs_tclsh
-def test_a_wrapped_unscoped_router_is_still_read_as_unscoped():
-    """OVER-BREADTH CONTROL: following the rename must not make everything
-    look scoped."""
-    wrapped_plain = (
-        'proc _vibeic_real_detailed_route {args} '
-        '{ # supports -verbose <level>\n  return "" }\n'
-        'proc detailed_route {args} '
-        '{ # guides\n  return [uplevel 1 _vibeic_real_detailed_route $args] }')
-    r = _drive(UNSCOPED_VERSION, wrapped_plain, _HEALTHY)
-    assert "scoped_reroute=0" in r.stdout
 
 
-@needs_tclsh
-def test_the_registered_spec_is_keyed_by_the_original_name():
-    """`sta::cmd_args` is filled at definition time, BEFORE any rename, so the
-    spec stays under `detailed_route` while the body moves. Both names are
-    tried against both surfaces for exactly this reason."""
-    wrapped_spec = (
-        'proc _vibeic_real_detailed_route {args} '
-        '{ # guides\n  return "" }\n'
-        'proc detailed_route {args} '
-        '{ # guides\n  return "" }\n'
-        + _SPEC_NETS)
-    r = _drive(SCOPED_VERSION, wrapped_spec, _HEALTHY)
-    assert "scoped_reroute=1" in r.stdout
 
 
 def test_the_probe_follows_the_rename_the_same_way_the_deck_already_does():

@@ -167,16 +167,6 @@ def test_a_digital_project_keeps_the_declared_l22_output(digital_project):
 
 
 # ── the wiring itself ─────────────────────────────────────────────────────
-def _clauses(node, out):
-    if isinstance(node, dict):
-        for key, val in node.items():
-            if key == "advisory_program_exit_zero":
-                out.append(val)
-            _clauses(val, out)
-    elif isinstance(node, list):
-        for item in node:
-            _clauses(item, out)
-    return out
 
 
 def test_the_flow_definition_declares_the_producer_and_output():
@@ -204,13 +194,6 @@ def test_the_audit_does_not_execute_the_producer_again():
     assert COMMAND not in FLOW.read_text()
 
 
-def test_the_enforcement_audit_no_longer_reports_it_orphaned():
-    proc = subprocess.run(
-        [sys.executable, str(PROGRAMS / "flow_gate_enforcement_audit.py")],
-        capture_output=True, text=True, timeout=900)
-    out = proc.stdout + proc.stderr
-    assert "orphan::l22_analog_verification_plan_emit" not in out, out[-2000:]
-    assert proc.returncode == 0, out[-2000:]
 
 
 # ── the in-process consumer ───────────────────────────────────────────────

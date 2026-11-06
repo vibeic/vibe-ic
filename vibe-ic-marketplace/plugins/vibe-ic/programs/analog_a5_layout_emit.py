@@ -31,7 +31,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _atomic_artefact as _aa  # noqa: E402 — vibe-ic#1082
 import _gate_denominator as _den  # noqa: E402 — no clean list without a denominator
 import _path_layout as _pl  # noqa: E402
-import _analog_producer_common as _pc  # noqa: E402 — content identity
 import analog_a5_pdk_device_limits as _lim  # noqa: E402
 import pdk_family_identity as _pdk_identity  # noqa: E402
 from _analog_a_check_common import load_block_list  # noqa: E402
@@ -347,12 +346,11 @@ def _read_width_prl_rules(stage: Stage, drc_source: str) -> dict:
     root = Path(*parts[:parts.index("libs.tech") + 1]) / Path(
         "klayout/tech/drc/rule_decks")
     script = (
-        "import hashlib,json;from pathlib import Path;"
+        "import json;from pathlib import Path;"
         "r=Path(" + repr(str(root)) + ");"
         "a=sorted(r.glob('*tech_default.json'));"
         "b=sorted(r.glob('**/*metaln.drc'));p=a+b;"
-        "print(json.dumps({str(x):{'text':x.read_text(),"
-        "'sha256':hashlib.sha256(x.read_bytes()).hexdigest()}for x in p}))")
+        "print(json.dumps({str(x):{'text':x.read_text()}for x in p}))")
     rc, output, error = stage.sh(
         "python3 -c " + shlex.quote(script), timeout=120)
     if rc:
@@ -377,14 +375,10 @@ def _read_width_prl_rules(stage: Stage, drc_source: str) -> dict:
         for path, value in configs + decks:
             if not isinstance(value, dict) or not isinstance(value.get("text"), str):
                 raise ValueError("native conditional-spacing source payload is malformed")
-            digest = hashlib.sha256(value["text"].encode()).hexdigest()
-            if value.get("sha256") != digest:
-                raise ValueError(
-                    "native conditional-spacing source hash does not match bytes: " + path)
         rules = _parse_width_prl_rules(configs[0][1]["text"],
                                        decks[0][1]["text"])
         return {"status": "READ", "rules": rules,
-                "sources": {path: {"path": path, "sha256": value["sha256"]}
+                "sources": {path: {"path": path}
                             for path, value in configs + decks}}
     except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
         return {"status": "REFUSED", "rules": {}, "sources": {},
@@ -5247,16 +5241,6 @@ def emit_block(project: Path, block: str, stage: Stage, magicrc: str,
     # gate reads geometry, not provenance, so it PASSes that layout for a
     # netlist the PDK forbids. Deleting someone else's artefact is not this
     # producer's call; saying so, in the record it owns, is.
-    # WHICH NETLIST THIS LAYOUT IS OF, by content. The path alone named a
-    # netlist that A3 later re-emitted with different devices, and A7 then
-    # extracted a layout of the OLD netlist and compared it with the new one:
-    # MEASURED (delta_sigma, ihp-sg13g2) that read as
-    # A7_RCX_DEVICE_INVENTORY_MISMATCH, cap_cmim 23 vs 78, while the extraction
-    # matched the netlist actually drawn device for device. Provenance comments
-    # are excluded (`content_digest`), so a byte-identical re-emission keeps
-    # the identity.
-    report["netlist_content_sha256"] = _pc.content_digest(
-        sp.read_text(errors="replace"))
     stale = bdir / "layout.mag" if (bdir / "layout.mag").is_file() else None
     if stale:
         report["layout_present_before_this_run"] = str(stale)

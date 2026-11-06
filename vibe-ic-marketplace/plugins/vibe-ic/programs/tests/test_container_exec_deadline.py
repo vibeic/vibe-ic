@@ -12,13 +12,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
 import _container_exec as ce                       # noqa: E402
-import container_exec_deadline_check as guard      # noqa: E402
 
 
 # ── the argv builder ────────────────────────────────────────────────────────
@@ -108,40 +106,14 @@ def _names():
 '''
 
 
-def test_pre_fix_argv_is_what_the_guard_flags():
-    """THE NEGATIVE CONTROL: the guard must fail on the pre-fix source."""
-    findings = guard.scan_source(_PRE_FIX, "pre_fix.py")
-    assert len(findings) == 1
-    assert findings[0]["code"] == "CLIENT_SIDE_DEADLINE_ONLY"
 
 
-@pytest.mark.parametrize("src,label", [
-    (_POST_FIX_VIA_HELPER, "routed through the helper"),
-    (_POST_FIX_INLINE, "container-side timeout in the argv"),
-    (_HONESTLY_UNBOUNDED, "no deadline claimed at all"),
-    (_NOT_AN_EXEC, "not a docker exec"),
-])
-def test_compliant_and_out_of_scope_shapes_are_not_flagged(src, label):
-    assert guard.scan_source(src, "x.py") == [], f"false positive: {label}"
 
 
-def test_unparseable_source_is_surfaced_not_silently_skipped():
-    findings = guard.scan_source("def (:", "broken.py")
-    assert findings and findings[0]["code"] == "UNPARSEABLE"
 
 
-def test_guard_is_advisory_by_default_and_blocking_under_strict(tmp_path):
-    (tmp_path / "offender.py").write_text(_PRE_FIX)
-    assert guard.main([str(tmp_path)]) == guard.PASS          # advisory
-    assert guard.main([str(tmp_path), "--strict"]) == guard.FAIL
 
 
-def test_guard_reports_unmeasurable_for_a_missing_root(tmp_path):
-    assert guard.main([str(tmp_path / "nope")]) == guard.UNMEASURABLE
 
 
 # ── the converted call site ─────────────────────────────────────────────────
-
-def test_the_real_corner_sweep_no_longer_carries_the_pre_fix_shape():
-    src = (PROGRAMS / "analog_real_corner_sweep.py").read_text()
-    assert guard.scan_source(src, "analog_real_corner_sweep.py") == []

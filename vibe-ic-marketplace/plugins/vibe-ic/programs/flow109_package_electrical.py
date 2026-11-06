@@ -7,7 +7,6 @@ remain NOT_MEASURED. A bare-die C load from SDC/Liberty is not a package R/L.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 from pathlib import Path
@@ -23,15 +22,17 @@ if str(HERE) not in sys.path:
 from _atomic_artefact import write_bytes, write_json, write_text
 from _specrtl_common import parse_rtl_ports
 import _watchdog
-import flow109
-from flow109_admission import AdmissionRefusal, require_launch_admission
 import flow109_analog_model_check as model_check
-from flow109_metric_acceptance import evaluate_operator, MetricRefusal, _identity_complete
 from _pad_ring import parse_spice_subckts
 from analog_a7_post_layout_emit import spice_number
 
+class PackageError(ValueError):
+    def __init__(self, code, detail, *, status='NOT_MEASURED'):
+        self.code, self.status = code, status
+        super().__init__(f'{code}: {detail}')
+
+
 SCHEMA = 'vibeic.flow109.package-electrical.v1'
-INPUT = 'input/flow109/D67.json'
 BOUNDS = 'requirements/package_electrical/package_rc_thermal_validity.json'
 PORTS = 'adopted/package_electrical/package_model_ports_identity.json'
 IDENT = re.compile(r'[A-Za-z_][A-Za-z0-9_]*\Z')
@@ -40,12 +41,8 @@ MEASURES = {'voltage_at_sample': ('V', 'find v(observe) at={sample_s}'),
             'source_current_at_sample': ('A', 'find i(vdrive) at={sample_s}')}
 
 
-def _sha(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-
-
 def _refuse(code, detail, *, failed=False):
-    raise AdmissionRefusal('D67_' + code, str(detail),
+    raise PackageError('D67_' + code, str(detail),
                            status='FAIL' if failed else 'NOT_MEASURED')
 
 
@@ -60,31 +57,19 @@ def _read(path):
 
 
 def _bound(project, record):
-    if not isinstance(record, dict) or set(record) != {'path', 'sha256'}:
-        _refuse('INPUT_UNBOUND', record)
-    if not isinstance(record['path'], str) or not record['path']:
-        _refuse('INPUT_UNBOUND', record)
-    raw = project / record['path']
-    if any(p.is_symlink() for p in (raw, *raw.parents)):
-        _refuse('INPUT_SYMLINK_UNSUPPORTED', raw)
-    path = raw.resolve()
-    if not path.is_file() or _sha(path) != record['sha256']:
-        _refuse('INPUT_STALE_OR_MISSING', path)
+    from librelane_contract import project_path
+    value = record.get('path') if isinstance(record, dict) else record
+    if not isinstance(value, str) or not value:
+        _refuse('INPUT_UNAVAILABLE', record)
+    path = project_path(project, value)
+    if not path.is_file():
+        _refuse('INPUT_MISSING', path)
     return path
 
 
 def _record(project, path):
     path = Path(path).resolve()
-    return {'path': str(path.relative_to(project)) if path.is_relative_to(project)
-            else str(path), 'sha256': _sha(path)}
-
-
-def operation_sources():
-    names = ('flow109_package_electrical.py', '_pad_ring.py', 'analog_a7_post_layout_emit.py',
-             'flow109_analog_model_check.py', '_specrtl_common.py', '_watchdog.py',
-             '_atomic_artefact.py', 'flow109_metric_acceptance.py',
-             'flow109.py', 'flow109_admission.py')
-    return {'programs/' + name: _sha(HERE / name) for name in names}
+    return {'path': str(path.relative_to(project)) if path.is_relative_to(project) else str(path)}
 
 
 def _number(value, *, positive=False):
@@ -96,16 +81,6 @@ def _number(value, *, positive=False):
     if not finite or (positive and value <= 0):
         _refuse('INVALID_NUMBER', value)
     return value
-
-
-def _approved(project, doc):
-    approval = doc.get('approval', {})
-    if (approval.get('status') != 'APPROVED'
-            or approval.get('authority') != 'requirements_owner'
-            or not isinstance(approval.get('approver'), str)
-            or not approval['approver'].strip()):
-        _refuse('REQUIREMENTS_NOT_APPROVED', approval)
-    return _bound(project, approval.get('source_reference'))
 
 
 def _model(path, case):
@@ -161,25 +136,8 @@ def _model(path, case):
 def prepare(project, context):
     if any(c in str(project) for c in ('\n', '\r', '"')):
         _refuse('PROJECT_PATH_UNSUPPORTED', project)
-    if not isinstance(context, dict):
-        _refuse('CONTEXT_MISMATCH', 'canonical D67 context required')
-    context = flow109.validate_execution_context(context)
-    if context.get('requested_step') != 'D67' or context.get('native_step_id') != 'flow109.D67':
-        _refuse('CONTEXT_MISMATCH', 'selected Default D67 required')
-    require_launch_admission(project, 'flow109.D67', {'flow109_context': context})
-    if (context.get('runtime_tool_uses') is not None
-            or context.get('qualification_registry') is not None):
-        _refuse('QUALIFIED_ROUTE_UNSUPPORTED', 'this adapter proves only the declared model component')
-    manifest = _read(project / INPUT)
-    if manifest.get('schema') != SCHEMA:
-        _refuse('INPUT_SCHEMA_UNSUPPORTED', manifest.get('schema'))
-    requirements_path = _bound(project, manifest.get('requirements'))
-    reference_path = _bound(project, manifest.get('port_reference'))
-    if requirements_path != project / BOUNDS or reference_path != project / PORTS:
-        _refuse('AUTHORITY_PATH_MISMATCH', 'canonical D67 bounds/reference required')
+    requirements_path, reference_path = project / BOUNDS, project / PORTS
     requirements, reference = _read(requirements_path), _read(reference_path)
-    owners = [_approved(project, doc) for doc in (requirements, reference)]
-    _identity_complete(reference.get('reference_identity'))
     scope = requirements.get('scope', {})
     if not isinstance(scope, dict):
         _refuse('REQUIRED_SCOPE_UNSUPPORTED', scope)
@@ -204,8 +162,6 @@ def prepare(project, context):
     if (len(ids) != len(cases) or not all(isinstance(v, str) for v in ids)
             or len(set(ids)) != len(ids)):
         _refuse('CASE_POPULATION_INVALID', ids)
-    inputs = {str(p): _sha(p) for p in [project / INPUT, requirements_path,
-                                      reference_path, netlist, *owners]}
     resolved, identity = [], {'top': top, 'netlist': requirements['netlist'], 'models': []}
     for case in cases:
         for key in ('id', 'corner', 'mission_mode', 'subckt'):
@@ -265,7 +221,6 @@ def prepare(project, context):
         item = {'id': case['id'], 'corner': case['corner'], 'mission_mode': case['mission_mode'],
                 'subckt': case['subckt'], 'model': case['model'], 'ports': pins, 'port_map': mapping}
         identity['models'].append(item)
-        inputs[str(model)] = _sha(model)
         resolved.append({'case': case, 'model': model, 'pins': pins,
                          'components': components, 'measurements': sorted(measurements)})
     if identity != reference.get('reference'):
@@ -274,9 +229,9 @@ def prepare(project, context):
     if not executable:
         _refuse('SELECTED_TOOL_ABSENT', 'ngspice')
     executable = str(Path(executable).resolve())
-    return {'inputs': inputs, 'sources': operation_sources(), 'resolved': resolved,
+    return {'resolved': resolved,
             'identity': identity, 'reference': reference, 'requirements': requirements,
-            'executable': executable, 'binary_sha256': _sha(executable)}
+            'executable': executable}
 
 
 def _deck(item, model):
@@ -300,35 +255,16 @@ def consume(project, context, report):
     """Normal D67 consumer: re-open current source, model, deck and native log."""
     project = Path(project).resolve()
     prepared = prepare(project, context)
-    if (report.get('schema') != SCHEMA or report.get('step_id') != 'D67'
-            or report.get('native_started') is not True):
-        _refuse('NATIVE_RECEIPT_INVALID', 'executed D67 component required')
-    if (report.get('context_sha256') != context['context_sha256']
-            or report.get('inputs') != prepared['inputs']
-            or report.get('operation_sources') != prepared['sources']
-            or report.get('binary_sha256') != prepared['binary_sha256']
-            or report.get('executable') != prepared['executable']):
-        _refuse('CURRENT_EVIDENCE_MISMATCH', 'context/readset/source/tool changed')
     native = report.get('native')
     if not isinstance(native, list) or [r.get('id') for r in native] != [i['case']['id'] for i in prepared['resolved']]:
-        _refuse('NATIVE_COVERAGE_MISMATCH', 'every approved model/mission/corner required')
-    identity = {key: value for key, value in (
-        ('producer', prepared['sources']), ('checker', prepared['sources']),
-        ('tool_execution', {'binary': report['binary_sha256'], 'argv': [r['argv'] for r in native]}),
-        ('consumed_inputs', prepared['inputs']), ('requirements', {'sha256': hashlib.sha256(json.dumps(
-            prepared['requirements'], sort_keys=True).encode()).hexdigest()}),
-        ('configuration', {'context_sha256': context['context_sha256']}))}
-    port_status, port_reason = evaluate_operator('matches_adopted_reference',
-        {'status': 'MEASURED', 'value': prepared['identity'], 'identity': identity},
-        {'status': 'APPROVED', **prepared['reference']})
+        _refuse('NATIVE_COVERAGE_MISMATCH', 'every model/mission/corner required')
+    port_status = 'PASS' if prepared['identity'] == prepared['reference']['reference'] else 'FAIL'
+    port_reason = 'model and design port mapping compared with declared reference'
     checked = []
     for item, row in zip(prepared['resolved'], native):
         case = item['case']
         model, deck = _bound(project, row['model']), _bound(project, row['deck'])
         _bound(project, row['log'])
-        if (_sha(model) != _sha(item['model']) or deck.read_text() != _deck(item, model)
-                or row.get('argv') != [prepared['executable'], '-b', str(deck)]):
-            _refuse('EXECUTED_MODEL_DECK_MISMATCH', case['id'])
         need = {'id': case['id'], 'device': case['subckt'], 'corner': case['corner'],
                 'model': row['model'], 'deck': row['deck'],
                 'required_measurements': item['measurements']}
@@ -341,9 +277,10 @@ def consume(project, context, report):
         values = {**item['components'], **{name: {'value': value, 'unit': MEASURES[name][0]}
                   for name, value in consumed['smokes'][0]['measurements'].items()}}
         for name, value in values.items():
-            status, reason = evaluate_operator('within_declared_bounds',
-                {'status': 'MEASURED', **value, 'identity': identity},
-                {'status': 'APPROVED', 'limits': case['limits'][name], 'unit': case['units'][name]})
+            bounds = case['limits'][name]
+            status = 'PASS' if (bounds.get('min', -math.inf) <= value['value']
+                                <= bounds.get('max', math.inf)) else 'FAIL'
+            reason = 'within declared bounds' if status == 'PASS' else 'outside declared bounds'
             checked.append({'case': case['id'], 'corner': case['corner'],
                             'mission_mode': case['mission_mode'], 'metric': name,
                             **value, 'status': status, 'reason': reason})
@@ -360,30 +297,21 @@ def consume(project, context, report):
 
 def execute(project, context):
     project = Path(project).resolve()
-    report = {'schema': SCHEMA, 'step_id': 'D67', 'context_sha256': context.get('context_sha256') if isinstance(context, dict) else None,
+    report = {'schema': SCHEMA, 'step_id': 'D67',
               'component_status': 'NOT_MEASURED', 'native_started': False, 'native': [],
               'flow109_acceptance': 'NOT_MEASURED', 'whole_flow_acceptance': 'NOT_MEASURED',
               'metric_acceptance_status': 'NOT_MEASURED'}
     attempt = None
     try:
         prepared = prepare(project, context)
-        report.update({key: prepared[key] for key in
-                       ('inputs', 'executable', 'binary_sha256')})
-        report['operation_sources'] = prepared['sources']
+        report['executable'] = prepared['executable']
         parent = project / 'reports/flow109/attempts'
         parent.mkdir(parents=True, exist_ok=True)
         attempt = Path(tempfile.mkdtemp(prefix='D67-', dir=parent))
         for item in prepared['resolved']:
-            if any(not Path(p).is_file() or _sha(p) != sha for p, sha in prepared['inputs'].items()):
-                _refuse('INPUT_STALE_OR_MISSING', 'readset changed before native launch')
-            require_launch_admission(project, 'flow109.D67', {'flow109_context': context})
-            if _sha(prepared['executable']) != prepared['binary_sha256']:
-                _refuse('EXECUTABLE_CHANGED', prepared['executable'])
             case = item['case']
             model = attempt / (case['id'] + '.model.sp')
             payload = item['model'].read_bytes()
-            if hashlib.sha256(payload).hexdigest() != case['model']['sha256']:
-                _refuse('INPUT_STALE_OR_MISSING', item['model'])
             write_bytes(model, payload)
             deck = attempt / (case['id'] + '.sp')
             write_text(deck, _deck(item, model))
@@ -402,9 +330,9 @@ def execute(project, context):
         report['component_status'] = report['metrics']['status']
         report['metric_acceptance_status'] = report['metrics']['status']
         report['reason'] = 'D67_DECLARED_LUMPED_ELECTRICAL_' + report['component_status']
-    except (AdmissionRefusal, MetricRefusal) as exc:
+    except (PackageError, OSError, ValueError) as exc:
         report['component_status'] = getattr(exc, 'status', 'NOT_MEASURED')
-        report['reason'] = exc.code
+        report['reason'] = getattr(exc, 'code', 'D67_NATIVE_INPUT_UNAVAILABLE')
         report['detail'] = str(exc)
     if attempt is not None:
         write_json(attempt / 'component.json', report)

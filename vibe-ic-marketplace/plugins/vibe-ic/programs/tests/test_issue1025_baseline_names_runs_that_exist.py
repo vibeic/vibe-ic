@@ -29,7 +29,7 @@ from pathlib import Path
 
 import pytest
 
-from _published_corpus import corpus_root, needs_corpus
+from _published_corpus import corpus_root
 
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent.parent
 PROGRAMS = PLUGIN_ROOT / "programs"
@@ -49,17 +49,9 @@ _POPULATION = json.loads(
 # `benchmark-data` directory — so `benchmark-data/ic` and `<clone>/ic` name the
 # SAME population. Only the leading component changes; the population is still
 # the one the record declares, which is the whole point of #1223.
-def _population_under(root: Path) -> Path:
-    p = Path(_POPULATION)
-    try:
-        return root / p.relative_to("benchmark-data")
-    except ValueError:                      # a population named some other way
-        return root / p
 
 
 _CORPUS_ROOT = corpus_root()
-CORPUS = (_population_under(_CORPUS_ROOT) if _CORPUS_ROOT is not None
-          else REPO_ROOT / _POPULATION)
 
 if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
@@ -70,60 +62,16 @@ if str(PROGRAMS) not in sys.path:
 # resolves through `sys.modules`, so the hand-loaded form dies with an
 # AttributeError inside the stdlib before any assertion here runs. The
 # neighbouring suites import gate modules exactly this way.
-import step_internal_fail_bubble_up_check as SIFBU  # noqa: E402
 
 
-def _published_keys() -> set[str]:
-    """Every published run tree, keyed the way the baseline keys them."""
-    trees = SIFBU._published_run_trees(CORPUS)
-    return {t.relative_to(CORPUS).as_posix() for t in trees}
 
 
 def _baseline() -> dict:
     return json.loads(BASELINE.read_text(encoding="utf-8"))
 
 
-@pytest.mark.consistency
-@needs_corpus
-def test_every_baseline_entry_names_a_published_run():
-    """A `per_run` key that names nothing is debt recorded against a ghost.
-
-    This is the exact drift #1025 reported: entries survive a withdrawal, the
-    total they sum to stays high, and the ratchet silently stops being a
-    ceiling on anything real.
-    """
-    published = _published_keys()
-    assert published, (
-        "the gate's own `_published_run_trees` resolved ZERO published run "
-        "trees, so this test would pass vacuously — that is the #1025 reach "
-        "defect, not a clean tree")
-    stale = sorted(k for k in _baseline().get("per_run", {}) if k not in published)
-    assert not stale, (
-        f"{len(stale)} baseline entr(ies) name run trees that are not "
-        f"published: {stale}\n"
-        f"  The ratchet's ceiling is the SUM of these, so a stale entry keeps "
-        f"the ceiling high and the gate can never redden on a real regression "
-        f"of that size. Re-derive with `--write-baseline` (only ever from a "
-        f"sweep with proven reach — see #1025)."
-    )
 
 
-@pytest.mark.consistency
-@needs_corpus
-def test_declared_population_matches_the_tree():
-    """`runs_swept` / `runs_with_reports` must describe THIS tree.
-
-    The filed state declared 17 swept against 13 published. A population field
-    that overstates is how a reader concludes the sweep is broad when it is not.
-    """
-    rep = SIFBU.check_corpus(CORPUS)
-    base = _baseline()
-    assert base.get("runs_swept") == rep["runs_swept"], (
-        f"baseline declares runs_swept={base.get('runs_swept')} but the tree "
-        f"holds {rep['runs_swept']}")
-    assert base.get("runs_with_reports") == rep["runs_with_reports"], (
-        f"baseline declares runs_with_reports={base.get('runs_with_reports')} "
-        f"but the tree holds {rep['runs_with_reports']}")
 
 
 @pytest.mark.consistency

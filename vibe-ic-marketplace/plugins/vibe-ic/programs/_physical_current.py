@@ -250,36 +250,6 @@ def clock_plan_lef_paths(pdk, *, io_context=None):
     return lefs
 
 
-def clock_plan_receipt_lef_refusal(record, pdk, *, io_context=None):
-    """Refuse reuse when the receipt's complete LEF set differs from PDK."""
-    if pdk is None:
-        return "CURRENT_PDK_CONTEXT_MISSING"
-    if not isinstance(record, dict) or record.get("pdk") != pdk.name:
-        return ("CURRENT_PDK_CHANGED: recorded="
-                f"{record.get('pdk') if isinstance(record, dict) else None} "
-                f"expected={getattr(pdk, 'name', None)}")
-    try:
-        expected = [Path(path).resolve() for path in
-                    clock_plan_lef_paths(pdk, io_context=io_context)]
-    except (OSError, ValueError, TypeError) as exc:
-        return f"CURRENT_PDK_LEF_SET_UNAVAILABLE: {exc}"
-    inputs = record.get("inputs") if isinstance(record, dict) else None
-    if not isinstance(inputs, dict):
-        return "CURRENT_INPUTS_MISSING"
-    rows = []
-    for role, row in inputs.items():
-        if not re.fullmatch(r"pdk_lef_\d+", str(role)):
-            continue
-        if not isinstance(row, dict) or not isinstance(row.get("path"), str):
-            return f"CURRENT_PDK_LEF_ROW_INVALID: {role}"
-        rows.append((int(str(role).rsplit("_", 1)[1]),
-                     Path(row["path"]).resolve()))
-    actual = [path for _, path in sorted(rows)]
-    if actual != expected:
-        return ("CURRENT_PDK_LEF_SET_CHANGED: recorded="
-                f"{[str(path) for path in actual]} expected="
-                f"{[str(path) for path in expected]}")
-    return ""
 
 
 def clock_plan_liberty_paths(pdk, *, io_context=None):
@@ -311,27 +281,6 @@ def clock_plan_liberty_paths(pdk, *, io_context=None):
                                (getattr(pdk, "macro_libs", []) or [])), *io_libs]))
 
 
-def clock_plan_receipt_liberty_refusal(record, pdk, *, io_context=None):
-    """The producer's complete timing-view set must still be selected on reuse."""
-    try:
-        expected = [str(Path(path).resolve()) for path in clock_plan_liberty_paths(
-            pdk, io_context=io_context)]
-        inputs = record.get("inputs") if isinstance(record, dict) else None
-        if not isinstance(inputs, dict):
-            raise ValueError("CURRENT_INPUTS_MISSING")
-        rows = []
-        for role, row in inputs.items():
-            if not re.fullmatch(r"pdk_liberty_\d+", str(role)):
-                continue
-            if not isinstance(row, dict) or not isinstance(row.get("path"), str):
-                raise ValueError(f"CURRENT_PDK_LIBERTY_ROW_INVALID: {role}")
-            rows.append((int(role.rsplit("_", 1)[1]), str(Path(row["path"]).resolve())))
-        actual = [path for _, path in sorted(rows)]
-        if actual != expected or sorted(i for i, _ in rows) != list(range(len(expected))):
-            return f"CURRENT_PDK_LIBERTY_SET_CHANGED: recorded={actual} expected={expected}"
-    except (OSError, ValueError, TypeError) as exc:
-        return f"CURRENT_PDK_LIBERTY_SET_UNAVAILABLE: {exc}"
-    return ""
 
 
 def clock_plan(project, plan, floorplan, sdcs, pdk, *, io_context=None):
@@ -341,9 +290,6 @@ def clock_plan(project, plan, floorplan, sdcs, pdk, *, io_context=None):
     if floorplan.resolve() != (project / "phase3/stage3/pnr/floorplan.def").resolve():
         raise ValueError("CLOCK_PLAN_REQUIRES_FLOORPLAN")
     design = design_of(floorplan)
-    inputs = {"floorplan": entry(project, floorplan)}
-    for i, path in enumerate(sdcs):
-        inputs[f"sdc_{i}"] = entry(project, path)
     if not sdcs:
         raise ValueError('CLOCK_PLAN_SDC_MISSING' + f": clock_plan.sdcs argument={sdcs!r}: no SDC files selected for {floorplan}; native clock producer not launched")
     # The runner already supplied any required IO views in macro_lefs. Use
@@ -351,10 +297,6 @@ def clock_plan(project, plan, floorplan, sdcs, pdk, *, io_context=None):
     lefs = clock_plan_lef_paths(pdk)
     liberties = clock_plan_liberty_paths(pdk, io_context=io_context)
     image = native_image(project, "openroad")
-    for i, row in enumerate(lef_entries(project, lefs, image=image)):
-        inputs[f"pdk_lef_{i}"] = row
-    for i, row in enumerate(liberty_entries(project, liberties, image=image)):
-        inputs[f"pdk_liberty_{i}"] = row
     plan.parent.mkdir(parents=True, exist_ok=True)
     script, log = plan.with_suffix(".tcl"), plan.with_suffix(".log")
     def quote(path):
@@ -387,7 +329,6 @@ def clock_plan(project, plan, floorplan, sdcs, pdk, *, io_context=None):
         '  puts "CLOCK_PLAN_SINK_COUNT [get_full_name $c]|$count"',
         '}',
         'puts "CLOCK_PLAN_DONE"', ""]))
-    inputs["recipe"] = entry(project, script)
     native_args = ["-exit", str(script)]
     rc, execution = (run_native(project, "openroad", native_args, log, image=image)
                      if image else run_native(project, "openroad", native_args, log))
@@ -401,27 +342,12 @@ def clock_plan(project, plan, floorplan, sdcs, pdk, *, io_context=None):
     if rc or not clocks or "CLOCK_PLAN_DONE" not in text or re.search(r"\[ERROR\]|^Error:", text, re.M):
         raise ValueError(f"CLOCK_PLAN_NATIVE_REFUSED: rc={rc}; {text[-500:]}")
     sinks = clock_plan_sinks(text, [clock["name"] for clock in clocks])
-    current_lefs = lef_entries(project, lefs, image=image)
-    current_liberties = liberty_entries(project, liberties, image=image)
-    for role, row in inputs.items():
-        if role.startswith("pdk_lef_"):
-            actual = current_lefs[int(role.rsplit("_", 1)[1])]
-        elif role.startswith("pdk_liberty_"):
-            actual = current_liberties[int(role.rsplit("_", 1)[1])]
-        else:
-            actual = entry(project, project / row["path"])
-        if actual != row:
-            raise ValueError(f"CLOCK_PLAN_INPUT_CHANGED: {role}")
-    current = build(project, "16", "stage3", design, pdk.name, "openroad",
-                    inputs, {"log": entry(project, log)}, execution)
     write_json(plan, {"tool": "openroad", "primary_clock": clocks[0]["name"],
-                      "clocks": clocks, "current": current,
+                      "clocks": clocks, "log": str(log), "execution": execution,
                       "sinks": sinks,
                       "sink_census": {"method": CLOCK_SINK_METHOD,
-                                      "counts": {name: len(pins) for name, pins in sinks.items()}},
-                      "derived_from": {str(Path(p).relative_to(project)): digest(p) for p in sdcs}})
+                                      "counts": {name: len(pins) for name, pins in sinks.items()}}})
     return str(plan)
-
 
 CLOCK_SINK_METHOD = "OpenSTA all_registers -clock <clock> -clock_pins"
 

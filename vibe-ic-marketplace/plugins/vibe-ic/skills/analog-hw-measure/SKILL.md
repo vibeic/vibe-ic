@@ -57,10 +57,7 @@ deterministic — do NOT re-derive it by hand each run. Once you have a
 captured scope CSV (`time,voltage`), invoke the program so the numbers come
 out identically every time:
 
-```bash
-python3 programs/scope_waveform_metrics.py <scope_csv> \
-    [--spec analog/<block>/spec.json] [--json analog/<block>/hw_measurements.json]
-```
+Read the actual scope trace with its sampling interval and voltage scale. Measure the required levels, periods, edges or response timing and compare them with the original electrical/protocol limits.
 
 It emits `{dc_level, rise_time, settling_time, overshoot, freq, jitter}` and,
 when a spec JSON with per-metric `min`/`max` is given, a per-spec
@@ -111,19 +108,5 @@ only freezes the arithmetic on a capture you already judged good.
 ## Handoff
 
 - `hw_measurements.json` → `analog-hw-tuning-loop` for three-way comparison
-- Scope CSV files → `scope_response_byte_decode_check` (if protocol testing)
+- Scope CSV files → native protocol decoding and source-required byte comparison
 - If any measurement FAIL → report to tuning loop for sizing adjustment
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/analog-hw-measure/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-
-**Your task is not complete until the audit returns PASS.**

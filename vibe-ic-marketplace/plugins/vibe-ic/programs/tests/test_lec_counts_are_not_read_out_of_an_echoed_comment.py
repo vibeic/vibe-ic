@@ -104,57 +104,8 @@ def test_the_stripper_keeps_paths_and_mid_line_slashes():
     assert lec_run.strip_echoed_hdl_comments("") == ""
 
 
-def _declaration_scan_offenders():
-    """The offender NAMES the declaration-scan gate reports on this tree.
-
-    Returns a list. Raises if the gate did not actually answer — an empty check
-    and a clean check print the same, and this helper refuses to confuse them.
-    """
-    import re as _re
-    import subprocess
-    proc = subprocess.run(
-        # `--root` NAMED (vibe-ic#2199): `SCRIPT.parent` is programs/, so its
-        # parent is the shipped plugin -- the tree this arm has always meant.
-        [sys.executable,
-         str(SCRIPT.parent / "hdl_declaration_scan_strips_comments_check.py"),
-         "--root", str(SCRIPT.parent.parent)],
-        capture_output=True, text=True, timeout=900)
-    assert proc.returncode in (0, 1), (
-        "the gate did not reach a verdict (rc=%s); that is NOT a clean tree\n%s"
-        % (proc.returncode, proc.stdout + proc.stderr))
-    if proc.returncode == 0:
-        assert "newly scan text no stripper touched" not in proc.stdout
-        return []
-    m = _re.search(r"newly scan text no stripper touched:\n((?:\s+\S+\n)+)",
-                   proc.stdout)
-    assert m, ("the gate exited 1 but printed no offender block; nothing was "
-               "parsed, so nothing may be concluded\n" + proc.stdout)
-    return [ln.strip() for ln in m.group(1).splitlines() if ln.strip()]
 
 
-def test_this_regex_is_not_among_the_declaration_scan_offenders():
-    """THE PROPERTY THIS FILE OWNS, asserted as MEMBERSHIP.
-
-    It used to assert `returncode == 0` — that the WHOLE tree was clean. That is
-    a claim about every regex in the repo, and it was true when written: the gate
-    exited 0 at dd85b42cee. At e812321b0f it exits 1 because FOUR offenders
-    landed that are not mine and are not in this file's power to fix:
-    canonical_primitive_synth (x2), design_one_shot_runner,
-    phase1_doc_one_shot_runner. Measured on both trees: base names 5 including
-    mine, this branch names the same list MINUS mine and adds none.
-
-    So the assertion is re-aimed at what this change actually did, and it is
-    aimed WIDER than the one line it fixed, not narrower — the ratchet is on
-    MEMBERSHIP, not on a count (vibe-ic#900):
-      * the regex this file exists for must be ABSENT, and
-      * NO lec_run offender of ANY name may be present, so a different one of
-        mine cannot arrive unnoticed, and
-      * `_declaration_scan_offenders` fails if the gate did not answer at all.
-    """
-    offenders = _declaration_scan_offenders()
-    assert "lec_run::lec_proved_points_from_output::_INDUCT_FOUND_RE(raw)" \
-        not in offenders, offenders
-    assert [o for o in offenders if o.startswith("lec_run::")] == [], offenders
 
 
 def test_the_polarity_of_the_line_is_consulted_for_all_three_patterns():

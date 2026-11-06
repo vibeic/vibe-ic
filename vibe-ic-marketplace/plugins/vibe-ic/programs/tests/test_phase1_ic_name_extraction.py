@@ -6,7 +6,7 @@ remained "UNKNOWN_IC" because the prior heuristic only matched
 chip-style part numbers like EXAMPLE_CHIP / EXAMPLE_TESTER."""
 from __future__ import annotations
 
-from programs.phase1_one_shot_runner import _ic_name_from_docs
+from programs.phase1_doc_one_shot_runner import _ic_name_from_docs
 
 
 # ---------------------------------------------------------------------------

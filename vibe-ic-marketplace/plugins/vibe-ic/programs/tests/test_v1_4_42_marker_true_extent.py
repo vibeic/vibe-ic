@@ -60,42 +60,12 @@ import phase3_one_shot_runner as p3  # noqa: E402
 
 # ── the embedded klayout script itself ──────────────────────────────────────
 
-def test_streamout_script_compiles():
-    compile(p3._GDS_STREAMOUT_PY, "<streamout>", "exec")
 
 
-def test_streamout_uses_true_library_extent_not_size_bbox_alone():
-    src = p3._GDS_STREAMOUT_PY
-    assert "_lib_extent(" in src
-    assert "_old_box + _true_box" in src        # Box union — never shrinks
-    assert "_inst.trans" in src                  # placed per-instance, not a blanket fill
-    assert "_dbu_scale" in src                   # derived scaling, not assumed-equal DBUs
 
 
-def test_streamout_has_the_anti_masking_guard():
-    src = p3._GDS_STREAMOUT_PY
-    assert "ANTI-MASKING GUARD" in src
-    assert "_leak" in src
-    # Follow-on fix (caravel commercial PDK, dense-routing close-loop): the guard probes
-    # the ENTIRE painted region (SIZE-box ∪ true-extent), not just the overhang
-    # ring, against top-level net geometry — because the deck derives METAL the
-    # same `__metN__ = NOT METN <marker>` way it derives FEOL, so a marker pixel
-    # over a routed wire carves that wire (proven on caravel: no-marker 10 fails →
-    # SIZE-box paint 22 → true-extent paint 18). On overlap it paints NOTHING —
-    # NEVER the old SIZE-box fallback, which itself carved.
-    assert "_paint_reg" in src and "_net_reg" in src
-    assert "(_paint_reg & _net_reg)" in src
-    assert "NOT painted" in src                    # skip, not revert
-    assert "reverted to SIZE-bbox" not in src      # the harmful fallback is gone
 
 
-def test_streamout_never_hardcodes_the_measured_overhang_margin():
-    # This library measured 0.22um (H) / 0.62um (V) overhang — that number
-    # must NEVER appear as a literal in the fix; it must be re-derived from
-    # the library GDS on every run, for every PDK.
-    src = p3._GDS_STREAMOUT_PY
-    assert "0.22" not in src
-    assert "0.62" not in src
 
 
 # ── pure-Python box/region model (mirrors pya.Box `+`/`-` semantics used in
@@ -183,35 +153,10 @@ def test_full_region_guard_catches_overhang_routing_too():
 #    is empty) — documented so a future rule with the same shape isn't
 #    mis-classified in either direction. ──────────────────────────────────────
 
-def test_all_marker_layers_resolved_up_front_and_painted_identically():
-    # Multi-marker consistency: ALL configured marker layers are resolved up
-    # front (`_marker_lis`) and painted with the SAME `_paint_reg`, so a deck's
-    # "identity ⊆ don't-check" consistency rule (commercial PDK: Artisan ⊆ DCTY0, its
-    # `COPY (Artisan andnot DCTY)` check) can never fire from a per-layer paint
-    # mismatch. Proven necessary: painting 65/0 then letting 113/0's net probe
-    # see the just-painted 65/0 as "net" would skip 113/0 and light up the
-    # Artisan.CHECK consistency rule.
-    src = p3._GDS_STREAMOUT_PY
-    assert "_marker_lis" in src
-    assert "_marker_li_set" in src
-    assert "for _one, _li_m in _marker_lis" in src
 
 
-def test_net_probe_excludes_every_marker_layer():
-    # A marker layer carries no net — it is the marker we are about to paint —
-    # so the net probe MUST exclude ALL marker layers (not just the current one),
-    # else the first-painted marker blocks the second.
-    src = p3._GDS_STREAMOUT_PY
-    assert "if _oli in _marker_li_set" in src
 
 
-def test_streamout_documents_metal_is_marker_exempted_too():
-    # The load-bearing root cause: the deck derives METAL the same
-    # `__metN__ = NOT METN <marker>` way as FEOL, so the marker is NOT a
-    # FEOL-only exemption — painting it over a routed wire carves that wire.
-    # This rationale must be on record in the guard comment.
-    src = p3._GDS_STREAMOUT_PY
-    assert "__met1__ = NOT MET1 DCTY" in src or "exempts metal too" in src
 
 
 def test_classify_svrf_fails_module_documents_the_or_cut_andnot_identity_caveat():

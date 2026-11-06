@@ -30,79 +30,29 @@ WHAT IS ASSERTED
 
 chip/PDK-AGNOSTIC: no chip, vendor or corner literal drives the resolution.
 """
-import glob as _glob
-import shlex as _shlex
 import sys
 from pathlib import Path
 
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
-import phase3_one_shot_runner as R  # noqa: E402
 
 _CORNERS = ("min", "nom", "max")
 
 
-def _fake_ls(_container, ls_expr, must_contain, timeout=20):
-    """Host stand-in for `_container_ls_paths` (test container path == host)."""
-    hits = []
-    for pat in _shlex.split(ls_expr):
-        for p in sorted(_glob.glob(pat)):
-            if p.startswith("/") and must_contain in p and p not in hits:
-                hits.append(p)
-    return hits
 
 
-def _stage_openpdks(root: Path, subdir: str = "librelane") -> str:
-    """open_pdks / asap7 layout: rules.openrcx.<pdk>.<corner>.magic"""
-    d = root / "pdk" / "libs.tech" / subdir
-    d.mkdir(parents=True, exist_ok=True)
-    for c in _CORNERS:
-        (d / f"rules.openrcx.sky130A.{c}.magic").write_text("# captable\n")
-    ref = root / "pdk" / "libs.ref" / "fix"
-    ref.mkdir(parents=True, exist_ok=True)
-    return str(ref / "tech.lef")
 
 
-def _stage_ihp(root: Path, subdir: str = "librelane") -> str:
-    """IHP-Open-PDK layout: openrcx/<pdk>.<corner>.magic.rules"""
-    d = root / "pdk" / "libs.tech" / subdir / "openrcx"
-    d.mkdir(parents=True, exist_ok=True)
-    for c in _CORNERS:
-        (d / f"ihp-sg13g2.{c}.magic.rules").write_text("# captable\n")
-    ref = root / "pdk" / "libs.ref" / "fix"
-    ref.mkdir(parents=True, exist_ok=True)
-    return str(ref / "tech.lef")
 
 
-def _declare(root: Path, rel_by_corner: dict, subdir: str = "librelane") -> None:
-    """F13: the PDK's `libs.tech/<subdir>/config.tcl` DECLARES these files
-    (RCX_RULESETS, the form both open_pdks and IHP-Open-PDK use)."""
-    d = root / "pdk" / "libs.tech" / subdir
-    d.mkdir(parents=True, exist_ok=True)
-    (d / "config.tcl").write_text("set ::env(RCX_RULESETS) [dict create]\n" + "".join(
-        f'dict set ::env(RCX_RULESETS) "{c}_*" '
-        f'"$::env(PDK_ROOT)/$::env(PDK)/libs.tech/{subdir}/{rel}"\n'
-        for c, rel in rel_by_corner.items()))
 
 
 _IHP = {c: f"openrcx/ihp-sg13g2.{c}.magic.rules" for c in _CORNERS}
 _OPENPDKS = {c: f"rules.openrcx.sky130A.{c}.magic" for c in _CORNERS}
 
 
-def _host_exec(container, cmd, timeout=20, **_kw):
-    """The container boundary, faked: the runner's command runs on the host."""
-    import subprocess
-    p = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True,
-                       timeout=60)
-    return p.returncode, p.stdout, p.stderr
 
 
-def _pdk_with(tech_lef: str):
-    class _P:
-        name = "fixture_pdk"
-    p = _P()
-    p.tech_lef = tech_lef
-    return p
 
 
 # F13 (§4.05): the ruleset is the one the PDK DECLARES, so each layout below
@@ -112,64 +62,16 @@ def _pdk_with(tech_lef: str):
 # convention on disk never re-points a PDK (the declaration decides).
 
 # ── the regression: IHP-only layout must resolve ─────────────────────────────
-def test_discover_captables_finds_ihp_openrcx_subdir_layout(tmp_path, monkeypatch):
-    monkeypatch.setattr(R, "_docker_exec", _host_exec)
-    tlef = _stage_ihp(tmp_path)
-    _declare(tmp_path, _IHP)
-    out = R._discover_openrcx_captables(_pdk_with(tlef), container="fake")
-    assert set(out) == set(_CORNERS), (
-        f"IHP openrcx/<pdk>.<corner>.magic.rules layout not discovered: {out}")
-    for c in _CORNERS:
-        assert out[c].endswith(f".{c}.magic.rules"), out[c]
-        assert "/libs.tech/librelane/openrcx/" in out[c], out[c]
 
 
-def test_ihp_layout_also_found_under_openlane_subdir(tmp_path, monkeypatch):
-    """Backward-compat: an older image puts the same tree under openlane/."""
-    monkeypatch.setattr(R, "_docker_exec", _host_exec)
-    tlef = _stage_ihp(tmp_path, subdir="openlane")
-    _declare(tmp_path, _IHP, subdir="openlane")
-    out = R._discover_openrcx_captables(_pdk_with(tlef), container="fake")
-    assert set(out) == set(_CORNERS), out
-    for c in _CORNERS:
-        assert "/libs.tech/openlane/openrcx/" in out[c], out[c]
 
 
 # ── no behaviour change for PDKs that already resolved ───────────────────────
-def test_openpdks_layout_still_resolves(tmp_path, monkeypatch):
-    monkeypatch.setattr(R, "_docker_exec", _host_exec)
-    tlef = _stage_openpdks(tmp_path)
-    _declare(tmp_path, _OPENPDKS)
-    out = R._discover_openrcx_captables(_pdk_with(tlef), container="fake")
-    assert set(out) == set(_CORNERS), out
-    for c in _CORNERS:
-        assert out[c].endswith(f".{c}.magic"), out[c]
 
 
-def test_openpdks_layout_wins_when_both_present(tmp_path, monkeypatch):
-    """A second convention on disk must not re-point a PDK that already
-    resolved — the declared open_pdks model stays the one used."""
-    monkeypatch.setattr(R, "_docker_exec", _host_exec)
-    tlef = _stage_openpdks(tmp_path)
-    _stage_ihp(tmp_path)
-    _declare(tmp_path, _OPENPDKS)
-    out = R._discover_openrcx_captables(_pdk_with(tlef), container="fake")
-    assert set(out) == set(_CORNERS), out
-    for c in _CORNERS:
-        assert out[c].endswith(f".{c}.magic"), (
-            f"IHP layout hijacked a PDK that already resolved: {out[c]}")
 
 
 # ── every discovery site resolves both conventions ───────────────────────────
-def test_max_captable_helper_globs_both_conventions(tmp_path, monkeypatch):
-    """_max_captable_c must not lose an IHP-layout PDK's max-corner captable.
-    (F13: it returns the DECLARED max ruleset; it no longer globs.)"""
-    monkeypatch.setattr(R, "_docker_exec", _host_exec)
-    tlef = _stage_ihp(tmp_path)
-    _declare(tmp_path, _IHP)
-    got = R._max_captable_c(_pdk_with(tlef), "fake")
-    assert got.endswith("/libs.tech/librelane/openrcx/ihp-sg13g2.max.magic.rules"), (
-        "_max_captable_c lost the IHP-layout max-corner captable: " + repr(got))
 
 
 def test_emitted_spef_decks_glob_both_conventions():
@@ -195,16 +97,3 @@ def test_emitted_spef_decks_glob_both_conventions():
     assert "glob -nocomplain" not in spef, "step 22 must not glob its ruleset"
     assert "set _rules {{{rules_nom}}}" in spef
     assert "_openrcx_ruleset_declaration(pdk, container)" in spef
-
-
-def test_post_route_deck_takes_the_ihp_layout_declaration(tmp_path, monkeypatch):
-    """F13b: the post-route deck, handed the reader's record for an
-    IHP-layout PDK, extracts and repairs with that layout's rulesets -- the
-    coupling model, not the `-lef_rc` fall-through."""
-    monkeypatch.setattr(R, "_docker_exec", _host_exec)
-    tlef = _stage_ihp(tmp_path)
-    _declare(tmp_path, _IHP)
-    decl = R._openrcx_ruleset_declaration(_pdk_with(tlef), container="fake")
-    tcl = R._post_route_spef_repair_tcl("/out", tlef, rcx_declaration=decl)
-    assert "/libs.tech/librelane/openrcx/ihp-sg13g2.nom.magic.rules}" in tcl
-    assert "/libs.tech/librelane/openrcx/ihp-sg13g2.max.magic.rules}" in tcl

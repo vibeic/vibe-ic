@@ -37,9 +37,11 @@ Takes a verified analog block (SPICE corner sweep passed, optionally hardware-ve
   `phase3/analog/hardmacro/<block>/<block>.gds` with Magic, against the
   technology the layout's own `tech` line names. `analog_one_shot_runner`
   invokes it at `A8_hardmacro_gen`, before the A8 checks. It is deliberately
-  NOT wired into A8's flow gate: `flow_compliance_check` is the acceptance
-  auditor, and an auditor that writes a declared `required_output` into the
-  project it audits certifies its own output. Do not hand-author a `.gds`.
+  a producer, not a signoff verdict. Inspect the actual Magic output and
+  native tool results in `reports/flow_engine.json` against their original
+  requirements, then AI review each result. Missing native data is
+  `NOT_MEASURED`; producing a declared output does not prove its correctness.
+  Do not hand-author a `.gds`.
 - Its TCL is `magic_port_extract_emit.build_gds_write_tcl` — the same fixed
   `load / select top cell / gds write` template the extraction path uses.
   Between v0.1.114 and 2026-07 that emitter had **no caller at all**, which is
@@ -143,17 +145,3 @@ hardmacro/<block>/
 - LEF → `eda_pnr` `additional_lefs` parameter
 - Liberty → `eda_sta` additional liberty path
 - Behavioral Verilog → `eda_simulate` for mixed-signal gate-level sim
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/analog-hardmacro-gen/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-
-**Your task is not complete until the audit returns PASS.**

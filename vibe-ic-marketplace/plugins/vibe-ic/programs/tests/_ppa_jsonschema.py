@@ -53,7 +53,7 @@ import sys
 import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-from not_verified_tier import not_verified_reason  # noqa: E402
+from _tool_probes import not_verified_reason  # noqa: E402
 from _ppa import schema_validation as _SV  # noqa: E402
 
 # THE REFERENCE LIBRARY, ASKED FOR THROUGH THE ONE PLACE THAT NAMES IT.

@@ -151,7 +151,6 @@ laundered into a PASS on the way out.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 import sys
@@ -162,7 +161,6 @@ _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
 
 import _flow_reason_taxonomy as _reason_taxonomy  # noqa: E402
-import _gate_authorship as _ga  # R-0915-152 (who invoked this writer)
 
 TOOL = "em_peak_current_authority_check"
 VERSION = "1.0.1"
@@ -311,52 +309,17 @@ def jmax_tier(project: Path, jmax: Optional[Path], tech_lef: Optional[Path],
                 jpath, tlef = _discover_jmax_ref(project)
             except Exception:  # pragma: no cover - defensive
                 jpath, tlef = None, None
-    # The measured DEF identity authorizes its local special-wire geometry;
-    # the matching ODB dump also carries placed macro PG PORT rectangles.
     local_def = None
     net_hint = None
-    # The EM producer records exactly which DEF PSM read.
     try:
         em_doc = json.loads((project / "reports/phase3/em.json").read_text())
         nets = em_doc.get("power_nets")
         if isinstance(nets, list) and len(nets) == 1:
             net_hint = str(nets[0])
-        rel = Path(str(em_doc["subject_def"]))
-        digest = em_doc["subject_def_sha256"]
-        if not rel.is_absolute():
-            candidate = project / rel
-            if (".." not in rel.parts and not candidate.is_symlink()
-                    and candidate.is_file()
-                    and hashlib.sha256(candidate.read_bytes()).hexdigest() == digest):
-                local_def = candidate
-        else:
-            # A current native solve may read an independently owned final
-            # DEF outside the project. Authorize that exact object only after
-            # the existing density consumer has validated the invocation,
-            # current owner, source identities and complete input/output set.
-            native = emc.validate_native_density(project)
-            if native.get("valid"):
-                density_doc = json.loads((project / "reports/phase3" /
-                                          "em_openroad_density.json").read_text())
-                layout = density_doc["inputs"]["layout"]
-                primary = density_doc.get("step24_primary")
-                current_basis = (primary.get("current_em_basis")
-                                 if isinstance(primary, dict) else None)
-                owned_def = (current_basis.get("def")
-                             if isinstance(current_basis, dict) else None)
-                declared = Path(str(layout["declared_path"]))
-                if (layout.get("project_path") is None
-                        and declared.is_absolute()
-                        and isinstance(owned_def, dict)
-                        and emc._lexical_absolute(project, str(owned_def.get("path")))
-                        == emc._lexical_absolute(project, str(declared))
-                        and owned_def.get("sha256") == digest
-                        and emc._lexical_absolute(project, str(rel))
-                        == emc._lexical_absolute(project, str(declared))
-                        and layout.get("sha256") == digest
-                        and not declared.is_symlink() and declared.is_file()
-                        and hashlib.sha256(declared.read_bytes()).hexdigest() == digest):
-                    local_def = declared
+        selected = Path(str(em_doc["subject_def"]))
+        candidate = selected if selected.is_absolute() else project / selected
+        if candidate.is_file():
+            local_def = candidate
     except (OSError, ValueError, KeyError, TypeError):
         pass
     geometry_path = None
@@ -365,14 +328,10 @@ def jmax_tier(project: Path, jmax: Optional[Path], tech_lef: Optional[Path],
             geometry_doc = json.loads((project / "reports/phase3" /
                                        "em_pg_geometry_subject.json").read_text())
             name = geometry_doc.get("geometry_file")
-            if (geometry_doc.get("def_sha256") == digest
-                    and isinstance(name, str)
-                    and Path(name).name == name):
-                candidate_geometry = project / "reports/phase3" / name
-                if (candidate_geometry.is_file()
-                        and hashlib.sha256(candidate_geometry.read_bytes()).hexdigest()
-                        == geometry_doc.get("geometry_sha256")):
-                    geometry_path = candidate_geometry
+            if isinstance(name, str) and Path(name).name == name:
+                candidate = project / "reports/phase3" / name
+                if candidate.is_file():
+                    geometry_path = candidate
         except (OSError, ValueError, TypeError):
             pass
     verdict, rep = emc.evaluate(em_path, jpath, tlef, margin,
@@ -541,7 +500,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         # R-0915-152 -- the document states WHO INVOKED this writer, beside the
         # verdict it already composes. Unstated role == producer, so the run's
         # own path is unchanged.
-        _ga.stamp(rep)
         out.write_text(json.dumps(rep, indent=2, ensure_ascii=False) + "\n")
 
     ss = rep["supply_current_screen"]

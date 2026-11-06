@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""_analog_producer_common.py — the exit-code contract and the provenance
-binding shared by the deterministic A-track PRODUCERS.
+"""_analog_producer_common.py — the exit-code contract and metadata helpers shared by the deterministic A-track PRODUCERS.
 
 TWO MEASURED DEFECTS, both of the same family: a published token that means
 two different things, with nothing on the token to say which.
@@ -22,33 +21,6 @@ two different things, with nothing on the token to say which.
     print a line-start token so a caller that reads text rather than rc cannot
     confuse them either.
 
-(2) A DIGEST PUBLISHED AS PROOF NAMED NEITHER THE ARTEFACT NOR THE RUN.
-    The netlist header quoted `sha256=` of its two inputs. Those files embed a
-    wall-clock stamp and an absolute path, so the digest changed on every run
-    even when the design content was byte-identical — measured across SIX
-    sibling run trees of the same inputs, six different quoted digests, and
-    nothing on any of them saying which tree it came from. A digest like that
-    is a per-run nonce wearing the clothes of a content identity: a reader can
-    neither recompute it nor match it to the run being reported.
-
-    Content identity and run identity are two jobs. They get two functions,
-    and both are checkable from bytes that travel WITH the tree — so a run
-    directory copied intact still verifies, and only a record lifted out of
-    one run and dropped into another does not:
-
-      * :func:`content_digest` — identifies the CONTENT. Every provenance
-        comment is removed before hashing, so it is stable across runs of the
-        same inputs and a reader recomputes it from the artefact alone.
-      * :func:`new_run_ref` — identifies ONE EMISSION. A nonce, stamped into
-        the artefact AND into the record beside it, and checked by AGREEMENT
-        rather than by re-derivation. See the function for why deriving it
-        from the run's path is the wrong answer.
-      * :func:`provenance_ref` — the ONE token a report quotes: run, artefact
-        and content in one string, so a digest quoted from a different run is
-        self-evidently from a different run.
-      * :func:`verify_provenance_ref` — the check a reader would otherwise do
-        by hand, shipped so a gate does it on every run.
-
 chip-AGNOSTIC: nothing here knows a design, PDK SKU, vendor or part number.
 """
 from __future__ import annotations
@@ -61,7 +33,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 # ── exit-code contract ────────────────────────────────────────────────────
 #: The producer emitted at least one artefact.
@@ -78,28 +50,6 @@ RC_HONEST_GAP = 2
 #: written, no report was written, and nothing about the project was learned.
 EX_USAGE = 64
 
-#: ENVIRONMENT REFUSED — the producer was correctly invoked against a real
-#: project and the ENVIRONMENT it needs refused it: the container it was told
-#: to use is provably not the pinned image, the pinned image is not on this
-#: host, the tool is not installed. `sysexits.h` EX_UNAVAILABLE.
-#:
-#: WHY IT IS ITS OWN TIER AND NOT ONE OF THE THREE ABOVE (vibe-ic#2088).
-#: MEASURED on 8HD-9, 2026-09-07, against 94617408759e: with the container
-#: named `vibeic-eda` holding `sha256:06537f7e…` while the pin names
-#: `sha256:8c5694ab…`, `analog_a3_netlist_emit --verify-sim` raised
-#: `ContainerImageMismatch` out of `_docker_ok`, exited 1 with a traceback and
-#: wrote NO gap file and NO --json report. The analog runner recorded
-#: `WAIVED A3_netlist_gen … deterministic producer ERRORED rc=1 and wrote NO
-#: gap file`, and A4..A7 then reported BLOCKED on a missing `.sp` — a verdict
-#: about an absence three steps downstream of the real cause.
-#:
-#: An environment refusal is NOT `RC_OK` (nothing was produced), NOT
-#: `RC_NO_INPUT` (the input was there and was read), NOT `RC_HONEST_GAP` (a
-#: gap is a statement about the DESIGN, and this one says nothing about the
-#: design at all) and NOT `EX_USAGE` (the command line was right). Folding it
-#: into any of them is what let a host condition be read as a producer defect.
-#: A caller may translate this tier into NOT_MEASURED and MUST NOT translate
-#: it into a verdict about the subject.
 EX_ENV_REFUSED = 69
 
 #: Line-start tokens, for a caller that reads text rather than an exit code.
@@ -206,58 +156,6 @@ def content_digest(text: str) -> str:
     return hashlib.sha256(("\n".join(body) + "\n").encode("utf-8")).hexdigest()
 
 
-def layout_netlist_identity(lay_doc: dict, netlist_text: str) -> tuple:
-    """Is the A5 layout a layout OF the netlist A7 compares it with?
-
-    `(state, detail)`, state one of MATCH / STALE / UNVERIFIED. A5 records the
-    netlist's content digest (`netlist_content_sha256`); a record written
-    before it did carries only the netlist PATH, and that file -- when it can
-    still be read -- is compared by content instead. Provenance comments never
-    count (`content_digest`), so a byte-identical re-emission is a MATCH."""
-    current = content_digest(netlist_text)
-    # A5 writes its record on EVERY outcome. A record whose own result is not
-    # OK drew nothing, so the layout on disk is from an EARLIER run and the
-    # digest it carries is not the layout's: MEASURED, a redraw the gencell
-    # refused left the 09-15 layout under a record naming the 09-16 netlist.
-    result = lay_doc.get("result")
-    if result not in (None, "OK"):
-        return ("STALE",
-                f"A5's latest record did not draw this layout (result "
-                f"{result}); the layout on disk is from an earlier run")
-    recorded = lay_doc.get("netlist_content_sha256")
-    if isinstance(recorded, str) and recorded:
-        return (("MATCH" if recorded == current else "STALE"),
-                f"layout_provenance netlist_content_sha256={recorded[:12]} vs "
-                f"current A3 netlist {current[:12]}")
-    path = lay_doc.get("netlist")
-    try:
-        drawn = Path(path).read_text(errors="replace") if path else None
-    except OSError:
-        drawn = None
-    if drawn is None:
-        return ("UNVERIFIED", "layout_provenance records no netlist digest and "
-                              f"its netlist path is not readable ({path})")
-    other = content_digest(drawn)
-    return (("MATCH" if other == current else "STALE"),
-            f"the netlist A5 drew ({path}, content {other[:12]}) vs the current "
-            f"A3 netlist (content {current[:12]}); no digest was recorded")
-
-def layout_identity_of_block(bdir: Path, netlist: Path) -> tuple:
-    """`layout_netlist_identity` for a block directory: A5's
-    `layout_provenance.json` against the netlist file on disk. A record that
-    cannot be read is UNVERIFIED, never STALE -- the check refuses only on a
-    measured disagreement."""
-    try:
-        doc = json.loads((bdir / "layout_provenance.json").read_text())
-    except (OSError, ValueError):
-        doc = {}
-    try:
-        text = netlist.read_text(errors="replace")
-    except OSError:
-        return ("UNVERIFIED", f"{netlist} could not be read")
-    return layout_netlist_identity(doc if isinstance(doc, dict) else {}, text)
-
-
 def json_content_digest(raw: str) -> Optional[str]:
     """sha256 over a JSON artefact's CONTENT, with its `_provenance` removed.
 
@@ -304,38 +202,3 @@ def provenance_ref(ref: str, rel_path: str, content_sha: str) -> str:
     indistinguishable 64-hex blob.
     """
     return f"{ref}/{rel_path}@{content_sha[:12]}"
-
-
-def verify_provenance_ref(ref: Any, rel_path: str, text: str) -> Optional[str]:
-    """None when *ref* describes THIS artefact and was produced by the run that
-    stamped it; otherwise the reason it does not.
-
-    Three comparisons, all against bytes that travel WITH the tree, so a whole
-    run directory copied intact still verifies and a record lifted out of one
-    run and dropped into another does not:
-
-      * the run the record claims == the run stamped in the artefact
-      * the artefact the record names == the artefact it was read from
-      * the content digest the record publishes == the artefact's own
-    """
-    if not isinstance(ref, str) or ref.count("/") < 1 or "@" not in ref:
-        return (f"provenance_ref {ref!r} is not in the "
-                f"`<run>/<artefact>@<content>` shape")
-    got_run, rest = ref.split("/", 1)
-    got_path, got_sha = rest.rsplit("@", 1)
-    stamped = stamped_run_ref(text)
-    if stamped is None:
-        return ("the artefact carries no `run_ref` stamp to check the record "
-                "against")
-    if got_run != stamped:
-        return (f"the record names run {got_run} and the artefact beside it is "
-                f"stamped {stamped}. This record was produced by a DIFFERENT "
-                f"run than the artefact it claims to describe")
-    if got_path != rel_path:
-        return (f"the record names artefact {got_path!r}, read from "
-                f"{rel_path!r}")
-    want_sha = content_digest(text)
-    if got_sha != want_sha[:12]:
-        return (f"the record publishes content digest {got_sha} — the "
-                f"artefact on disk digests to {want_sha[:12]}")
-    return None

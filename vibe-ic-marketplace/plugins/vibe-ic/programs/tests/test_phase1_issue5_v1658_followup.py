@@ -26,13 +26,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from programs.phase1_one_shot_runner import (
-    _ic_name_from_docs,
-    _is_valid_ic_name_phrase,
-    _looks_like_ip_token,
-    _trim_h1_to_ip_phrase,
-    gen_l6_control_logic,
-)
+from programs.phase1_doc_one_shot_runner import _ic_name_from_docs, _is_valid_ic_name_phrase, _looks_like_ip_token, _trim_h1_to_ip_phrase, gen_l6_control_logic
 import pytest
 
 

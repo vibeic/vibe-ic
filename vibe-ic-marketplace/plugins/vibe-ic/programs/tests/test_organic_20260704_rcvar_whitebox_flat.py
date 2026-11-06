@@ -10,15 +10,12 @@ design's OWN internal signals hierarchically (dut.<internal>) still sees them.
 The step-level transform is OPT-IN (VIBE_IC_RCVAR_WHITEBOX_FLAT=1) so the shipped
 default stays the wrapper (its #518/#689/#792 guard tests are untouched).
 """
-import os
-import subprocess
 import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 PROG = HERE.parent
 sys.path.insert(0, str(PROG))
-import _outcome_states as states       # noqa: E402
 import reset_clock_variant_alias as R  # noqa: E402
 import design_one_shot_runner as D     # noqa: E402
 
@@ -49,24 +46,6 @@ def test_flat_renames_in_place_no_inner_submodule():
     assert "if (reset)" in out                        # body unchanged → resolves to alias
 
 
-def test_flat_result_compiles_and_whitebox_signal_visible(tmp_path):
-    # It used to `return` here, so an iverilog-less host PASSED it having
-    # compiled nothing. Absent tool -> NOT_VERIFIED naming the host (R-0927).
-    states.require_tools("iverilog")
-    out = R.emit_variant_alias_flat(DUT, "widget", {"reset": "rst"})
-    (tmp_path / "widget.v").write_text(out)
-    tb = (            # WHITEBOX TB: binds the design's internal parity_out hierarchically
-        "module tb; reg clk=0, rst=1, d=0; wire q;\n"
-        "  widget dut(.clk(clk), .rst(rst), .d(d), .q(q));\n"
-        "  initial begin #1 $display(\"pv=%b\", dut.parity_out); $finish; end\n"
-        "  always #5 clk = ~clk;\n"
-        "endmodule\n"
-    )
-    (tmp_path / "tb.v").write_text(tb)
-    r = subprocess.run(["iverilog", "-g2012", "-o", str(tmp_path / "a.out"),
-                        str(tmp_path / "widget.v"), str(tmp_path / "tb.v")],
-                       capture_output=True, text=True)
-    assert r.returncode == 0, r.stderr   # canonical port + hierarchical dut.parity_out both elaborate
 
 
 def test_flat_declines_cross_polarity():

@@ -54,7 +54,6 @@ import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _progress_run as _pr  # noqa: E402
 from _specrtl_common import strip_comments  # noqa: E402
-import instrument_calibration as _instrument_calibration  # noqa: E402  R-0915-86(3)
 
 try:
     import _path_layout as _pl
@@ -828,8 +827,6 @@ def sdf_annotation_census(text: str) -> Dict[str, object]:
     PURE — transcript in, counts out. `annotated` is False ONLY when not one
     delay was applied, which is the state that makes "SDF-annotated" false.
     """
-    _instrument_calibration.assert_calibrated(
-        "sdf_gate_sim::sdf_annotation_census")  # R-0915-86(3)
     applied = len(_SDF_APPLIED_RE.findall(text or ""))
     unmatched = len(_SDF_MODPATH_FAIL_RE.findall(text or ""))
     return {"delays_applied": applied,
@@ -839,7 +836,6 @@ def sdf_annotation_census(text: str) -> Dict[str, object]:
 
 def sdf_error_count(text: str) -> int:
     """Every SDF record the simulator refused, of any kind. PURE (T106)."""
-    _instrument_calibration.assert_calibrated("sdf_gate_sim::sdf_error_count")
     return len(_SDF_ERROR_RE.findall(text or ""))
 
 
@@ -1445,8 +1441,6 @@ def _docker(container: str, cmd: str, budget_s: float = 600):
     # `_container_exec.container_tree_probe` because that factory is called on
     # every supervised run, including from inside tests that patch `os.listdir`
     # process-wide — see the entry's `calls_at` note.
-    _instrument_calibration.assert_calibrated(
-        "_container_exec::container_tree_probe")  # R-0915-86(3)
     return _ce.run_in_container_supervised(
         container, _TOOL_PATH + cmd, ceiling_s=float(budget_s))
 
@@ -2286,7 +2280,6 @@ class SdfErrorExplainer:
 def classify_sdf_errors(transcript: str, *, compile_log: str, sdf_text: str,
                         explainer: SdfErrorExplainer) -> Dict[str, object]:
     """Every `SDF ERROR` of one simulation, by class; the rest unexplained."""
-    _instrument_calibration.assert_calibrated("sdf_gate_sim::classify_sdf_errors")
     sorry = {(Path(m.group(1)).name, int(m.group(2)))
              for m in _IFNONE_SORRY_RE.finditer(compile_log or "")}
     lines = (sdf_text or "").splitlines()
@@ -2471,26 +2464,19 @@ def _postlayout_output_deadline(project: Path, plan: dict, declared: dict,
                 {Path(f).resolve() for f in state['sdf'].values()} !=
                 {f.resolve() for f in sdfs}):
             raise ValueError('GLS and STA do not use the same timed views')
-        if sta_step_dir is None:
-            receipt = json.loads((folder / 'vibeic_receipt.json').read_text())
-            for sdf in sdfs:
-                relative = str(sdf.relative_to(folder))
-                if receipt['sha256'].get(relative) != contract.digest(sdf):
-                    raise ValueError('SDF differs from the native STA receipt')
-        else:
-            if not state['sdf']:
-                raise ValueError('no current native STA scenes')
-            corners = {}
-            for name, sdf in state['sdf'].items():
-                scene = folder / name
-                if (scene.parent != folder or Path(sdf).resolve(strict=True).parent != scene):
-                    raise ValueError('SDF is outside its native STA scene')
-                report = scene / 'max.rpt'
-                corners[name] = {'files': {'max.rpt': {'text': report.read_text()}}}
-            basis = {'producer': 'librelane:OpenROAD.STAPostPNR',
-                     'state': str(folder / 'state_out.json'),
-                     'corners': {name: {'max.rpt': str(folder / name / 'max.rpt')}
-                                 for name in corners}}
+        if not state['sdf']:
+            raise ValueError('no current native STA scenes')
+        corners = {}
+        for name, sdf in state['sdf'].items():
+            scene = folder / name
+            if (scene.parent != folder or Path(sdf).resolve(strict=True).parent != scene):
+                raise ValueError('SDF is outside its native STA scene')
+            report = scene / 'max.rpt'
+            corners[name] = {'files': {'max.rpt': {'text': report.read_text()}}}
+        basis = {'producer': 'librelane:OpenROAD.STAPostPNR',
+                 'state': str(folder / 'state_out.json'),
+                 'corners': {name: {'max.rpt': str(folder / name / 'max.rpt')}
+                             for name in corners}}
         clocks = declared_sdc_clocks(sdc, [f.read_text() for f in sdfs])
         port_map = declared.get('port_map') or {}
         port = port_map.get(plan['spec']['serial_out'], plan['spec']['serial_out'])

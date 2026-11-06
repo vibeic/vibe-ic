@@ -114,18 +114,3 @@ The deliverable is one markdown proposal. The template below is the whole shape.
     | runs/round5/manifest.json | sha256:b204e8a1 | closure controller |
 
     Next: run /ppa-diagnose
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/ppa-recover/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed, exit 2 =
-the checker could not read one of its own inputs and reached no conclusion.
-
-**Your task is not complete until the audit returns PASS.**

@@ -7,33 +7,17 @@ description: "Generate HPS (Hard Processor System) integration for DE10-Nano FPG
 
 Generate a complete HPS-to-FPGA bridge integration for Cyclone V SoC FPGA verification, enabling the ARM Cortex-A9 to control BIST engines via direct memory-mapped I/O instead of UART.
 
-## Generate (do NOT hand-paste the bridge or the register offsets)
+## Build the bridge from the register map
 
-The bridge RTL + the 16-entry register map are a FIXED, deterministic lookup —
-paraphrasing a byte offset is a silent bug (the HPS `/dev/mem` read lands on the
-wrong register and reports garbage with no error). Run the generator instead of
-re-typing the files:
+Implement the Avalon-MM bridge and software register access from the project's
+actual register map. Keep byte offsets, widths, reset values, address decoding
+and handshake timing consistent between RTL and software. Simulate reads,
+writes, byte enables and reset behavior with native HDL tools, then compile
+with Quartus for the selected board. Read its timing and fit reports.
 
-```bash
-python3 ../../programs/fpga_hps_bridge_gen.py \
-    --ic <ic_name> --out <project_dir> \
-    [--bist <bist_module>] [--dut <dut_module>] \
-    [--chip-id 0xNN] [--version 0xNN] \
-    [--total-tests N] [--base 0xFF200000]
-```
-
-It emits all four artefacts verbatim and identically every run:
-`common_rtl/hps_bridge.sv`, `<ic>_hps_top.sv`, `hps_test.py`, and
-`hps_register_map.md` (the canonical 16-register table, offsets 0x00..0x3C).
-`--ic`, the BIST/DUT module names, and the CHIP_ID/VERSION constants are
-parameters — the generator is chip-AGNOSTIC. Invalid input (empty IC stem,
-out-of-range constant) exits non-zero with a message; it never crashes or
-emits a partial register map.
-
-**AI judgment still required (the generator does NOT do these):** adapting the
-BIST engine to your IC's coverage groups, wiring `pin_cur` / branch-coverage
-tracking to your DUT, writing the `HPS_INTEGRATION_GUIDE.md` Qsys/Linux setup,
-and deciding WHEN HPS is the right path vs UART (see When NOT to Use below).
+The register table below is a worked integration template. Confirm the
+project's required map before using it; no retired generator supplies an
+authoritative map.
 
 ## When to Use
 
@@ -61,9 +45,9 @@ and deciding WHEN HPS is the right path vs UART (see When NOT to Use below).
 
 ## Generated Files
 
-> All four files below are produced by `programs/fpga_hps_bridge_gen.py` (see
-> "Generate" above) — do not author them by hand. The descriptions document
-> what the generator emits.
+The following files describe the bridge RTL, software access and integration
+guide to author for the selected project. Validate them with native simulation
+and Quartus.
 
 ### 1. `common_rtl/hps_bridge.sv` — Avalon-MM Slave Register Bridge
 
@@ -131,10 +115,9 @@ DE10-Nano SoC
 
 ## Register Map
 
-This 16-entry table is the SINGLE SOURCE OF TRUTH baked into
-`programs/fpga_hps_bridge_gen.py` (`REGISTER_MAP`). The generator emits it
-verbatim into `hps_register_map.md`, the SV read mux, and the Python `Reg`
-class — never re-derive or paraphrase these offsets by hand.
+Keep the selected register map identical in `hps_register_map.md`, the RTL
+read/write logic and the software constants. Confirm each offset through
+native simulation before hardware access.
 
 | Offset | Name | R/W | Description |
 |--------|------|-----|-------------|
@@ -199,11 +182,7 @@ class — never re-derive or paraphrase these offsets by hand.
 The structural adaptation is mechanical — let the generator do it instead of
 copy-editing:
 
-```bash
-python3 ../../programs/fpga_hps_bridge_gen.py \
-    --ic <new_ic> --out <project_dir> \
-    --bist <new_ic>_bist_v5 --dut <new_ic> --chip-id 0x<NN>
-```
+Implement the bridge from the selected project register map. Keep RTL/software byte offsets, widths, reset behavior and handshakes aligned, then verify them through native HDL simulation and Quartus.
 
 This re-emits `hps_bridge.sv` (with the new `CHIP_ID_VALUE`), `<ic>_hps_top.sv`
 (instantiating the named DUT + BIST), and `hps_test.py` (with the new
@@ -216,24 +195,3 @@ Then apply the parts that need engineering judgment (NOT generated):
 2. **Update Qsys** — same Platform Designer system, just point the top-level at
    `<ic>_hps_top`.
 3. **Author `HPS_INTEGRATION_GUIDE.md`** — Linux/SD-card + Qsys setup steps.
-
-## Compliance gate (mandatory — not optional)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 ../../_shared/skill_compliance_check.py \
-    --requirements ./compliance.yaml <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with the specific missing elements listed.
-`compliance.yaml` (in this skill's directory) enumerates every required
-element of your output — section headers, metadata fields, handoff lines,
-tool invocations.
-
-**Your task is not complete until the audit returns PASS.** If it fails,
-re-read the listed missing elements, patch your output, and re-run the
-audit. This guarantees that different agents executing this same SKILL.md
-produce reports containing the same required elements, even when the prose
-inside each element differs. Missing elements are the single largest
-source of skill-execution non-determinism.

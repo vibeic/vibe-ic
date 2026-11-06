@@ -6,9 +6,8 @@ WHY THIS EXISTS
 An assembled batch is measured as a whole. Every push to one of its inputs makes
 that measurement older than the branch it describes, and the landing gate then
 refuses the batch -- correctly, and at the worst possible moment, because by then
-the whole measurement has been paid for. `gatekeeper-land.sh` says so in its own
-words at the point where it fails a landing "when the tree moves under the gates,
-so the price is the batch".
+the whole measurement has been paid for. Checking input revisions before
+measurement makes that drift visible earlier.
 
 MEASURED, and it is why this is a gate hole rather than a nicety: one batch lost
 THREE full measurement rounds to exactly this, with ten of sixteen inputs still

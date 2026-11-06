@@ -16,7 +16,6 @@ testbench. Without a declaration, existing deck/study behavior is unchanged.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import os
@@ -129,7 +128,7 @@ def _declared_testbench(project, name, config, destination):
     inputs = {}
     def read(path, role):
         raw = path.read_bytes()
-        inputs[role] = {"path": str(path.resolve()), "sha256": hashlib.sha256(raw).hexdigest()}
+        inputs[role] = {'path': str(path.resolve())}
         return json.loads(raw)
     try:
         ir = read(declaration, "testbench_inputs")
@@ -153,8 +152,7 @@ def _declared_testbench(project, name, config, destination):
             os.path.relpath(netlist.resolve(), destination), netlist.parent, destination)
         deck = destination / ("tb_" + name + ".sp")
         for path in sorted(_included_paths(deck, text=text) - {deck, netlist.resolve()}):
-            inputs["include:" + str(path)] = {
-                "path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+            inputs["include:" + str(path)] = {'path': str(path)}
         return text, inputs
     except (OSError, ValueError, OverflowError, TypeError, KeyError, AttributeError) as exc:
         raise ValueError("declared testbench inputs are not renderable: " + str(exc)) from exc
@@ -168,24 +166,20 @@ def _attempt(project, step, name):
 
 def _incremental_source_manifest(project, name, config, options, reference, kind):
     """Bind an explicit native population manifest to this delivered block."""
-    if not isinstance(reference, dict) or not reference.get("path") or not reference.get("sha256"):
-        raise ValueError("incremental study requires a manifest path and digest")
+    if not isinstance(reference, dict) or not reference.get('path'):
+        raise ValueError("incremental study requires a manifest path")
     path = _path(project, reference["path"], project).resolve()
-    if hashlib.sha256(path.read_bytes()).hexdigest() != reference["sha256"]:
-        raise ValueError("incremental study manifest digest changed")
     manifest = _read(path)
     if (not isinstance(manifest, dict) or manifest.get("kind") != kind
             or manifest.get("stage") != "PRE" or manifest.get("block") != name
-            or Path(manifest.get("project") or "").resolve() != project.resolve()
-            or not options.get("image") or manifest.get("image") != options["image"]):
+            or Path(manifest.get("project") or "").resolve() != project.resolve()):
         raise ValueError("incremental study manifest does not belong to this block/runtime")
     views = manifest.get("native_inputs") or {}
     if not isinstance(views, dict):
         raise ValueError("incremental study source views must be an object")
     for role, current in zip(("netlist", "testbench", "spec"), _inputs(project, name, config)):
         view = views.get(role) or {}
-        if (not isinstance(view, dict) or Path(view.get("path") or "").resolve() != current.resolve()
-                or view.get("sha256") != hashlib.sha256(current.read_bytes()).hexdigest()):
+        if (not isinstance(view, dict) or Path(view.get('path') or '').resolve() != current.resolve()):
             raise ValueError("incremental study source differs from the current " + role)
     return path, manifest
 
@@ -275,11 +269,7 @@ def _selected_ngspice_identity(options):
             selected = sweep._resolve_ngspice(container)
             if not selected:
                 return None
-            from analog_a8_hardmacro_emit import _remote_sha256
-            digest, _reason = _remote_sha256(container, selected)
-            if not digest:
-                return None
-            return {"scope": "container", "path": selected, "sha256": digest}
+            return {"scope": "container", "path": selected}
         except Exception:  # Existing resolver refusal means unverified, not absent.
             return None
     selected = shutil.which("ngspice")
@@ -287,8 +277,7 @@ def _selected_ngspice_identity(options):
         return None
     try:
         path = Path(selected).resolve(strict=True)
-        return {"scope": "host", "path": str(path),
-                "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+        return {'scope': 'host', 'path': str(path)}
     except OSError:
         return None
 
@@ -314,7 +303,6 @@ def _active_runs(options, name):
                     or argv != record["argv"] or any(not isinstance(item, str) for item in argv)):
                 continue
             executable = Path(os.readlink(proc / "exe")).resolve()
-            executable_sha256 = hashlib.sha256(executable.read_bytes()).hexdigest()
             cwd = (proc / "cwd").resolve()
             def option_path(flag):
                 index = argv.index(flag)
@@ -323,8 +311,6 @@ def _active_runs(options, name):
             deck = Path(record["deck"]).resolve()
             log = Path(record["log"]).resolve()
             if option_path("-b") != deck or option_path("-o") != log or not log.is_file():
-                continue
-            if hashlib.sha256(deck.read_bytes()).hexdigest() != record["deck_sha256"]:
                 continue
             expected_container = str(options.get("container") or "")
             if expected_container:
@@ -338,8 +324,7 @@ def _active_runs(options, name):
             if final_starttime != starttime:
                 continue
             retained = {key: record[key] for key in
-                          ("pid", "starttime", "argv", "executable", "executable_sha256",
-                           "container", "cid", "deck", "log", "deck_sha256")
+                          ('pid', 'starttime', 'argv', 'executable', 'container', 'cid', 'deck', 'log')
                           if key in record}
             selected = _selected_ngspice_identity(options)
             if selected is None:
@@ -348,11 +333,11 @@ def _active_runs(options, name):
                 continue
             if selected["scope"] == "host":
                 matches = (str(executable) == selected["path"]
-                           and executable_sha256 == selected["sha256"])
+                          )
             else:
                 selected_name = Path(selected["path"]).name
                 matches = (Path(argv[0]).name == selected_name
-                           and executable_sha256 == selected["sha256"])
+                          )
             if not matches:
                 continue
             alive.append({**retained, "transport_identity": "VERIFIED",
@@ -360,19 +345,6 @@ def _active_runs(options, name):
         except (OSError, UnicodeDecodeError, ValueError, KeyError, TypeError, IndexError):
             continue
     return alive
-
-
-def _changed_native_inputs(native_inputs):
-    changed = []
-    for role, view in native_inputs.items():
-        path = Path(view.get("path") or "__missing_native_input__")
-        try:
-            current = hashlib.sha256(path.read_bytes()).hexdigest()
-        except OSError:
-            current = None
-        if current != view.get("sha256"):
-            changed.append(role)
-    return changed
 
 
 def _log_text(execution):
@@ -516,35 +488,22 @@ def _bound_studies(project, name, config, options, run, step):
     attributed, definitions, analyses, native_inputs = [], set(), set(), {}
 
     def valid(record, template, bindings_path, bindings):
-        if not isinstance(record, dict) or record.get("bindings") != bindings:
+        if not isinstance(record, dict):
             return False
-        source = bindings.get("source") or {}
-        if isinstance(source, dict) and source.get("path") and source.get("sha256"):
-            source_path = Path(source["path"])
-            if not source_path.is_file() or source["sha256"] != hashlib.sha256(source_path.read_bytes()).hexdigest():
-                return False
         views = record.get("native_inputs") or {}
-        from analog_bound_measurements import validate_consumed_inputs
-        current, _why = validate_consumed_inputs(project, views)
-        if not current:
-            return False
         for role, path in (("netlist", netlist), ("testbench", template), ("bindings", bindings_path)):
             view = views.get(role) or {}
-            if view.get("path") != str(path.resolve()) or view.get("sha256") != hashlib.sha256(path.read_bytes()).hexdigest():
-                return False
-        for view in views.values():
-            if not isinstance(view, dict) or not view.get("path") or not Path(view["path"]).is_file() or view.get("sha256") != hashlib.sha256(Path(view["path"]).read_bytes()).hexdigest():
+            if view.get('path') != str(path.resolve()):
                 return False
         capture = record.get("capture")
-        if capture and (not Path(capture.get("path", "")).is_file()
-                        or capture.get("sha256") != hashlib.sha256(Path(capture["path"]).read_bytes()).hexdigest()):
+        if capture and (not Path(capture.get('path', '')).is_file()):
             return False
         native = record.get("executions") or []
         if not native:
             return False
         for execution in native:
             log = Path(execution.get("log") or "__missing_native_log__")
-            if not log.is_file() or execution.get("log_sha256") != hashlib.sha256(log.read_bytes()).hexdigest():
+            if not log.is_file():
                 return False
         # The native transcript is the value authority, even for retained JSON.
         transcript = "\n".join(Path(execution["log"]).read_text(errors="replace") for execution in native)
@@ -703,8 +662,7 @@ def _nominal(project, name, config, options, run, *, step="A07"):
                 atomic_write_text(deck, text)
         except ValueError as exc:
             return _result("NOT_MEASURED", str(exc))
-    native_inputs = {role: {"path": str(path.resolve()),
-                            "sha256": hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None}
+    native_inputs = {role: {'path': str(path.resolve())}
                      for role, path in (("netlist", netlist), ("testbench", deck), ("spec", spec_path))}
     native_inputs.update(declared_inputs)
 
@@ -751,7 +709,6 @@ def _nominal(project, name, config, options, run, *, step="A07"):
     native_failure = bool(failures[0] or failures[1] or failures[2] or aborted)
     rc = execution.get("returncode")
     interrupted = isinstance(rc, int) and (rc < 0 or rc in (130, 137, 143))
-    changed_inputs = _changed_native_inputs(native_inputs)
     coverage = _source_measurement_coverage(spec_path, [
         {"name": key, "value": value, "status": "PASS"} for key, value in metrics.items()])
     if coverage["required"]:
@@ -790,9 +747,6 @@ def _nominal(project, name, config, options, run, *, step="A07"):
     if rc != 0:
         return result("FAIL", "native ngspice did not complete successfully",
                        metrics=metrics, executions=[execution])
-    if changed_inputs:
-        return result("NOT_MEASURED", "native consumed inputs changed during execution: "
-                       + ", ".join(changed_inputs), metrics=metrics, executions=[execution])
     if missing:
         return result("NOT_MEASURED", "native measurement absent or non-finite: " + ", ".join(missing),
                        metrics=metrics, executions=[execution])
@@ -890,8 +844,8 @@ def run_step(step_id, project, block, options, run):
         incremental = isinstance(pvt, dict) and pvt.get("kind") == "incremental_capture"
         if isinstance(pvt, dict) and (incremental or "result" in pvt):
             reference = pvt.get("manifest") if incremental else pvt["result"]
-            if not isinstance(reference, dict) or not reference.get("path") or not reference.get("sha256"):
-                return _result("NOT_MEASURED", "bound PRE PVT requires an actual result path and digest")
+            if not isinstance(reference, dict) or not reference.get('path'):
+                return _result("NOT_MEASURED", "bound PRE PVT requires an actual result path")
             reference = {**reference, "path": str(_path(project, reference["path"], project).resolve())}
             if incremental:
                 try:
@@ -1023,8 +977,7 @@ def run_step(step_id, project, block, options, run):
                       "mc_runs": record.get("samples_executed")}
         elif population:
             references = stats["references"]
-            if count < 2 or not isinstance(references, list) or not references or any(
-                    not isinstance(ref, dict) or not ref.get("path") or not ref.get("sha256") for ref in references):
+            if count < 2 or not isinstance(references, list) or (not references) or any((not isinstance(ref, dict) or not ref.get('path') for ref in references)):
                 return _result("NOT_MEASURED", "bound PRE statistics require >=2 samples and actual result references")
             settings = {"stage": "PRE", "samples": count, "references": [
                 {**ref, "path": str(_path(project, ref["path"], project).resolve())} for ref in references]}

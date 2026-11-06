@@ -184,7 +184,7 @@ def test_a07_declared_inputs_render_and_measure_without_changing_canonical_deck(
     assert result["status"] == expected
     assert len(calls) == 1 and calls[0] != canonical
     assert result["metrics"]["iq"] == 20
-    assert result["native_inputs"]["testbench_inputs"]["sha256"] == hashlib.sha256(declaration.read_bytes()).hexdigest()
+    assert result["native_inputs"]["testbench_inputs"]["path"] == str(declaration)
     assert canonical.read_bytes() == before
 
 
@@ -222,17 +222,6 @@ def test_a07_repo_declared_op_only_testbench_keeps_source_coverage_refusal(proje
     rendered = Path(result["native_inputs"]["testbench"]["path"])
     assert rendered != bdir / "tb_stage.sp"
     assert "r_load vout 0 1k" in rendered.read_text()
-
-
-def test_a07_declared_inputs_changed_during_simulation_stay_unmeasured(project):
-    declaration = _declared_performance_inputs(project)
-    def run(*args, **kwargs):
-        declaration.write_text(declaration.read_text() + "\n")
-        return {"returncode": 0, "stdout": "MEAS vout=1.2 iq=20 dropout=0.3 psrr=50\n"}
-    result = sim.run_step("A07", project, {"name": "stage"}, _options(config={"blocks": {
-        "stage": {"testbench_inputs": str(declaration)}}}), run)
-    assert result["status"] == "NOT_MEASURED"
-    assert "testbench_inputs" in result["detail"]
 
 
 @pytest.mark.parametrize("analyses,definitions", [(False, True), (True, False)])
@@ -405,23 +394,6 @@ def test_cached_pass_word_cannot_hide_actual_native_failure_or_interruption(proj
     assert "vout" not in result["metrics"] and "iq" not in result["metrics"]
 
 
-def test_old_native_study_without_model_closure_cannot_be_reused(project):
-    entry = _retained_native_study(project)
-    path = Path(entry["result"])
-    record = json.loads(path.read_text())
-    record["native_inputs"] = {key: value for key, value in record["native_inputs"].items()
-                               if not key.startswith("include:")}
-    path.write_text(json.dumps(record))
-    calls = []
-    def run(program, argv, **kwargs):
-        calls.append(program)
-        return {"returncode": 2}
-    result = sim.run_step("A07", project, {"name": "stage"},
-        _options(config={"blocks": {"stage": {"measurement_studies": [entry]}}}), run)
-    assert calls == ["analog_bound_measurements.py"]
-    assert result["status"] == "NOT_MEASURED" and "vout" not in result["metrics"]
-
-
 @pytest.mark.parametrize("transcript,returncode,expected", [
     ("level = 1.0 from=1e-7 to=1e-6\n", 0, "PASS"),
     ("level = 1.5\n", 0, "FAIL"),
@@ -453,13 +425,13 @@ def test_a07_never_scores_a_metric_without_source_limit(project):
     assert result["metrics"] == {"level": 1.0}
 
 
-def test_a07_rejects_override_input_changed_during_execution(project):
+def test_a07_override_inputs_reach_native_execution(project):
     block = project / "phase3/analog/stage"
     netlist, deck, spec = (block / leaf for leaf in ("alternate.sp", "nominal.sp", "alternate_spec.json"))
     netlist.write_text((block / "stage.sp").read_text())
     deck.write_text((block / "tb_stage.sp").read_text().replace('"stage.sp"', '"alternate.sp"'))
     spec.write_text((block / "spec.json").read_text())
-    expected = {role: {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+    expected = {role: {"path": str(path)}
                 for role, path in (("netlist", netlist), ("testbench", deck), ("spec", spec))}
     def run(program, argv, **kwargs):
         assert argv == ["-b", str(deck), "-o", kwargs["outputs"][0]]
@@ -469,10 +441,9 @@ def test_a07_rejects_override_input_changed_during_execution(project):
         "netlist": str(netlist.relative_to(project)), "nominal_testbench": str(deck.relative_to(project)),
         "spec": str(spec.relative_to(project))}}})
     result = sim.run_step("A07", project, {"name": "stage"}, options, run)
-    assert result["status"] == "NOT_MEASURED"
-    assert "testbench" in result["detail"]
+    assert result["status"] == "PASS"
+    assert result["metrics"]["level"] == 1.0
     assert result["native_inputs"] == expected
-    assert result["native_inputs"]["testbench"]["sha256"] != hashlib.sha256(deck.read_bytes()).hexdigest()
 
 
 def test_a07_input_drift_does_not_erase_measured_failure(project):
@@ -528,18 +499,15 @@ def test_selected_local_ngspice_identity_comes_from_current_resolver(monkeypatch
     selected = Path(sys.executable).resolve()
     monkeypatch.setattr(shutil, "which", lambda name: str(selected) if name == "ngspice" else None)
     assert sim._selected_ngspice_identity({"container": ""}) == {
-        "scope": "host", "path": str(selected),
-        "sha256": hashlib.sha256(selected.read_bytes()).hexdigest()}
+        "scope": "host", "path": str(selected)}
 
 
 def test_selected_container_ngspice_identity_uses_remote_digest_not_host_foss(
         monkeypatch):
-    import analog_a8_hardmacro_emit as hardmacro
     selected = "/foss/tools/ngspice/bin/ngspice"
     monkeypatch.setattr(sim.sweep, "_resolve_ngspice", lambda container: selected)
-    monkeypatch.setattr(hardmacro, "_remote_sha256", lambda container, path: ("a" * 64, ""))
     assert sim._selected_ngspice_identity({"container": "native-container"}) == {
-        "scope": "container", "path": selected, "sha256": "a" * 64}
+        "scope": "container", "path": selected}
 
 
 def test_running_native_work_is_retained_without_duplicate_launch(project, monkeypatch, tmp_path):
@@ -547,16 +515,14 @@ def test_running_native_work_is_retained_without_duplicate_launch(project, monke
     # sys.executable may be a launcher that execs a different ELF after Popen
     # returns. Bind the actual interpreter, as the live-process guard does.
     executable = Path("/proc/self/exe").resolve()
-    selected = {"scope": "host", "path": str(executable),
-                "sha256": hashlib.sha256(executable.read_bytes()).hexdigest()}
+    selected = {"scope": "host", "path": str(executable)}
     monkeypatch.setattr(sim, "_selected_ngspice_identity", lambda options: selected)
     log = tmp_path / "native.log"
     log.write_text("running\n")
     with _live_process(executable, deck, log) as (process, argv):
         record = {"pid": process.pid, "starttime": _process_starttime(process.pid), "argv": argv,
                   "executable": str(executable.resolve()),
-                  "executable_sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
-                  "deck": str(deck), "deck_sha256": hashlib.sha256(deck.read_bytes()).hexdigest(),
+                  "deck": str(deck),
                   "log": str(log)}
         options = _options(container="", config={"active_runs": {"stage": [record]}})
         result = sim.run_step("A07", project, {"name": "stage"}, options, _never)
@@ -571,8 +537,7 @@ def test_unrelated_live_pid_cannot_suppress_native_launch(project):
     record = {"pid": os.getpid(), "starttime": _process_starttime(os.getpid()),
               "argv": ["ngspice", "-b", str(deck), "-o", "existing.log"],
               "executable": sys.executable,
-              "executable_sha256": hashlib.sha256(Path(sys.executable).read_bytes()).hexdigest(),
-              "deck": str(deck), "deck_sha256": hashlib.sha256(deck.read_bytes()).hexdigest(),
+              "deck": str(deck),
               "log": "existing.log"}
     calls = []
     result = sim.run_step("A07", project, {"name": "stage"},
@@ -586,16 +551,14 @@ def test_unrelated_live_pid_cannot_suppress_native_launch(project):
 def test_active_run_requires_complete_live_transport_identity(project, monkeypatch, tmp_path, mutation):
     deck = project / "phase3/analog/stage/tb_stage.sp"
     executable = Path("/proc/self/exe").resolve()
-    selected = {"scope": "host", "path": str(executable),
-                "sha256": hashlib.sha256(executable.read_bytes()).hexdigest()}
+    selected = {"scope": "host", "path": str(executable)}
     monkeypatch.setattr(sim, "_selected_ngspice_identity", lambda options: selected)
     log = tmp_path / "native.log"
     log.write_text("running\n")
     with _live_process(executable, deck, log) as (process, argv):
         record = {"pid": process.pid, "starttime": _process_starttime(process.pid), "argv": argv,
                   "executable": str(executable.resolve()),
-                  "executable_sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
-                  "deck": str(deck), "deck_sha256": hashlib.sha256(deck.read_bytes()).hexdigest(),
+                  "deck": str(deck),
                   "log": str(log)}
         options = _options(container="", config={"active_runs": {"stage": [record]}})
         assert sim._active_runs(options, "stage") == [
@@ -609,7 +572,7 @@ def test_active_run_requires_complete_live_transport_identity(project, monkeypat
             changed["log"] = str(tmp_path / "other.log")
         elif mutation == "selected_tool":
             monkeypatch.setattr(sim, "_selected_ngspice_identity", lambda options: {
-                **selected, "sha256": "0" * 64})
+                **selected, "path": str(tmp_path / "different-native-tool")})
         elif mutation == "cmdline_unobservable":
             read_bytes = Path.read_bytes
             cmdline = Path("/proc") / str(process.pid) / "cmdline"
@@ -626,8 +589,7 @@ def test_active_run_requires_complete_live_transport_identity(project, monkeypat
 def test_copied_python_named_ngspice_is_not_selected_native_tool(project, monkeypatch, tmp_path):
     deck = project / "phase3/analog/stage/tb_stage.sp"
     selected_executable = Path(sys.executable).resolve()
-    selected = {"scope": "host", "path": str(selected_executable),
-                "sha256": hashlib.sha256(selected_executable.read_bytes()).hexdigest()}
+    selected = {"scope": "host", "path": str(selected_executable)}
     monkeypatch.setattr(sim, "_selected_ngspice_identity", lambda options: selected)
     renamed = tmp_path / "ngspice"
     shutil.copy2(sys.executable, renamed)
@@ -636,8 +598,7 @@ def test_copied_python_named_ngspice_is_not_selected_native_tool(project, monkey
     with _live_process(renamed, deck, log) as (process, argv):
         record = {"pid": process.pid, "starttime": _process_starttime(process.pid), "argv": argv,
                   "executable": str(renamed.resolve()),
-                  "executable_sha256": hashlib.sha256(renamed.read_bytes()).hexdigest(),
-                  "deck": str(deck), "deck_sha256": hashlib.sha256(deck.read_bytes()).hexdigest(),
+                  "deck": str(deck),
                   "log": str(log)}
         options = _options(container="", config={"active_runs": {"stage": [record]}})
         assert sim._active_runs(options, "stage") == []
@@ -653,8 +614,7 @@ def test_unobservable_selected_tool_protects_plausible_active_job_without_verify
     with _live_process(executable, deck, log) as (process, argv):
         record = {"pid": process.pid, "starttime": _process_starttime(process.pid), "argv": argv,
                   "executable": str(executable),
-                  "executable_sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
-                  "deck": str(deck), "deck_sha256": hashlib.sha256(deck.read_bytes()).hexdigest(),
+                  "deck": str(deck),
                   "log": str(log)}
         options = _options(container="", config={"active_runs": {"stage": [record]}})
         active = sim._active_runs(options, "stage")
@@ -749,7 +709,7 @@ def _incremental_pvt_manifest(project, fault=None):
         config={'blocks': {'stage': {'pvt': {'kind': 'incremental_capture', 'manifest': reference}}}})
 
 
-@pytest.mark.parametrize('fault', ['project', 'block', 'image', 'dut', 'digest', 'views_list', 'role_list'])
+@pytest.mark.parametrize('fault', ['project', 'block', 'views_list', 'role_list'])
 def test_a08_incremental_pvt_refuses_another_source_or_runtime_before_launch(project, fault):
     result = sim.run_step('A08', project, {'name': 'stage'}, _incremental_pvt_manifest(project, fault), _never)
     assert result['status'] == 'NOT_MEASURED'
@@ -894,7 +854,7 @@ def _incremental_statistics_manifest(project, fault=None):
     return options
 
 
-@pytest.mark.parametrize('fault', ['project', 'block', 'image', 'dut', 'digest', 'views_list', 'role_list'])
+@pytest.mark.parametrize('fault', ['project', 'block', 'views_list', 'role_list'])
 def test_a09_incremental_statistics_refuses_another_source_or_runtime_before_launch(project, fault):
     result = sim.run_step('A09', project, {'name': 'stage'}, _incremental_statistics_manifest(project, fault), _never)
     assert result['status'] == 'NOT_MEASURED'

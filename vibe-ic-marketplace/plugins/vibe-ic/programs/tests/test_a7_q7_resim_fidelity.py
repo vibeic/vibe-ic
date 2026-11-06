@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -79,6 +80,8 @@ STUB = r'''#!/usr/bin/env python3
 import json, os, re, subprocess, sys
 a = sys.argv[1:]
 j = " ".join(a)
+if a[:2] == ["image", "inspect"]:
+    print("null"); sys.exit(0)
 if a[0] == "inspect":
     if "Mounts" in j:
         print(json.dumps([{"Type": "bind", "Source": os.environ["STUB_ROOT"],
@@ -169,7 +172,7 @@ def _project(tmp_path: Path, tb: str = TB, net: str = A3_NET) -> Path:
 def stub(tmp_path, monkeypatch):
     d = tmp_path / "bin"
     d.mkdir()
-    (d / "docker").write_text(STUB)
+    (d / "docker").write_text(STUB.replace("#!/usr/bin/env python3", "#!" + sys.executable, 1))
     (d / "docker").chmod(0o755)
     monkeypatch.setenv("PATH", f"{d}{os.pathsep}{os.environ['PATH']}")
     monkeypatch.setenv("STUB_ROOT", str(tmp_path))

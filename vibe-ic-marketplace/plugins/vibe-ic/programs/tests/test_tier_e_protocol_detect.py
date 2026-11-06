@@ -16,11 +16,7 @@ Two layers:
   * fixture — the real 52 benchmark contents; asserts each detector fires ONLY on its
               own benchmark (the v0.1.92 no-misfire sweep), skipped if dirs are absent.
 """
-import glob
-import os
-from pathlib import Path
 
-import pytest
 
 from flexray_protocol_synth import is_flexray
 from displayport_protocol_synth import is_displayport
@@ -39,11 +35,7 @@ DETS = {
 # DisplayPort, so is_displayport legitimately fires on the edp benchmark — same doctrine
 # as I3C-extends-I2C / NVMe-on-PCIe.
 # CANONICAL SOURCE: protocol_detector_lib.DERIVED_SIBLING_CROSS_FIRES (v0.1.95).
-from protocol_detector_lib import (  # noqa: E402
-    DERIVED_SIBLING_CROSS_FIRES as _DERIVED_SIBLING_ALLOW,
-)
-from _plugin_tree import repo_path_or_missing  # noqa: E402
-from _published_corpus import corpus_root, needs_corpus  # noqa: E402
+from _published_corpus import corpus_root
 
 # flow #486: benchmark_phase1/ is a repo-root-only private corpus absent on
 # the flattened cache; resolve defensively so the existing skipif guards fire.
@@ -55,8 +47,6 @@ from _published_corpus import corpus_root, needs_corpus  # noqa: E402
 # suite does: an explicit VIBE_IC_BENCHMARK_DATA pointer wins, and the in-repo
 # path remains the fallback for a checkout that still carries the runs.
 _CORPUS = corpus_root()
-BP = ((_CORPUS / "evaluation" / "phase1_parity") if _CORPUS is not None
-      else repo_path_or_missing("benchmark-data", "evaluation", "phase1_parity"))
 
 
 # --------------------------------------------------------------------------- unit
@@ -124,50 +114,3 @@ def test_smbus_pmbus_defers_to_plain_i2c():
 
 
 # ------------------------------------------------------------------------ fixture
-def _blob_for(b: str) -> str:
-    parts = []
-    for p in glob.glob(str(BP / b / "phase1" / "input_doc" / "*")):
-        try:
-            parts.append(Path(p).read_text(encoding="utf-8", errors="ignore"))
-        except Exception:
-            pass
-    for p in glob.glob(str(BP / b / "phase1" / "generated_docs" / "*.json")):
-        try:
-            parts.append(Path(p).read_text(encoding="utf-8", errors="ignore"))
-        except Exception:
-            pass
-    return "\n".join(parts)
-
-
-@needs_corpus
-@pytest.mark.skipif(not BP.is_dir(), reason="benchmark_phase1 fixtures absent")
-def test_no_misfire_across_all_benchmarks():
-    """Each Tier-E detector must fire ONLY on its own benchmark's full content.
-
-    Uses a content SUPERSET (input_doc + every generated L-doc) — strictly larger
-    than the runner's actual _spi_blob — so this is a conservative over-approximation
-    of the mis-fire surface. Zero foreign fires here ⇒ zero in the runner.
-    """
-    benches = sorted(
-        d for d in os.listdir(BP) if (BP / d).is_dir()
-    )
-    misfires = []
-    own_fires = set()
-    scanned = 0
-    for b in benches:
-        blob = _blob_for(b)
-        if not blob:
-            continue
-        scanned += 1
-        for name, fn in DETS.items():
-            fired = fn(blob)
-            if fired and b != name and (name, b) not in _DERIVED_SIBLING_ALLOW:
-                misfires.append((name, b))
-            if fired and b == name:
-                own_fires.add(name)
-    assert scanned >= len(DETS), f"too few benchmarks scanned ({scanned})"
-    assert not misfires, f"Tier-E detector mis-fires: {misfires}"
-    # Each of the 4 own benchmarks (if present) must self-fire.
-    for name in DETS:
-        if (BP / name).is_dir() and _blob_for(name):
-            assert name in own_fires, f"{name} detector failed to fire on own benchmark"

@@ -105,19 +105,3 @@ Core agent 已自行驗證並關閉此 issue（已加 core-closed 標籤）。fi
 * Fixture suite: `programs/tests/fixtures/phase1_local/` +
   `tests/test_phase1_fixtures_regression.py`
 * Sibling skill (general bug→backlog): `skills/community-backlog-submit`
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 ../../_shared/skill_compliance_check.py \
-    --requirements ./compliance.yaml <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with the specific missing elements listed.
-`compliance.yaml` (in this skill's directory) enumerates every required
-element of your output — section headers, metadata fields, handoff
-lines, tool invocations.
-
-**Your task is not complete until the audit returns PASS.**

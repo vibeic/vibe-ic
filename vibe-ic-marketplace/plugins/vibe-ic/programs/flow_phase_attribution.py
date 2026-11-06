@@ -1,73 +1,8 @@
 #!/usr/bin/env python3
-"""flow_phase_attribution.py — WHO did each of the four phases, and HOW.
+"""Describe Router decisions, RTL authorship, and native tool results.
 
-Every design that goes through this plugin is ROUTED, SOLVED, VERIFIED and
-(when a gate fails) REPAIRED. Those four phases are what the GENERAL flow does
-to ANY design; they are not benchmark concepts and nothing here knows what a
-benchmark is.
-
-This module answers, for one project directory:
-
-    phase 1  routing     WHO classified the task, from what signal, to what
-                         entry step and exit step.
-    phase 2  solving     WHO wrote the RTL — the deterministic emitter BY NAME,
-                         or the AI skill the runner WAIVED to. Plus the
-                         emitters the chain REFUSED.
-    phase 3  verifying   WHICH gates actually ran and what each of them said.
-    phase 4  debugging   WHETHER an RTL repair or retry fired, what triggered
-                         it, whether the action was a PROGRAM or an AI HANDOFF,
-                         and whether the rtl_gen verdict changed.  This is not
-                         a physical-design / metal-layer ECO.
-
-WHY THIS FILE EXISTS SEPARATELY FROM ANY BENCHMARK (GENERAL-CORE / THIN-ADAPTER)
-===============================================================================
-This logic was first written inside a benchmark dispatcher's per-problem loop,
-where it was reachable only by someone running a dataset. Its LOGIC has no
-benchmark literal and no dataset shape: it reads the router's own return value
-and the runner's own step record, both of which exist for every design. That is
-exactly the naming debt the general-core rule describes, and it had a measured
-consequence — a user running `vibe_ic_one_shot_runner.py <project>` on a plain
-design doc could not learn which emitter solved their design, which gates ran,
-or whether a repair fired, while a benchmark run of the SAME flow could.
-
-Measured on a plain 4-to-1 multiplexer project (no dataset, no harness,
-`vibe_ic_one_shot_runner.py --skip-analog --skip-hardware --skip-phase3`):
-`reports/orchestrator/phase2_one_shot.json` recorded rtl_gen BLOCKED, then an
-`rtl_repair_retry_iter` marker, then rtl_gen PASS with
-`extras.deterministic_generator="multiplexer"`, with sdc_gen / reference_tb /
-final_audit / lec_equivalence FAILing. Every fact the four-phase attribution
-reports was already on disk and NOTHING read it.
-
-`task_nature_route` is the precedent: it was lifted out of a `cvdp_…` module
-for this same reason, and this module delegates its phase-1 half to it rather
-than re-deriving a nature.
-
-THE ADAPTER'S REMAINING JOB
-===========================
-Exactly two things are benchmark-shaped and neither is here:
-
-  * the loop over a dataset's records, and the per-record id;
-  * whether a SCORER collected the artefact. That is a claim about a scorer's
-    collector, not about the design, so it is an OPTIONAL argument
-    (`artefact_collected`) and its absence is recorded as an absence — never
-    guessed from the tree.
-
-UNKNOWN IS A RESULT
-===================
-Where a phase cannot be attributed from what was recorded, the field says
-UNKNOWN and carries the reason. That is a finding about the instrumentation and
-it must stay visible; a plausible default would bury it.
-
-Usage:
-    python3 flow_phase_attribution.py <project> [--json]
-
-    import flow_phase_attribution as fpa
-    att = fpa.attribute(project)                       # a plain design
-    att = fpa.attribute(project, routing=verdict,      # an adapter that
-                        entry=e, evidence=ev,          # already routed
-                        exit_step=x, rtl_present=b,
-                        artefact_collected=ok)
-    roll = fpa.summarize([att, ...])                   # over N designs
+The native engine report defines the executed window. The frontend report
+adds the RTL authoring result used by Program First and its AI backup.
 """
 from __future__ import annotations
 
@@ -84,27 +19,7 @@ import verdict as _V  # noqa: E402  R-0915-85 — the one vocabulary module
 SCHEMA = 2
 REPORT_NAME = "flow_phase_attribution.json"
 
-# The runner's step record, and WHY this file and not the other.
-#
-# Phase 3 is read from `reports/orchestrator/phase2_one_shot.json` and from
-# nothing else. `steps/index.json` is a second, canonical-flow-id VIEW of the
-# same run and the two DISAGREE — measured on VerilogEval-Human Prob001/2/3,
-# where index.json reports step 9 "Synthesis (Yosys -> mapped netlist)" as
-# `pass` on all three while the orchestrator report records `yosys_synth` FAIL
-# on the same three runs.
-#
-# Choosing the orchestrator report is not a coin toss between two records of
-# unknown quality. It is the SAME record every consumer already reads to decide
-# whether a project produced RTL at all, so an attribution taken from it can
-# never contradict that decision. Reading the view instead would let a design
-# be reported as verified by a gate the artefact decision treated as failed.
 _STEP_REPORT = ("reports", "orchestrator", "phase2_one_shot.json")
-_STEP_REPORT_REJECTED = "steps/index.json"
-_STEP_REPORT_REASON = (
-    "the orchestrator report is the SAME record the artefact decision reads, "
-    "so an attribution taken from it cannot contradict that decision; "
-    "steps/index.json is a second view of the same run and was measured to "
-    "disagree (step 9 'Synthesis' pass while yosys_synth FAIL)")
 
 # The runner's status vocabulary, RE-PARTITIONED for the question this module
 # asks. `design_one_shot_runner._aggregate_verdict` partitions the same
@@ -182,26 +97,22 @@ def _read_json(p: Path) -> Any:
 
 
 def step_report(project: Path) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
-    """The runner's own per-step record for `project`, or (None, why not)."""
-    rep = Path(project).joinpath(*_STEP_REPORT)
-    if not rep.is_file():
-        return None, f"ABSENT: {rep.name} was never written by this run"
-    d = _read_json(rep)
-    if not isinstance(d, dict):
-        return None, f"UNREADABLE: {rep.name} did not parse as JSON"
-    if not isinstance(d.get("steps"), list):
-        return None, f"NO_STEPS: {rep.name} carries no `steps` list"
-    from flow_engine_frontend import selected_engine
-    if selected_engine([]) == "native":
-        native = _read_json(Path(project) / "reports/flow_engine.json") or {}
-        status = next((row.get("status") for row in native.get("steps", [])
-                       if row.get("name") == "functional_simulation_and_coverage"), None)
-        if status is not None and not any(row.get("name") == "sim" for row in d["steps"]):
-            d["steps"].append({"name": "sim", "status": "NOT_MEASURED"})
-        for row in d["steps"]:
-            if row.get("name") == "sim" and row.get("status") in (_STATUS_RAN | _STATUS_NOT_ATTEMPTED) - set(_STATUS_FAILING):
-                row.update(status=status if status in {"PASS", "FAIL"} else "NOT_MEASURED", detail="reports/flow_engine.json")
-    return d, None
+    """Read the native engine's selected window and the frontend's RTL result."""
+    project = Path(project)
+    engine = _read_json(project / "reports/flow_engine.json")
+    owner = _read_json(project.joinpath(*_STEP_REPORT))
+    if isinstance(engine, dict) and isinstance(engine.get("steps"), list):
+        rows = list(engine["steps"])
+        if isinstance(owner, dict):
+            rows += [row for row in owner.get("steps", [])
+                     if row.get("name") in {"rtl_gen", "rtl_validate"}]
+        return {**engine, "steps": rows,
+                "native_selected_steps": engine.get("selected", 0),
+                "native_steps_recorded": len(engine["steps"])}, None
+    if isinstance(owner, dict) and isinstance(owner.get("steps"), list):
+        return owner, None
+    return None, "The runner reported no native tool results."
+
 
 
 def _prompt_text(project: Path) -> Tuple[Optional[str], Optional[str]]:
@@ -364,11 +275,8 @@ def phase2_solving(rep: Optional[Dict[str, Any]], why: Optional[str],
     REFUSED are in `extras.rejected_emitters` / `rejected_rules`. Both are read
     here; neither is re-derived by calling the chain a second time.
 
-    The LAST `rtl_gen` step describes the current dispatch. A waived dispatch
-    may retain earlier deterministic RTL: when a project is supplied, its
-    existing ownership ledger must validate the surviving bytes before its
-    recorded producer can override the solving summary. The handoff remains
-    visible separately; reporting never stamps or emits RTL.
+    The last `rtl_gen` step describes the current dispatch. A handoff names
+    the backup skill. Reporting does not infer authorship from old records.
 
     `artefact_collected` is a claim about a SCORER's collector, not about the
     design. It is optional and its absence is recorded as an absence.
@@ -454,32 +362,6 @@ def phase2_solving(rep: Optional[Dict[str, Any]], why: Optional[str],
             "evidence": f"rtl_gen PASS_WITH_WAIVERS, "
                         f"extras.fallback_skill={skill!r}",
         })
-        if project is not None and not last.get("output_files"):
-            import rtl_provenance
-
-            ownership, ownership_reason, ownership_evidence = \
-                rtl_provenance.classify(project)
-            out.update({"rtl_provenance": ownership,
-                        "rtl_provenance_evidence": ownership_evidence})
-            producer = ownership_evidence.get("ledger_generator")
-            # GENERATED also covers a removed-only tree. It cannot attribute
-            # an artifact that no longer exists, nor supply a missing name.
-            if (ownership == rtl_provenance.GENERATED
-                    and ownership_evidence.get("file_count", 0) > 0
-                    and isinstance(producer, str) and producer.strip()):
-                out["current_dispatch"] = {
-                    "status": status, "fallback_skill": skill,
-                    "mechanism": out["mechanism"], "actor": out["actor"],
-                }
-                out.update({
-                    "solved_by": "EMITTER", "mechanism": "PROGRAM",
-                    "actor": "runner", "emitter": producer, "reused": True,
-                    "emitted_in_this_invocation": False,
-                    "evidence": f"retained RTL validated against the existing "
-                                f"ownership ledger, producer={producer!r}; "
-                                f"no new emission: {ownership_reason}",
-                })
-                out.pop("emitter_absent_reason", None)
     # R-0915-85 — `BLOCKED` is `NOT_MEASURED(input_absent)`, which the
     # NOT-ATTEMPTED arm below already owns. It is dropped here rather than
     # translated: a step that could not look is not a step that looked and
@@ -521,61 +403,30 @@ def phase2_solving(rep: Optional[Dict[str, Any]], why: Optional[str],
 
 def phase3_verifying(rep: Optional[Dict[str, Any]],
                      why: Optional[str]) -> Dict[str, Any]:
-    """WHICH gates actually ran, and what each of them said."""
+    """Report the tool statuses from the runner's selected window."""
     if rep is None:
-        return _unknown(f"phase-3 verifying cannot be attributed: {why}")
-    steps = rep.get("steps") or []
-    ran: Dict[str, str] = {}
-    not_attempted: Dict[str, str] = {}
-    markers: Dict[str, str] = {}
-    unclassified: Dict[str, str] = {}
-    repeats: Dict[str, int] = {}
-    required_site_results = []
-    superseded_site_results = []
-    for s in steps:
-        name = str(s.get("name"))
-        status = str(s.get("status"))
+        return _unknown(why or "No native tool results.")
+    ran, not_attempted, markers, unclassified, repeats = {}, {}, {}, {}, {}
+    for row in rep.get("steps", []):
+        name, status = str(row.get("name")), str(row.get("status"))
         repeats[name] = repeats.get(name, 0) + 1
-        ownership = (s.get("extras") or {}).get("required_site")
-        if ownership is not None:
-            measured = {"result_name": name, "status": status, "ownership": ownership}
-            if (isinstance(ownership, dict) and ownership.get("rtl_sha256")
-                    and rep.get("required_site_rtl_sha256")
-                    and ownership["rtl_sha256"] != rep["required_site_rtl_sha256"]):
-                superseded_site_results.append(measured)
-            else:
-                required_site_results.append(measured)
-        # ASKED FIRST, because a marker's verdict word is `PASS` and the
-        # `_STATUS_RAN` test below would claim it.
-        if _is_progress_marker(s):
+        if _is_progress_marker(row):
             markers[name] = status
         elif status in _STATUS_RAN:
             ran[name] = status
-            not_attempted.pop(name, None)
         elif status in _STATUS_NOT_ATTEMPTED:
-            if name not in ran:
-                not_attempted[name] = status
+            not_attempted[name] = status
         else:
             unclassified[name] = status
-    return {
-        "attributed": True,
-        "source": "/".join(_STEP_REPORT),
-        "source_rejected": _STEP_REPORT_REJECTED,
-        "source_reason": _STEP_REPORT_REASON,
-        "run_verdict": rep.get("verdict"),
-        "ran": ran,
-        "failed": sorted(k for k, v in ran.items() if v in _STATUS_FAILING),
-        "not_attempted": not_attempted,
-        "markers": markers,
-        "unclassified_status": unclassified,
-        "steps_recorded": len(steps),
-        "steps_recorded_more_than_once": {k: v for k, v in repeats.items()
-                                          if v > 1},
-        **({"required_site_results": required_site_results,
-             "required_site_rtl_sha256": rep.get("required_site_rtl_sha256"),
-             "superseded_required_site_results": superseded_site_results}
-           if required_site_results or superseded_site_results else {}),
-    }
+    return {"attributed": True, "source": "native runner reports",
+            "run_verdict": rep.get("verdict"), "ran": ran,
+            "failed": sorted(name for name, status in ran.items() if status == "FAIL"),
+            "not_attempted": not_attempted, "markers": markers,
+            "unclassified_status": unclassified,
+            "selected_steps": rep.get("native_selected_steps", 0),
+            "steps_recorded": rep.get("native_steps_recorded", len(rep.get("steps", []))),
+            "steps_recorded_more_than_once": {name: count for name, count in repeats.items() if count > 1}}
+
 
 
 def phase4_debugging(rep: Optional[Dict[str, Any]],

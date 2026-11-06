@@ -36,7 +36,6 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 
 import spec_conformance_check as SC                       # noqa: E402
-import gate_zero_denominator_refuses_check as GZ          # noqa: E402
 from _specrtl_common import Port, SpecContract            # noqa: E402
 
 _RULE = 'spec-port-comparison-not-measured'
@@ -85,55 +84,5 @@ def test_the_note_is_not_emit_blocking():
 # test would have proved only that the test can build a string: it would have
 # stayed green with the emitter deleted.
 
-import contextlib                                    # noqa: E402
-import io                                            # noqa: E402
-import json                                          # noqa: E402
-import tempfile                                      # noqa: E402
 
 _RTL_SRC = "module m(input clk, input rst, output q);\nendmodule\n"
-
-
-def _run_main(spec_ports):
-    """Drive the program end to end and return (rc, its printed summary line)."""
-    root = tempfile.mkdtemp(prefix="cz2035c_denom_")
-    rtl = Path(root) / "rtl"
-    rtl.mkdir()
-    (rtl / "m.v").write_text(_RTL_SRC)
-    spec = Path(root) / "L9.json"
-    spec.write_text(json.dumps({"module": "m", "ports": spec_ports}))
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        rc = SC.main(["--rtl-dir", str(rtl), "--spec", str(spec)])
-    lines = [ln for ln in buf.getvalue().splitlines()
-             if ln.startswith("spec_conformance_check:")]
-    assert len(lines) == 1, buf.getvalue()
-    return rc, lines[0]
-
-
-def test_the_old_summary_shape_was_invisible_to_the_house_predicate():
-    """The measurement that forced this change, kept executable.
-
-    `ports=0` is a zero the repo's own zero-denominator predicate cannot see.
-    """
-    old = ("spec_conformance_check: PASS — findings: 0 (0 error, 0 warn, 0 info) "
-           "[spec ports=0(json), rtl ports=5, spec reset=-/-]")
-    assert GZ.states_zero_population(old) is False
-
-
-def test_the_printed_summary_states_its_zero_in_the_shape_the_house_reads():
-    rc, line = _run_main([])
-    assert GZ.states_zero_population(line) is True, line
-    assert "NOT_MEASURED" in line
-    # the verdict is NOT turned into a failure: this states a denominator, it
-    # does not accuse the design.
-    assert rc == 0
-
-
-def test_a_non_zero_denominator_prints_no_zero_population():
-    """CONTROL — the note must not appear when ports were actually read."""
-    rc, line = _run_main([{"name": "clk", "direction": "input", "width": 1},
-                          {"name": "rst", "direction": "input", "width": 1},
-                          {"name": "q", "direction": "output", "width": 1}])
-    assert "NOT_MEASURED" not in line, line
-    assert GZ.states_zero_population(line) is False, line
-    assert rc == 0

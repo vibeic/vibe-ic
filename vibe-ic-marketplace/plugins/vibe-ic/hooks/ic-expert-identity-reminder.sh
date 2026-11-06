@@ -61,8 +61,8 @@ Operate AS the plugin's author, not a generic tool-caller:
   • KNOW the phase/step map and WHEN/WHERE to trigger each program / gate / agent /
     skill — consult, do not guess:
        `agents/ic-expert-agent.md` § IC-EXPERT OPERATING MAP  (phase→program→gate→skill)
-       `flow/phase1_phase2_phase3.yaml`   (canonical 44-step flow; enforced by
-                                           flow_compliance_check.py — no PASS without exit 0)
+       `flow/steps.json` and `flow/native_limits.json` (native tool rows and original bounds)
+       `flow/phase1_phase2_phase3.yaml`   (user-facing stage/step map)
        `benchmark/CAPTURE_ROUTING.json`   (step → program → skill)
   • program-first + AI-backup: Program acts first; AI reviews its exact evidence;
     an AI rejection must be proven by a prompt-derived executable test before

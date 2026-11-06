@@ -25,69 +25,18 @@ from pathlib import Path
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
-import phase3_one_shot_runner as p3  # noqa: E402
 
 
-def _ex(**kw):
-    base = dict(die_w=200, die_h=200, log_text="", loosen_idx=0,
-                auto_die_requested=True, route_completed=True)
-    base.update(kw)
-    return p3._route_feedback_loosen_ex(**base)
 
 
-def test_307_every_decline_names_a_reason():
-    """Each refusal branch must say WHY. A bare None is what made the path
-    silent."""
-    seen = set()
-    d, r = _ex(auto_die_requested=False)
-    assert d is None and r == "explicit_die_requested"; seen.add(r)
-    d, r = _ex(route_completed=False)
-    assert d is None and r == "route_did_not_complete"; seen.add(r)
-    d, r = _ex(loosen_idx=len(p3._ROUTE_LOOSEN_UTIL_LADDER) - 1)
-    assert d is None and r == "loosen_ladder_exhausted"; seen.add(r)
-    # a converging trajectory — the reason BOTH live runs actually declined for
-    d, r = _ex(log_text="Number of violations = 900\nNumber of violations = 100\n")
-    assert d is None and r == "route_still_converging"; seen.add(r)
-    assert len(seen) == 4, seen
 
 
-def test_307_reason_is_never_empty_on_a_decline():
-    """A decline with an empty reason would be silence wearing a return type."""
-    for kw in ({"auto_die_requested": False}, {"route_completed": False},
-               {"loosen_idx": len(p3._ROUTE_LOOSEN_UTIL_LADDER) - 1}):
-        d, r = _ex(**kw)
-        assert d is None
-        assert isinstance(r, str) and r.strip(), kw
 
 
-def test_307_the_converging_case_is_the_one_the_live_runs_hit():
-    """Evidence boundary: the two measured runs declined because the violation
-    trajectory was still DESCENDING, not because of the die cap. Pin that this
-    reason is distinct from the cap reason, so the two are never conflated."""
-    _, converging = _ex(
-        log_text="Number of violations = 880145\nNumber of violations = 670215\n")
-    assert converging == "route_still_converging"
-    assert converging != "die_cap_reached"
 
 
-def test_307_backward_compatible_wrapper_still_returns_bare_optional():
-    """The 6 existing call sites/tests must keep working unchanged."""
-    assert p3._route_feedback_loosen(200, 200, "", 0, False, True) is None
 
 
-def test_307_success_path_still_returns_the_record():
-    """No regression on the ACCEPT path: a non-converging trajectory with rungs
-    left must still loosen, and now also report `loosened`."""
-    plateau = "\n".join(f"Number of violations = {13000 + i}" for i in range(6))
-    decision, reason = _ex(log_text=plateau)
-    if decision is None:
-        # the ladder/cap guards may legitimately refuse on these dims; then the
-        # reason must still be one of the named ones, never empty.
-        assert reason in {"loosen_ladder_exhausted", "die_cap_reached",
-                          "route_still_converging"}
-    else:
-        assert reason == "loosened"
-        assert decision[2]["direction"] == "loosen"
 
 
 def test_307_runner_emits_a_named_decline_marker():

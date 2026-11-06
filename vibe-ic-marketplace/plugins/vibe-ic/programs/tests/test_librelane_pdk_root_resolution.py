@@ -187,25 +187,6 @@ def test_native_handoff_refuses_explicit_remote_without_container(env, monkeypat
         resolution(env.project, 'stated_pdk', native_handoff=True)
 
 
-def test_production_host_pdk_marks_the_native_handoff(monkeypatch, tmp_path):
-    import execution_production as production
-
-    root = tmp_path / 'root'
-    (root / 'stated_pdk').mkdir(parents=True)
-    seen = {}
-
-    def resolve(project, pdk, *, image=None, native_handoff=False, **_kw):
-        seen.update(project=project, pdk=pdk, image=image,
-                    native_handoff=native_handoff)
-        return {'path': str(root)}
-
-    monkeypatch.setattr(production, '_regular', lambda path: False)
-    monkeypatch.setattr(contract, 'pdk_root_resolution', resolve)
-    pdk = type('Pdk', (), {'name': 'stated_pdk'})()
-
-    result = production._host_pdk(tmp_path, pdk, 'sha256:' + 'ab' * 32)
-    assert result['pdk_root_host'] == str((root / 'stated_pdk').resolve())
-    assert seen['native_handoff'] is True
 
 
 # ------------------------------------------------------------ resolution ---
@@ -349,39 +330,3 @@ def test_step_27_corner_mounts_the_resolved_root_with_no_declaration(env):
     root = env.tmp / 'cache' / IMAGE_ID.split(':')[1]
     assert tool is not None and tool['corner'] == corner
     assert tool['mounts'] == [(root / 'gfx', '/pdk/gfx')] and (root / 'gfx').is_dir()
-
-
-def test_opt_in_step_37_uses_the_resolved_root_with_no_declaration(env, monkeypatch):
-    runner = importlib.import_module('phase3_one_shot_runner')
-    import librelane_step37
-    import drc_feedback_repair
-    import execution_policy
-    # This is the retained opt-in tool seam. Ordinary Default now owns its
-    # single fill-aware streamer and is covered at that existing boundary.
-    monkeypatch.setattr(execution_policy, 'request', lambda: {'mode': 'ultra'})
-
-    class Reached(Exception):
-        pass
-    seen = {}
-
-    def fake_run(project, image, pdk_root, pdk, *_a, **_k):
-        seen.update(image=image, root=pdk_root, pdk=pdk)
-        raise Reached
-    _switch(env.project, steps={'37': 'librelane'})
-    pnr = runner._pl.pnr_dir(env.project)
-    pnr.mkdir(parents=True, exist_ok=True)
-    for name in ('top.def', 'routed.def'):
-        (pnr / name).write_text('DESIGN top ;\n')
-    monkeypatch.setattr(runner, '_layout_basis', lambda *a, **k: ('digest', None))
-    monkeypatch.setattr(runner._ga, 'gate_passed', lambda *a, **k: True)
-    monkeypatch.setattr(runner, '_vacuous_on_unrouted', lambda *a, **k: None)
-    monkeypatch.setattr(drc_feedback_repair, 'has_reviewed_rule', lambda *a, **k: False)
-    monkeypatch.setattr(runner, '_streamout_top', lambda def_file, top: (top, ''))
-    monkeypatch.setattr(runner, 'publish_database_unit_declaration', lambda *a, **k: None)
-    monkeypatch.setattr(runner, 'publish_tapeout_declarations', lambda *a, **k: None)
-    monkeypatch.setattr(librelane_step37, 'run', fake_run)
-    pdk = SimpleNamespace(name='stated_pdk', drc_deck=None)
-    with pytest.raises(Reached):
-        runner.step_gds(env.project, 'top', pdk, 'c')
-    assert Path(seen['root']) == env.tmp / 'cache' / IMAGE_ID.split(':')[1]
-    assert seen['image'] == stated_image() and seen['pdk'] == 'stated_pdk'

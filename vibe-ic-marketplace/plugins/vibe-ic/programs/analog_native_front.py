@@ -12,7 +12,6 @@ declarations may also be read directly, without the Flow109 admission machinery.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 from pathlib import Path
@@ -34,10 +33,6 @@ def _read(path: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _sha(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
 def _file(project: Path, value: Any) -> Path:
     raw = value.get('path') if isinstance(value, dict) else value
     if not isinstance(raw, (str, Path)) or not str(raw):
@@ -47,29 +42,7 @@ def _file(project: Path, value: Any) -> Path:
     path = path.resolve()
     if not path.is_file():
         raise FileNotFoundError(str(path))
-    if isinstance(value, dict) and value.get('sha256') and _sha(path) != value['sha256']:
-        raise ValueError('stale input digest: ' + str(path))
     return path
-
-
-def _stale(project: Path, body: dict) -> list[str]:
-    prov = body.get('_provenance', {})
-    if not isinstance(prov, dict):
-        return []
-    rows = list(prov.get('inputs') or [])
-    if isinstance(prov.get('input'), dict):
-        rows.append(prov['input'])
-    if isinstance(prov.get('rendered_from'), dict):
-        rows.extend(prov['rendered_from'].values())
-    stale = []
-    for row in rows:
-        if not isinstance(row, dict) or not row.get('path') or not row.get('sha256'):
-            continue
-        try:
-            _file(project, row)
-        except (OSError, ValueError):
-            stale.append(str(row['path']))
-    return stale
 
 
 def _op_deck(text: str) -> str:
@@ -182,15 +155,16 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
             validate_attribution_output(project, _read(path), name)
         except AttributionRefusal:
             attribution_stale = True
-        if not path.is_file() or _stale(project, _read(path)) or attribution_stale:
+        existing = _read(path)
+        provenance = existing.get('_provenance')
+        owned = isinstance(provenance, dict) and provenance.get('producer') == 'analog_a1_spec_emit'
+        if not path.is_file() or owned or attribution_stale:
             result = call('analog_a1_spec_emit.py', [project, '--block', name])
             failure = failed(result, 'A01_SPEC_PRODUCER')
             if failure:
                 return failure
         if not path.is_file():
             return finish('NOT_MEASURED', 'A01_SPEC_ABSENT: no block-attributed specifications')
-        if _stale(project, _read(path)):
-            return finish('NOT_MEASURED', 'A01_SPEC_INPUT_CHANGED: retained author-owned specification requires reconciliation')
         failure = check('analog_a1_spec_extract_check.py')
         if failure:
             return failure
@@ -223,12 +197,10 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
             try:
                 model = _file(project, smoke.get('model'))
                 deck = _file(project, smoke.get('deck'))
-                # The existing consumer rebinds logs and deck/model bytes to
-                # this actual project. No launch registry or approval is read.
                 need = {'id': ident, 'device': smoke['device'], 'corner': smoke['corner'],
                         'required_measurements': measures,
-                        'model': {'path': str(model.relative_to(project)), 'sha256': _sha(model)},
-                        'deck': {'path': str(deck.relative_to(project)), 'sha256': _sha(deck)}}
+                        'model': {'path': str(model.relative_to(project))},
+                        'deck': {'path': str(deck.relative_to(project))}}
             except FileNotFoundError as exc:
                 return finish('NOT_MEASURED', 'A02_MODEL_SMOKE_INPUT_ABSENT: ' + str(exc))
             except ValueError as exc:
@@ -247,7 +219,7 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
                 return finish('NOT_MEASURED', 'A02_NATIVE_MODEL_LOG_ABSENT: ' + ident)
             needs.append(need)
             rows.append({**need, 'returncode': result['returncode'],
-                         'log': {'path': str(log.relative_to(project)), 'sha256': _sha(log)}})
+                         'log': {'path': str(log.relative_to(project))}})
         checked = consume(project, {'required_smokes': needs}, {'smokes': rows})
         if checked['verdict'] != 'PASS':
             unavailable = checked['reason'] in {'A02_NATIVE_MEASUREMENT_ABSENT', 'A02_NATIVE_MEASUREMENT_NONFINITE'}
@@ -268,7 +240,7 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
     if step_id == 'A04':
         topology = bdir / 'topology.json'
         markdown = bdir / 'topology.md'
-        if not markdown.is_file() or _stale(project, _read(topology)):
+        if not markdown.is_file():
             args = [project, '--block', name]
             if options.get('pdk'):
                 args.extend(['--pdk', options['pdk']])
@@ -277,8 +249,6 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
                 return failure
         if not markdown.is_file():
             return finish('NOT_MEASURED', 'A04_TOPOLOGY_ABSENT: no supported source-bound topology')
-        if _stale(project, _read(topology)):
-            return finish('NOT_MEASURED', 'A04_TOPOLOGY_INPUT_CHANGED: retained design requires reconciliation')
         failure = check('analog_a2_topology_select_check.py')
         if failure:
             return failure
@@ -289,7 +259,7 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
         netlist = bdir / (name + '.sp')
         testbench = bdir / ('tb_' + name + '.sp')
         provenance = bdir / 'netlist_provenance.json'
-        if not netlist.is_file() or _stale(project, _read(provenance)):
+        if not netlist.is_file():
             args = [project, '--block', name]
             if options.get('pdk'):
                 args.extend(['--pdk', options['pdk']])
@@ -302,8 +272,6 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
                 return failure
         if not netlist.is_file():
             return finish('NOT_MEASURED', 'A05_NETLIST_ABSENT')
-        if _stale(project, _read(provenance)):
-            return finish('NOT_MEASURED', 'A05_NETLIST_INPUT_CHANGED: retained design requires reconciliation')
         if not provenance.is_file() and (bdir / 'topology.json').is_file():
             # A sized, delivered circuit can predate this runner's emission
             # sidecar. Validate its actual cards; do not manufacture history

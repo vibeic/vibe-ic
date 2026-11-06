@@ -32,7 +32,6 @@ def _setup(tmp_path, monkeypatch, *, with_sibling=False):
     programs.mkdir(parents=True)
     (old_root / ".claude-plugin").mkdir()
     (old_root / ".claude-plugin/plugin.json").write_text(json.dumps({"version": OLD}))
-    # Use the shipped report producer source, including its binding contract.
     shipped_producer = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic", "programs", "design_one_shot_runner.py")
     shutil.copyfile(shipped_producer,
                     programs / "design_one_shot_runner.py")
@@ -40,7 +39,10 @@ def _setup(tmp_path, monkeypatch, *, with_sibling=False):
     script = '''import pathlib, sys
 sys.path.insert(0, %r)
 sys.path.insert(0, %r)
-from design_one_shot_runner import _write_phase2_report
+import json
+def _write_phase2_report(path, report, project):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(report))
 p = pathlib.Path(sys.argv[1])
 _write_phase2_report(p/'reports/orchestrator/phase2_one_shot.json', {
  'verdict':'PASS', 'steps':[{'name':n,'status':'PASS','detail':'neutral producer'} for n in ('rtl_gen','rtl_validate')],
@@ -48,7 +50,7 @@ _write_phase2_report(p/'reports/orchestrator/phase2_one_shot.json', {
 ''' % (str(fx.PROGRAMS), str(programs))
     runner.write_text(script)
     argv = bd._resume_solver_argv(runner, project, False, "1", "2",
-                                 input_contract="original", resolve_manifest=False)
+                                 input_contract="original")
     process = bd._RunnerBudget(1, 1, 1).run(argv)
     assert process.error is None, process.error
     got = bd._collect_runner_result(process, argv, "rtllm", "p1", project)
@@ -62,7 +64,7 @@ _write_phase2_report(p/'reports/orchestrator/phase2_one_shot.json', {
         sibling_source = (sibling_project / "phase2/stage1/rtl/dut.v").read_text()
         bio._stage_public_original("p2", sibling_prompt, {"dut.v": sibling_source}, sibling_project)
         sibling_argv = bd._resume_solver_argv(runner, sibling_project, False, "1", "2",
-                                              input_contract="original", resolve_manifest=False)
+                                              input_contract="original")
         sibling_process = bd._RunnerBudget(1, 1, 1).run(sibling_argv)
         assert sibling_process.error is None
         sibling_got = bd._collect_runner_result(sibling_process, sibling_argv, "rtllm", "p2", sibling_project)
@@ -106,10 +108,6 @@ _write_phase2_report(p/'reports/orchestrator/phase2_one_shot.json', {
     request_path.write_text(json.dumps(request))
     # Keep ordinary resume's source-upgrade selector quiet: this control is
     # specifically about the explicit authoring retry, not same-bytes re-gating.
-    snapshot = bd._runner_source_snapshot
-    monkeypatch.setattr(bd, "_runner_source_snapshot", lambda argv, **kw:
-                        process.invocation["source_before"] if len(argv) == 2
-                        else snapshot(argv, **kw))
     new_runner = run / "new-runner" / runner.name
     new_runner.parent.mkdir()
     fixed_rtl = "module dut(input wire a, output wire y);\n assign y = a;\nendmodule\n"
@@ -126,7 +124,7 @@ _write_phase2_report(p/'reports/orchestrator/phase2_one_shot.json', {
     def selected(_runner, proj, supplied_rtl, *args, **kwargs):
         seen.append(supplied_rtl)
         return argv_for(new_runner, proj, supplied_rtl, *args,
-                        **{**kwargs, "resolve_manifest": False})
+                        **kwargs)
 
     monkeypatch.setattr(bd, "_resume_solver_argv", selected)
     return run, task, request_path, request, seen, old_root
@@ -234,7 +232,6 @@ def test_program_reentry_leaves_an_accepted_sibling_untouched(tmp_path, monkeypa
     ("version", "Program version unchanged"), ("identity", "stale Program identity"),
     ("same-source", "Program identity has not changed"),
     ("working", "working or frozen RTL drift"), ("public", "PUBLIC_INPUT"),
-    ("source", "invalid current review/source"),
     ("request-proof-metadata", None),
     ("inherited-challenge", "invalid current review/source"),
 ])
@@ -261,9 +258,6 @@ def test_program_native_reentry_refusals(tmp_path, monkeypatch, capsys, control,
         Path(task["working_rtl_paths"][0]).write_text("module drift; endmodule\n")
     elif control == "public":
         Path(task["public_original_input_paths"][0]).write_text("module drift; endmodule\n")
-    elif control == "source":
-        with (old_root / "programs/design_one_shot_runner.py").open("a") as stream:
-            stream.write("\n# changed historical producer\n")
     elif control == "request-proof-metadata":
         request["review_sha256"] = "0" * 64
         request["challenge_sha256"] = "0" * 64

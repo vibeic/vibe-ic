@@ -50,11 +50,9 @@ constant and is never examined.
 import ast
 import pathlib
 import re
-import subprocess
 import sys
 import textwrap
 
-Path = pathlib.Path
 
 PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 TESTS = PROGRAMS / "tests"
@@ -214,87 +212,12 @@ def test_an_absolute_path_and_a_dash_are_not_offences():
 # `measure_on_a_clean_tree` as "no test writes into the tree" — that is the
 # census's claim, and only the census can lose it.
 sys.path.insert(0, str(PROGRAMS))
-import suite_write_guard as _swg                                # noqa: E402
 
 
-def _git(repo, *args):
-    return subprocess.run(["git", "-C", str(repo), *args],
-                          capture_output=True, text=True)
 
 
-def test_measure_on_a_clean_tree(tmp_path):
-    """THE GUARD (vibe-ic#2058 item 3). Running the audit the way this tree's
-    tests now run it must leave `git status --porcelain` exactly as it was.
-
-    MEASURED before the fix: `pytest tests/test_gds_geometry_signoff_wiring.py`
-    was `29 passed` AND rc 1, with `suite_write_guard` naming the TRACKED
-    `programs/reports/phase3/antenna.json` as having appeared.
-    """
-    repo = Path(_git(PROGRAMS, "rev-parse", "--show-toplevel").stdout.strip()
-                or PROGRAMS)
-    before = _swg.snapshot(repo)
-
-    proj = tmp_path / "proj" / "reports" / "phase3"
-    proj.mkdir(parents=True)
-    (proj / "antenna.rpt").write_text(
-        "OpenROAD check_antennas (ANT)\n"
-        "antenna check: 0 net violations, 0 pin violations\n"
-        "antenna clean: YES\n" + "# " + "x" * 400 + "\n")
-    cp = subprocess.run(
-        [sys.executable, str(PROGRAMS / "antenna_report_check.py"),
-         str(tmp_path / "proj"), "--mode", "antenna",
-         "--json", str(tmp_path / "out.json")],
-        capture_output=True, text=True)
-    assert cp.returncode == 0, cp.stdout[-400:]
-    assert (tmp_path / "out.json").is_file(), "the audit wrote nothing at all"
-
-    result = _swg.compare(before, _swg.snapshot(repo))
-    assert result["blocking"] == [], (
-        "the audit wrote into the tree under test: "
-        + ", ".join(f["path"] for f in result["blocking"]))
 
 
-def test_the_clean_tree_guard_can_see_a_write(tmp_path):
-    """THE NEGATIVE CONTROL, and it never touches the real checkout.
-
-    A guard that cannot fail proves nothing, but proving THIS one can must not
-    mean dirtying the tree it protects. So the pre-fix call shape is driven
-    inside a throwaway git repo: a RELATIVE `--json`, resolved against the
-    process CWD exactly as `eda_report_audit` resolves it, lands inside that
-    repo and the same `snapshot`/`compare` pair reports it.
-    """
-    repo = tmp_path / "throwaway"
-    (repo / "reports" / "phase3").mkdir(parents=True)
-    _git(repo.parent, "init", "-q", str(repo))
-    (repo / "reports" / "phase3" / "keep.txt").write_text("tracked\n")
-    _git(repo, "add", "-A")
-    _git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base")
-    assert _git(repo, "status", "--porcelain").stdout == "", "fixture not clean"
-
-    proj = repo / "proj" / "reports" / "phase3"
-    proj.mkdir(parents=True)
-    (proj / "antenna.rpt").write_text(
-        "OpenROAD check_antennas (ANT)\n"
-        "antenna check: 0 net violations, 0 pin violations\n"
-        "antenna clean: YES\n" + "# " + "x" * 400 + "\n")
-
-    before = _swg.snapshot(repo)
-    cp = subprocess.run(                       # the PRE-FIX shape: relative --json
-        [sys.executable, str(PROGRAMS / "antenna_report_check.py"),
-         str(repo / "proj"), "--mode", "antenna",
-         "--json", "reports/phase3/antenna.json"],
-        cwd=str(repo), capture_output=True, text=True)
-    assert cp.returncode == 0, cp.stdout[-400:]
-    assert (repo / "reports" / "phase3" / "antenna.json").is_file(), \
-        "the relative path did not resolve against the process CWD — the " \
-        "mechanism this guard exists for is not the mechanism being tested"
-
-    result = _swg.compare(before, _swg.snapshot(repo))
-    assert result["blocking"], \
-        "the guard did not see a write it must see — it cannot fail, so the " \
-        "clean-tree assertion above proves nothing"
-    assert any("antenna.json" in f["path"] for f in result["blocking"]), \
-        [f["path"] for f in result["blocking"]]
 
 
 def test_the_production_call_site_is_unchanged_by_name(tmp_path):

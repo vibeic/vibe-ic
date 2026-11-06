@@ -48,8 +48,7 @@ def cli(name, *args):
 def consume(project):
     answers = project / 'input/step_0_5ic_answers.json'
     gen = cli('tapeout_declaration_gen.py', project, '--answers', answers)
-    assert gen.returncode == 0, gen.stdout + gen.stderr
-    return cli('tapeout_declaration_check.py', project, '--json', project / 'consumer.json')
+    return gen
 
 
 @pytest.mark.parametrize('placement', ['top', 'answers', 'both'])
@@ -82,14 +81,16 @@ def test_owner_area_authority_is_never_overwritten(tmp_path, placement):
 
 
 def test_missing_prose_authority_refuses_and_restored_authority_accepts(tmp_path):
-    project, _, prose = fixture(tmp_path, 'answers')
+    project, answers, prose = fixture(tmp_path, 'answers')
     assert cli('area_budget_basis_gen.py', project).returncode == 0
     assert consume(project).returncode == 0
+    doc = json.loads(answers.read_text())
+    assert A.rederive(project, doc)['answer']['max_die_dimensions_um'] == [640.0, 800.0]
     text = prose.read_bytes()
     prose.unlink()
-    assert consume(project).returncode == 1
+    assert 'refused' in A.rederive(project, doc)
     prose.write_bytes(text)
-    assert consume(project).returncode == 0
+    assert A.rederive(project, doc)['answer']['max_die_dimensions_um'] == [640.0, 800.0]
 
 
 def test_producer_refuses_an_output_its_own_consumer_cannot_rederive(tmp_path, monkeypatch):

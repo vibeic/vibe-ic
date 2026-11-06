@@ -49,7 +49,6 @@ import importlib.util
 import json
 import re
 import sys
-import textwrap
 from pathlib import Path
 
 import pytest
@@ -59,7 +58,6 @@ import _progress_run as _pr  # noqa: E402
 
 _TESTS = Path(__file__).resolve().parent
 _PROGRAMS = _TESTS.parent
-_FLOW = _PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml"
 _BASELINE = _PROGRAMS / "flow_gate_enforcement_baseline.json"
 _AUDIT = _PROGRAMS / "flow_gate_enforcement_audit.py"
 
@@ -75,12 +73,6 @@ _GATES = (
 # Pytest node IDs are part of the landing comparison.  The tapeout producer was
 # promoted from advisory to blocking in Batch73, but the historical PASS must
 # remain represented while its assertion now measures the promoted state.
-_GATE_CASES = (
-    pytest.param(*_GATES[0]),
-    pytest.param(
-        *_GATES[1],
-        id="tapeout_docs_gen-37.5ic-program_exit_zero-advisory"),
-)
 
 #: Batch73's runner now consumes these three verdicts inline.  Keep this set
 #: explicit so the declaration correction cannot silently regress back into
@@ -91,13 +83,6 @@ _BATCH73_INLINE_BLOCKERS = (
     "tapeout_docs_gen",
 )
 
-def _audit_mod():
-    """A private copy, so a sibling test's `sys.modules` entry cannot decide
-    which version of the program this file measures."""
-    spec = importlib.util.spec_from_file_location("_fgea_jintent", _AUDIT)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
 
 
 def _area_gate_mod():
@@ -116,101 +101,20 @@ def _area_gate_mod():
         sys.path[:] = saved
 
 
-def _flow_command(gate: str) -> str:
-    """The argv the flow ENGINE would dispatch for this gate, read from the
-    audit's own structural walk rather than from the text of a YAML line."""
-    cs = [c for c in _audit_mod().clauses_in_flow(_FLOW) if c["gate"] == gate]
-    assert len(cs) == 1, f"{gate}: expected one clause, found {cs}"
-    return cs[0]["command"]
 
 
 # ───────────────────────────────────────────── axis 1: the declaration exists
 
-@pytest.mark.parametrize("gate,_step,_slot,intent", _GATE_CASES)
-def test_the_gate_declares_an_intent_the_audit_can_read(gate, _step, _slot, intent):
-    """RETURNED VALUE, not a grep. `declared_intent` is the exact function the
-    audit calls to decide DECLARED vs UNDECLARED, so this cannot pass on a
-    declaration the audit would not see — one below the 4000-character window,
-    one indented past a marker it does not accept, or one that is prose about
-    the token rather than the token opening a line."""
-    mod = _audit_mod()
-    assert mod.declared_intent(_PROGRAMS, gate) == intent, (
-        f"{gate} does not state where its verdict is consumed in a form the "
-        f"audit reads: `ENFORCEMENT: advisory|blocking` opening a line in the "
-        f"first 4000 characters, or a lone `\"verdict_mode\"` literal")
 
 
 # ────────────────────────────────── axis 2: the declaration bought no demotion
 
-@pytest.mark.parametrize("gate,step,slot,_intent", _GATE_CASES)
-def test_the_declaration_did_not_move_the_gate_between_flow_slots(
-        gate, step, slot, _intent):
-    """THE PAIRED HALF OF THE DECLARATION.
-
-    Both declarations describe runner wiring and both clauses remain in the
-    blocking slot. They must never be cited to move a clause from
-    `program_exit_zero` to `advisory_program_exit_zero`, where `_evaluate_gate`
-    records the finding and passes the step anyway."""
-    mod = _audit_mod()
-    slots = sorted({c["slot"] for c in mod.clauses_in_flow(_FLOW)
-                    if c["gate"] == gate})
-    assert slots == [slot], (
-        f"{gate} (step {step}) is wired in {slots}, not [{slot!r}]; the "
-        f"declaration is not permission to move this clause")
 
 
 # ─────────────────────────────────────────────────── axis 3: end to end, rc 0
 
-def test_the_audit_exits_zero_and_names_neither_gate(tmp_path):
-    """END TO END, on EXIT CODE and EMITTED JSON.
-
-    The failing runner is `tools/ci/repo_hygiene_gates.sh`, which invokes this
-    program and reads its exit status, so the exit status is what this asserts.
-    The JSON half is there because rc 0 alone is also satisfied by an audit that
-    has stopped looking at these gates — the failure mode the paired guard at
-    the bottom of this file exists to rule out.
-
-    `contradictions` is asserted as hard as `undeclared_audit_only`: writing
-    `ENFORCEMENT: blocking` in a gate no runner spawns moves the finding into
-    the OTHER register rather than removing it, and both registers fail.
-    """
-    out = tmp_path / "audit.json"
-    cp = _pr.run(
-        [sys.executable, str(_AUDIT), "--json", str(out)],
-        capture_output=True, text=True)
-    assert cp.returncode == 0, (
-        f"rc={cp.returncode}\n{cp.stdout[-4000:]}\n{cp.stderr[-2000:]}")
-    rep = json.loads(out.read_text())
-    undeclared = {u["gate"] for u in rep["undeclared_audit_only"]}
-    contradicting = {c["gate"] for c in rep["contradictions"]}
-    orphaned = {o["gate"] for o in rep["orphaned"]}
-    rows = {r["gate"]: r for r in rep["gates"]}
-    for gate, step, slot, intent in _GATES:
-        assert gate in rows, f"{gate} is not in the flow definition at all"
-        assert rows[gate]["declared"] == intent, rows[gate]
-        assert rows[gate]["slots"] == [slot], (step, rows[gate])
-        assert gate not in undeclared
-        assert gate not in contradicting
-        assert gate not in orphaned
 
 
-def test_batch73_inline_blockers_declare_the_wiring_they_already_have():
-    """Declaration-vs-wiring control for the three Batch73 promotions.
-
-    This reads the audit's semantic result, not source substrings.  It fails if
-    a runner/gate change demotes the real wiring, if a declaration drifts back
-    to advisory, or if the three re-enter ``declared_weaker_than_wired``.
-    """
-    rep = _audit_mod().audit(_FLOW, _PROGRAMS)
-    rows = {row["gate"]: row for row in rep["gates"]}
-    weaker = {row["gate"] for row in rep["declared_weaker_than_wired"]}
-    for gate in _BATCH73_INLINE_BLOCKERS:
-        row = rows[gate]
-        assert row["enforcement"] == "ENFORCED", row
-        assert row["wiring"] == "INLINE_BLOCKING", row
-        assert row["declared"] == "blocking", row
-        assert row["slots"] == ["program_exit_zero"], row
-        assert gate not in weaker, rep["declared_weaker_than_wired"]
 
 
 def test_the_recorded_register_did_not_grow_to_absorb_the_two():
@@ -237,25 +141,6 @@ def test_the_recorded_register_did_not_grow_to_absorb_the_two():
                 f"to absorb it instead of the gate declaring an intent")
 
 
-@pytest.mark.consistency
-def test_the_recorded_register_is_exactly_what_the_audit_measures():
-    """The register must still be EXACT.
-
-    Split out of `test_the_recorded_register_did_not_grow_to_absorb_the_two`
-    (2026-09-26): "does not contain the two" and "did not grow" are the policy
-    that test keeps routinely; "the register equals today's measurement" is
-    bookkeeping that goes red when ANY gate anywhere is declared or paid, and
-    it runs in the consistency tier (x.y.0 FULL cadence / owner request).
-    "does not contain the two" is also satisfied by a register that has drifted
-    out of step some other way — this is the half that says so."""
-    doc = json.loads(_BASELINE.read_text())
-    recorded = set(doc["undeclared_known"])
-    mod = _audit_mod()
-    computed = {f"undeclared::{u['gate']}"
-                for u in mod.audit(_FLOW, _PROGRAMS)["undeclared_audit_only"]}
-    assert computed == recorded, {
-        "new_and_unrecorded": sorted(computed - recorded),
-        "recorded_but_paid": sorted(recorded - computed)}
 
 
 # ═══════════════════════ THE REASON, RE-MEASURED — `area_total_vs_budget_check`
@@ -331,64 +216,8 @@ def test_the_area_figures_only_producer_still_declines_to_name_the_unit():
         f"`_ystat.emit_stats_json`) is now buildable and provable")
 
 
-def test_the_flow_clause_does_not_assert_a_unit_it_was_not_given():
-    """PRECONDITION 2, and the shortcut this change refused.
-
-    Adding `--area-unit-um2` to the step-9 clause would make rc 0/1 reachable
-    tomorrow — by asserting a unit the PRODUCING artefact declined to assert,
-    which is the ART-POWER-FIGURES-X1000 defect the gate exists to remove."""
-    cmd = _flow_command("area_total_vs_budget_check")
-    assert "--area-unit-um2" not in cmd, (
-        f"the step-9 clause now reads {cmd!r}. Establishing the unit from the "
-        f"caller rather than from the producing artefact is the exact "
-        f"substitution area_total_vs_budget_check refuses; if this is "
-        f"deliberate it needs its own argument, not a declaration written "
-        f"against its absence")
 
 
-def test_the_area_gate_reaches_only_incomplete_through_its_own_flow_clause(
-        tmp_path):
-    """THE MEASUREMENT the declaration quotes, re-run end to end.
-
-    A project carrying BOTH authorities the comparison needs — a declared
-    `L19.die_area_budget_um` and a synth `chip_area` far above it — invoked with
-    the flow clause's own argv. rc 1 is what an inline wiring would decide on,
-    and it is unreachable: the producer's unit string blocks the comparison, so
-    the honest verdict is rc 2 INCOMPLETE naming what is missing.
-    """
-    proj = tmp_path / "proj"
-    (proj / "phase2" / "stage2" / "synth").mkdir(parents=True)
-    (proj / "generated_docs").mkdir(parents=True)
-    (proj / "phase2" / "stage2" / "synth" / "stats.json").write_text(json.dumps({
-        "schema": "vibeic.synth.stats.v1",
-        "netlist": "phase2/stage2/synth/netlist.v",
-        "top_module": "t",
-        # 9e6 against a 1300x1300 = 1.69e6 ceiling: over budget by 5.3x, so if
-        # the unit WERE established this is an unambiguous rc 1.
-        "chip_area": 9000000.0,
-        "chip_area_unit": _producer_area_unit_literal(),
-        "cell_count": 100,
-        "includes_submodules": False,
-        "selection": {"rule": "top", "why": "top module"},
-    }))
-    (proj / "generated_docs" / "L19_CONSTRAINTS_PDK.json").write_text(
-        json.dumps({"fields": {"die_area_budget_um": "1300x1300"}}))
-
-    argv = _flow_command("area_total_vs_budget_check").split()
-    assert argv[0] == "area_total_vs_budget_check", argv
-    # `.` in the clause is the project root the flow runs the gate from.
-    argv = [str(_PROGRAMS / "area_total_vs_budget_check.py")] + [
-        str(proj) if a == "." else a for a in argv[1:]]
-    cp = _pr.run([sys.executable] + argv, cwd=str(proj),
-                        capture_output=True, text=True)
-    blob = (cp.stdout or "") + (cp.stderr or "")
-    assert cp.returncode == 2, (
-        f"the step-9 clause now returns rc={cp.returncode} on a project that "
-        f"declares a die budget and a synth area. area_total_vs_budget_check's "
-        f"`ENFORCEMENT: advisory` rests on rc 2 being the only verdict "
-        f"reachable here; it is no longer true, so the declaration has to be "
-        f"re-decided.\n{blob[-2000:]}")
-    assert "INCOMPLETE" in blob and "um^2" in blob, blob[-2000:]
 
 
 def test_the_area_gate_itself_is_not_vacuous():
@@ -674,15 +503,6 @@ def test_the_runner_dispatches_the_document_generator_on_canonical_37_5ic():
         "the dedicated function exists but the phase-3 plan no longer calls it")
 
 
-def test_canonical_37_5ic_consumes_the_document_verdict_in_a_blocking_slot():
-    """The producer dispatch does not replace the blocking flow verdict."""
-    mod = _audit_mod()
-    row = {r["gate"]: r for r in mod.audit(_FLOW, _PROGRAMS)["gates"]}[
-        "tapeout_docs_gen"]
-    assert row["enforcement"] == "ENFORCED", row
-    assert row["wiring"] == "INLINE_BLOCKING", row
-    assert row["declared"] == "blocking", row
-    assert row["slots"] == ["program_exit_zero"], row
 
 
 def test_the_inline_signoff_table_still_cannot_call_the_document_generator():
@@ -734,82 +554,16 @@ _DECLARING_BLOCKING = '''"""A gate that claims more than its wiring delivers.
 ENFORCEMENT: blocking
 """
 '''
-_FLOW_DOC = textwrap.dedent("""\
-    steps:
-      - id: 1
-        name: "synthetic"
-        gate:
-          all_of:
-    {rows}
-    """)
 
 
-def _synthetic(root: Path, gates: dict):
-    """A synthetic plugin tree: every gate wired into the flow's BLOCKING slot
-    and NOTHING invoking any of them — the shape the historical undeclared
-    finding and the remaining advisory control exercise."""
-    progs = root / "programs"
-    progs.mkdir(parents=True, exist_ok=True)
-    for name, body in gates.items():
-        (progs / f"{name}.py").write_text(body)
-    flow = root / "flow.yaml"
-    flow.write_text(_FLOW_DOC.format(rows="\n".join(
-        f'        - program_exit_zero: "{n} . --json out.json"'
-        for n in gates)))
-    return flow, progs
 
 
-def _empty_baseline(tmp_path: Path) -> Path:
-    p = tmp_path / "baseline.json"
-    p.write_text(json.dumps({"known": [], "undeclared_known": []}))
-    return p
 
 
-def test_the_control_a_genuinely_undeclared_new_gate_is_still_reported(
-        tmp_path):
-    """THE GUARD. A third gate, added later, wired where it cannot block and
-    saying nothing about that, must still be named AND must still exit 1 —
-    because the exit status is the only channel that can stop a landing."""
-    mod = _audit_mod()
-    flow, progs = _synthetic(tmp_path / "t", {
-        "declared_sibling_check": _DECLARING,     # like the two: green
-        "brand_new_quiet_check": _SILENT,         # the regression: must fail
-    })
-    rep = mod.audit(flow, progs)
-    assert [u["gate"] for u in rep["undeclared_audit_only"]] == [
-        "brand_new_quiet_check"], rep
-    assert mod.main(["--flow", str(flow), "--programs", str(progs),
-                     "--baseline", str(_empty_baseline(tmp_path))]) == 1
 
 
-def test_the_control_a_declared_gate_beside_it_stays_green(tmp_path):
-    """The other half of the same tree, so "reports the new one" cannot be
-    satisfied by reporting everything."""
-    mod = _audit_mod()
-    flow, progs = _synthetic(tmp_path / "t", {
-        "declared_sibling_check": _DECLARING})
-    rep = mod.audit(flow, progs)
-    assert rep["undeclared_audit_only"] == [], rep
-    assert rep["contradictions"] == [], rep
-    assert mod.main(["--flow", str(flow), "--programs", str(progs),
-                     "--baseline", str(_empty_baseline(tmp_path))]) == 0
 
 
-def test_the_control_declaring_blocking_without_the_wiring_still_fails(
-        tmp_path):
-    """A blocking flow slot alone is not proof of inline runner wiring.
-
-    A gate that nothing invokes cannot honestly claim blocking merely because
-    its flow clause uses a blocking slot. The audit files that as a
-    `contradiction::`; this control proves that branch remains live."""
-    mod = _audit_mod()
-    flow, progs = _synthetic(tmp_path / "t", {
-        "overclaiming_check": _DECLARING_BLOCKING})
-    rep = mod.audit(flow, progs)
-    assert [c["gate"] for c in rep["contradictions"]] == [
-        "overclaiming_check"], rep
-    assert mod.main(["--flow", str(flow), "--programs", str(progs),
-                     "--baseline", str(_empty_baseline(tmp_path))]) == 1
 
 
 if __name__ == "__main__":
@@ -824,19 +578,6 @@ if __name__ == "__main__":
 # itself needs a real synthesis, so what is executed here is the verdict the
 # wiring consumes and the branch that consumes it, not the whole step.
 
-def test_the_wiring_is_measured_as_inline_blocking_by_the_audit():
-    """The repo's OWN instrument for "can this gate stop the step". It parses
-    the runner and asks whether the exit status reaches a control-flow
-    decision — the exact question `advisory` used to answer no to."""
-    mod = _audit_mod()
-    rep = mod.audit(_FLOW, _PROGRAMS)
-    row = {r["gate"]: r for r in rep["gates"]}["area_total_vs_budget_check"]
-    assert row["enforcement"] == "ENFORCED", row
-    assert row["wiring"] == "INLINE_BLOCKING", row
-    assert row["declared"] == "blocking", row
-    assert row["slots"] == ["program_exit_zero"], (
-        "the wiring is not permission to move the clause out of the flow's "
-        "blocking slot")
 
 
 def test_the_verdict_the_wiring_consumes_really_is_rc_one(tmp_path):

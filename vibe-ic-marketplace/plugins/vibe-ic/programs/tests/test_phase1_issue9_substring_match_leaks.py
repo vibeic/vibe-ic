@@ -26,11 +26,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from programs.phase1_one_shot_runner import (
-    _infer_vendor,
-    _apply_alias_normalization,
-    gen_l1_datasheet,
-)
+from programs.phase1_doc_one_shot_runner import _infer_vendor, _apply_alias_normalization, gen_l1_datasheet
 import pytest
 
 _GEN_DIR = Path("phase1") / "generated_docs"
@@ -337,9 +333,7 @@ def test_no_aid_or_vendor_leakage_across_3_thin_input_classes(
         proj = _seed(tmp_path_factory.mktemp(label))
         # Drive L1 through gen_l1_datasheet then aliases pass.
         gen_l1_datasheet(proj, {"README.md": src})
-        from programs.phase1_one_shot_runner import (
-            _apply_alias_normalization as _atl,
-        )
+        from programs.phase1_doc_one_shot_runner import _apply_alias_normalization as _atl
         _atl(proj, {"README.md": src})
         l1 = json.loads(
             (proj / _GEN_DIR / "L1_DATASHEET.json").read_text()

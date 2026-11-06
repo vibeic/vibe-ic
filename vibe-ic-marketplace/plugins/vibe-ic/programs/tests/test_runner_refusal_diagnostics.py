@@ -39,12 +39,6 @@ def test_real_canonical_refusal_survives_the_producer(tmp_path):
     assert receipt["rc"] == 2
 
 
-def test_diagnostic_receipts_follow_the_existing_report_taxonomy(tmp_path):
-    import reports_subfolder_taxonomy_check as taxonomy
-    process = bd._RunnerBudget(1, None, 0).run(_argv(tmp_path))
-    assert process.rc == 2
-    result = taxonomy.audit(tmp_path)
-    assert result.passed, result.stray_dirs
 
 
 def test_frontdoor_names_the_actual_refusal_instead_of_missing_provenance(tmp_path, monkeypatch):

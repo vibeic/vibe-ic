@@ -45,11 +45,17 @@ def stapostpnr_state(project: Path) -> Tuple[Path, dict]:
     """(step folder, state) of the STAPostPNR run step 23 recorded."""
     from librelane_contract import project_path
     record = project / STEP23_RECORD
-    if not record.is_file():
-        record = project / 'reports/flow109/components/D70.json'
     doc = _load(record) if record.is_file() else {}
-    ref = doc.get('sta_state') or {}
-    state_path = project_path(project, ref.get('path', '') if isinstance(ref, dict) else ref)
+    ref = doc.get('sta_state')
+    if ref:
+        state_path = project_path(project, ref.get('path', '') if isinstance(ref, dict) else ref)
+    else:
+        states = [path for path in _librelane_states(project)
+                  if _state_step_id(path.parent) == 'OpenROAD.STAPostPNR']
+        if len(states) != 1:
+            raise Refusal('LL_STAPOSTPNR_STATE_ABSENT',
+                          f'native STA State count: {len(states)}')
+        state_path = states[0]
     if not state_path.is_file():
         raise Refusal('LL_STAPOSTPNR_STATE_ABSENT', f'{record}: sta_state {state_path}')
     if _state_step_id(state_path.parent) != 'OpenROAD.STAPostPNR':
@@ -288,12 +294,11 @@ def _librelane_states(project: Path) -> List[Path]:
     root = project / 'phase3/librelane'
     if not root.is_dir():
         return []
-    return sorted((p for p in root.rglob('state_out.json') if 'attempts' not in p.parts),
-                  key=lambda p: p.stat().st_mtime)
+    return sorted(p for p in root.rglob('state_out.json') if 'attempts' not in p.parts)
 
 
 def perc_tool_metrics(project: Path) -> Dict[str, Any]:
-    """Per PERC category, the newest LibreLane state carrying all its metrics:
+    """Per PERC category, the last native step carrying all its metrics:
     the values, the state path and its sha256. Absent -> not in the result."""
     out: Dict[str, Any] = {}
     for state_path in _librelane_states(project):

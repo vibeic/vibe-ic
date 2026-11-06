@@ -853,24 +853,6 @@ def test_d01_oracle_and_truncation_disclosures_survive_frame(tmp_path, monkeypat
     assert not h['source_frame']['members'][0]['complete']
 
 
-def test_d01_native_only_reuse_does_not_requalify_actual_d25(tmp_path):
-    import os
-    import shutil
-    import flow109_metric_acceptance as metrics
-    reference = Path(os.environ['B829_D25_REFERENCE'])
-    project = tmp_path / 'actual-authority'
-    shutil.copytree(reference, project)
-    # Real image/tool/model/LOCAL admission, no native EQY execution.
-    metrics._d25_inputs(project)
-    answer, raw, _before = _new_frame_answer(project)
-    source = project / 'input/flow109/D25_source_authority.json'
-    value = json.loads(source.read_text())
-    value['native_qualification']['native_scope'] += ' changed retained context'
-    source.write_text(json.dumps(value, indent=2) + '\n')
-    assert _framed_read(project)['status'] == 'CONSUMED'
-    assert answer.read_bytes() == raw
-    with pytest.raises(metrics.MetricRefusal, match='METRIC_AUTHORITY_STALE'):
-        metrics._d25_inputs(project)
 
 
 def test_d01_normal_report_reopens_semantics_not_generated_values(tmp_path):

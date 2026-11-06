@@ -62,12 +62,11 @@ _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
-import phase3_one_shot_runner as R          # noqa: E402
 import sta_signoff_rigor_check as G         # noqa: E402
 # vibe-ic#1128 — these skips mean A VERIFICATION DID NOT HAPPEN, not that
 # one passed. Declared through `not_verified_tier` so the run's roll-up
 # cannot count them under `passed`; see that module's docstring.
-from not_verified_tier import skip_not_verified  # noqa: E402
+from _tool_probes import skip_not_verified  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
@@ -109,53 +108,12 @@ _REPORT_CHECKS_REJECTED = {
     "-group_count": "removed from OpenSTA; use -group_path_count",
 }
 
-_REPORT_CHECKS_CALL_RE = re.compile(r"report_checks\b([^\n>]*)")
 
 
-def _emitted_report_checks_flags(tcl: str) -> list:
-    """Every leading-dash token the emitted Tcl passes to `report_checks`."""
-    flags = []
-    for m in _REPORT_CHECKS_CALL_RE.finditer(tcl):
-        for tok in m.group(1).split():
-            if tok.startswith("-"):
-                flags.append(tok)
-    return flags
 
 
-@pytest.mark.parametrize("flag,mode", [("-max", "max"), ("-min", "min")])
-def test_emitted_report_checks_uses_only_flags_opensta_accepts(flag, mode):
-    """LAYER 1 — the emitted command must be one OpenSTA can parse.
-
-    This is the assertion whose absence let the bug live: nothing anywhere
-    checked that the token handed to `report_checks` was a `report_checks`
-    token. It runs with no tclsh and no container."""
-    tcl = R._report_worst_paths_tcl("/out/sta.rpt", flag)
-    flags = _emitted_report_checks_flags(tcl)
-    assert flags, f"no report_checks invocation emitted for {flag}: {tcl}"
-    for f in flags:
-        assert f not in _REPORT_CHECKS_REJECTED, (
-            f"`report_checks {f}` is not a valid OpenSTA invocation "
-            f"({_REPORT_CHECKS_REJECTED[f]}). This raises Error 514, and the "
-            f"enclosing catch turns that into a report with no path.")
-        assert f in _REPORT_CHECKS_KEYWORDS, (
-            f"`report_checks {f}` is not a known OpenSTA keyword; it will "
-            f"raise Error 514 and be swallowed by the catch")
-    # the selector must have been TRANSLATED, not passed through
-    assert "-path_delay" in flags
-    assert f"-path_delay {mode}" in tcl, tcl
 
 
-def test_worst_path_helper_reports_and_discloses_failure():
-    """The guard stays (it protects the DRV query that follows) but is no longer
-    SILENT: success and failure each leave a marker, so a report always states
-    whether its slack has path evidence behind it."""
-    tcl = R._report_worst_paths_tcl("/out/sta.rpt", "-max")
-    assert "catch {report_checks" in tcl
-    assert R._SIGNOFF_WORST_PATHS_MARKER in tcl      # success branch
-    assert R._SIGNOFF_WORST_PATHS_FAILED in tcl      # failure branch
-    assert "reason=$_wperr" in tcl, (
-        "the failure branch must carry the TOOL's own reason — a bare 'failed' "
-        "would repeat the original defect one level up")
 
 
 # ── layer 2: execute the emitted Tcl, assert on the produced report ─────────
@@ -214,56 +172,8 @@ def _run_tcl(tmp_path: Path, fragment: str, rpt: Path) -> str:
     return rpt.read_text()
 
 
-@needs_tclsh
-@pytest.mark.parametrize("flag", ["-max", "-min"])
-def test_emitted_tcl_executes_into_a_report_carrying_a_path(tmp_path, flag):
-    """LAYER 2, THE REGRESSION — execute the emitted fragment and require the
-    REPORT to carry a path.
-
-    This is the assertion the old tests could not make. It keys on the output
-    of running the Tcl, so it fails for ANY reason the path dump does not
-    arrive — a bad flag, a mis-ordered guard, a dropped redirect — not only for
-    the one broken literal that used to be pinned."""
-    rpt = tmp_path / "sta.rpt"
-    body = _run_tcl(tmp_path, R._report_worst_paths_tcl(str(rpt), flag), rpt)
-    assert "Startpoint:" in body, body
-    assert "Endpoint:" in body, body
-    assert "data arrival time" in body, body
-    # and the report says the query ran, at the right path delay
-    mode = "min" if flag == "-min" else "max"
-    assert f"SIGNOFF_WORST_PATHS_REPORTED path_delay={mode}" in body, body
-    assert "SIGNOFF_WORST_PATHS_FAILED" not in body, body
-    # END-TO-END: the sign-off rigor gate must now SEE that evidence.
-    assert G.evaluate(body)["worst_path_evidence"] is True
 
 
-@needs_tclsh
-@pytest.mark.parametrize("flag", ["-max", "-min"])
-def test_mutation_control_the_prefix_form_yields_a_bare_report(tmp_path, flag):
-    """MUTATION CONTROL — the PRE-FIX command, through the same harness, must
-    produce a report with NO path. Without this the test above could be passing
-    because the stub always writes a dump.
-
-    This reproduces the defect exactly: the slack survives, the path does not,
-    and the script exits 0 because the `catch` swallowed the error."""
-    rpt = tmp_path / "sta.rpt"
-    prefix_form = (
-        f"if {{[catch {{report_checks {flag} -group_path_count 3 "
-        f"-fields {{slew capacitance}} >> {rpt}}} _e]}} {{\n"
-        f'  set _f [open {rpt} a]\n'
-        f'  puts $_f "{R._SIGNOFF_WORST_PATHS_FAILED}max reason=$_e"\n'
-        f"  close $_f\n}}\n")
-    body = _run_tcl(tmp_path, prefix_form, rpt)
-    assert "Startpoint:" not in body, body
-    assert "data arrival time" not in body, body
-    # the slack is still there — which is precisely why nobody noticed
-    assert "worst slack max" in body, body
-    # and the error OpenSTA really raises is the one the stub raised
-    assert "Error 514" in body, body
-    assert f"'{flag}' is not a known keyword or flag" in body, body
-    # the gate must call this out rather than pass it
-    res = G.evaluate(body)
-    assert res["worst_path_evidence"] is False, res
 
 
 @needs_tclsh

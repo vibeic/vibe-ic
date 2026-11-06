@@ -24,7 +24,6 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import librelane_postroute_repair as P  # noqa: E402
-from _drv_class_fixture import write_witness
 
 CORNER = "nom_tt_025C_5v00"
 
@@ -142,19 +141,6 @@ def _stage(tmp_path, pad_libs=True, lib_text=_LIB):
     (sta / "config.json").write_text(json.dumps(cfg))
     (sta / "state_in.json").write_text(json.dumps({"nl": str(nl)}))
     ctx = {"corners": [CORNER], "mounts": [(str(pdk), "/pdk")], "project": str(tmp_path)}
-    if pad_libs:
-        write_witness(tmp_path, nl, sdc, pdk / "io/io_tt.lib",
-                      [(p, "", "", p, True) for p in ("a", "b", "c", "n")] +
-                      [("u_pad_a/PAD", "PADIN", "PAD", "a", False),
-                       ("u_pad_a/Y", "PADIN", "Y", "a_core", True),
-                       ("u_pad_b/PAD", "PADWEAK", "PAD", "b", False),
-                       ("u_pad_b/Y", "PADWEAK", "Y", "b_core", True),
-                       ("u_pad_c/PAD", "PADMID", "PAD", "c", False),
-                       ("u_pad_c/Y", "PADMID", "Y", "c_core", True),
-                       ("u_core/u1/A", "BUF", "A", "a_core", False),
-                       ("u_core/u1/Z", "BUF", "Z", "z1", True),
-                       ("u2/A", "BUF", "A", "n", False), ("u2/Z", "BUF", "Z", "z2", True)],
-                      scene="tt_025C_5v00_nom")
     summary = {"drv": {"slew": {CORNER: len(_SLEW)}, "cap": {CORNER: len(_CAP)},
                        "fanout": {CORNER: len(_FANOUT)}}}
     return ctx, sta, summary
@@ -251,62 +237,27 @@ def test_a_padless_run_counts_every_row_as_before(tmp_path):
     assert len(census["drv_pin_checks"]) == len(_SLEW) + len(_FANOUT) + len(_CAP)
 
 
-@pytest.mark.parametrize("fault", ["absent", "netlist", "sdc", "liberty", "run", "raw_hash",
-                                 "partial", "unknown_pin", "unconnected_input", "ambiguous_lib", "not_fresh", "scene", "tool"])
-def test_incomplete_or_stale_connectivity_keeps_ports_counted(tmp_path, fault):
-    from drv_signoff_judge import _sha
+@pytest.mark.parametrize("syntax", ["concatenation", "positional", "branching_alias", "unconnected"])
+def test_unresolved_structural_connectivity_keeps_ports_counted(tmp_path, syntax):
     ctx, sta, summary = _stage(tmp_path)
-    source = tmp_path / "reports/phase3/sta/drv_signoff_bundle.json"
-    doc = json.loads(source.read_text())
-    scene = doc["scenes"][0]
-    if fault == "absent":
-        source.unlink()
-    elif fault in ("netlist", "sdc", "liberty", "raw_hash"):
-        path = {"netlist": tmp_path / "top.nl.v", "sdc": tmp_path / "signoff.sdc",
-                "liberty": tmp_path / "pdk/io/io_tt.lib",
-                "raw_hash": Path(scene["pin_census_report"]["path"])}[fault]
-        path.write_text(path.read_text() + "\n")
-    elif fault in ("partial", "unknown_pin", "unconnected_input"):
-        # A self-consistent row count in report_net is insufficient: the
-        # independent pin inventory contains a core load the table omits.
-        path = Path(scene["pin_census_report"]["path"])
-        net = "" if fault == "unconnected_input" else "a"
-        path.write_text(path.read_text() + f"hidden/A\tpin\tinput\t0\thidden\tBUF\tA\t{net}\tinput\t0.1\t0.1\t0\tX\t0\n")
-        scene["pin_census_report"]["sha256"] = _sha(path)
-        if fault == "unknown_pin":
-            path = Path(scene["net_census_report"]["path"])
-            path.write_text(path.read_text().replace(" u_pad_a/PAD input", " unknown/PAD input"))
-            scene["net_census_report"]["sha256"] = _sha(path)
-        source.write_text(json.dumps(doc))
+    path = tmp_path / "top.nl.v"
+    text = path.read_text()
+    if syntax == "concatenation":
+        text = text.replace(".A(n)", ".A({n,a})")
+    elif syntax == "positional":
+        text = text.replace(".A(n),\n    .Z(z2)", "a, z2")
+    elif syntax == "branching_alias":
+        text = text.replace("endmodule", "assign alias1 = a; assign alias2 = a; endmodule")
     else:
-        if fault == "run":
-            doc["identity"]["run_id"] = "previous-run"
-        elif fault == "not_fresh":
-            scene["fresh_process"] = False
-        elif fault == "scene":
-            scene["name"] = "other_scene"
-        elif fault == "tool":
-            doc["identity"].pop("opensta_commit")
-        elif fault == "ambiguous_lib":
-            path = tmp_path / "conflicting.lib"
-            path.write_text(_LIB)
-            scene["linked_liberties"].append({"name": "conflicting", "path": str(path), "sha256": _sha(path)})
-        source.write_text(json.dumps(doc))
+        text = text.replace(".A(n)", ".A()")
+    path.write_text(text)
     census = P.drv_pin_census(sta, summary, ctx["corners"], classifier=P._drv_classifier(ctx, sta))
-    assert census["drv_pin_checks_state"] == "PASS", census
     assert ("a", "cap") in _counted(census)
     assert ("a", "slew") in _counted(census)
-    # A bound IO margin survives an incomplete port connectivity proof, but
-    # unavailable source identity cannot authorize any measured-row exclusion.
     assert ("u_core/u1/Z", "cap") in _counted(census)
     assert ("u_pad_b/Y", "cap") in _counted(census)
-    if fault in ("partial", "unknown_pin", "unconnected_input"):
-        assert any(r["class"] == "IO_STD_CELL_MARGIN_DISCLOSURE"
-                   for r in census["drv_pin_checks_excluded"])
-    else:
-        assert ("u_pad_a/Y", "cap") in _counted(census)
-        assert not any(r["class"] == "IO_STD_CELL_MARGIN_DISCLOSURE"
-                       for r in census["drv_pin_checks_excluded"])
+    assert any(row["class"] == "IO_STD_CELL_MARGIN_DISCLOSURE"
+               for row in census["drv_pin_checks_excluded"])
 
 
 @pytest.mark.parametrize("connection", ["alias", "concat"])

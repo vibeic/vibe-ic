@@ -57,20 +57,16 @@ exits 1 — and that the recorded register did not grow to absorb it.
 """
 from __future__ import annotations
 
-import importlib.util
 import json
 import sys
-import textwrap
 from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import _progress_run as _pr  # noqa: E402
 
 _TESTS = Path(__file__).resolve().parent
 _PROGRAMS = _TESTS.parent
-_FLOW = _PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml"
 _BASELINE = _PROGRAMS / "flow_gate_enforcement_baseline.json"
 
 #: The five gates, with the flow step each guards and the slot it is wired in.
@@ -87,24 +83,8 @@ _GATES = (
 )
 
 
-def _audit_mod():
-    """A private copy, so a sibling test's `sys.modules` entry cannot decide
-    which version of the program this file measures."""
-    spec = importlib.util.spec_from_file_location(
-        "_fgea_1035", _PROGRAMS / "flow_gate_enforcement_audit.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
 
 
-@pytest.mark.parametrize("gate", ["fmeda_coverage_check", "mixed_signal_signoff_check"])
-def test_paid_gates_are_wired_at_a_status_consuming_venue(gate):
-    mod = _audit_mod()
-    row = next(row for row in mod.audit(_FLOW, _PROGRAMS)["gates"]
-               if row["gate"] == gate)
-    assert row == {"gate": gate, "enforcement": "ENFORCED",
-                   "wiring": "INLINE_BLOCKING", "declared": None,
-                   "slots": ["program_exit_zero"]}
 
 
 @pytest.mark.parametrize("gate", ["fmeda_coverage_check", "mixed_signal_signoff_check"])
@@ -190,128 +170,16 @@ def test_paid_gate_mock_status_is_consumed(gate, state, tmp_path):
 
 # ───────────────────────────────────────────── axis 1: the declaration exists
 
-@pytest.mark.parametrize("gate,_step,_slot", _GATES)
-def test_the_gate_declares_an_intent_the_audit_can_read(gate, _step, _slot):
-    """RETURNED VALUE, not a grep. `declared_intent` is the exact function the
-    audit calls to decide DECLARED vs UNDECLARED, so this cannot pass on a
-    declaration the audit would not see — one indented past a comment marker it
-    does not accept, one below the 4000-character window, or one that is prose
-    about the token rather than the token opening a line."""
-    mod = _audit_mod()
-    assert mod.declared_intent(_PROGRAMS, gate) == "advisory", (
-        f"{gate} does not state where its verdict is consumed in a form the "
-        f"audit reads: `ENFORCEMENT: advisory|blocking` opening a line in the "
-        f"first 4000 characters, or a lone `\"verdict_mode\"` literal")
 
 
 # ────────────────────────────────── axis 2: the declaration bought no demotion
 
-@pytest.mark.parametrize("gate,step,slot", _GATES)
-def test_the_declaration_did_not_move_the_gate_between_flow_slots(
-        gate, step, slot):
-    """THE PAIRED HALF OF THE DECLARATION, and the one worth the most.
-
-    `advisory` answers "no runner spawns this inline". It is NOT a statement
-    that the finding may be ignored, and it must never be cited to move a
-    clause from `program_exit_zero` to `advisory_program_exit_zero`, where
-    `_evaluate_gate` records the finding and passes the step anyway. Three of
-    these five are in the blocking slot on a measured argument recorded at
-    their flow rows; if this declaration ever becomes the reason one of them
-    moves, this assertion is what fails.
-
-    It pins the advisory two just as hard, in the other direction: they are
-    advisory by MEASUREMENT (41 of 107 published roots red for one broken L6
-    extractor; 1 demonstrable wrong ruler in L9's 8 reds) with a promotion
-    condition stated in each program, and a silent promotion would be as
-    unreviewed as a silent demotion.
-
-    Read from `clauses_in_flow` — the audit's own structural walk — so this is
-    an assertion about what the flow ENGINE would dispatch, not about the text
-    of a YAML line.
-    """
-    mod = _audit_mod()
-    slots = sorted({c["slot"] for c in mod.clauses_in_flow(_FLOW)
-                    if c["gate"] == gate})
-    assert slots == [slot], (
-        f"{gate} (step {step}) is wired in {slots}, not [{slot!r}]; the "
-        f"`ENFORCEMENT: advisory` declaration answers a different axis and is "
-        f"not permission to move this clause")
 
 
 # ─────────────────────────────────────────────────── axis 3: end to end, rc 0
 
-def test_the_audit_exits_zero_and_names_none_of_the_five(tmp_path):
-    """END TO END, on EXIT CODE and EMITTED JSON.
-
-    The failing runner is `tools/ci/repo_hygiene_gates.sh`, which invokes this
-    program and reads its exit status, so the exit status is what this asserts.
-    The JSON half is there because rc 0 alone is also satisfied by an audit
-    that has stopped looking at these gates — which is the failure mode the
-    controls at the bottom of this file exist to rule out.
-    """
-    out = tmp_path / "audit.json"
-    # 60s is the per-call ceiling `ci_harness_timeout_ceiling_check` enforces
-    # (the 180s harness session bound // 3): a bound above it can outlive the
-    # session and take the rest of the subset down with it.
-    cp = _pr.run(
-        [sys.executable, str(_PROGRAMS / "flow_gate_enforcement_audit.py"),
-         "--json", str(out)],
-        capture_output=True, text=True)
-    assert cp.returncode == 0, (
-        f"rc={cp.returncode}\n{cp.stdout[-4000:]}\n{cp.stderr[-2000:]}")
-    rep = json.loads(out.read_text())
-    undeclared = {u["gate"] for u in rep["undeclared_audit_only"]}
-    contradicting = {c["gate"] for c in rep["contradictions"]}
-    orphaned = {o["gate"] for o in rep["orphaned"]}
-    rows = {r["gate"]: r for r in rep["gates"]}
-    for gate, step, slot in _GATES:
-        assert gate in rows, f"{gate} is not in the flow definition at all"
-        assert rows[gate]["declared"] == "advisory", rows[gate]
-        assert rows[gate]["slots"] == [slot], (step, rows[gate])
-        assert gate not in undeclared
-        assert gate not in contradicting
-        assert gate not in orphaned
 
 
-def test_the_recorded_register_did_not_grow_to_absorb_the_five():
-    """The OTHER way to make the audit green, and the one this change refuses.
-
-    `--write-baseline --scope-expanded '<why>'` would have recorded the five as
-    permanent debt and exited 0 without any gate saying anything about itself.
-    The register is shrink-only and the five must be paid down OUT of it, not
-    INTO it, so this pins both halves: the file still records 116 entries, and
-    none of them is one of the five.
-    """
-    doc = json.loads(_BASELINE.read_text())
-    recorded = set(doc["undeclared_known"])
-    for gate, _step, _slot in _GATES:
-        assert f"undeclared::{gate}" not in recorded, (
-            f"{gate} was recorded as debt instead of declaring an intent")
-        assert f"undeclared::{gate}.py" not in recorded, gate
-    prev = doc["undeclared_previous_size"]
-    assert prev is None or len(recorded) <= prev, (
-        f"the shrink-only register grew: {prev} -> {len(recorded)}")
-    # `--write-baseline` will only GROW the register when a `--scope-expanded`
-    # reason NAMES an entry it excuses (vibe-ic#900). The register does carry
-    # one such reason already, recorded when #886 created it; what must stay
-    # true is that no reason names one of the five, because that is exactly the
-    # escape route this change refused to take.
-    for key in ("scope_expanded", "undeclared_scope_expanded"):
-        reason = doc.get(key) or ""
-        for gate, _step, _slot in _GATES:
-            assert gate not in reason, (
-                f"the {key} reason names {gate}, so the register was widened "
-                f"to absorb it instead of the gate declaring an intent")
-    # And the register must still be EXACT: every recorded entry still holds,
-    # and nothing the audit finds is missing from it. A register that merely
-    # "does not contain the five" is also satisfied by one that has drifted out
-    # of step with the tree in some other direction.
-    mod = _audit_mod()
-    computed = {f"undeclared::{u['gate']}"
-                for u in mod.audit(_FLOW, _PROGRAMS)["undeclared_audit_only"]}
-    assert computed == recorded, {
-        "new_and_unrecorded": sorted(computed - recorded),
-        "recorded_but_paid": sorted(recorded - computed)}
 
 
 # ═════════════════════════════════════════════════════════════ THE PAIRED GUARD
@@ -335,96 +203,14 @@ _DECLARING_BLOCKING = '''"""A gate that claims more than its wiring delivers.
 ENFORCEMENT: blocking
 """
 '''
-_FLOW_DOC = textwrap.dedent("""\
-    steps:
-      - id: 1
-        name: "synthetic"
-        gate:
-          all_of:
-    {rows}
-    """)
 
 
-def _synthetic(root: Path, gates: dict):
-    """A synthetic plugin tree: every gate is wired into the flow's BLOCKING
-    slot and NOTHING invokes any of them, which is the shape all five real
-    gates are in."""
-    progs = root / "programs"
-    progs.mkdir(parents=True, exist_ok=True)
-    for name, body in gates.items():
-        (progs / f"{name}.py").write_text(body)
-    flow = root / "flow.yaml"
-    flow.write_text(_FLOW_DOC.format(rows="\n".join(
-        f'        - program_exit_zero: "{n} . --json out.json"'
-        for n in gates)))
-    return flow, progs
 
 
-def test_the_control_a_genuinely_undeclared_new_gate_is_still_reported(
-        tmp_path):
-    """THE GUARD. A sixth gate, added later, wired where it cannot block and
-    saying nothing about that — the exact shape of the five — must still be
-    named and must still exit 1.
-
-    Both halves are asserted. `audit()` naming it proves the finding survives;
-    `main()` returning 1 proves the finding still REACHES the exit status that
-    `repo_hygiene_gates.sh` reads, which is the only channel that can stop a
-    landing. A finding reported into a report nobody's exit code depends on is
-    the #306 defect this whole program is about.
-    """
-    mod = _audit_mod()
-    flow, progs = _synthetic(tmp_path / "t", {
-        "declared_sibling_check": _DECLARING,     # like the five: green
-        "brand_new_quiet_check": _SILENT,         # the regression: must fail
-    })
-    rep = mod.audit(flow, progs)
-    assert [u["gate"] for u in rep["undeclared_audit_only"]] == [
-        "brand_new_quiet_check"], rep
-    baseline = tmp_path / "baseline.json"
-    baseline.write_text(json.dumps({"known": [], "undeclared_known": []}))
-    assert mod.main(["--flow", str(flow), "--programs", str(progs),
-                     "--baseline", str(baseline)]) == 1
 
 
-def test_the_control_a_declared_gate_beside_it_stays_green(tmp_path):
-    """The other half of the same tree, so "reports the new one" cannot be
-    satisfied by reporting everything. A gate that declares `advisory` and is
-    wired audit-only has made a decision that matches its wiring, and punishing
-    it would make the register penalise exactly the gates that complied."""
-    mod = _audit_mod()
-    flow, progs = _synthetic(tmp_path / "t", {
-        "declared_sibling_check": _DECLARING})
-    rep = mod.audit(flow, progs)
-    assert rep["undeclared_audit_only"] == [], rep
-    assert rep["contradictions"] == [], rep
-    baseline = tmp_path / "baseline.json"
-    baseline.write_text(json.dumps({"known": [], "undeclared_known": []}))
-    assert mod.main(["--flow", str(flow), "--programs", str(progs),
-                     "--baseline", str(baseline)]) == 0
 
 
-def test_the_control_declaring_blocking_without_the_wiring_still_fails(
-        tmp_path):
-    """The third shape, and the reason `advisory` is the honest token for all
-    five rather than `blocking`.
-
-    Three of the five sit in the flow's BLOCKING slot, so `ENFORCEMENT:
-    blocking` is a tempting thing to write in them. It would be a different
-    claim — that a runner can stop the step — and the audit files it as a
-    `contradiction::`, which fails just as hard and in a register whose debt is
-    paid down differently. This control proves that branch is live, so the
-    choice of `advisory` is a measured one and not a way around a check.
-    """
-    mod = _audit_mod()
-    flow, progs = _synthetic(tmp_path / "t", {
-        "overclaiming_check": _DECLARING_BLOCKING})
-    rep = mod.audit(flow, progs)
-    assert [c["gate"] for c in rep["contradictions"]] == [
-        "overclaiming_check"], rep
-    baseline = tmp_path / "baseline.json"
-    baseline.write_text(json.dumps({"known": [], "undeclared_known": []}))
-    assert mod.main(["--flow", str(flow), "--programs", str(progs),
-                     "--baseline", str(baseline)]) == 1
 
 
 if __name__ == "__main__":

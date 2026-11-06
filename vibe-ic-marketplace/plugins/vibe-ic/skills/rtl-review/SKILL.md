@@ -3,145 +3,48 @@ name: rtl-review
 description: Audit RTL code for lint violations, synthesis hazards, coding-style compliance, and readability. Use when the user says "review this Verilog", "check my RTL", "lint this module", "is this code synthesizable", or shares an HDL file and asks for feedback before simulation or tape-in.
 ---
 
-# RTL Review (Pattern-A — program-driven, doctrine-compliant v0.1.50)
+# Review RTL
 
-> **Doctrine (user, 2026-05-29):** 把修法寫進工具，而非寫進 prompt。
->
-> The 6-category checklist + 0-10 scoring rubric that previously lived
-> in this skill prose is now in **`programs/rtl_review_aggregate.py`**
-> (54 pytest cases pin every category mapping + scoring boundary, and pin that an
-> unreadable producer is REFUSED rather than scored as clean).
->
-> **You run the program first.** Claude is the backstop for residual
-> prose, NOT the rule applicator.
-
-## When to use
-
-User shares an RTL file or directory and asks for a review.
-
-## Mandatory: run the program FIRST
+Read the selected rows in `<project>/reports/flow_engine.json` and open their
+native `reports`. `flow/steps.json` names each current tool and
+`flow/native_limits.json` retains its original limits. Review `tool_ran`,
+`native_steps`, `native_metrics`, and each metric's value, operator and limit.
+A missing native measurement is `NOT_MEASURED`. AI reviews the engineering
+meaning of every result and fixes problems in the design, tool or plugin.
 
 ```bash
-python3 plugins/vibe-ic/programs/rtl_review_aggregate.py \
-    --rtl-dir <dir-of-.v-and-.sv> \
-    --top <selected-top> \
-    --define <selected-compile-define> \
-    --tmp-dir <project-root>/reports/phase2/lint/rtl_review \
-    --out-md  <project-root>/reports/phase2/lint/rtl_review.md \
-    --out-json <project-root>/reports/phase2/lint/rtl_review.json
+python3 programs/flow_engine.py report --project <project>
 ```
 
+Run the normal selected RTL validation window first. Read the native Verilator
+or Yosys diagnostics and the existing `rtl_hygiene_lint.py` findings. Preserve
+the actual top, source files, include paths, defines and parameters.
 
-Child reports and native elaboration evidence belong outside the complete RTL
-source inventory. Without `--tmp-dir`, canonical `<project>/phase2/stage1/rtl`
-uses `<project>/reports/phase2/lint/rtl_review`; a standalone RTL directory uses
-its sibling `<rtl-dir>.review`. An explicit `--tmp-dir` remains honored.
+Review synthesis hazards, resets and clock domains, style that changes
+semantics, arithmetic widths and signedness, control correctness, and port
+fidelity against the input. Inspect the design's encoding, CRC/bit order and
+counter behavior when the source specification requires those features.
 
-Existing `<rtl-dir>/.review` evidence is left unchanged. It remains extra
-inventory until explicitly archived outside RTL; do not ignore hidden files or
-delete reports to obtain admission. Any approved relocation must preserve the
-original bytes, hashes and receipts in that archive before moving the files.
+Report each finding with its source location, native evidence where available,
+and the requirement it violates. Distinguish a confirmed defect from a
+hypothesis. For a semantic rejection, write a prompt-derived executable test
+before repair. Rerun the appropriate native lint, simulation or formal tool on
+the fix. Preserve ECO spare cells and their keep attributes.
 
-Pass the frontend's selected top and complete ordered RTL closure (repeat
-`--rtl-file` when the directory also contains testbenches or include hubs),
-compile defines (`--define`), integer top overrides (`--parameter`) and include
-directories (`--include-dir`). Omit `--define` for an explicitly empty define
-set. These describe the selected configuration; AI does not guess active
-generate branches. The hygiene consumer elaborates fresh native Yosys evidence
-in this invocation and retains its input hashes, log and JSON in a new
-`native-elaboration-*` directory. Without a selected top, review remains
-lexical and conditional-driver uncertainty still blocks. Native failure does
-not erase findings or the missing-auditor disclosure.
-
-The canonical Default Step-2 gate calls `rtl_hygiene_lint --project . --define
-SYNTHESIS`: the existing silicon source selector, L9 top and catalog top
-parameter owner supply the digital configuration. This is driver elaboration,
-not a second full synthesis run or Ultra candidate comparison.
-
-Exit codes: 0 = PASS or WARN; 1 = FAIL (with `--strict`); 2 = bad input.
-
-The program runs six sub-programs when `--top` selects the configured design:
-- `rtl_hygiene_lint.py` — § 1 synthesis hazards + § 3 style + § 5 width
-- `reset_discipline_check.py` — § 2 reset/clock hygiene
-- `rtl_precheck_gate.py` — § 4 correctness smells + § 6 port fidelity
-- `interface_encoding_audit.py` — interface encoding consistency receipt
-- `crc_bitorder_check.py` — data layout / CRC loading receipt
-- `phy_counter_audit.py` — counter implementation receipt
-
-It aggregates findings into 6 categories, computes the score (rubric in
-`compute_score()`), and emits the same Markdown template the skill
-previously asked the LLM to author by hand.
-
-## What Claude does (backstop only)
-
-After the program emits the requested `rtl_review.md` + `rtl_review.json`:
-
-1. **Read the program output.** Do not re-derive any number it already returned.
-2. **Refuse to claim a higher score than the program returned.** The
-   scoring rubric is deterministic; overriding it would be an honesty-rule
-   violation.
-3. **Add residual prose** the program cannot author: design-intent
-   comments per finding (why a particular latch is intentional, why a
-   width-mismatch is parameterised), and short fix-suggestions per
-   ERROR / WARN.
-4. **Handoff:** if `verdict == "FAIL"`, recommend `/rtl-repair` (which
-   runs `rtl_hygiene_lint.py --fix`). If `WARN`, list the items to address
-   before tapeout. If `PASS`, proceed to `/checkpoint-gate`.
-
-## Scoring rubric (deterministic, in the program)
-
-The skill USED to enumerate this as prose. It is now `compute_score()`
-in `rtl_review_aggregate.py`, pinned by pytest:
-
-| Score | Condition | Verdict |
-|---|---|---|
-| 10 | 0 errors, 0 warns, 0 infos, over the auditors that ran; `auditors_not_run` is printed beside it | PASS |
-| 8–9 | 0 errors, 0 warns, INFO-only | PASS |
-| 6–7 | 0 errors, 1–4 warns | WARN |
-| 4–5 | 0–1 errors OR ≥ 5 warns | FAIL |
-| 2–3 | 2+ errors | FAIL |
-| 0–1 | not synthesizable | FAIL |
-
-**The score is over the auditors that RAN (ruling F2036-H).** A skipped
-auditor is a fact about the invocation, not a finding about the RTL, so it
-does not move the score — and it is never silent either: the report carries
-`auditors_not_run` (name + reason), the Score and Verdict lines print it
-beside the number, and `--strict` refuses to certify PASS while it is
-non-empty. **Never quote the score without that clause.** `10/10` while a
-check did not run, quoted bare, is the same defect one level up as reading a
-producer that wrote nothing as a clean file.
-
-
-## Anti-patterns
-
-- ❌ **Authoring the score by reading the file.** The program returns
-  it; you do not re-derive.
-- ❌ **Skipping the program because "it's a small file".** The program
-  is the audit trail. Run it on every review request.
-- ❌ **Claiming PASS when the JSON output says `verdict: FAIL`.**
-- ❌ **Quoting the score without `auditors_not_run`.** A bare `10/10` when an
-  auditor did not run states a coverage the run does not have.
-
-## Technical basis
-
-`programs/rtl_review_aggregate.py` + `programs/tests/test_rtl_review_aggregate.py`
-(54 pytest cases). The 3 sub-programs all pre-existed; this skill's
-former 159-line prose checklist is now a 14-line wrapper because the
-rules moved from prompt-space to tool-space.
+A numerical review score, identity receipt or signature is not a tool result.
+Do not add one to decide whether RTL passes.
 
 ## Error-flag site classification — recoverable vs fatal (#468)
 
-When the `fsm_error_invariant` gate flags an error-flag assignment site (an
-`error <= 1`, `err_o = 1'b1`, `status[ERR] <= 1`, etc. raised on an
-undefined-access / illegal-command / out-of-range path), the **program has done
-its half**: it located the site and proved an error flag is raised there. What it
-**cannot** decide from RTL structure is whether that error is *recoverable* (the
-FSM keeps serving subsequent transactions) or *fatal* (the FSM halts / needs reset
+Review every error-flag assignment site (an `error <= 1`, `err_o = 1'b1`,
+`status[ERR] <= 1`, etc. raised on an undefined-access / illegal-command /
+out-of-range path). RTL structure alone does not establish whether that error
+is *recoverable* (the FSM keeps serving subsequent transactions) or *fatal* (the FSM halts / needs reset
 to clear). That halt-vs-continue semantic lives in the **protocol prose** of L3
 (external interface / transaction protocol) and L5 (ADI / error-handling spec), not
 in the netlist topology — so it is the residual LLM judgment for this skill.
 
-**Procedure** (per flagged site):
+**Procedure** (per error-flag assignment site):
 
 1. Read the L3/L5 sentences that describe what the protocol does *after* this error
    condition is signalled.
@@ -150,22 +53,27 @@ in the netlist topology — so it is the residual LLM judgment for this skill.
      illegal-command / out-of-range) path AND the FSM **continues serving the next
      transaction** per L3/L5 (e.g. "an unsupported command sets the error bit and
      the slave returns to IDLE ready for the next frame"). Add the annotation
-     `// fsm_error: recoverable` at the flagged site.
+     `// fsm_error: recoverable` at the assignment site.
    - **fatal** — the error flag binds to a **halt / lockup state**, or L3/L5 says it
      **requires a reset (or explicit clear sequence) to clear** before any further
-     transaction is served. Leave the gate finding as a real concern and document the
-     halt/reset requirement.
+     transaction is served. Verify the halt/reset behavior and document the
+     requirement.
 3. In the review prose, **quote the exact L3/L5 sentence(s)** that justify the
    classification.
 
-**FORBIDDEN:** silencing / waiving the `fsm_error_invariant` gate finding *without*
+4. Derive an executable challenge from the provided prompt and L3/L5: trigger
+   the error, then offer the next legal transaction. Check specified recovery
+   or persistent halt until the required reset/clear. Review the actual native
+   simulation or formal result against that requirement. Missing native
+   evidence is `NOT_MEASURED`; hygiene lint does not prove this semantic behavior.
+
+**FORBIDDEN:** dismissing an error-recovery or fatal-state concern *without*
 quoting the L3/L5 sentence(s) that establish recoverable-vs-fatal. An unquoted
 "this is fine, it's recoverable" is an honesty-rule violation — the annotation must
 be backed by protocol text, not by an unsupported assertion.
 
-**why_not_bucket_a (cannot be a deterministic rule):** the program already flags the
-sites — that half *is* deterministic. The halt-vs-continue judgment requires reading
-the protocol's error-handling semantics in L3/L5 prose; whether the FSM resumes or
+**why_not_bucket_a (cannot be a deterministic rule):** the halt-vs-continue
+judgment requires reading the protocol's error-handling semantics in L3/L5 prose; whether the FSM resumes or
 locks up is a property of the *spec's intent*, not of the RTL's `case`/state
 structure (the same `error <= 1` line is recoverable in one protocol and fatal in
 another). No regex over the RTL can decide it; it needs the L3/L5 sentence.
@@ -174,67 +82,14 @@ another). No regex over the RTL can decide it; it needs the L3/L5 sentence.
 error-flag has an undefined-access path; recoverable-vs-fatal is a universal axis of
 error-handling specs. It names no chip and depends only on generic L3/L5 protocol
 prose + the gate's structural flag.
+## Review reset intent
 
-## Compliance gate (mandatory)
+A constant-arm data mux is a possible reset implementation, not proof of an
+architectural reset. Read the source reset requirement and the actual RTL
+branch/selector before interpreting a native CDC/RDC finding. Distinguish
+synchronous reset, functional update and unresolved intent. A signal name,
+constant value or absent document alone does not establish reset intent.
 
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/rtl-review/compliance.yaml \
-    --evidence-dir <project-root>/reports/phase2/lint/rtl_review \
-    --rtl-source-root <complete-rtl-source-directory> \
-    <project-root>/reports/phase2/lint/rtl_review.md
-```
-
-Exit 0 = PASS; exit 1 = the program output is missing a required section
-(typically you forgot `--out-md` or the program crashed and you authored
-by hand instead).
-
-The three named interface, CRC and counter obligations may be
-`NOT_APPLICABLE`, which is **not an audit PASS**. Their producing programs
-must prove structural absence over a complete source census, and the
-compliance checker independently re-elaborates the source directory selected
-by `--rtl-source-root` (or a check's `rtl_source_root`). The receipt's own path
-is not an independent source selection. The source files, hashes, subject and
-empty native audit population must all match the remeasured proof.
-
-The supported absence predicates are deliberately narrow: a closed single
-module with no child instances for interface encoding; no multi-bit nets or
-ports for CRC; and a closed single-module state graph with no transformed
-state recurrence for counters. A renamed counter is not absent. Missing or
-changed source, unresolved hierarchy, preprocessing, parameters, unsupported
-cells or memories, and a subject whose role is unknown remain blocking
-`NOT_MEASURED` at the zero-population boundary. A zero keyword-hit count or a
-prose-only `NOT_APPLICABLE` claim cannot discharge an obligation. Existing
-applicable-result and advisory CLI policies are unchanged.
-
-## Step3 reset-role fallback
-
-A constant-arm D-mux is a role candidate, not proof of an architectural reset.
-When ordinary `reset_dependency_check` reports `RESET_ROLE_UNRESOLVED`, read
-its `summary.reset_dependency_analysis.reset_role_request` and the current
-source plus actual design INPUT. Do not change L-docs, native graph/manifest,
-RTL, native reset pins or rule severity to satisfy this request.
-
-The Step3 request/answer writer below is newly added; existing D1/1/4/5
-receipt contracts are unchanged. Use
-`programs/ai_signed_judgement.py PROJECT --step 3` to obtain the current request. Author an answer with that exact `evidence_sha256`, `netlist_sha256`
-and `reset_roles[]`. Each role row includes the unchanged `candidate` object,
-`role` (`synchronous_reset`, `functional_update`, or `unresolved`), `rationale`,
-and exact `source_context` citations; resolved roles additionally require
-`intent` citations in the actual `input/` documents. Citations are
-`{file, line, quote}`. Review every current input listed by the request, including potentially
-conflicting statements outside the chosen quote. A supported role may be an
-explicit statement or a reviewed inference from actual input and source context
-in any language. In the rationale, describe the exact state, branch and selector
-and explain how the cited intent supports that role. A constant arm, a signal
-name, existing ARST or missing L8 facts alone is not intent. Insufficient or
-conflicting intent stays `unresolved`; do not fabricate input to fit a role.
-The program validates identity and citation bytes, not natural-language truth or
-a dishonest review. Semantic support and contradiction review belong to ICExpert.
-
-Publish through the same program with `--step 3 --answer ANSWER.json
---signed-by REVIEWER --judgement REASON`, then rerun the same ordinary RDC
-consumer. Only the canonical `reports/audit/ai_judgements/3.json` is authority;
-the temporary authored answer is not. The unchanged intrinsic candidate census
-keeps the handoff required after adoption or request deletion. Existing native
-cycles and other gates remain authoritative; a role signature is no IC PASS.
+Verify the source-required behavior with native simulation or formal results.
+Keep conflicting or insufficient intent unresolved, and never fabricate a
+source requirement or change rule severity to clear a finding.

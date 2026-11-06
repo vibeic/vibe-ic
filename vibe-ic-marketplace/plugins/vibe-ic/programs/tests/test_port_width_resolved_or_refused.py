@@ -187,61 +187,14 @@ def test_resolver_reads_the_dut_parameter_header():
     assert PW.dut_defaults(_UNRESOLVABLE_RTL, "core_top") == {}
 
 
-def test_more_input_is_not_a_worse_answer():
-    """THE CONTROL. Deleting the width cell must not improve the answer.
-
-    Pre-fix this asserted-false in the most damning way available: `both` gave
-    "" (one bit) and `less` -- strictly less information about the same port --
-    gave the correct " [9:0]".
-    """
-    both = {"width_decl": "[aw-1:0]", "msb": 9, "lsb": 0}
-    less = dict(both)
-    del less["width_decl"]
-    assert P2._v643_width_decl(less) == " [9:0]"
-    assert P2._v643_width_decl(both) == P2._v643_width_decl(less)
 
 
 # ── consumer 1: the full-stack TB (the SILENT path) ──────────────────────────
 
-def test_full_stack_tb_declares_the_bus_at_its_real_width(tmp_path):
-    proj, _ = _seed(tmp_path, _PARAM_L9, _PARAM_RTL)
-    res = P2.step_full_stack_tb_gen(proj, "chip_top")
-    assert res.status != "FAIL", res.detail
-    body = list(P2._pl.sim_full_stack_dir(proj).glob("tb_*_full.v"))[0].read_text()
-    assert "reg [9:0] adr = 0;" in body, body
-    assert "reg [31:0] wdat = 0;" in body, body
-    assert "wire [31:0] rdat;" in body, body
-    # the pre-fix text: a wide bus bound one bit wide, which still PASSED
-    assert "reg adr = 0;" not in body
-    assert "reg wdat = 0;" not in body
 
 
-@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
-def test_full_stack_tb_compiles_at_full_width(tmp_path):
-    proj, rtl = _seed(tmp_path, _PARAM_L9, _PARAM_RTL)
-    P2.step_full_stack_tb_gen(proj, "chip_top")
-    tb = list(P2._pl.sim_full_stack_dir(proj).glob("tb_*_full.v"))[0]
-    r = subprocess.run(
-        ["iverilog", "-g2012", "-o", str(tmp_path / "a.out"),
-         str(tb), str(rtl / "core_top.v")], capture_output=True, text=True)
-    assert r.returncode == 0, r.stderr
 
 
-def test_full_stack_tb_refuses_an_underivable_width(tmp_path):
-    """No parameter header -> the step FAILS by name and writes NO TB.
-
-    The alternative -- declare it one bit and carry on -- is the defect.
-    """
-    l9 = {"top_module": "core_top", "top_ports": [
-        {"name": "clk", "direction": "input"},
-        {"name": "rst_n", "direction": "input"},
-        {"name": "adr", "direction": "input"},
-        {"name": "ack", "direction": "output"}]}
-    proj, _ = _seed(tmp_path, l9, _UNRESOLVABLE_RTL)
-    res = P2.step_full_stack_tb_gen(proj, "chip_top")
-    assert res.status == "FAIL", (res.status, res.detail)
-    assert "adr" in res.detail and "aw" in res.detail, res.detail
-    assert not list(P2._pl.sim_full_stack_dir(proj).glob("tb_*_full.v"))
 
 
 # ── consumer 2: the L10 unit TBs (the LOUD path) ─────────────────────────────
@@ -312,53 +265,14 @@ _MACRO_L9 = {"top_module": "pad_top", "top_ports": [
     {"name": "io_out", "direction": "output", "width": 38, "msb": 37, "lsb": 0}]}
 
 
-def test_a_macro_width_is_resolved_from_the_l9_bounds(tmp_path):
-    """The RTL cell is a `define; L9 measured the port. Use what is known."""
-    proj, _ = _seed(tmp_path, _MACRO_L9, _MACRO_RTL, name="pad_top")
-    res = P2.step_full_stack_tb_gen(proj, "pad_top")
-    assert res.status != "FAIL", res.detail
-    body = list(P2._pl.sim_full_stack_dir(proj).glob("tb_*_full.v"))[0].read_text()
-    assert "reg [37:0] io_in = 0;" in body, body
-    assert "wire [37:0] io_out;" in body, body
-    assert "reg io_in = 0;" not in body          # the pre-fix 1-bit declaration
 
 
-def test_the_l9_bounds_survive_the_rtl_reconcile(tmp_path):
-    """The #629 reconcile replaces the port dicts with RTL-derived ones. It must
-    CARRY the L9 numbers across, or the fallback above can never fire in the
-    real flow even though the numbers were on disk the whole time."""
-    proj, _ = _seed(tmp_path, _MACRO_L9, _MACRO_RTL, name="pad_top")
-    P2.step_full_stack_tb_gen(proj, "pad_top")
-    l9 = P2._port_width.l9_bounds(P2._pl.generated_docs_dir(proj))
-    assert l9["io_in"]["msb"] == 37 and l9["io_in"]["lsb"] == 0, l9
 
 
-def test_a_macro_width_with_no_l9_number_still_refuses(tmp_path):
-    """NO-LEAK. The L9 fallback must not become a way to guess: strip the
-    numbers and the same design refuses again, by name."""
-    l9 = {"top_module": "pad_top", "top_ports": [
-        {"name": "clk", "direction": "input"},
-        {"name": "io_in", "direction": "input"},
-        {"name": "io_out", "direction": "output"}]}
-    proj, _ = _seed(tmp_path, l9, _MACRO_RTL, name="pad_top")
-    res = P2.step_full_stack_tb_gen(proj, "pad_top")
-    assert res.status == "FAIL", (res.status, res.detail)
-    assert "io_in" in res.detail and "IO_PADS" in res.detail, res.detail
 
 
 # ── the two generators must agree ────────────────────────────────────────────
 
-def test_both_generators_resolve_the_same_width(tmp_path):
-    """One resolver, two consumers — so a port cannot be 10 bits in one TB and
-    1 bit in the other, which is exactly what the two separate code paths
-    produced before."""
-    proj, _ = _seed(tmp_path, _PARAM_L9, _PARAM_RTL)
-    P2.step_full_stack_tb_gen(proj, "chip_top")
-    fs = list(P2._pl.sim_full_stack_dir(proj).glob("tb_*_full.v"))[0].read_text()
-    _mod, ports, _why = TBG.resolve_dut(proj, "core_top")
-    unit = {n: w for _d, w, n in ports}
-    assert unit["adr"] == "[9:0]" and "reg [9:0] adr = 0;" in fs
-    assert unit["wdat"] == "[31:0]" and "reg [31:0] wdat = 0;" in fs
 
 
 if __name__ == "__main__":

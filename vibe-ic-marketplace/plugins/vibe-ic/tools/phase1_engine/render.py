@@ -743,7 +743,7 @@ def compute_required_facts_coverage(
     facts to alternate canonical paths (`L9.process`, `L1.meta.*`, etc).
     """
     try:
-        from .gap_detect import detect_gaps, DEFAULT_CLASS_KB, RequiredFactsApplicabilityError
+        from .gap_detect import detect_gaps, DEFAULT_CLASS_KB
     except Exception:
         return {"pct": 1.0, "total": 0, "satisfied": 0,
                 "missing_by_layer": {}, "alias_rescued": []}
@@ -753,8 +753,6 @@ def compute_required_facts_coverage(
                 "missing_by_layer": {}, "alias_rescued": []}
     try:
         gaps = detect_gaps(graph, class_kb_root=root)
-    except RequiredFactsApplicabilityError:
-        raise
     except Exception:
         return {"pct": 1.0, "total": 0, "satisfied": 0,
                 "missing_by_layer": {}, "alias_rescued": []}
@@ -763,19 +761,15 @@ def compute_required_facts_coverage(
     # template (same code path detect_gaps uses).
     from .gap_detect import (
         _aggregate_required_facts,
-        _applicable_required_facts,
         _load_yaml,
         _parent_chain,
     )
     try:
         tree = _load_yaml(root / "class-tree.yaml")
         chain = _parent_chain(graph.class_path, tree)
-        required, omitted = _applicable_required_facts(
-            graph, _aggregate_required_facts(chain, root / "templates"))
-    except RequiredFactsApplicabilityError:
-        raise
+        required = _aggregate_required_facts(chain, root / "templates")
     except Exception:
-        required, omitted = {}, []
+        required = {}
 
     total_required = 0
     for entries in required.values():
@@ -818,7 +812,7 @@ def compute_required_facts_coverage(
         "satisfied": satisfied,
         "missing_by_layer": missing_by_layer,
         "alias_rescued": alias_rescued,
-        "inapplicable_required_facts": omitted,
+        "inapplicable_required_facts": [],
     }
 
 

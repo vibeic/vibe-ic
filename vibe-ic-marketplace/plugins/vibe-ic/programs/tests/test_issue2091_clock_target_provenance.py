@@ -258,14 +258,8 @@ def test_the_question_uses_no_silicon_jargon(tmp_path):
 # runner orchestrates and `test_ppa_runner_extraction_ledger` refuses a
 # `clock`-named function defined in it. This asserts the runner still CALLS
 # them, so moving the logic out cannot quietly unwire it.
-import phase3_one_shot_runner as p3  # noqa: E402
 
 
-def test_the_runner_calls_the_provenance_module_at_the_signoff_step():
-    import inspect
-    src = inspect.getsource(p3.step_declared_signoff_gates)
-    assert "emit_report" in src, src[-800:]
-    assert "stamp_signoff_records" in src, src[-800:]
 
 
 def test_runner_stamps_the_assumption_into_the_signoff_record(tmp_path):

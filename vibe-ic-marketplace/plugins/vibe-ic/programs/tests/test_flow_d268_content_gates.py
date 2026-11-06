@@ -8,7 +8,6 @@ import pytest
 import yaml
 
 from programs import flow_compliance_check as compliance
-from programs import flow_gate_enforcement_audit as enforcement
 from _declared_design_inputs import consumes_declaration, declare_no_reuse
 
 FLOW = Path(__file__).resolve().parents[2] / "flow/phase1_phase2_phase3.yaml"
@@ -224,32 +223,6 @@ def test_step1_case_is_judged_on_its_declaration(tmp_path):
                "missing" in r for r in unread.reasons), unread.reasons
 
 
-def test_content_gate_declares_runner_advisory_and_required_step_clauses():
-    programs = Path(__file__).resolve().parents[1]
-    assert enforcement.declared_intent(
-        programs, "flow_step_output_content_check") == "advisory"
-    expected = {
-        ("1", "rtl"), ("14", "netlist"), ("14", "stage_analog"),
-        ("27", "si"), ("32", "repair"), ("35", "dfm"), ("P0", "rtl"),
-    }
-
-    def content_modes(gate):
-        if not isinstance(gate, dict):
-            return
-        command = gate.get("program_exit_zero")
-        prefix = "flow_step_output_content_check . --mode "
-        if isinstance(command, str) and command.startswith(prefix):
-            yield command[len(prefix):]
-        for key in ("all_of", "any_of"):
-            children = gate.get(key)
-            if isinstance(children, list):
-                for child in children:
-                    yield from content_modes(child)
-
-    actual = {(step_id, mode)
-              for step_id, step in _steps().items()
-              for mode in content_modes(step.get("gate"))}
-    assert actual == expected, (sorted(actual - expected), sorted(expected - actual))
 
 
 @pytest.mark.parametrize("step_id,commands", [
