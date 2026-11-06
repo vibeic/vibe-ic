@@ -295,7 +295,7 @@ runner = importlib.import_module('phase3_one_shot_runner')
 
 
 def test_supply_nets_and_pins_come_only_from_the_defs_power_declarations():
-    tcl = contract.def_supply_tcl(DEF_TEXT, runner._PNR_STAGE_MARKER)
+    tcl = contract.def_supply_tcl(DEF_TEXT, 'PNR_STAGE:')
     assert 'odb::dbNet_create $_ll_blk "VDD"]; $_ll_n setSpecial; $_ll_n setSigType POWER' in tcl
     assert 'odb::dbNet_create $_ll_blk "VSS"]; $_ll_n setSpecial; $_ll_n setSigType GROUND' in tcl
     assert 'dbBTerm_create [$_ll_blk findNet "VDD"] "VDD"]; $_ll_b setIoType INOUT' in tcl
@@ -309,7 +309,7 @@ def test_supply_nets_and_pins_come_only_from_the_defs_power_declarations():
 
 
 def _deck():
-    m = runner._PNR_STAGE_MARKER
+    m = 'PNR_STAGE:'
     return ("read_lef /pdk/core.lef\nread_verilog /work/netlist.v\nlink_design core\n"
             f'puts "{m} floorplan"\ninitialize_floorplan -die_area "0 0 100 100" \\\n'
             "  -core_area \"10 10 90 90\" -site unit\n"
@@ -320,12 +320,12 @@ def _deck():
 
 
 def test_tap_and_pdn_region_is_elided_only_between_its_two_markers():
-    out = contract.elide_tap_pdn_region(_deck(), runner._PNR_STAGE_MARKER)
+    out = contract.elide_tap_pdn_region(_deck(), 'PNR_STAGE:')
     assert 'tapcell' not in out and 'pdngen' not in out
     assert out.index('write_def /work/phase3/stage3/pnr/floorplan.def') < out.index('global_placement')
     assert out.count('read_verilog') == 1
     with pytest.raises(ValueError, match='LL_FLOORPLAN_SEAM_AMBIGUOUS'):
-        contract.elide_tap_pdn_region(_deck() + _deck(), runner._PNR_STAGE_MARKER)
+        contract.elide_tap_pdn_region(_deck() + _deck(), 'PNR_STAGE:')
 
 
 
