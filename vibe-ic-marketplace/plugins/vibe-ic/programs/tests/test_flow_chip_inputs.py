@@ -408,7 +408,7 @@ def test_prepare_writes_usable_chip_inputs_and_preserves_pdn(inputs):
         assert result[key] == config[key]
     wrapper = Path(result["VERILOG_FILES"][-1]).read_text()
     assert "input wire [5:2] data" in wrapper
-    assert "output wire result" in wrapper
+    assert "inout wire result" in wrapper
     assert "wire [5:2] _core_port_2;" in wrapper
     assert ".PAD(data[5])" in wrapper
     assert ".Y(_core_port_2[5])" in wrapper
@@ -428,6 +428,65 @@ def test_prepare_writes_usable_chip_inputs_and_preserves_pdn(inputs):
     assert report["assumptions"]
     assert result["DIE_AREA"][2] >= 84
     assert result["CORE_AREA"][0] == 22
+
+
+def test_bidirectional_pad_terminal_does_not_change_the_logical_input_budget(inputs):
+    project, config, native, ports, _ = inputs
+    liberty = Path(native["PAD_LIBS"]["*"][0])
+    liberty.write_text(liberty.read_text().replace(
+        "direction : input;\n   is_pad : true;", "direction : inout;\n   is_pad : true;"))
+    result = chip.prepare(project, config)
+    wrapper = Path(result["VERILOG_FILES"][-1]).read_text()
+    assert "inout wire [5:2] data" in wrapper
+    assert "inout wire clk" in wrapper
+    assert next(port for port in ports if port["name"] == "data")["direction"] == "input"
+    report = json.loads((project / "work/flow/chip/preparation.json").read_text())
+    assert next(port for port in report["ports"] if port["name"] == "data")["direction"] == "input"
+    sdc = Path(result["PNR_SDC_FILE"]).read_text()
+    assert "set_input_delay 4.8" in sdc and r"data\[5\]" in sdc
+    assert "set_output_delay 4.8" in sdc
+
+
+def test_native_bidirectional_receivers_pass_the_normal_verilator_step(tmp_path, native_inputs):
+    from librelane.common import Toolbox
+    from librelane.flows import Flow
+    from librelane.state import State
+    from librelane.steps import Step
+
+    core = Path(native_inputs["VERILOG_FILES"][0])
+    core.write_text("module unit(input clk, input [3:1] data, output reg q);\n"
+                    "always @(posedge clk) q <= ^data; endmodule\n")
+    owner = Flow.factory.get("Chip")(native_inputs, design_dir=str(tmp_path),
+                                    pdk_root=os.environ["PDK_ROOT"])
+    native = owner.config.to_raw_dict()
+    library = chip._library(native)
+    ports = chip._ports({"modules": {"unit": {"ports": {
+        "clk": {"direction": "input", "bits": [2]},
+        "data": {"direction": "input", "bits": [3, 4, 5], "offset": 1},
+        "q": {"direction": "output", "bits": [6]},
+    }}}}, "unit")
+    chosen, ordered, supplies, *_ = chip._ring(tmp_path, native, ports, library)
+    wrapper = _write(tmp_path / "wrapper.v", chip._wrapper(
+        "unit", "unit_chip", ports, chosen, ordered, supplies, native, library))
+    config = owner.config.copy(DESIGN_NAME="unit_chip", VERILOG_FILES=[str(core), str(wrapper)])
+    result = Step.factory.get("Verilator.Lint")(config, State()).start(
+        toolbox=Toolbox(str(tmp_path / "tools")), step_dir=str(tmp_path / "lint"))
+    assert result.metrics["design__lint_error__count"] == 0
+    assert "inout wire [3:1] data" in wrapper.read_text()
+
+
+@pytest.mark.parametrize("direction", ["input", "output"])
+def test_unidirectional_pad_terminals_keep_their_native_direction(direction):
+    port = {"name": "signal", "direction": direction, "width": 1, "indexed": False}
+    chosen = {"u_pad": {"port": "signal", "master": "neutral_pad", "terminal": "BOND",
+                         "direction": direction, "core_pin": "CORE"}}
+    library = {"cells": {"neutral_pad": {"BOND": {"direction": direction}}},
+               "pg_pins": {}, "verilog": []}
+    native = {"SYNTH_TIEHI_CELL": "neutral_hi/Y", "SYNTH_TIELO_CELL": "neutral_lo/Y"}
+    wrapper = chip._wrapper("neutral_core", "neutral_chip", [port], chosen,
+                            {"N": ["u_pad"]}, [], native, library)
+    assert f"{direction} wire signal" in wrapper
+    assert "inout wire signal" not in wrapper
 
 
 @pytest.mark.parametrize("wide_side", ["N", "E"])
