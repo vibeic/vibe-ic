@@ -1,4 +1,3 @@
-"""Derive native clock-wire repair length from the core capacitance budget."""
 from __future__ import annotations
 
 from decimal import Decimal, ROUND_FLOOR
@@ -48,6 +47,45 @@ def _buffer_input_caps(text, excluded):
             return None
         values.append(max(caps))
     return values
+
+
+def cts_settings(config):
+    fanout = config.get("MAX_FANOUT_CONSTRAINT")
+    distance = config.get("CTS_DISTANCE_BETWEEN_BUFFERS") or 0
+    if (fanout is None or not math.isfinite(float(fanout)) or fanout <= 0
+            or not math.isfinite(float(distance)) or distance < 0):
+        return {}
+    selectors = config.get("CTS_CLK_BUFFERS") or []
+    technology = matching(config.get("TECH_LEFS") or {}, config.get("DEFAULT_CORNER") or "")
+    cells = paths(config.get("CELL_LEFS"))
+    if (not selectors or len(technology) != 1 or not cells
+            or any(not path.is_file() for path in technology + cells)):
+        return {}
+    import odb
+
+    database = odb.dbDatabase.create()
+    try:
+        for path in technology + cells:
+            odb.read_lef(database, str(path))
+        masters = {master.getName(): master for library in database.getLibs()
+                   for master in library.getMasters()}
+        heights = []
+        for selector in selectors:
+            matches = ([masters[selector]] if selector in masters else
+                       [master for name, master in masters.items()
+                        if fnmatch.fnmatchcase(name, selector)])
+            if not matches:
+                return {}
+            heights.extend(master.getHeight() for master in matches)
+        if min(heights) <= 0:
+            return {}
+        # OpenROAD TechChar uses height * 10 / 2 DBU as its minimum segment unit.
+        characterization_length_um = Decimal(min(heights) * 5) / database.getTech().getDbUnitsPerMicron()
+        if distance:
+            characterization_length_um = min(characterization_length_um, Decimal(str(distance)))
+        return {"CTS_DISTANCE_BETWEEN_BUFFERS": characterization_length_um}
+    finally:
+        odb.dbDatabase.destroy(database)
 
 
 def clock_settings(config):

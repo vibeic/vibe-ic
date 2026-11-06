@@ -37,6 +37,8 @@ def implementation_setting(key: str) -> bool:
 
 def native_defaults(config):
     """Apply native cell exclusions and bounded CTS characterization defaults."""
+    from flow_clock_geometry import cts_settings
+
     excluded = [*(config.get("EXTRA_EXCLUDED_CELLS") or []), "*dly*", "*delay*"]
     if str(config.get("PDK", "")).lower().startswith("gf180mcu"):
         # OpenROAD-flow-scripts flow/platforms/gf180/config.mk sets DONT_USE_CELLS = *_1.
@@ -49,6 +51,7 @@ def native_defaults(config):
     # Zero requests native auto; CTS resets both axes when either is unspecified.
     if caps and slews:
         changes.update(CTS_MAX_CAP=min(caps), CTS_MAX_SLEW=min(slews))
+    changes.update(cts_settings(config))
     return config.copy(**changes)
 
 
