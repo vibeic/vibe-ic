@@ -566,6 +566,9 @@ def test_implementation_pdn_widths_reach_native_configuration(project):
     ("GRT_DESIGN_REPAIR_MAX_CAP_PCT", 30), ("GRT_DESIGN_REPAIR_MAX_SLEW_PCT", 30),
     ("EXTRA_EXCLUDED_CELLS", ["delay_weak*"]),
     ("DECAP_CELLS", []), ("DECAP_CELLS", ["native_decap*"]),
+    ("CLOCK_PORT", "clock_i"), ("CLOCK_PORT", ["clock_i", "aux_clock_i"]),
+    ("FP_DEF_TEMPLATE", "frame.def"), ("FALLBACK_SDC", "fallback.sdc"),
+    ("PNR_SDC_FILE", "pnr.sdc"), ("SIGNOFF_SDC_FILE", "signoff.sdc"),
 ])
 def test_cli_records_supported_implementation_choice(project, key, value):
     output = project / "config.json"
