@@ -287,8 +287,3 @@ def test_mc_yield_reports_a_structured_skip_instead_of_raising(
     assert out["needs_user_decision"] is True
     assert {o["id"] for o in out["options"]} == {"derive_from_project",
                                                  "explicit_env"}
-
-
-# ---------------------------------------------------------------------------
-# BEHAVIOUR — the yosys flattener, driven as a real process over a fake docker
-# ---------------------------------------------------------------------------

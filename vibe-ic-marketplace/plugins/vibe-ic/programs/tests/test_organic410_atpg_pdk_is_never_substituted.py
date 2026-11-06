@@ -28,17 +28,6 @@ import fault_atpg_run as F  # noqa: E402
 _RUNNER = (_PROGRAMS / "design_one_shot_runner.py").read_text()
 
 
-
-
-
-
-
-
-
-
-
-
-
 def test_unmapped_is_not_a_pdk_so_the_engine_refuses():
     assert "unmapped" not in F.PDK_CONFIG
 
