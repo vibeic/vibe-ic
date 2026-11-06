@@ -523,24 +523,13 @@ if {$::vic_changed == 0} {
 }
 
 # ---- 6. legalize, supply, reroute ------------------------------------------
-# Only the cells the repair created or resized are legalized; every other
-# instance is LOCKED for the call and restored (the Odb.InsertECOBuffers
-# pattern), so the router's placement is not re-legalized around them.
+# Let native legalization move neighboring movable cells to satisfy padding.
+# Their incident nets are included in the ECO route through vic_moved below.
 set ::vic_mine [dict create]
 foreach inst [concat $::vic_created $::vic_resized] { dict set ::vic_mine [$inst getName] 1 }
-set ::vic_locked [list]
-foreach inst [$::block getInsts] {
-    if {[dict exists $::vic_mine [$inst getName]]} { continue }
-    set status [$inst getPlacementStatus]
-    if {$status ni {LOCKED FIRM COVER}} {
-        lappend ::vic_locked [list $inst $status]
-        $inst setPlacementStatus LOCKED
-    }
-}
 source $::env(SCRIPTS_DIR)/openroad/common/dpl_cell_pad.tcl
 log_cmd detailed_placement \
     -max_displacement [subst { $::env(PL_MAX_DISPLACEMENT_X) $::env(PL_MAX_DISPLACEMENT_Y) }]
-foreach pair $::vic_locked { [lindex $pair 0] setPlacementStatus [lindex $pair 1] }
 # An illegal placement ends the step, named like its other candidate
 # refusals: the controller books this candidate refused, not crashed.
 if {[catch {check_placement -verbose} err]} {
