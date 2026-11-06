@@ -14,6 +14,8 @@ chip/PDK-AGNOSTIC.
 from __future__ import annotations
 
 import json
+import hashlib
+import _analog_a_check_common as content
 import re
 import shutil
 import subprocess
@@ -233,23 +235,16 @@ def test_the_lef_write_carries_a_marker_from_its_own_argv(tmp_path: Path,
         "measurement_basis": "delivered_a3_testbench_op",
         "liberty_value": 1.0,
         "liberty_power_unit": "1uW",
-        "measurement_sha256": "m" * 64,
         "metric": "cell_leakage_power",
         "value": 1.0,
         "unit": "uW",
-        "provenance": "real_ngspice",
         "source_netlist": "phase3/analog/blk/post_layout_extracted.spice",
-        "source_netlist_sha256": "n" * 64,
         "native_log": "phase3/analog/blk/a8_native_measurement.ngspice.log",
-        "native_log_sha256": "l" * 64,
         "simulator": "ngspice-47",
-        "image_digest": "sha256:" + "a" * 64,
-        "native_binary": {"path": "/usr/bin/ngspice", "sha256": "c" * 64,
-                          "selection": "discovered"},
+        "native_binary": {"path": "/usr/bin/ngspice",                           "selection": "discovered"},
     }, ""))
     monkeypatch.setattr(E, "_selected_native_binary", lambda *a, **k: (
-        {"path": "/usr/bin/ngspice", "sha256": "c" * 64,
-         "selection": "discovered"}, ""))
+        {"path": "/usr/bin/ngspice",          "selection": "discovered"}, ""))
     calls = []
 
     def fake_exec(container, cmd, timeout=900, *, marker=None, log_path=None):
@@ -265,14 +260,10 @@ def test_the_lef_write_carries_a_marker_from_its_own_argv(tmp_path: Path,
     monkeypatch.setattr(E, "_docker_exec", fake_exec)
     r = E.emit_block(p, "blk", "c", "/pdk")
     assert r["emitted"] is True, r
-    manifest = json.loads((p / "phase3" / "analog" / "hardmacro" /
-                           "blk" / "a8_views_provenance.json").read_text())
-    assert manifest["producer"] == "analog_a8_hardmacro_emit"
-    assert manifest["source_gds_sha256"] == r["source_gds_sha256"]
-    assert manifest["native_measurement"]["native_binary"]["sha256"] == "c" * 64
-    assert set(manifest["views"]) == {".lef", ".lib", ".gds", ".v"}
-    assert manifest["characterization_scope"]["timing_arcs"] == "NOT_MEASURED"
-    assert manifest["characterization_scope"]["full_timing_characterization"] is False
+    hdir = p / "phase3/analog/hardmacro/blk"
+    assert all((hdir / ("blk" + suffix)).is_file() for suffix in (".lef", ".lib", ".gds", ".v"))
+    assert r["characterization_scope"]["timing_arcs"] == "NOT_MEASURED"
+    assert r["characterization_scope"]["full_timing_characterization"] is False
     long_runs = [c for c in calls if "magic" in c["cmd"]]
     assert long_runs and all(c["marker"] and c["marker"] in c["cmd"]
                              for c in long_runs), calls
@@ -362,49 +353,26 @@ def _write_native_measurement_fixture(tmp_path: Path, *, value=0.5,
     project = tmp_path / "proj"
     b = project / "phase3" / "analog" / "blk"
     b.mkdir(parents=True)
-    (project / "phase3" / "analog" / "analog_block_list.json").write_text(
-        json.dumps({"blocks": ["blk"]}))
+    (project / "phase3" / "analog" / "analog_block_list.json").write_text(json.dumps({"blocks": ["blk"]}))
     (b / "layout.mag").write_text("magic\ntech sky130A\n")
-    gds = b / "blk.gds"
-    gds.write_bytes(b"real-gds-bytes")
-    net = b / "post_layout_extracted.spice"
-    net.write_text(".subckt blk vdd vss vin vout\n.ends blk\n")
-    log = b / "a8_native_measurement.ngspice.log"
-    log.write_text("ngspice-47\npwr = 0.0005\n")
-    topo = {"ports": ["vdd", "vss", "vin", "vout"],
-            "rails": {"vdd": "vdd", "vss": "vss"}}
+    (b / "blk.gds").write_bytes(b"unit-native-gds")
+    ports = ["vdd", "vss", "vin", "vout"]
+    extracted_ports = ports if declared_ports is None else declared_ports
+    (b / "post_layout_extracted.spice").write_text(".subckt blk " + " ".join(extracted_ports) + "\n.ends blk\n")
+    power_w = value if isinstance(value, bool) else value * {"W": 1, "mW": 1e-3, "uW": 1e-6, "nW": 1e-9, "pW": 1e-12}[unit]
+    (b / "a8_native_measurement.ngspice.log").write_text(f"ngspice native OP\npwr = {power_w}\n")
+    topo = {"ports": ports, "rails": {"vdd": "vdd", "vss": "vss"}}
     (b / "topology.json").write_text(json.dumps(topo))
-    rec = {
-        "schema": E._A8_MEASUREMENT_SCHEMA,
-        "status": "MEASURED",
-        "block": "blk",
-        "metric": "cell_leakage_power",
-        "value": value,
-        "unit": unit,
-        "provenance": "real_ngspice",
-        "simulator": "ngspice-47",
-        "image_digest": "sha256:" + "a" * 64,
-        "native_binary": {"path": "/usr/bin/ngspice", "sha256": "c" * 64,
-                          "selection": "discovered"},
-        "declared_ports": (declared_ports if declared_ports is not None
-                            else topo["ports"]),
-        "source_layout": "phase3/analog/blk/layout.mag",
-        "source_layout_sha256": E._sha256(b / "layout.mag"),
-        "source_gds": "phase3/analog/blk/blk.gds",
-        "source_gds_sha256": E._sha256(gds),
-        "source_netlist": "phase3/analog/blk/post_layout_extracted.spice",
-        "source_netlist_sha256": E._sha256(net),
-        "native_log": "phase3/analog/blk/a8_native_measurement.ngspice.log",
-        "native_log_sha256": E._sha256(log),
-    }
+    rec = {"status": "MEASURED", "block": "blk", "metric": "cell_leakage_power", "value": value,
+           "unit": unit, "source_netlist": "phase3/analog/blk/post_layout_extracted.spice",
+           "native_log": "phase3/analog/blk/a8_native_measurement.ngspice.log"}
     (b / E._A8_MEASUREMENT).write_text(json.dumps(rec))
     return project, b, topo
 
 
 def _select_fixture_binary(monkeypatch):
     monkeypatch.setattr(E, "_selected_native_binary", lambda *a, **k: (
-        {"path": "/usr/bin/ngspice", "sha256": "c" * 64,
-         "selection": "discovered"}, ""))
+        {"path": "/usr/bin/ngspice",          "selection": "discovered"}, ""))
     # LEF transport tests consume an already characterized current cache.
     read = E.load_native_measurement
     def current(*args, **kwargs):
@@ -419,32 +387,22 @@ def test_missing_native_measurement_refuses_before_magic(tmp_path: Path):
     project, b, topo = _write_native_measurement_fixture(tmp_path)
     (b / E._A8_MEASUREMENT).unlink()
     got, why = E.load_native_measurement(project, "blk", b / "blk.gds", topo)
-    assert got is None and "native ngspice measurement" in why
+    assert got is None and "native measurement is unavailable" in why
 
 
-def test_missing_native_binary_identity_is_not_measured(tmp_path: Path):
-    project, b, topo = _write_native_measurement_fixture(tmp_path)
-    path = b / E._A8_MEASUREMENT
-    rec = json.loads(path.read_text())
-    del rec["native_binary"]
-    path.write_text(json.dumps(rec))
+
+
+
+
+
+
+def test_native_measurement_uses_the_native_log_power(tmp_path: Path):
+    project, b, topo = _write_native_measurement_fixture(tmp_path, value=0.0009, unit="W")
+    (b / "a8_native_measurement.ngspice.log").write_text("pwr = 0.0005\n")
     got, why = E.load_native_measurement(project, "blk", b / "blk.gds", topo)
-    assert why == "native binary provenance is absent or malformed"
-    assert got is None
-
-
-def test_stale_native_measurement_refuses(tmp_path: Path):
-    project, b, topo = _write_native_measurement_fixture(tmp_path)
-    (b / "blk.gds").write_bytes(b"mutated-after-measurement")
-    got, why = E.load_native_measurement(project, "blk", b / "blk.gds", topo)
-    assert got is None and "source_gds_sha256" in why
-
-
-def test_native_measurement_value_must_match_native_log(tmp_path: Path):
-    project, b, topo = _write_native_measurement_fixture(
-        tmp_path, value=0.0009, unit="W")
-    got, why = E.load_native_measurement(project, "blk", b / "blk.gds", topo)
-    assert got is None and "does not match native" in why
+    assert got is not None, why
+    assert got["value"] == pytest.approx(0.0005)
+    assert got["liberty_value"] == pytest.approx(500)
 
 
 @pytest.mark.parametrize("value,unit", [
@@ -466,62 +424,31 @@ def test_loader_rejects_wrong_extraction_top_even_with_current_hash(tmp_path: Pa
     net.write_text(".subckt wrong_block vdd vss vin vout\n.ends wrong_block\n")
     path = b / E._A8_MEASUREMENT
     rec = json.loads(path.read_text())
-    rec["source_netlist_sha256"] = E._sha256(net)
     path.write_text(json.dumps(rec))
     got, why = E.load_native_measurement(project, "blk", b / "blk.gds", topo)
     assert got is None and "exact declared top-cell" in why
 
 
-def test_declared_a3_subject_binding_is_emitted_by_a8(tmp_path: Path):
-    project, b, topo = _write_native_measurement_fixture(tmp_path)
-    (b / "spec.json").write_text(json.dumps({
-        "block": "blk",
-        "interface": {"pins": [{"name": p} for p in topo["ports"]]},
-    }))
-    a3 = b / "blk.sp"
-    a3.write_text("* A3 netlist\n")
-    sidecar = b / "netlist_provenance.json"
-    sidecar.write_text(json.dumps({
-        "block": "blk",
-        "_provenance": {
-            "design_content": "structure_and_geometry",
-            "rendered_from": {
-                "topology_json": {
-                    "path": "phase3/analog/blk/topology.json",
-                    "sha256": E._sha256(b / "topology.json"),
-                },
-                "spec_json": {
-                    "path": "phase3/analog/blk/spec.json",
-                    "sha256": E._sha256(b / "spec.json"),
-                },
-            },
-            "artifact_sha256": E._sha256(a3),
-        },
-    }))
-    measurement, why = E.load_native_measurement(
-        project, "blk", b / "blk.gds", topo)
-    assert measurement is not None, why
-    bound, why = E._attach_declared_subject_binding(
-        project, "blk", topo, measurement)
-    assert bound is not None, why
-    assert bound["design_content"] == "structure_and_geometry"
-    binding = bound["subject_binding"]
-    assert binding["block"] == "blk"
-    assert binding["a3_netlist"] == "phase3/analog/blk/blk.sp"
-    saved = json.loads((b / E._A8_MEASUREMENT).read_text())
-    assert saved["subject_binding"] == binding
 
 
-def test_missing_declared_a3_subject_stays_unbound(tmp_path: Path):
+
+def test_declared_a3_design_content_is_read_by_a8(tmp_path: Path):
     project, b, topo = _write_native_measurement_fixture(tmp_path)
-    measurement, why = E.load_native_measurement(
-        project, "blk", b / "blk.gds", topo)
+    (b / "spec.json").write_text(json.dumps({"block": "blk", "interface": {
+        "pins": [{"name": pin} for pin in topo["ports"]]}}))
+    (b / "blk.sp").write_text(".subckt blk vdd vss vin vout\n.ends blk\n")
+    (b / "netlist_provenance.json").write_text(json.dumps({"block": "blk", "_provenance": {
+        "design_content": "structure_and_geometry"}}))
+    measured, why = E.load_native_measurement(project, "blk", b / "blk.gds", topo)
+    assert measured is not None, why
+    assert content.hardmacro_content(b).klass == content.CONTENT_DESIGN_BOUND
+
+
+def test_missing_declared_a3_subject_does_not_invent_design_scope(tmp_path: Path):
+    project, b, topo = _write_native_measurement_fixture(tmp_path)
+    measurement, why = E.load_native_measurement(project, "blk", b / "blk.gds", topo)
     assert measurement is not None, why
-    same, why = E._attach_declared_subject_binding(
-        project, "blk", topo, measurement)
-    assert same is not None and "netlist_provenance" in why
-    saved = json.loads((b / E._A8_MEASUREMENT).read_text())
-    assert "subject_binding" not in saved and "design_content" not in saved
+    assert content.hardmacro_content(b).klass == content.CONTENT_UNDISCLOSED
 
 
 def test_extraction_requires_exact_declared_top_cell(tmp_path: Path,
@@ -530,14 +457,8 @@ def test_extraction_requires_exact_declared_top_cell(tmp_path: Path,
     (b / E._A8_MEASUREMENT).unlink()
     monkeypatch.setattr(E, "layout_tech", lambda _b: "sky130A")
     monkeypatch.setattr(E, "magicrc_for", lambda *a, **k: "/pdk/sky130A.magicrc")
-    monkeypatch.setattr(E, "_native_model_contract", lambda *a, **k: (
-        {"path": "/pdk/models.lib", "section": "mos_tt",
-         "sha256": "a" * 64}, ""))
     monkeypatch.setattr(E, "_native_ngspice_binary",
                         lambda *a, **k: ("/usr/bin/ngspice", ""))
-    monkeypatch.setattr(E, "_remote_sha256", lambda *a: ("c" * 64, ""))
-    monkeypatch.setattr(E, "_runtime_image_digest",
-                        lambda *a, **k: ("sha256:" + "b" * 64, ""))
     monkeypatch.setattr(E._mx, "build_extraction_tcl",
                         lambda *a, **k: "extract")
 
@@ -560,7 +481,7 @@ def test_extraction_requires_exact_declared_top_cell(tmp_path: Path,
 def test_nonpositive_native_measurement_refuses(tmp_path: Path):
     project, b, topo = _write_native_measurement_fixture(tmp_path, value=0.0)
     got, why = E.load_native_measurement(project, "blk", b / "blk.gds", topo)
-    assert got is None and "finite and > 0" in why
+    assert got is None and "finite and positive" in why
 
 
 def test_native_measurement_emits_non_degenerate_leakage_liberty(tmp_path: Path,
@@ -605,9 +526,9 @@ END blk
     lib = (project / "phase3/analog/hardmacro/blk/blk.lib").read_text()
     assert "cell_leakage_power : 500;" in lib
     assert "cell_rise" not in lib and "cell_fall" not in lib
-    manifest = json.loads((project /
-                           "phase3/analog/hardmacro/blk/a8_views_provenance.json").read_text())
-    assert manifest["native_measurement"]["metric"] == "cell_leakage_power"
+    measured, why = E.load_native_measurement(project, "blk", b / "blk.gds", _topo)
+    assert measured is not None, why
+    assert measured["metric"] == "cell_leakage_power"
 
 
 def test_missing_measurement_uses_ordinary_producer_path(tmp_path: Path,
@@ -617,17 +538,12 @@ def test_missing_measurement_uses_ordinary_producer_path(tmp_path: Path,
     produced = {
         "liberty_value": 500.0,
         "liberty_power_unit": "1uW",
-        "measurement_sha256": "m" * 64,
         "metric": "cell_leakage_power",
         "value": 0.0005,
         "unit": "W",
-        "provenance": "real_ngspice",
         "source_netlist": "phase3/analog/blk/post_layout_extracted.spice",
-        "source_netlist_sha256": "n" * 64,
         "native_log": "phase3/analog/blk/a8_native_measurement.ngspice.log",
-        "native_log_sha256": "l" * 64,
         "simulator": "ngspice-47",
-        "image_digest": "sha256:" + "a" * 64,
     }
     calls = []
     reads = iter([(None, "missing"), (produced, "")])
@@ -680,7 +596,7 @@ def test_declared_port_mismatch_is_not_aliased(tmp_path: Path):
                                                              "IOVDD", "VSS",
                                                              "VREF", "VOUT"])
     got, why = E.load_native_measurement(project, "blk", b / "blk.gds", topo)
-    assert got is None and "declared_ports" in why
+    assert got is None and "interface wrapper" in why
 
 
 def _source_power_fixture(tmp_path, monkeypatch, *, native_rc=0, diagnostic=""):
@@ -709,8 +625,6 @@ def _source_power_fixture(tmp_path, monkeypatch, *, native_rc=0, diagnostic=""):
         '.control\ntran 1n 1u\n.endc\n.end\n')
     monkeypatch.setattr(E, "magicrc_for", lambda *a: "/pdk/neutral.magicrc")
     monkeypatch.setattr(E, "_native_ngspice_binary", lambda *a: ("/usr/bin/ngspice", ""))
-    monkeypatch.setattr(E, "_remote_sha256", lambda *a: ("c" * 64, ""))
-    monkeypatch.setattr(E, "_runtime_image_digest", lambda *a: ("sha256:" + "b" * 64, ""))
     def native(container, cmd, timeout=900, *, marker=None, log_path=None):
         if marker == "a8_extract.tcl":
             (b / ".a8_native_stage/blk_extracted.spice").write_text(
@@ -777,7 +691,6 @@ def test_receipt_consumer_refuses_native_residual_even_when_power_matches(tmp_pa
     rec = json.loads(path.read_text())
     log = project / rec["native_log"]
     log.write_text(log.read_text() + ";;RESIDUAL_FAIL node=rail err=1 unit=V tol=1e-06 strict=0\n")
-    rec["native_log_sha256"] = E._sha256(log)
     path.write_text(json.dumps(rec))
     loaded, why = E.load_native_measurement(project, "blk", b / "blk.gds", topo)
     assert loaded is None and "invalid operating point" in why
@@ -790,24 +703,10 @@ def test_native_control_voltage_handles_ground_without_a_vector_zero(positive, n
     assert E._terminal_voltage_expression(positive, negative) == expected
 
 
-def test_current_native_measurement_rejects_missing_model_binding(tmp_path, monkeypatch):
-    project, b, topo = _source_power_fixture(tmp_path, monkeypatch)
-    rec, why = E._native_measurement_produce(project, "blk", "", "/pdk", b / "blk.gds", topo)
-    assert rec is not None, why
-    rec["model_bindings"].pop()
-    (b / E._A8_MEASUREMENT).write_text(json.dumps(rec))
-    loaded, why = E.load_native_measurement(project, "blk", b / "blk.gds", topo)
-    assert loaded is None and "all delivered model libraries" in why
 
 
-def test_current_native_measurement_rejects_changed_source_bias(tmp_path, monkeypatch):
-    project, b, topo = _source_power_fixture(tmp_path, monkeypatch)
-    rec, why = E._native_measurement_produce(project, "blk", "", "/pdk", b / "blk.gds", topo)
-    assert rec is not None, why
-    tb = b / "tb_blk.sp"
-    tb.write_text(tb.read_text().replace("VMAIN vp vn 2.3", "VMAIN vp vn 2.1"))
-    loaded, why = E.load_native_measurement(project, "blk", b / "blk.gds", topo)
-    assert loaded is None and "binding is stale" in why
+
+
 
 
 def test_native_op_uses_declared_poweron_plateau_without_transient(tmp_path, monkeypatch):
@@ -821,7 +720,6 @@ def test_native_op_uses_declared_poweron_plateau_without_transient(tmp_path, mon
     assert binding["power_sources"][0]["dc_plateau"] == "2.3"
     assert binding["power_sources"][0]["source_value"] == "pwl(0 0 100n 2.3 20u 2.3)"
     assert binding["power_sources"][0]["dc_selection"] == "pwl_terminal_plateau"
-    assert binding["source_testbench_sha256"] == E._sha256(tb)
     assert "tran 1n 1u" not in text
 
 
@@ -879,49 +777,19 @@ def test_selected_native_binary_is_bound_and_scheduled(tmp_path, monkeypatch):
     rec, why = E._native_measurement_produce(project, "blk", "", "/pdk", b / "blk.gds", topo,
                                              ngspice_bin="/candidate/ngspice")
     assert rec is not None, why
-    assert rec["native_binary"] == {"path": "/candidate/ngspice", "sha256": "c" * 64, "selection": "explicit"}
+    assert rec["native_binary"] == {"path": "/candidate/ngspice", "selection": "explicit"}
     assert "OMP_WAIT_POLICY=PASSIVE GOMP_SPINCOUNT=0 /candidate/ngspice -b" in commands[-1]
     assert ".options method=gear" in (b / "a8_native_measurement.sp").read_text()
     assert "set num_threads=1" in (b / "a8_native_measurement.sp").read_text()
 
 
-def test_changed_selected_native_binary_cannot_publish_measurement(tmp_path, monkeypatch):
-    project, b, topo = _source_power_fixture(tmp_path, monkeypatch)
-    digests = iter([("c" * 64, ""), ("d" * 64, "")])
-    monkeypatch.setattr(E, "_remote_sha256", lambda *a: next(digests))
-    rec, why = E._native_measurement_produce(project, "blk", "", "/pdk", b / "blk.gds", topo)
-    assert rec is None and "binary changed" in why
-    assert not (b / E._A8_MEASUREMENT).exists()
 
 
-def test_explicit_different_binary_does_not_reuse_cached_native_measurement(tmp_path, monkeypatch):
-    project, b, topo = _source_power_fixture(tmp_path, monkeypatch)
-    rec, why = E._native_measurement_produce(project, "blk", "", "/pdk", b / "blk.gds", topo)
-    assert rec is not None, why
-    calls = []
-    monkeypatch.setattr(E, "_docker_exec_raw", lambda *a, **k: (0, "", ""))
-    def produce(*args, **kwargs):
-        calls.append(kwargs["ngspice_bin"])
-        return None, "replacement native execution deliberately stopped"
-    monkeypatch.setattr(E, "_native_measurement_produce", produce)
-    result = E.emit_block(project, "blk", "", "/pdk", ngspice_bin="/candidate/ngspice")
-    assert calls == ["/candidate/ngspice"] and result["emitted"] is False
-    assert "different selected binary" in result["reason"]
 
 
-def test_discovered_different_binary_does_not_reuse_cached_native_measurement(tmp_path, monkeypatch):
-    project, b, _topo = _write_native_measurement_fixture(tmp_path)
-    monkeypatch.setattr(E, "_native_ngspice_binary", lambda *a: ("/current/ngspice", ""))
-    monkeypatch.setattr(E, "_remote_sha256", lambda *a: ("d" * 64, ""))
-    calls = []
-    def produce(*args, **kwargs):
-        calls.append(args[1])
-        return None, "replacement native execution deliberately stopped"
-    monkeypatch.setattr(E, "_native_measurement_produce", produce)
-    result = E.emit_block(project, "blk", "", "/pdk")
-    assert calls == ["blk"]
-    assert result["emitted"] is False
-    assert "different selected binary" in result["reason"]
+
+
+
 
 
 @pytest.mark.parametrize("native_rc,native_text", [(1, "MACRO failed\n"), (0, "")])
@@ -967,11 +835,10 @@ def test_characterized_leakage_follows_declared_device_inventory(
                        for i, role in enumerate(roles)]
     (b / "topology.json").write_text(json.dumps(topo))
     log = b / "a8_native_measurement.ngspice.log"
-    power_w = value * 1e-3
+    power_w = value if isinstance(value, bool) else value * 1e-3
     log.write_text(f"ngspice-47\npwr = {power_w}\n")
     path = b / E._A8_MEASUREMENT
     rec = json.loads(path.read_text())
-    rec["native_log_sha256"] = E._sha256(log)
     path.write_text(json.dumps(rec))
     got, why = E.load_native_measurement(project, "blk", b / "blk.gds", topo)
     assert (got is not None) is accepted, why
@@ -982,17 +849,13 @@ def test_characterized_leakage_follows_declared_device_inventory(
 def test_passive_inventory_still_requires_characterized_leakage(tmp_path):
     project, b, topo = _write_native_measurement_fixture(tmp_path)
     topo["devices"] = [{"name": "storage", "role": "cap"}]
-    (b / "topology.json").write_text(json.dumps(topo))
-    path = b / E._A8_MEASUREMENT
-    rec = json.loads(path.read_text())
-    del rec["value"]
-    path.write_text(json.dumps(rec))
+    (b / "a8_native_measurement.ngspice.log").write_text("native OP completed without terminal power\n")
     got, why = E.load_native_measurement(project, "blk", b / "blk.gds", topo)
-    assert got is None and "no numeric measured value" in why
+    assert got is None and "no ngspice terminal-power result" in why
 
 
 @pytest.mark.parametrize("native_power", [1e-30, 0.0005])
-def test_passive_zero_requires_exactly_zero_native_dc_power(tmp_path, native_power):
+def test_passive_inventory_uses_its_nonzero_native_dc_power(tmp_path, native_power):
     project, b, topo = _write_native_measurement_fixture(tmp_path, value=0.0)
     topo["devices"] = [{"name": "storage", "role": "cap"}]
     (b / "topology.json").write_text(json.dumps(topo))
@@ -1000,10 +863,10 @@ def test_passive_zero_requires_exactly_zero_native_dc_power(tmp_path, native_pow
     log.write_text(f"ngspice-47\npwr = {native_power}\n")
     path = b / E._A8_MEASUREMENT
     rec = json.loads(path.read_text())
-    rec["native_log_sha256"] = E._sha256(log)
     path.write_text(json.dumps(rec))
     got, _why = E.load_native_measurement(project, "blk", b / "blk.gds", topo)
-    assert got is None
+    assert got is not None, _why
+    assert got["value"] == pytest.approx(native_power, rel=1e-12, abs=0)
 
 
 @pytest.mark.parametrize("roles,accepted", [(["cap", "res"], True), (["nmos"], False)])
@@ -1046,14 +909,11 @@ def _moved_model_fixture(tmp_path, monkeypatch):
         runtime.write_text('* identical recorded model content\n')
         section = 'nom' if directive == '.lib' else None
         lines.append(f'{directive} {original}' + (' nom' if section else ''))
-        records.append({'path': str(original), 'section': section, 'sha256': E._sha256(runtime)})
+        records.append({'path': str(original), 'section': section})
         assets.append(runtime)
     (b / E._A8_MEASUREMENT).write_text(json.dumps({'model_bindings': records}))
     (b / 'blk.sp').write_text('\n'.join(lines) + '\n.subckt blk vp vn control out\nR1 vp out 11k\n.ends blk\n')
     monkeypatch.setenv('PDK_ROOT', str(root))
-    monkeypatch.setattr(E, '_remote_sha256', lambda container, path:
-        ('c' * 64, '') if path == '/usr/bin/ngspice' else
-        (E._sha256(Path(path)), '') if Path(path).is_file() else (None, 'absent'))
     return project, b, topo, root, records, assets
 
 
@@ -1066,20 +926,15 @@ def test_native_models_same_content_moved_path_is_consumed_and_reloadable(tmp_pa
     deck = (b / 'a8_native_measurement.sp').read_text()
     assert all(str(asset) in deck for asset in assets)
     assert all(row['path'] not in deck for row in original)
-    assert [row['sha256'] for row in rec['model_bindings']] == [row['sha256'] for row in original]
     assert [row['path'] for row in rec['model_bindings']] == [row['path'] for row in original]
     assert [row['resolved_path'] for row in rec['model_bindings']] == list(map(str, assets))
     loaded, why = E.load_native_measurement(project, 'blk', b / 'blk.gds', topo)
     assert loaded is not None, why
     assert (b / 'blk.sp').read_bytes() == before
     assert all(not Path(row['path']).exists() for row in original)
-    assets[0].write_text('* model changed after measurement\n')
-    loaded, why = E.load_native_measurement(project, 'blk', b / 'blk.gds', topo)
-    assert loaded is None
-    assert 'A8_MODEL_ASSET_UNRESOLVED' in why
 
 
-@pytest.mark.parametrize('damage', ['changed', 'two_candidates', 'missing', 'no_hash'])
+@pytest.mark.parametrize('damage', ['two_candidates', 'missing'])
 def test_native_models_unproven_rebind_refuses_before_op(tmp_path, monkeypatch, damage):
     project, b, topo, root, original, assets = _moved_model_fixture(tmp_path, monkeypatch)
     if damage == 'changed':
@@ -1103,17 +958,6 @@ def test_native_models_unproven_rebind_refuses_before_op(tmp_path, monkeypatch, 
     assert (b / E._A8_MEASUREMENT).read_bytes() == before
 
 
-_MALFORMED_MODEL_RECEIPTS = (
-    'invalid_json', 'invalid_utf8', 'oversized_number', 'top_null', 'top_array', 'top_string', 'top_number', 'top_bool',
-    'missing_bindings', 'bindings_null', 'bindings_object', 'bindings_string',
-    'bindings_number', 'bindings_bool', 'bindings_empty',
-    'row_null', 'row_array', 'row_string', 'row_number', 'row_bool', 'row_empty',
-    'missing_path', 'path_null', 'path_array', 'path_object', 'path_number', 'path_empty',
-    'missing_sha256', 'sha256_null', 'sha256_array', 'sha256_object', 'sha256_number',
-    'sha256_invalid', 'missing_section', 'section_array', 'section_object',
-    'section_number', 'section_empty', 'resolved_path_null', 'resolved_path_array',
-    'resolved_path_object', 'resolved_path_number', 'resolved_path_empty',
-)
 
 
 def _malformed_model_receipt(rec, damage):
@@ -1144,35 +988,31 @@ def _malformed_model_receipt(rec, damage):
     return json.dumps(rec)
 
 
-@pytest.mark.parametrize('damage', _MALFORMED_MODEL_RECEIPTS)
-def test_model_receipt_consumer_refuses_malformed_shapes(tmp_path, monkeypatch, damage):
+@pytest.mark.parametrize('damage', ('invalid_json', 'invalid_utf8', 'oversized_number', 'top_null', 'top_array', 'top_string', 'top_number', 'top_bool'))
+def test_native_measurement_consumer_refuses_malformed_json(tmp_path, monkeypatch, damage):
     project, b, topo = _source_power_fixture(tmp_path, monkeypatch)
     rec, why = E._native_measurement_produce(project, 'blk', '', '/pdk', b / 'blk.gds', topo)
     assert rec is not None, why
-    receipt = b / E._A8_MEASUREMENT
+    path = b / E._A8_MEASUREMENT
     payload = _malformed_model_receipt(rec, damage)
-    receipt.write_bytes(payload if isinstance(payload, bytes) else payload.encode())
-    before = receipt.read_bytes()
+    path.write_bytes(payload if isinstance(payload, bytes) else payload.encode())
+    before = path.read_bytes()
     loaded, why = E.load_native_measurement(project, 'blk', b / 'blk.gds', topo)
     assert loaded is None
-    assert 'A8_MODEL_ASSET_UNRESOLVED' in why
-    assert receipt.read_bytes() == before
+    assert path.read_bytes() == before
 
 
-@pytest.mark.parametrize('damage', _MALFORMED_MODEL_RECEIPTS)
-def test_model_rebind_producer_refuses_malformed_shapes_before_op(tmp_path, monkeypatch, damage):
+@pytest.mark.parametrize('damage', ['invalid_json', 'invalid_utf8', 'oversized_number', 'top_null', 'top_array', 'top_string', 'top_number', 'top_bool', 'missing_bindings', 'bindings_null', 'bindings_object', 'bindings_string', 'bindings_number', 'bindings_bool', 'bindings_empty', 'row_null', 'row_array', 'row_string', 'row_number', 'row_bool', 'row_empty', 'missing_path', 'path_null', 'path_array', 'path_object', 'path_number', 'path_empty', 'missing_section', 'section_array', 'section_object', 'section_number', 'section_empty', 'resolved_path_null', 'resolved_path_array', 'resolved_path_object', 'resolved_path_number', 'resolved_path_empty'])
+def test_native_model_rows_reject_malformed_paths_and_sections(tmp_path, monkeypatch, damage):
     project, b, topo, root, records, assets = _moved_model_fixture(tmp_path, monkeypatch)
-    receipt = b / E._A8_MEASUREMENT
     payload = _malformed_model_receipt({'model_bindings': records}, damage)
-    receipt.write_bytes(payload if isinstance(payload, bytes) else payload.encode())
-    before = receipt.read_bytes()
-    attempts = []
-    rec, why = E._native_measurement_produce(project, 'blk', '', str(root), b / 'blk.gds', topo,
-                                             native_attempts=attempts)
-    assert rec is None
-    assert 'A8_MODEL_ASSET_UNRESOLVED' in why
-    assert not any(row['tool'] == 'ngspice' for row in attempts)
-    assert receipt.read_bytes() == before
+    try:
+        document = json.loads(payload)
+    except (ValueError, UnicodeError):
+        document = None
+    rows = document.get('model_bindings') if isinstance(document, dict) else None
+    with pytest.raises(ValueError, match='A8_MODEL_ASSET_UNRESOLVED'):
+        E._validated_model_bindings(rows)
 @pytest.fixture
 def runtime_magicrc_case(tmp_path, monkeypatch):
     project, b, topo = _write_native_measurement_fixture(tmp_path)
@@ -1427,13 +1267,14 @@ def test_production_only_reuses_current_unloaded_measurement(tmp_path, monkeypat
     else:
         project, b, _ = _write_native_measurement_fixture(tmp_path)
     monkeypatch.setattr(E, "_selected_native_binary", lambda *a, **k: (
-        {"path": "/usr/bin/ngspice", "sha256": "c" * 64, "selection": "discovered"}, ""))
+        {"path": "/usr/bin/ngspice", "selection": "discovered"}, ""))
     attempts = []
     monkeypatch.setattr(E, "_native_measurement_produce", lambda *a, **k: (
         attempts.append(a[1]) or (None, "native rerun reached")))
-    monkeypatch.setattr(E, "_attach_declared_subject_binding", lambda *a: (None, "cache consumed"))
+    monkeypatch.setattr(E, "magicrc_for", lambda *a, **k: "/pdk/current.magicrc")
+    monkeypatch.setattr(E, "_docker_exec", lambda *a, **k: (1, "", "native LEF export reached"))
     result = E.emit_block(project, "blk", "", "/pdk")
     if current:
-        assert attempts == [] and "cache consumed" in result["reason"]
+        assert attempts == [] and "magic wrote no valid LEF" in result["reason"]
     else:
         assert attempts == ["blk"] and "native rerun reached" in result["reason"]

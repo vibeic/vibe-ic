@@ -1,5 +1,6 @@
 """Neutral source-only A8 positional adapter and deck-consumer controls."""
 import hashlib
+import json
 
 import pytest
 
@@ -36,11 +37,22 @@ def test_adapter_preserves_native_order_and_open_nodes_through_actual_a8_deck(tm
     assert not any(line.startswith(("R", "C", ".global")) for line in adapter.logical_lines(text))
     wrapper = tmp_path / "interface.spice"
     wrapper.write_text(text)
-    deck = producer._measurement_deck_text(extracted, declared, mapping["wrapper_subckt"],
-                                           str(tmp_path / "declared.lib"), "typ", wrapper)
+    block = tmp_path / "phase3/analog/Coupler"
+    block.mkdir(parents=True)
+    model = block / "declared.lib"
+    model.write_text(".lib typ\n* transport-only model declaration\n.endl typ\n")
+    (block / "Coupler.sp").write_text(f".lib {model} typ\n.subckt Coupler Drive Sense\n.ends Coupler\n")
+    (block / "tb_Coupler.sp").write_text("* source stimulus\nVdrive Drive 0 1\nXDUT Drive 0 Coupler\n.end\n")
+    docs = tmp_path / "phase1/generated_docs"
+    docs.mkdir(parents=True)
+    (docs / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({"instances": [{"block": "Coupler", "ports": [
+        {"name": "Drive", "direction": "input", "type": "power"},
+        {"name": "Sense", "direction": "inout", "type": "ground"}]}]}))
+    deck, _ = producer._delivered_measurement_deck(tmp_path, "Coupler", extracted, declared,
+        mapping["wrapper_subckt"], {"ports": declared, "rails": {"vdd": "Drive", "vss": "Sense"}}, wrapper)
     assert f'.include "{extracted}"' in deck
     assert f'.include "{wrapper}"' in deck
-    assert "XU Drive Sense Coupler__a8_interface" in deck
+    assert "Coupler__a8_interface" in next(line for line in deck.splitlines() if line.startswith("XU "))
     assert extracted.read_bytes() == before
     assert hashlib.sha256(before).hexdigest() == hashlib.sha256(extracted.read_bytes()).hexdigest()
 
