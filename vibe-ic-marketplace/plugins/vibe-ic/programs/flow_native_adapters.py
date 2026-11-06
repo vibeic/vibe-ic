@@ -309,7 +309,7 @@ def simulation(project, directory, tool, commands):
             argv = [argv[0], *["-I" + str(path) for path in include_dirs
                               if "-I" + str(path) not in argv], *argv[1:]]
         completed = commands.run(argv, cwd)
-        if len(argv) == 1:
+        if argv[0] != "verilator":
             coverage_run = completed
         return ((completed.returncode, completed.stdout, completed.stderr) if completed is not None
                 else (127, "", "Native executable is absent."))

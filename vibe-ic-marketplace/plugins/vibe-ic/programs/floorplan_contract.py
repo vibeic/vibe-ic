@@ -52,6 +52,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import _reference_flow_boundary as _rfb
+from _submission_template import parse_rect
 
 
 class FloorplanContractRefusal(ValueError):
@@ -312,29 +313,15 @@ def _structured_core_util(value: Any, source: str) -> Any:
     return int(number) if number.is_integer() else number
 
 
-def _die_area_from_value(v: Any) -> Optional[str]:
-    """A config ``DIE_AREA`` value is either a JSON list of 4 numbers or a
-    string of 4 whitespace/comma-separated numbers. Returns 'WxH' or None."""
-    nums: List[float] = []
-    if isinstance(v, (list, tuple)):
-        for x in v:
-            try:
-                nums.append(float(x))
-            except (TypeError, ValueError):
-                return None
-    elif isinstance(v, str):
-        for tok in re.split(r"[\s,]+", v.strip()):
-            if not tok:
-                continue
-            try:
-                nums.append(float(tok))
-            except ValueError:
-                return None
-    else:
+def _die_area_rect_from_value(value: Any) -> Optional[List[float]]:
+    rect = parse_rect(value)
+    if rect is None or not all(number.is_finite() for number in rect):
         return None
-    if len(nums) != 4:
+    numbers = [float(number) for number in rect]
+    if (not all(math.isfinite(number) for number in numbers)
+            or numbers[2] <= numbers[0] or numbers[3] <= numbers[1]):
         return None
-    return _rect_to_wxh(nums[0], nums[1], nums[2], nums[3])
+    return numbers
 
 
 def _iter_input_files(project: Path) -> List[Tuple[str, Path, str]]:
@@ -393,7 +380,7 @@ def _parse_openlane_config(rel: str, text: str) -> Optional[Dict[str, Any]]:
     """Return the design-mandated floorplan facts from ONE OpenLane-style
     config file (JSON or classic TCL), or None if it declares nothing.
 
-    Keys returned (any subset): design_name, die_wxh, fp_sizing,
+    Keys returned (any subset): design_name, die_wxh, die_area_um, fp_sizing,
     fp_core_util, fp_core_util_line, def_template, pin_order_cfg,
     source(rel)."""
     facts: Dict[str, Any] = {"source": rel}
@@ -409,9 +396,10 @@ def _parse_openlane_config(rel: str, text: str) -> Optional[Dict[str, Any]]:
             if isinstance(dn, str) and dn.strip():
                 facts["design_name"] = dn.strip()
             da = _ci_get(cfg, "DIE_AREA")
-            wxh = _die_area_from_value(da) if da is not None else None
-            if wxh:
-                facts["die_wxh"] = wxh
+            rect = _die_area_rect_from_value(da)
+            if rect is not None:
+                facts["die_wxh"] = _rect_to_wxh(*rect)
+                facts["die_area_um"] = rect
             fps = _ci_get(cfg, "FP_SIZING")
             if isinstance(fps, str) and fps.strip():
                 facts["fp_sizing"] = fps.strip().lower()
@@ -430,9 +418,10 @@ def _parse_openlane_config(rel: str, text: str) -> Optional[Dict[str, Any]]:
         # Classic OpenLane config.tcl: `set ::env(DIE_AREA) "0 0 W H"`, etc.
         m = _DIE_AREA_RECT_RE.search(text)
         if m:
-            wxh = _rect_to_wxh(*(float(m.group(i)) for i in (1, 2, 3, 4)))
-            if wxh:
-                facts["die_wxh"] = wxh
+            rect = _die_area_rect_from_value([m.group(i) for i in (1, 2, 3, 4)])
+            if rect is not None:
+                facts["die_wxh"] = _rect_to_wxh(*rect)
+                facts["die_area_um"] = rect
         mfp = _FP_SIZING_PROSE_RE.search(text)
         if mfp:
             facts["fp_sizing"] = mfp.group(1).lower()
@@ -465,13 +454,22 @@ def _looks_like_openlane_config(name: str, text: str) -> bool:
         or "::env(" in head)
 
 
+def _exact_config_rectangle(configs: List[Dict[str, Any]]) -> Optional[List[float]]:
+    choices = {(tuple(facts["die_area_um"]), facts.get("fp_sizing"))
+               for facts in configs}
+    if len(choices) != 1:
+        return None
+    rectangle, sizing = next(iter(choices))
+    return list(rectangle) if sizing == "absolute" else None
+
+
 def _prose_die_area(project: Path,
                     files: List[Tuple[str, Path, str]]
-                    ) -> Optional[Tuple[str, str]]:
+                    ) -> Optional[Tuple[str, str, Optional[List[float]]]]:
     """The authoritative design-doc statement of the mandated die. Reads the
     L9/constraint/floorplan prose docs first, then any input doc. Returns
-    (die_wxh, source_rel) or None."""
-    def _scan(text: str) -> Optional[str]:
+    (die_wxh, source_rel, exact_rectangle) or None."""
+    def _scan(text: str) -> Optional[Tuple[str, Optional[List[float]]]]:
         # Every recogniser below iterates ALL of its matches and skips the
         # negated ones, so a statement that denies a die ("... is REMOVED, not
         # translated") can neither be recorded as a mandate nor poison a genuine
@@ -479,24 +477,31 @@ def _prose_die_area(project: Path,
         # #457 pdk_target loop. The span handed to the guard is the NUMERIC
         # VALUE, not the whole match — see `_die_statement_negated`.
         for m in _DIE_AREA_RECT_RE.finditer(text):
-            wxh = _rect_to_wxh(*(float(m.group(i)) for i in (1, 2, 3, 4)))
+            rect = _die_area_rect_from_value([m.group(i) for i in (1, 2, 3, 4)])
+            wxh = _rect_to_wxh(*rect) if rect is not None else None
             if (wxh and die_dimensions_are_outer(text, m.start(1), m.end(4))
                     and not _die_statement_negated(text, m.start(1), m.end(4))):
-                return wxh
+                sizing = {match.group(1).lower()
+                          for match in _FP_SIZING_PROSE_RE.finditer(text)
+                          if not _die_statement_negated(
+                              text, match.start(1), match.end(1))}
+                if sizing and sizing != {"absolute"}:
+                    rect = None
+                return wxh, rect
         mw, mh = _DIE_WIDTH_RE.search(text), _DIE_HEIGHT_RE.search(text)
         if (mw and mh
                 and die_dimensions_are_outer(text, mw.start(1), mw.end(1))
                 and die_dimensions_are_outer(text, mh.start(1), mh.end(1))
                 and not _die_statement_negated(text, mw.start(1), mw.end(1))
                 and not _die_statement_negated(text, mh.start(1), mh.end(1))):
-            return _rect_to_wxh(0.0, 0.0, float(mw.group(1)),
-                                float(mh.group(1)))
+            wxh = _rect_to_wxh(0.0, 0.0, float(mw.group(1)), float(mh.group(1)))
+            return (wxh, None) if wxh else None
         for m in _DIE_LABELLED_WXH_RE.finditer(text):
             if (not die_dimensions_are_outer(text, m.start(2), m.end(3))
                     or _die_statement_negated(text, m.start(2), m.end(3))):
                 continue
-            return _rect_to_wxh(0.0, 0.0, float(m.group(2)),
-                                float(m.group(3)))
+            wxh = _rect_to_wxh(0.0, 0.0, float(m.group(2)), float(m.group(3)))
+            return (wxh, None) if wxh else None
         return None
 
     prose = [(r, t) for (r, p, t) in files
@@ -507,9 +512,9 @@ def _prose_die_area(project: Path,
         return (base.startswith("l9") or "constraint" in base
                 or "floorplan" in base)
     for r, t in sorted(prose, key=lambda rt: (not _is_l9(rt[0]), rt[0])):
-        wxh = _scan(t)
-        if wxh:
-            return wxh, r
+        area = _scan(t)
+        if area:
+            return area[0], r, area[1]
     return None
 
 
@@ -523,6 +528,7 @@ def extract_floorplan_contract(project: Path,
         "constraints_present": bool,   # any mandated value found
         "die_area_budget_um": "WxH"|None,
         "die_area_source": <rel>|None,
+        "die_area_um": [llx, lly, urx, ury],  # only an explicit rectangle
         "floorplan_hints": [ {kind, value, source, ...}, ... ],
       }
 
@@ -650,14 +656,15 @@ def extract_floorplan_contract(project: Path,
     # --- resolve the mandated die (precedence above) ---
     die_wxh: Optional[str] = None
     die_src: Optional[str] = None
+    die_rect: Optional[List[float]] = None
     if prose:
-        die_wxh, die_src = prose
+        die_wxh, die_src, die_rect = prose
     if die_wxh is None and top_module:
-        for facts in configs:
-            if (facts.get("die_wxh")
-                    and facts.get("design_name") == top_module):
-                die_wxh, die_src = facts["die_wxh"], facts["source"]
-                break
+        matching = [facts for facts in configs if facts.get("die_wxh")
+                    and facts.get("design_name") == top_module]
+        if matching:
+            die_wxh, die_src = matching[0]["die_wxh"], matching[0]["source"]
+            die_rect = _exact_config_rectangle(matching)
     if die_wxh is None:
         abs_cfgs = [f for f in configs
                     if f.get("die_wxh")
@@ -668,6 +675,7 @@ def extract_floorplan_contract(project: Path,
         if len(uniq) == 1 and abs_cfgs:
             f0 = abs_cfgs[0]
             die_wxh, die_src = f0["die_wxh"], f0["source"]
+            die_rect = _exact_config_rectangle(abs_cfgs)
         elif len(uniq) > 1:
             # Multiple candidate dies: pick the config whose DESIGN_NAME is
             # STRICTLY most-referenced across the design's prose/input docs
@@ -686,9 +694,12 @@ def extract_floorplan_contract(project: Path,
             if len(ranked) >= 2 and ranked[0][0] > ranked[1][0]:
                 die_wxh, die_src = (ranked[0][1]["die_wxh"],
                                     ranked[0][1]["source"])
+                die_rect = _exact_config_rectangle([ranked[0][1]])
 
     result["die_area_budget_um"] = die_wxh
     result["die_area_source"] = die_src
+    if die_rect is not None:
+        result["die_area_um"] = die_rect
     # Dedup hints (kind+value+source) preserving order.
     seen = set()
     deduped: List[Dict[str, Any]] = []

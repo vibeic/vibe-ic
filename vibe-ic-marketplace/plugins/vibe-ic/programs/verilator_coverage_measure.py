@@ -274,13 +274,15 @@ def verilate_tb_and_run(rtl_files: List[str], tb_path: str, build_dir: str,
 
     if not rtl_files:
         raise SystemExit("no RTL sources to instrument")
-    tb = Path(tb_path)
+    tb = Path(tb_path).resolve()
     if tb.suffix == ".py":
         return verilate_professional_tb_and_run(
             rtl_files, tb, Path(build_dir), Path(run_dir),
             exec_fn=exec_fn, build_jobs=build_jobs)
     if not tb.is_file():
         raise SystemExit(f"testbench not found: {tb_path}")
+    build_dir = str(Path(build_dir).resolve())
+    run_dir = str(Path(run_dir).resolve())
     top = _tb_top_module(tb)
     Path(build_dir).mkdir(parents=True, exist_ok=True)
     Path(run_dir).mkdir(parents=True, exist_ok=True)
@@ -325,7 +327,8 @@ def verilate_tb_and_run(rtl_files: List[str], tb_path: str, build_dir: str,
             f"STDOUT:\n{out}")
 
     exe = Path(build_dir) / f"V{top}"
-    rc, out, err = exec_fn([str(exe)], run_dir)
+    data = (Path(run_dir) / "coverage.dat").resolve()
+    rc, out, err = exec_fn([str(exe), f"+verilator+coverage+file+{data}"], str(tb.resolve().parent))
     (Path(run_dir) / "simulation.log").write_text(out + err)
     if rc != 0:
         # A TB may $finish non-zero; coverage.dat can still be valid, so this
