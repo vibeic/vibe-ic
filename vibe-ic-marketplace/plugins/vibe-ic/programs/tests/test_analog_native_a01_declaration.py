@@ -32,7 +32,7 @@ def _project(tmp_path):
 
 def _run(root, *extra):
     cp = subprocess.run([sys.executable, str(native.HERE / 'analog_one_shot_runner.py'),
-                         str(root), '--flow', '109', '--entry-step', 'A01',
+                         str(root), '--entry-step', 'A01',
                          '--exit-step', 'A01', '--container', '', *extra],
                         capture_output=True, text=True)
     report = root / 'reports/analog_native/status.json'
