@@ -59,6 +59,25 @@ def test_native_sizing_records_the_core_state_for_activity(tmp_path, native_inpu
     assert Path(state["nl"]).is_file()
 
 
+def test_native_chip_pdn_connects_both_supplies_from_pad_access_layers(
+        tmp_path, native_inputs, monkeypatch):
+    from flow_config import _chip_pdn
+    from librelane.flows import Flow
+
+    monkeypatch.chdir(tmp_path)
+    Path(native_inputs["VERILOG_FILES"][0]).write_text(
+        "module unit(input clk, input [3:0] data, output reg q);\n"
+        "always @(posedge clk) q <= data[3]; endmodule\n")
+    config = {**native_inputs, **_chip_pdn(tmp_path, native_inputs["PDK"])}
+    prepared = chip.prepare(tmp_path, config)
+    owner = Flow.factory.get("Chip")(prepared, design_dir=str(tmp_path),
+                                     pdk_root=os.environ["PDK_ROOT"])
+    state = owner.start(frm="Yosys.JsonHeader", to="OpenROAD.GeneratePDN",
+                        _force_run_dir=str(tmp_path / "native"))
+    for net in prepared["VDD_NETS"] + prepared["GND_NETS"]:
+        assert state.metrics[f"design__power_grid_violation__count__net:{net}"] == 0
+
+
 def test_core_sizing_chooses_native_smaller_timing_feasible_strategy(tmp_path, native_inputs):
     Path(native_inputs["VERILOG_FILES"][0]).write_text(
         "module unit(input clk, reset_n, output reg [15:0] q);\n"
@@ -428,6 +447,50 @@ def test_prepare_writes_usable_chip_inputs_and_preserves_pdn(inputs):
     assert report["assumptions"]
     assert result["DIE_AREA"][2] >= 84
     assert result["CORE_AREA"][0] == 22
+
+
+@pytest.mark.parametrize("constant", [False, True])
+def test_native_pad_sdc_models_dc_bonds_and_preserves_dynamic_outputs(inputs, constant):
+    import shutil
+    import subprocess
+
+    sta = shutil.which("sta")
+    if sta is None:
+        pytest.skip("Native OpenSTA required")
+    project, config, native, _, _ = inputs
+    prepared = chip.prepare(project, config)
+    report = json.loads((project / "work/flow/chip/preparation.json").read_text())
+    instance, output = next((name, entry) for name, entry in report["pads"].items()
+                            if entry.get("direction") == "output")
+    supplies = [entry["port"] for entry in report["pads"].values() if entry.get("is_supply_pad")]
+    netlist = project / "mapped.v"
+    drive = "1'b0" if constant else "data[2]"
+    netlist.write_text(f"""module logic_chip(input clk, reset, input [5:2] data,
+      inout result, {', '.join(supplies)});
+      {output['master']} {instance} (.PAD(result), .A({drive}), .OE(1'b1));
+    endmodule
+    """)
+    script = project / "check_static.tcl"
+    script.write_text(f"""read_liberty {{{native['PAD_LIBS']['*'][0]}}}
+read_verilog {{{netlist}}}
+link_design logic_chip
+read_sdc {{{prepared['PNR_SDC_FILE']}}}
+puts "RESULT_CASE [sta::pin_case_logic_value [sta::get_port_pin [get_ports result]]]"
+foreach supply [get_ports {{{' '.join(supplies)}}}] {{
+  puts "SUPPLY_CASE [get_name $supply] [sta::pin_case_logic_value [sta::get_port_pin $supply]]"
+}}
+exit
+""")
+    run = subprocess.run([sta, "-no_init", "-no_splash", "-exit", str(script)],
+                         cwd=project, capture_output=True, text=True)
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert "Error" not in run.stdout + run.stderr
+    assert f"RESULT_CASE {'0' if constant else 'X'}" in run.stdout
+    library = chip._library(native)
+    for entry in report["pads"].values():
+        if entry.get("is_supply_pad"):
+            use = library["roles"][entry["master"]][entry["terminal"]][1]
+            assert f"SUPPLY_CASE {entry['port']} {int(use == 'POWER')}" in run.stdout
 
 
 def test_bidirectional_pad_terminal_does_not_change_the_logical_input_budget(inputs):
@@ -835,7 +898,11 @@ def test_pad_edges_follow_the_native_linked_corner(inputs, tmp_path, linked, max
     native["PAD_LIBS"] = {"*": paths}
     result = chip.prepare(project, config)
     script = tmp_path / "read.sdc.tcl"
-    script.write_text('''namespace eval sta {proc top_instance {} {return INSTANCE}}
+    script.write_text('''namespace eval sta {
+proc top_instance {} {return INSTANCE}
+proc find_pin {name} {return PIN}
+proc pin_sim_logic_value {pin} {return X}
+}
 proc INSTANCE method {return CELL}
 proc CELL {method name} {return PORT}
 proc get_ports args {return PORTS}
@@ -844,6 +911,7 @@ proc create_clock args {}
 proc set_units args {}
 proc set_input_delay args {}
 proc set_output_delay args {}
+proc set_case_analysis args {}
 proc set_input_transition args {puts "EDGE $args"}
 proc get_libs args {
     if {[lindex $args end] eq $::linked} {return LIB}
@@ -915,6 +983,10 @@ def test_prepare_connects_core_supply_pad_access_layers(inputs, access, vertical
     generated = Path(result["PDN_CFG"]).read_text()
     command = f"add_pdn_connect -grid stdcell_grid -layers {{{access} {target}}}"
     assert generated.count(command) + generated.count(reverse) == 1
+    for ring_layer in {target, horizontal}:
+        command = f"add_pdn_connect -grid stdcell_grid -layers {{{access} {ring_layer}}}"
+        reverse = f"add_pdn_connect -grid stdcell_grid -layers {{{ring_layer} {access}}}"
+        assert generated.count(command) + generated.count(reverse) == 1
     assert "signal_access" not in generated
     assert f"-layers {{{vertical} {vertical}}}" not in generated
     assert generated.startswith(original)

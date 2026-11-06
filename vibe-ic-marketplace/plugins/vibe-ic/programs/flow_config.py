@@ -292,8 +292,9 @@ def _resolve_rtl_inputs(project: Path, sources: dict) -> tuple[list[Path], str]:
     docs = project / "phase1/generated_docs"
     l9 = _load(docs / "L9_INTEGRATION_SPEC.json")
     l1 = _load(docs / "L1_DATASHEET.json")
+    tapeout_metadata = l1.get("tapeout_metadata") or {}
     top = (_load(project / "plugin_output/declaration.json").get("top_module")
-           or l9.get("top_module") or l1.get("tapeout_metadata", {}).get("top_cell"))
+           or l9.get("top_module") or tapeout_metadata.get("top_cell"))
     modules = set().union(*(module_names_in_text(path.read_text(errors="replace"))
                             for path in rtl))
     if top not in modules:
@@ -402,7 +403,11 @@ def build_config(project: Path | str, *, route: str | None = None, pdk: str | No
                    if implementation_setting(key)})
     config.update(_settings(fields, pdk))
     config.update({key: value for key, value in implementation.items() if key.startswith("PDN_")})
-    sdc = project / "phase3/stage3/pnr/constraint.sdc"
+    from sdc_constraints import collect_sdc_files
+
+    sdcs = collect_sdc_files(project)
+    sdc = (Path(config["PNR_SDC_FILE"]) if config.get("PNR_SDC_FILE") else
+           sdcs[0] if sdcs else project / "phase3/stage3/pnr/constraint.sdc")
     if sdc.is_file():
         from sdc_constraints import create_clocks_in_text
 
@@ -410,7 +415,7 @@ def build_config(project: Path | str, *, route: str | None = None, pdk: str | No
         declared = create_clocks_in_text(sdc.read_text())
         ports = list(dict.fromkeys(clock["port_name"] for clock in declared if clock["port_name"]))
         periods = [clock["period_ns"] for clock in declared if clock["period_ns"] is not None]
-        if ports:
+        if ports and "CLOCK_PORT" not in implementation:
             config["CLOCK_PORT"] = ports[0] if len(ports) == 1 else ports
         if periods:
             config["CLOCK_PERIOD"] = min(periods)

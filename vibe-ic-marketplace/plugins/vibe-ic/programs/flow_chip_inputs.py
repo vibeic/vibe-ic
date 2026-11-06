@@ -154,14 +154,11 @@ def _side_ports(project: Path, ports: list[dict]):
     available = {bit for bits in by_name.values() for bit in bits}
     sides = {side: [] for side in SIDES}
     if placement is not None:
-        renames = placement_docs.declared_renames(project)
-        declared, unresolved = placement_docs.expand_renamed_side_ports(
-            placement, params, ports, renames,
-            exact_carriers=placement_docs.input_delegated_rename_names(project, renames))
+        declared, unresolved = placement_docs.expand_side_ports(placement, params)
         if unresolved:
             raise ValueError(f"Unresolved pad placement: {unresolved}")
         groups, records = placement_docs.resolve_declared_pad_groups(
-            placement, ports, renames=renames, params=params)
+            placement, ports, params=params, project=project)
         if any(not record["resolved_nets"] for record in records):
             raise ValueError(f"Unresolved pad placement groups: {records}")
         for side in SIDES:
@@ -564,8 +561,9 @@ def _wrapper(core: str, top: str, ports: list[dict], chosen: dict, ordered: dict
             regular = electrical._named_connections(instance, entry["master"],
                 [(pin, net) for pin, net in pairs.items() if pin not in pg], buses)
             power = [f".{pin}({_identifier(net)})" for pin, net in pairs.items() if pin in pg]
-            if entry.get("is_ring_connector"):
-                lines.append("    (* keep = 1 *)")
+            # Every selected pad is a physical ring instance, including a
+            # receiver whose core-side output is unused after optimization.
+            lines.append("    (* keep = 1 *)")
             lines.extend([f"    {entry['master']} {_identifier(instance)} (", "        " + ", ".join(regular)])
             if power:
                 lines.extend(["`ifdef USE_POWER_PINS", ("        , " if regular else "        ") + ", ".join(power), "`endif"])
@@ -590,6 +588,30 @@ def _clock_periods(project: Path, config: dict) -> dict:
             for clock in clocks}
 
 
+def _pad_sdc(chosen: dict, library: dict) -> str:
+    """Model DC bonds, using PDK supply roles and native output constants."""
+    lines = []
+    for instance, entry in chosen.items():
+        if not entry.get("port"):
+            continue
+        port = _tcl_word(entry["port"])
+        bond = f"[get_ports [list [[[sta::top_instance] cell] find_port {port}]]]"
+        if entry.get("is_supply_pad"):
+            use = library["roles"][entry["master"]][entry["terminal"]][1]
+            if use in {"POWER", "GROUND"}:
+                lines.append(f"set_case_analysis {int(use == 'POWER')} {bond}")
+        elif entry.get("direction") == "output":
+            pin = _tcl_word(instance + "/" + entry["core_pin"])
+            # A fixed output pad drives its bond from this pin. Dynamic
+            # values remain X and receive no case analysis.
+            lines.extend((
+                f"set _chip_pad_value [sta::pin_sim_logic_value [sta::find_pin {pin}]]",
+                "if {$_chip_pad_value in {0 1}} {",
+                f"  set_case_analysis $_chip_pad_value {bond}",
+                "}"))
+    return "\n".join(lines) + "\n" if lines else ""
+
+
 def _sdc(project: Path, config: dict, ports: list[dict], input_masters: set[str] | None = None) -> str:
     directions = {bit: port["direction"] for port in ports for bit in _bits(port)}
     def collection(names):
@@ -598,6 +620,12 @@ def _sdc(project: Path, config: dict, ports: list[dict], input_masters: set[str]
     original = config.get("PNR_SDC_FILE")
     if original:
         text = Path(str(original)).read_text()
+        core = config.get("DESIGN_NAME")
+        if core:
+            name = re.escape(core)
+            text = re.sub(r"(?m)^([ \t]*current_design[ \t]+)(?:" + name +
+                          r"|\{" + name + r"\}|\"" + name + r"\")(?=[ \t]*(?:;|$))",
+                          lambda match: match[1] + _tcl_word(core + "_chip"), text)
         inputs = [bit for bit, value in directions.items() if value == "input"]
         outputs = [bit for bit, value in directions.items() if value == "output"]
         clocks = config.get("CLOCK_PORT") or []
@@ -719,7 +747,8 @@ def prepare(project: Path, core_config: dict[str, Any], on_tool_run=None) -> dic
                                 supplies, native, library))
     sdc = destination / "constraints.sdc"
     input_masters = {entry["master"] for entry in chosen.values() if entry.get("direction") == "input"}
-    sdc.write_text(_sdc(project, {**native, **core_config}, ports, input_masters))
+    sdc.write_text(_sdc(project, {**native, **core_config}, ports, input_masters)
+                   + _pad_sdc(chosen, library))
     result = dict(core_config)
     result.update(pdn_settings)
     from flow_clock_geometry import clock_settings
@@ -750,12 +779,12 @@ def prepare(project: Path, core_config: dict[str, Any], on_tool_run=None) -> dic
         access_layers -= connected_layers
         if access_layers:
             text = Path(str(_required(native, "PDN_CFG"))).read_text()
-            ring_layer = native.get("PDN_CORE_VERTICAL_LAYER") or native["PDN_VERTICAL_LAYER"]
             for layer in sorted(access_layers):
-                command = "add_pdn_connect -grid stdcell_grid -layers {" + layer + " " + ring_layer + "}"
-                reverse = "add_pdn_connect -grid stdcell_grid -layers {" + ring_layer + " " + layer + "}"
-                if command not in text and reverse not in text:
-                    text += "\n" + command + "\n"
+                for ring_layer in sorted(ring_layers):
+                    command = "add_pdn_connect -grid stdcell_grid -layers {" + layer + " " + ring_layer + "}"
+                    reverse = "add_pdn_connect -grid stdcell_grid -layers {" + ring_layer + " " + layer + "}"
+                    if command not in text and reverse not in text:
+                        text += "\n" + command + "\n"
             pdn = destination / "pdn_cfg.tcl"
             pdn.write_text(text)
             result["PDN_CFG"] = str(pdn)

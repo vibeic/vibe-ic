@@ -632,39 +632,97 @@ def declared_port_sides(placement: PadPlacement, params: Dict[str, int],
     return sorted(sides)
 
 
+def _document_port_sides(project: Path, placement: PadPlacement,
+                         ports: Sequence[Dict[str, Any]]) -> Dict[str, set]:
+    """Connect interface table names/descriptions to the implemented ports.
+
+    Interface rows may give aliases or a shared address port implemented as
+    separate read/write ports. The remaining control row can carry its side
+    only when one documented and one implemented port remain in that family.
+    No generated rename manifest is needed.
+    """
+    if not placement.side_groups:
+        return {}
+    groups = {side: group_atoms(re.split(r"[(（]", text)[0])
+              for side, text in placement.side_groups.items()}
+    controls = {side for side, text in placement.side_groups.items()
+                if re.search(r"\bcontrols?\b", text, re.I)}
+    rows = []
+    for path in discover_docs(project):
+        for line in path.read_text(errors="replace").splitlines():
+            cells = _cells(line)
+            if not cells:
+                continue
+            names = re.findall(r"`([A-Za-z_][A-Za-z_0-9]*)`", cells[0])
+            directions = {cell.strip().lower() for cell in cells[1:]} & {"input", "output", "inout"}
+            if not names or len(directions) != 1:
+                continue
+            atoms = [group_atoms(name, port_name=True) for name in names]
+            description = group_atoms(cells[-1])
+            sides = {side for side, group in groups.items() if group and any(
+                name and (name <= group or group <= name | description) for name in atoms)}
+            row = (tuple(names), directions.pop(), sides)
+            if row not in rows:
+                rows.append(row)
+    vocabulary = set().union(*groups.values(), *(group_atoms(name, port_name=True)
+                            for names, _, _ in rows for name in names))
+
+    def atoms(name):
+        return {atom[1:] if atom[:1] in {"r", "w"} and atom[1:] in vocabulary else atom
+                for atom in group_atoms(name, port_name=True)}
+
+    # A control group is the remainder of its documented interface family,
+    # after the named data/address/etc. groups have selected their rows.
+    for names, _, sides in rows:
+        if not sides:
+            sides.update(side for side in controls
+                         if any(atoms(name) & groups[side] for name in names))
+    result, used = {}, set()
+    for port in ports:
+        matches = [index for index, (names, direction, _) in enumerate(rows)
+                   if direction == port["direction"] and any(
+                       atoms(port["name"]) == atoms(name) for name in names)]
+        if matches:
+            used.update(matches)
+            result[port["name"]] = set().union(*(rows[index][2] for index in matches))
+    remaining = [port for port in ports if port["name"] not in result]
+    candidates = {port["name"]: [index for index, (names, direction, sides) in enumerate(rows)
+        if index not in used and sides and direction == port["direction"]
+        and any(atoms(port["name"]) & atoms(name) & groups[side]
+                for name in names for side in sides)] for port in remaining}
+    for name, matches in candidates.items():
+        if len(matches) == 1 and sum(matches[0] in others for others in candidates.values()) == 1:
+            result[name] = rows[matches[0]][2]
+    return result
+
+
 def resolve_declared_pad_groups(
         placement: "PadPlacement",
         ports: "Any",
         renames: "Sequence[Tuple[set, set]]" = (), *,
         params: Optional[Dict[str, int]] = None,
+        project: Optional[Path] = None,
         ) -> Tuple[Dict[str, List[str]], List[Dict[str, Any]]]:
-    """Resolve design-owned group rows against the design-owned port list.
+    """Resolve named pad groups to the elaborated ports' actual bit nets.
 
-    Exact backticked signal rows remain the primary representation.  This
-    handles the other legitimate L-doc shape: a side assigned to a named port
-    family such as ``memory data bus``.  The resolver is strict, deterministic
-    and auditable: every semantic atom of a selected port name must be present
-    in the group statement, and a zero-match group is returned unresolved.
-
-    ``renames`` are the design's own declared (L9 names, RTL names) pairs
-    that phase 2's rename rule accepts (`accepted_renames`). A pair whose L9 name satisfies the SAME atom rule
-    carries that group's side to its RTL names present in ``ports``: the
-    document grouped the family under its illustrative name, the manifest
-    says which implemented ports that family became. Nothing fuzzier: a pair
-    is matched only through the exact rule above, an L9 name with no
-    semantic atom matches nothing, and a pair whose L9 names sit in two
-    groups puts its RTL names on two sides, which the caller refuses.
+    Literal names match through their semantic atoms. With ``project``,
+    interface tables also supply names, aliases and descriptions directly
+    from design documents, without a manifest. Explicit ``renames`` remain
+    available to existing callers. Zero-match groups stay unresolved, and
+    assigning a port to two sides remains a conflict for the caller.
     """
     by_side: Dict[str, List[str]] = {}
     records: List[Dict[str, Any]] = []
+    documented = _document_port_sides(project, placement, ports) if project is not None else {}
     for side, statement in placement.side_groups.items():
         statement_atoms = group_atoms(statement)
         matched: List[Dict[str, Any]] = []
         for port in ports:
             name = str(port.get("name") or "")
             port_atoms = group_atoms(name, port_name=True)
-            if (port_atoms and port_atoms <= statement_atoms
-                    and side in declared_port_sides(placement, params or {}, port)):
+            if (side in documented.get(name, set()) or
+                    (port_atoms and port_atoms <= statement_atoms
+                     and side in declared_port_sides(placement, params or {}, port))):
                 matched.append(port)
         via_rename: List[Dict[str, Any]] = []
         for l9_names, rtl_names in renames:
