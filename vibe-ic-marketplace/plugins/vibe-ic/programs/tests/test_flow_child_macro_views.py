@@ -144,3 +144,47 @@ def test_non_hardened_macros_still_consume_supplied_views(tmp_path):
                               {"delivery_target": "ip_hardmacro"})
     assert engine.evaluate(engine.ToolResult(**result), []) == "PASS"
     assert not (tmp_path / "work/flow/children").exists()
+
+
+def test_child_phase1_reads_its_supplied_sdc_without_rewriting_it(tmp_path):
+    from types import SimpleNamespace
+    import flow_macro_views as macros
+    from phase1_port_extract import annotate_timing_ports
+
+    source = project(tmp_path)
+    sdc = source / "child.sdc"
+    text = ("# IO ports are assumed to be asynchronous. If synchronous, update IO_SYNC to 1.\n"
+            "set ::env(IO_SYNC) 0\n"
+            "if { $::env(IO_SYNC) } {\n"
+            "set_input_delay 2 -clock clk [get_ports {a}]\n"
+            "set_output_delay 2 -clock clk [get_ports {z}]\n}\n"
+            "set_output_delay 2 -clock clk [get_ports {parent_only}]\n")
+    sdc.write_text(text)
+    raw = json.loads((source / "child.json").read_text())
+    raw.update(FALLBACK_SDC=str(sdc), PNR_SDC_FILE=str(sdc), SIGNOFF_SDC_FILE=str(sdc))
+    found = {}
+
+    def observe(argv):
+        child = Path(argv[2])
+        document = {"top_module": "compute_tile", "top_ports": [
+            {"name": "a", "direction": "input"}, {"name": "z", "direction": "output"},
+            {"name": "required", "direction": "input"}]}
+        annotate_timing_ports(child, document)
+        found.update(document)
+        # This unit observes staging; it does not manufacture a child tool result.
+        return subprocess.CompletedProcess(argv, 9, "", "staging observed")
+
+    child, summary, code = macros._child(tmp_path, "compute_tile", source / "child.json",
+                                         raw, "neutral_pdk", SimpleNamespace(run=observe))
+    assert summary == {} and code == 9
+    ports = {p["name"]: p for p in found["top_ports"]}
+    assert ports["a"].get("timing_class") == ports["z"].get("timing_class") == "asynchronous"
+    assert "timing_class" not in ports["required"]
+    copies = list((child / "input").rglob("*.sdc"))
+    assert len(copies) == 1 and copies[0].read_text() == text
+    assert sdc.read_text() == text
+    overrides = json.loads((child / "work/flow/native_overrides.json").read_text())
+    assert overrides["PNR_SDC_FILE"] == str(sdc)
+    assert "parent_only" in copies[0].read_text()
+    assert all((child / s["file"]).is_file() and s["line"] in {1, 2, 4, 5}
+               for name in ("a", "z") for s in ports[name]["timing_class_sources"])
