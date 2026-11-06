@@ -1,7 +1,7 @@
-2026-09-28 15:56:35 +0200: Memory Usage (675248K) : Starting running GF180MCU Klayout DRC runset on /mnt/ssd2/mainred/u5_eda/phase3/stage4/gds/ant_cal.gds
+2026-09-28 15:56:35 +0200: Memory Usage (675248K) : Starting running GF180MCU Klayout DRC runset on /work/calibration/phase3/stage4/gds/ant_cal.gds
 2026-09-28 15:56:35 +0200: Memory Usage (675248K) : Ruby Version for klayout: 3.2.3
-2026-09-28 15:56:35 +0200: Memory Usage (676132K) : Input file: /mnt/ssd2/mainred/u5_eda/phase3/stage4/gds/ant_cal.gds
-2026-09-28 15:56:35 +0200: Memory Usage (676132K) : DRC Run Report: /mnt/ssd2/mainred/u5_eda/ant_cal.lyrdb
+2026-09-28 15:56:35 +0200: Memory Usage (676132K) : Input file: /work/calibration/phase3/stage4/gds/ant_cal.gds
+2026-09-28 15:56:35 +0200: Memory Usage (676132K) : DRC Run Report: /work/calibration/ant_cal.lyrdb
 2026-09-28 15:56:35 +0200: Memory Usage (676132K) : MIM Option selected: B
 2026-09-28 15:56:35 +0200: Memory Usage (676132K) : Verbose enabled: false
 2026-09-28 15:56:35 +0200: Memory Usage (676132K) : Number of parallel workers: 1
