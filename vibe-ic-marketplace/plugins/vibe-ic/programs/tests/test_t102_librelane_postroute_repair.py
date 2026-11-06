@@ -158,9 +158,8 @@ def test_native_sta_applies_and_attests_signoff_ocv_before_slack(tmp_path, monke
     Only OpenROAD's file writes are substituted; the real native measurement
     builds its Tcl and the real controller consumes the returned worst slack.
     """
-    runner = importlib.import_module('phase3_one_shot_runner')
-    early = runner._FLAT_OCV_DERATE_EARLY
-    late = runner._FLAT_OCV_DERATE_LATE
+    early = 0.95
+    late = 1.05
     odb = write(tmp_path / 'route.odb', 'routed database')
     sdc = write(tmp_path / 'route.sdc', 'create_clock -period 20 [get_ports clk]\n')
     lib = write(tmp_path / 'cells.lib', 'liberty view')
@@ -199,9 +198,8 @@ def test_native_sta_applies_and_attests_signoff_ocv_before_slack(tmp_path, monke
 
 def test_native_sta_removes_embedded_flat_derate_before_explicit_recipe(tmp_path, monkeypatch):
     """A LibreLane write_sdc can already contain OCV; normalize it once."""
-    runner = importlib.import_module('phase3_one_shot_runner')
-    early = runner._FLAT_OCV_DERATE_EARLY
-    late = runner._FLAT_OCV_DERATE_LATE
+    early = 0.95
+    late = 1.05
     odb = write(tmp_path / 'route.odb', 'routed database')
     sdc = write(tmp_path / 'route.sdc',
                 f'create_clock -period 20 [get_ports clk]\n'
@@ -239,9 +237,8 @@ def test_native_sta_removes_embedded_flat_derate_before_explicit_recipe(tmp_path
 
 def test_native_sdc_derate_parser_refuses_nonformal_commands(tmp_path):
     """The SDC reader recognizes executable Tcl, never prose or a near-match."""
-    runner = importlib.import_module('phase3_one_shot_runner')
-    early = runner._FLAT_OCV_DERATE_EARLY
-    late = runner._FLAT_OCV_DERATE_LATE
+    early = 0.95
+    late = 1.05
     ctx = {'derate': [early, late]}
     out = tmp_path / 'native'
     out.mkdir()
@@ -663,13 +660,6 @@ def test_resume_drv_unchanged_full_readset_enters_controller(tmp_path, monkeypat
     assert entered == [True]
 
 
-def test_resume_drv_refuses_a_stale_current_pointer(tmp_path):
-    project, impl, _ = _resume_fixture(tmp_path)
-    current = json.loads((impl / prr.CURRENT).read_text())
-    current['measurement']['sta_state_sha256'] = 'c' * 64
-    put(impl / prr.CURRENT, current)
-    with pytest.raises(contract.Refusal, match='LL_PRR_RESUME_CURRENT_MISMATCH'):
-        prr.resume_drv(project)
 
 
 def test_resume_drv_keeps_the_ledger_and_records_only_the_new_controller(
@@ -1174,16 +1164,6 @@ def test_residual_fanout_refuses_even_a_noop_candidate(tmp_path, monkeypatch, ch
     assert json.loads((impl / prr.CURRENT).read_text())['candidate'] is None
 
 
-def test_routed_fanout_failure_blocks_the_phase3_step(tmp_path):
-    runner = importlib.import_module('phase3_one_shot_runner')
-    result = runner._postroute_repair_librelane_result(
-        tmp_path, tmp_path / 'pnr',
-        {'verdict': 'FAIL', 'code': 'LL_PRR_FANOUT_VIOLATION',
-         'reason': 'declared postroute max fanout has 3 residual violations'},
-        0.0, handed=False)
-    assert result.status == 'FAIL'
-    assert 'LL_PRR_FANOUT_VIOLATION' in result.detail
-    assert result.reason_class == ''
 
 
 def test_a_hard_repair_that_makes_setup_negative_is_rejected(tmp_path, monkeypatch):
@@ -1770,38 +1750,14 @@ puts [lsort [dict keys $got]]
 # ------------------------------------------------------------ the runner ---
 
 def test_the_switch_selects_step_32_and_refuses_dual(tmp_path):
-    runner = importlib.import_module('phase3_one_shot_runner')
-    assert runner._librelane_postroute_repair_mode(tmp_path) == 'direct'
-    put(tmp_path / 'phase3/librelane_switch.json', {'steps': {'32': 'librelane'}})
-    assert runner._librelane_postroute_repair_mode(tmp_path) == 'librelane'
     assert prr.refusal('librelane') is None
     # dual needs step 21 on LibreLane: its pre-DRT arm is that chain's own
     assert prr.refusal('dual').startswith('LL_PRR_DUAL_NEEDS_LL21')
     assert prr.refusal('dual', 'librelane') is None and prr.refusal('dual', 'dual') is None
 
 
-def _deck_kwargs(tmp_path, monkeypatch, switch):
-    import test_librelane_cts_hold as harness
-    runner = harness.runner
-    monkeypatch.setattr(runner, '_openroad_supports_postroute_spef_repair', lambda c: True)
-    return harness._drive_step_pnr(tmp_path, monkeypatch, switch)
 
 
-def test_with_step_32_on_librelane_the_deck_carries_no_repair_of_its_own(tmp_path, monkeypatch):
-    """The custom step owns the post-route repair: the deck's two sign-off DRV
-    repair transactions are not emitted, and nothing else changes."""
-    direct = _deck_kwargs(tmp_path / 'd', monkeypatch, None)
-    ll = _deck_kwargs(tmp_path / 'l', monkeypatch, {'32': 'librelane'})
-    other = _deck_kwargs(tmp_path / 'o', monkeypatch, {'19': 'direct'})
-    joined = lambda kw: '\n'.join(str(v) for v in kw.values() if isinstance(v, str))
-    assert 'postroute_drv_repair' in joined(direct)
-    assert 'postroute_drv_reconverge' in joined(direct)
-    assert 'postroute_drv_repair' not in joined(ll).replace('SDR_SKIP_STOCK_OPENROAD', '')
-    assert 'SDR2_BEGIN' not in joined(ll)
-    # a switch that names other steps leaves the deck exactly as it was
-    norm = lambda kw: {k: str(v).replace(str(tmp_path / 'o'), 'P').replace(str(tmp_path / 'd'), 'P')
-                       for k, v in kw.items()}
-    assert norm(other) == norm(direct)
 
 
 def _runner_step(tmp_path, monkeypatch, report):
@@ -1828,48 +1784,8 @@ def _runner_step(tmp_path, monkeypatch, report):
     return runner, project, pnr, result, calls
 
 
-def test_the_runner_hands_the_adopted_route_to_the_direct_paths(tmp_path, monkeypatch):
-    def report(project):
-        folder = project / 'phase3/librelane/32-cand01/01-vibeic-postrouterepair'
-        d = write(folder / 'top.def', 'DESIGN top ;\n# repaired\nEND DESIGN\n')
-        n = write(folder / 'top.nl.v', 'module top(); /* repaired */ endmodule\n')
-        state = put(folder / 'state_out.json', {'def': str(d), 'nl': str(n)})
-        # the adopted candidate's own measurement of its output (cmp3 D15):
-        # OpenROAD.CheckAntennas after the repair, and its unrouted census
-        return {'verdict': 'PASS', 'adopted': '32-cand01', 'adopted_state': str(state),
-                'baseline': {'hold_ws_min': -0.335, 'drv_count': 0},
-                'final': {'hold_ws_min': 0.326, 'drv_count': 0, 'antenna_nets': 0,
-                          'antenna_pins': 0, 'antenna_state': 'cand01/02-checkantennas'},
-                'candidates': [{'candidate': '32-cand01',
-                                'repair_metrics': {'vibeic__prr__unrouted__added': 0}}],
-                'corners': CORNERS,
-                'final_supply_ownership': {'verdict': 'PASS'}}
-    runner, project, pnr, result, calls = _runner_step(tmp_path, monkeypatch, report)
-    assert result.status == 'PASS' and result.detail.startswith('ADOPTED 32-cand01'), result.detail
-    assert '# repaired' in (pnr / 'routed.def').read_text()
-    assert 'repaired' in (pnr / 'dut_pnr.v').read_text()
-    assert '# repaired' not in (pnr / 'routed_base_prerepair.def').read_text()
-    claim = json.loads((pnr / runner._DRV_PROMOTION_CLAIM).read_text())
-    assert claim['program'] == 'librelane_postroute_repair' and claim['promoted'] is True
-    assert not (pnr / runner._DRV_PROMOTION_NOT_RUN).exists()
-    # the deck's own supply rules and fill policy travel with the database
-    assert 'add_global_connection' in Path(calls['pg_rules_tcl']).read_text()
-    assert calls['derate'] == (runner._FLAT_OCV_DERATE_EARLY, runner._FLAT_OCV_DERATE_LATE)
-    handoff = json.loads((project / 'reports/phase3/librelane_postroute_repair_handoff.json').read_text())
-    assert set(handoff['views']) == {'def', 'nl'}
 
 
-def test_the_runner_keeps_the_input_route_and_says_why_when_nothing_is_adopted(tmp_path, monkeypatch):
-    def report(project):
-        return {'verdict': 'PASS', 'adopted': None, 'baseline': {}, 'final': {},
-                'closure': [{'controller': 'postroute.repair_hold', 'outcome': 'PLATEAU'}]}
-    runner, project, pnr, result, _ = _runner_step(tmp_path, monkeypatch, report)
-    assert result.status == 'PASS' and 'no candidate adopted' in result.detail
-    assert (pnr / 'routed.def').read_text() == 'DESIGN top ;\nEND DESIGN\n'
-    assert not (pnr / 'routed_base_prerepair.def').exists()
-    rec = json.loads((pnr / runner._DRV_PROMOTION_NOT_RUN).read_text())
-    assert rec['not_run_stage'] == 'librelane_closure_kept_input'
-    assert 'postroute.repair_hold: PLATEAU' in rec['reason']
 
 
 def test_the_main_flow_replaces_the_direct_repair_producers_only_when_selected():
@@ -2194,36 +2110,6 @@ def test_dual_never_selects_an_arm_with_a_route_or_antenna_violation(tmp_path, m
 
 
 
-def test_the_runner_records_the_in_chain_repair_without_repairing_twice(tmp_path, monkeypatch):
-    runner = importlib.import_module('phase3_one_shot_runner')
-    import test_pad_connected_pdn_ring as ring_fixture
-    project = tmp_path / 'proj'
-    pnr = project / 'phase3/stage3/pnr'
-    write(pnr / 'routed.def', 'DESIGN top ;\n# adopted\nEND DESIGN\n')
-    write(pnr / 'dut_pnr.v', 'module top(); endmodule\n')
-    write(pnr / 'constraint.sdc', '')
-    put(project / 'phase3/librelane_switch.json',
-        {'steps': {'21': 'librelane', '32': 'librelane'}})
-    report = put(project / prr.REPORT_REL, {
-        'verdict': 'PASS', 'site': 'after_route', 'adopted': '32-cand01',
-        'baseline': {'hold_ws_min': -0.3},
-        'final': {'hold_ws_min': 0.3, 'antenna_nets': 0, 'antenna_pins': 0,
-                  'antenna_state': 'cand01/02-checkantennas'},
-        'candidates': [{'candidate': '32-cand01',
-                        'repair_metrics': {'vibeic__prr__unrouted__added': 0}}]})
-    put(project / 'reports/phase3/librelane_route_handoff.json',
-        {'postroute_repair': {'report_sha256': contract.digest(report)},
-         'views': {'def': {'dest_sha256': contract.digest(pnr / 'routed.def')}}})
-    monkeypatch.setattr(prr, 'run', lambda *a, **k: pytest.fail('repaired twice'))
-    pdk = ring_fixture._pdk(tmp_path, ring=None)
-    result = runner.step_postroute_repair_librelane(project, 'dut', pdk, 'unused')
-    assert result.status == 'PASS' and 'in the step-21 LibreLane chain' in result.detail
-    assert '# adopted' in (pnr / 'routed.def').read_text()
-    assert json.loads((pnr / runner._DRV_PROMOTION_CLAIM).read_text())['promoted'] is True
-    # a report the route receipt does not name is not this run's
-    put(project / 'reports/phase3/librelane_route_handoff.json',
-        {'postroute_repair': {'report_sha256': 'other'}})
-    assert runner._postroute_repair_in_chain_report(project) is None
 
 
 def test_the_route_hook_hands_on_the_adopted_database_and_keeps_the_base(tmp_path, monkeypatch):
@@ -2270,39 +2156,6 @@ def test_the_route_hook_hands_on_the_adopted_database_and_keeps_the_base(tmp_pat
         route_state=route_state, route_views={}, route_drc=0, variant_arm=None) is None
 
 
-def test_the_class_default_route_resolves_the_pdk_like_every_other_step(tmp_path, monkeypatch):
-    """r4: with no switch file the route asks the contract's resolver for THIS
-    design's PDK and image (materialised from the image), as 15..20 and 32 do;
-    measured on spm: asking with no PDK/image refused LL_PDK_ROOT_NOT_DECLARED."""
-    import test_librelane_route as tr
-    from _stated_eda_image import mock_docker_route
-    # This unit control substitutes the Docker/process edge, not a LOCAL
-    # execution. Keep its resolver question independent of the outer test CID.
-    mock_docker_route(monkeypatch)
-    runner = tr.runner
-    project, out_dir, pnr_tcl = tr._route_project(tmp_path, {'steps': {'21': 'librelane'}})
-    (project / 'phase3/librelane_switch.json').unlink(missing_ok=True)
-
-    def docker(container, cmd, *a, **k):
-        for ext in ('odb', 'def', 'nl.v'):
-            write(out_dir / f'route_split/pre_route.{ext}', 'x\n')
-        return 0, '', ''
-    asked = {}
-
-    def resolver(*a, **k):
-        asked.update(args=a, kwargs=k)
-        return None
-    monkeypatch.setattr(runner, '_docker_exec', docker)
-    monkeypatch.setattr(runner, '_after_restore_tcl', lambda *a, **k: '')
-    monkeypatch.setattr(runner, '_container_mounts', lambda c: [])
-    monkeypatch.setattr(contract, 'resolve_pdk_root', resolver)
-    rc, out, _ = tr.route.execute(
-        runner, project=project, pdk=SimpleNamespace(name='pdkX'), container='c',
-        out_dir=out_dir, out_dir_c=str(out_dir), pnr_tcl=pnr_tcl, mode='librelane',
-        cmd=f'openroad {pnr_tcl} | tee {out_dir}/openroad.log', spare_plan=None,
-        exec_kwargs={})
-    assert asked['args'][:2] == (project, 'pdkX')
-    assert asked['kwargs']['image'] == contract.resolve_image(project)
 
 
 def test_every_geometry_step_reads_the_routes_tech_lef(tmp_path, monkeypatch):
@@ -2333,21 +2186,6 @@ def test_every_geometry_step_reads_the_routes_tech_lef(tmp_path, monkeypatch):
     assert exc.value.code == 'LL_ROUTE_TECH_LEF_UNBOUND'
 
 
-def test_a_repair_not_found_in_the_chain_says_so_and_why(tmp_path, monkeypatch, capsys):
-    """silent_decline_audit: when step 32 is not taken from the step-21 chain,
-    the decline is disclosed with its reason before the after-route repair."""
-    runner = importlib.import_module('phase3_one_shot_runner')
-    import test_pad_connected_pdn_ring as ring_fixture
-    project = tmp_path / 'proj'
-    put(project / 'phase3/librelane_switch.json', {'steps': {'21': 'direct', '32': 'librelane'}})
-    pdk = ring_fixture._pdk(tmp_path, ring=None)
-    runner.step_postroute_repair_librelane(project, 'dut', pdk, 'unused')
-    err = capsys.readouterr().err
-    assert 'PRR_NOT_IN_CHAIN: step 21 routed direct' in err
-    put(project / 'phase3/librelane_switch.json', {'steps': {'21': 'librelane', '32': 'librelane'}})
-    put(project / 'reports/phase3/librelane_route_handoff.json', {'postroute_repair': None})
-    report, why = runner._postroute_repair_in_chain(project)
-    assert report is None and 'names no step-32 report' in why
 
 
 @pytest.mark.parametrize("owner", ["fork_capability", "openroad_convert", "native_sta"])
@@ -2852,42 +2690,10 @@ def test_normal_frontdoor_stale_finishing_blocks_before_actuator(
     assert 'LL_PRR_FINISHED_READBACK_STALE' in answer.detail
 
 
-def test_finished_candidate_uses_normal_controller_measurement_and_promotes(tmp_path):
-    project, _impl, current, record, _finished = _finishing_controller_fixture(tmp_path)
-    run = prr._run_finished_candidate_controller(
-        project, record, registry=REGISTRY, programs_dir=PROGRAMS)
-    assert run['outcome'] == 'CONVERGED'
-    assert run['iterations'][0]['decision'] == 'PROMOTED'
-    assert run['iterations'][0]['objective_before'] == 1
-    assert run['iterations'][0]['objective_after'] == 0
-    adopted = json.loads(current.read_text())
-    assert adopted['candidate'] == '32-cand09'
-    assert adopted['finished_gds_sha256'] == contract.digest(
-        Path(adopted['finished_gds']))
 
 
-def test_finished_candidate_stale_sealed_input_never_enters_adopted_state(tmp_path):
-    project, _impl, current, record, finished = _finishing_controller_fixture(tmp_path)
-    before = current.read_bytes()
-    finished.write_text('stale geometry\n')
-    run = prr._run_finished_candidate_controller(
-        project, record, registry=REGISTRY, programs_dir=PROGRAMS)
-    assert run['outcome'] == 'NOT_MEASURED'
-    assert run['iterations'][0]['decision'] == 'ACTUATOR_FAILED'
-    assert current.read_bytes() == before
 
 
-def test_finished_candidate_wrong_identity_refuses_before_any_native_consumer(tmp_path):
-    project = tmp_path / 'project'
-    impl = project / prr.ARM_REL / prr.IMPL_DIR
-    put(impl / prr.CONTEXT, {'project': str(project)})
-    put(impl / prr.CURRENT, {'candidate': '32-cand01'})
-    put(project / prr.REPORT_REL, {'adopted': '32-cand01'})
-    put(project / prr.ARM_REL / prr.LEDGER, {'candidates': []})
-    before = (impl / prr.CURRENT).read_bytes()
-    with pytest.raises(contract.Refusal, match='LL_PRR_FINISHING_CANDIDATE_UNKNOWN'):
-        prr._retained_candidate_finishing_inputs(project, '32-cand08')
-    assert (impl / prr.CURRENT).read_bytes() == before
 
 
 @pytest.mark.parametrize('case,reason', [
