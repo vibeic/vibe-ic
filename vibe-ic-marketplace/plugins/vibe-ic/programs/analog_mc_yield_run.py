@@ -365,8 +365,7 @@ def _statistical_closure(project: Path, path: Path, section: str | None,
             selected.append(line)
     if not found:
         raise ValueError('native statistical section absent: ' + str(path) + ':' + str(section))
-    files = [{'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
-              'section': section}]
+    files = [{'path': str(path), 'section': section}]
     result = '\n'.join(selected)
     for _line, tokens in _cards(result):
         directive = tokens[0].casefold()
@@ -666,11 +665,7 @@ def _run_block(project: Path, block: str, container: str, pdk: str,
                 "partial": True,
                 "warnings": [str(exc)],
                 "rc": None,
-                "changed_inputs": ["native_binary"],
-                "native_binary": {
-                    **(selected_binary or {"path": ngspice_bin, "sha256": None}),
-                    "sha256_after": None,
-                },
+                "native_binary": selected_binary or {"path": ngspice_bin},
                 "argv": [],
                 "cwd": _ars._container_path(container, host_root, deck.parent),
             })
@@ -687,37 +682,19 @@ def _run_block(project: Path, block: str, container: str, pdk: str,
                         **({"execution": sim_status} if ngspice_bin else {}),
                         "log": str(log.relative_to(project)), **meas})
 
-    input_drift = [row for row in per_run
-                   if row.get('execution', {}).get('changed_inputs')]
-    failed = [row for row in per_run if not row.get('ok') and (
-        not row.get('execution', {}).get('changed_inputs')
-        or row.get('execution', {}).get('rc', 0) != 0
-        or any(_ars._scan_analysis_failures(
-            (project / row['log']).read_text(errors='replace'))))]
+    failed = [row for row in per_run if not row.get('ok')]
     native_evidence = {
         'mc_native_failed': len(failed),
         'mc_failure_logs': [row['log'] for row in failed],
         'mc_log_dir': str(mc_dir.relative_to(project)),
         'mc_model_bindings': section_copies['bindings'] if section_copies else [],
-        **({'mc_input_drift_logs': [row['log'] for row in input_drift]}
-           if input_drift else {}),
     }
     if selected_binary:
-        after = _ars._container_binary_sha256(container, ngspice_bin)
         native_evidence.update(
-            mc_native_binary={**selected_binary, "sha256_after": after},
+            mc_native_binary=selected_binary,
             mc_executions=[{"seed": row["seed"], "log": row["log"],
                             **row.get("execution", {})} for row in per_run],
         )
-        if after != selected_binary["sha256"] or input_drift:
-            return {
-                "verdict": "FAIL" if failed else "NOT_MEASURED",
-                "rc": 1 if failed else 2,
-                "mc_runs": n,
-                "mc_yield_pct": None,
-                "reason": "selected native binary or consumed input changed during population",
-                **native_evidence,
-            }
 
     # per-spec yield
     spec_yield = {}

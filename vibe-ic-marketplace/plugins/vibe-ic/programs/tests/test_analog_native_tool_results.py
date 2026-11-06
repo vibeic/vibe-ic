@@ -166,3 +166,34 @@ def test_native_declared_pvt_retains_all_nine_coordinates_and_limits(project, vo
     assert all(corner["status"] == expected for corner in result["metrics"]["corners"])
     assert all(corner["measurements"]["vout"] == pytest.approx(voltage) for corner in result["metrics"]["corners"])
     assert {corner["temperature_c"] for corner in result["metrics"]["corners"]} == {-40, 27, 125}
+
+
+def test_explicit_native_sweep_binary_returns_real_measurements(project, monkeypatch):
+    import subprocess
+    import analog_real_corner_sweep as sweep
+    deck = project / "selected-native.sp"
+    deck.write_text('* selected native binary\nv1 node 0 1.025\nr1 node 0 1k\n.control\ntran 1n 100n\n'
+                    'meas tran level avg v(node) from=10n to=100n\n.endc\n.end\n')
+    def local_transport(container, command, timeout=None):
+        return subprocess.run(["bash", "-lc", command], capture_output=True, text=True, timeout=timeout)
+    monkeypatch.setattr(sweep, "_docker", local_transport)
+    binary = shutil.which("ngspice")
+    ok, values, transcript, state = sweep._run_ngspice("", str(deck), cwd=str(project), ngspice_bin=binary)
+    assert ok, transcript
+    assert values["level"] == pytest.approx(1.025)
+    assert state["native_binary"] == {"path": binary}
+    assert not state["partial"]
+    with pytest.raises(ValueError, match="not executable"):
+        sweep._selected_ngspice_binary("", "/no-such-native-ngspice")
+
+
+def test_native_selected_model_closure_retains_sections_and_missing_model_errors(project):
+    import analog_mc_yield_run as mc
+    library = project / "native-models.lib"
+    library.write_text('.lib tt\n.model diode D(Is=1e-14)\n.endl tt\n'
+                       '.lib ff\n.model diode D(Is=2e-14)\n.endl ff\n')
+    text, files = mc._statistical_closure(project, library, "ff")
+    assert "Is=2e-14" in text and "Is=1e-14" not in text
+    assert files == [{"path": str(library), "section": "ff"}]
+    with pytest.raises(ValueError, match="section absent"):
+        mc._statistical_closure(project, library, "ss")
