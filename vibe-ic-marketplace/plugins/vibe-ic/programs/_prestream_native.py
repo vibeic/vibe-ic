@@ -339,6 +339,7 @@ def placement(project: Path, state_path: Path, *, container: str | None = None) 
     state = load(state_path)
     odb = path(project, str(state.get('odb', '')))
     import phase3_one_shot_runner as runner
+    import _eda_pin as pin
     import _atomic_artefact as aa
     log = project / 'reports/phase3/prestream_placement.log'
     log.parent.mkdir(parents=True, exist_ok=True)
@@ -352,7 +353,7 @@ def placement(project: Path, state_path: Path, *, container: str | None = None) 
         aa.write_text(log, missing[-1] + '\n')
     else:
         route = container if container is not None else (
-            os.environ.get('EDA_CONTAINER') or runner._pin.default_container_name())
+            os.environ.get('EDA_CONTAINER') or pin.default_container_name())
         tcl = log.with_suffix('.tcl')
         odb_c = runner._to_container_path(str(odb), route)
         # One literal Tcl word, including paths containing whitespace/braces.
@@ -416,6 +417,7 @@ def padring(project: Path, state_path: Path, *, container: str | None = None) ->
     import _atomic_artefact as aa
     import _pad_ring as pr
     import phase3_one_shot_runner as runner
+    import _eda_pin as pin
 
     log = project / 'reports/phase3/padring_final_state.log'
     log.parent.mkdir(parents=True, exist_ok=True)
@@ -426,7 +428,7 @@ def padring(project: Path, state_path: Path, *, container: str | None = None) ->
     if not odb.is_file():
         return result(missing=[f'PADRING_NATIVE_ODB_UNREADABLE:{odb}'], **evidence)
     route = container if container is not None else (
-        os.environ.get('EDA_CONTAINER') or runner._pin.default_container_name())
+        os.environ.get('EDA_CONTAINER') or pin.default_container_name())
 
     def word(value):
         return '"' + re.sub(r'([\\"$\[\]])', r'\\\1', str(value)) + '"'

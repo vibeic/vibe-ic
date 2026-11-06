@@ -5353,19 +5353,9 @@ def cmd_score(bench: str, run: str, dataset: str | None,
         raise SystemExit(
             "canonical scoring requires a full-dataset general --solve run; "
             "partial, separate-scaffold, or benchmark-local runs are not eligible")
-    accepted = _require_program_first_ai_acceptance(run_p)
-    entry_guard = Path(__file__).resolve().parent / "vibe_ic_entry_guard.py"
-    if entry_guard.is_file() and not allow_direct_agent and not accepted:
-        rc = subprocess.call([sys.executable, str(entry_guard), str(run_p),
-                              "--strict"])
-        if rc != 0:
-            raise SystemExit(
-                "Vibe-IC entry guard FAILed — this run lacks evidence of "
-                "passing through vibe_ic_one_shot_runner.py / phase1. "
-                "Run the benchmark through the Vibe-IC plugin; direct-agent "
-                "authoring/patching cannot be scored as canonical. "
-                "Pass --allow-direct-agent only for a disclosed NON-CANONICAL "
-                "exploratory run.")
+    if not _require_program_first_ai_acceptance(run_p):
+        raise SystemExit("Program First + AI Review acceptance is incomplete; "
+                         "complete the general solve and independent review before scoring")
     # Front-door clean-room gate (ORGANIC-20260604): refuse to score a run that
     # inherited prior samples / scores / memory. The published pass@1 must come
     # from a clean-room run ('一定是重跑', user directive 2026-06-04).
