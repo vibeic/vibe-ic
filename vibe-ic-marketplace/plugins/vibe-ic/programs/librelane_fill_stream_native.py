@@ -1,8 +1,7 @@
-"""Run reviewed LibreLane stream producer with only its fill-clear bug patched.
+"""Run the installed LibreLane stream producer with native fill retention.
 
-The installed source is never edited. Its complete license/header is retained
-in the compiled source; the exact original digest and this patch are bound by
-librelane_fill_stream.operation_sources. Unknown native versions refuse.
+The installed source and its license/header are retained. Legacy cell-clearing
+APIs are adapted without changing the installed script.
 """
 from pathlib import Path
 import sys
