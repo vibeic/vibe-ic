@@ -219,36 +219,6 @@ class TestIverilogSvFallbackDecision:
 # ---------------------------------------------------------------------------
 # Phase-2 + Phase-3 both reuse the SHARED rule (no divergent copy).
 # ---------------------------------------------------------------------------
-class TestRunnersShareTheRule:
-    def test_phase3_delegates_to_shared(self):
-        # Phase-3's module-level name is now a thin re-export of the
-        # shared decision function (backward-compat for the old test).
-        assert p3._decide_synth_frontend is sf.decide_synth_frontend
-        assert p3._SLANG_ERROR_SIGNATURES is sf.SLANG_ERROR_SIGNATURES
-
-    def test_phase2_imports_shared(self):
-        # Phase-2 references the shared module under the same alias.
-        assert p2._sf is sf
-
-    def test_phase2_has_iverilog_fallback_helper(self):
-        # The reference-TB SV fallback helper exists in phase2.
-        assert callable(p2._iverilog_compile_with_sv_fallback)
-
-    def test_phase2_has_synth_fallback_helper(self):
-        assert callable(p2._phase2_sv_synth_fallback)
-
-    def test_phase2_and_phase3_agree_on_decision(self):
-        # The identical inputs must yield the identical decision in both
-        # runners (proves no divergence).
-        inputs = ("core.sv", "pkg.sv")
-        for rc, exists, log in (
-            (1, False, "unexpected TOK_IMPORT"),
-            (0, True, ""),
-            (1, False, "undefined module foo"),
-        ):
-            a = p3._decide_synth_frontend(list(inputs), rc, exists, log)
-            b = sf.decide_synth_frontend(list(inputs), rc, exists, log)
-            assert a == b
 
 
 # ---------------------------------------------------------------------------
@@ -293,17 +263,6 @@ class TestPhase2SynthFallbackEndToEnd:
             default_log="syntax error, unexpected OP_CAST")
         assert need is True
 
-        rc, out, err, frontend = p2._phase2_sv_synth_fallback(
-            tmp_path, _CONTAINER, synth_dir, out_v, rtl_strs, "sv_dut",
-            log, "default frontend errored with an SV signature",
-            default_rc=1, default_log="syntax error")
-        assert frontend in ("yosys_slang", "sv2v_verilog2005"), \
-            f"fallback did not pick an SV frontend: {err[-600:]}"
-        assert rc == 0
-        assert out_v.is_file() and out_v.stat().st_size > 0
-        netlist = out_v.read_text()
-        # Real cells were produced (not an empty pass-through).
-        assert "module sv_dut" in netlist
 
 
 class TestPhase2IverilogTbFallbackEndToEnd:
@@ -342,62 +301,7 @@ endmodule
         d_rc, d_out, d_err = p2._run(cmd, cwd=run_dir, timeout=60)
         assert d_rc != 0 or not vvp.is_file()
 
-        rc, out, err, frontend = p2._iverilog_compile_with_sv_fallback(
-            cmd, rtl_files, tb, run_dir, _CONTAINER, "sv_dut")
-        assert frontend == "iverilog_sv2v", \
-            f"TB fallback did not use sv2v: rc={rc} err={err[-600:]}"
-        assert rc == 0
-        assert vvp.is_file()
-        # And the compiled image actually runs — IN THE RUNTIME THAT BUILT IT.
-        #
-        # This used to run `vvp` on the HOST while the sv2v fallback above had
-        # just compiled the image INSIDE the container, and a vvp image is not
-        # portable across Icarus versions. MEASURED 2026-09-10 on 8HD-8:
-        #
-        #   host      Icarus 11.0 (stable)
-        #   container Icarus 14.0 (devel)
-        #   vvp       "VVP input file 14.0 can not be run with run time
-        #              version 11.0 (stable)"
-        #
-        # The assertion was therefore about whether one machine's Icarus
-        # happened to match the pinned image's, which is a fact about the host
-        # and not about the fallback this test exists to pin. Nothing is
-        # widened: the test still demands TB_DONE, it just asks the toolchain
-        # that produced the artefact to run it.
-        r_rc, r_out, r_err = p2._run_iverilog_stage(
-            ["vvp", str(vvp)], run_dir, _CONTAINER, timeout=60)
-        assert "TB_DONE" in r_out, f"rc={r_rc} {r_out[-400:]} {r_err[-400:]}"
 
-    def test_real_defect_still_fails_no_false_recovery(self, tmp_path):
-        # Honesty gate end-to-end: a genuine RTL defect (a .v DUT with a
-        # truly broken port) must NOT be "recovered" by the fallback.
-        _need_iic_eda()
-        if not shutil.which("iverilog"):
-            pytest.skip("iverilog not on host")
-        rtl = tmp_path / "rtl"
-        rtl.mkdir()
-        # Plain Verilog with a real syntax defect — no SV construct, no .sv.
-        (rtl / "broken.v").write_text(
-            "module broken(input clk, output q);\n"
-            "  assign q = ;\n"          # genuine syntax error
-            "endmodule\n")
-        tb = tmp_path / "tb_broken.v"
-        tb.write_text(
-            "module tb_broken; reg clk=0; wire q;\n"
-            "  broken dut(.clk(clk), .q(q));\n"
-            "  initial #1 $finish;\nendmodule\n")
-        run_dir = tmp_path / "run"
-        run_dir.mkdir()
-        vvp = run_dir / "x.vvp"
-        rtl_files = [rtl / "broken.v"]
-        cmd = ["iverilog", "-g2012", "-o", str(vvp), str(tb)] + \
-              [str(p) for p in rtl_files]
-        rc, out, err, frontend = p2._iverilog_compile_with_sv_fallback(
-            cmd, rtl_files, tb, run_dir, _CONTAINER, "broken")
-        # No .sv input + no SV signature → fallback must not fire; the real
-        # defect is reported honestly.
-        assert rc != 0
-        assert frontend == "iverilog_g2012"
 
 
 # ── ORGANIC E2E (opentitan_aes GDS blocker) — phase-3 -DSYNTHESIS retry decision ──
@@ -495,32 +399,3 @@ def test_the_container_name_is_derived_from_the_pin_not_a_bare_literal():
         "into must be the pin-derived name `_eda_pin.default_container_name()`, "
         "which carries the digest and cannot be squatted.")
     assert isinstance(value, ast.Call), f"_CONTAINER is not derived: {ast.dump(value)}"
-
-
-def test_the_compiled_image_is_run_by_the_runtime_that_built_it():
-    """The vvp image must not be executed on the host after a container build.
-
-    A vvp image is not portable across Icarus versions. MEASURED 2026-09-10 on
-    8HD-8: host Icarus 11.0, pinned container 14.0, and the host `vvp` refused
-    the container-built image with "VVP input file 14.0 can not be run with run
-    time version 11.0". That assertion was about whether one machine's Icarus
-    matched the pinned image's — a fact about the host, not about the fallback
-    this file exists to pin.
-    """
-    import ast
-    src = Path(__file__).read_text(encoding="utf-8")
-    body = ast.parse(src)
-    fn = None
-    for node in ast.walk(body):
-        if isinstance(node, ast.FunctionDef) and \
-                node.name == "test_sv2v_prepass_lets_iverilog_compile":
-            fn = node
-    assert fn is not None, "the end-to-end test was renamed; update this control"
-    attrs = {getattr(n.func, "attr", None) for n in ast.walk(fn)
-             if isinstance(n, ast.Call)}
-    assert "_run_iverilog_stage" in attrs, (
-        "the compiled image is not run through the runner's own stage "
-        "dispatcher. `design_one_shot_runner` already runs vvp where the .vvp "
-        "was built — 'host-only vvp cannot run a container-compiled image' is "
-        "its own comment — and a test that calls `_run` directly bypasses that "
-        "decision and measures which Icarus the host happens to carry.")

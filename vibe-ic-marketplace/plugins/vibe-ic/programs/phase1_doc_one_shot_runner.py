@@ -627,7 +627,7 @@ def _libreoffice_convert_to_text(p: Path, target_filter: str) -> str:
     decoded text or "" when LibreOffice is unavailable / produced nothing.
     Chip-AGNOSTIC.
     """
-    import tempfile
+    import vibeic_temp as tempfile
     soffice = shutil.which("soffice") or shutil.which("libreoffice")
     if not soffice:
         return ""
@@ -55231,6 +55231,7 @@ def gen_l9_integration_spec(project: Path,
             bound["interface_types"] = [declared]
             bound["no_interface_type_in_input"] = False
             bound["no_interface_types_in_input"] = False
+    _ppx.annotate_timing_ports(project, bound, extracted)
     return _write_l_doc(
         project, "L9_INTEGRATION_SPEC", bound, evidence,
         source_documents=_source_documents_from_extracted(project, extracted))

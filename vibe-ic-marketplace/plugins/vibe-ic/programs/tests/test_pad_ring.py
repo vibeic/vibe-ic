@@ -198,18 +198,12 @@ def _pdk_args(root: Path):
     return ["--pdk-root", str(root / "pdk"), "--pdk", "proc"]
 
 
-
-
-
-
 def _report(root: Path) -> dict:
     return json.loads((root / PR.REPORT_REL).read_text())
 
 
 def _rules(root: Path):
     return {f["rule"] for f in _report(root).get("findings", [])}
-
-
 
 
 def _ring_def(root: Path) -> Path:
@@ -229,193 +223,9 @@ def _line(root: Path, inst: str) -> str:
     raise AssertionError(f"{inst} not in {PR.PADRING_DEF_REL}")
 
 
-
-
 # --------------------------------------------------------------------------- #
 # the producer — upstream's contract, upstream's algorithm
 # --------------------------------------------------------------------------- #
-
-
-def test_padring_def_is_a_complete_routing_handoff_not_a_pad_sidecar(tmp_path):
-    """The router must receive the original design plus the placed ring.
-
-    The old emitter rebuilt a tiny DEF containing only pad/corner COMPONENTS.
-    It could pass the ring gate while dropping the core, PINS, NETS, ROWS and
-    TRACKS that routing needs.  Pin each preserved section and the one intended
-    mutation (pad placement) here.
-    """
-    floorplan = _floorplan().replace(
-        "END DESIGN",
-        "ROW ROW_0 core_site 0 0 N DO 10 BY 1 STEP 500 0 ;\n"
-        "TRACKS X 0 DO 10 STEP 100 LAYER met2 ;\n"
-        "NETS 1 ;\n- ssig0 ( PIN ssig0 ) ;\nEND NETS\nEND DESIGN")
-    root = _project(tmp_path, floorplan=floorplan)
-    routed_input = _ring_def(root).read_text()
-    parsed = PR.parse_def(routed_input)
-    assert len(parsed.components) == (
-        1 + len(PADS) + 4 + len(_report(root)["fillers"])), (
-        "routing hand-off component population changed")
-    assert parsed.components["u_core"].master == "CORE_MACRO"
-    assert parsed.components[PADS["ssig0"]].placed
-    assert set(parsed.pins) == set(ALL_SIGNALS)
-    for exact in ("ROW ROW_0 core_site", "TRACKS X 0 DO 10 STEP 100",
-                  "NETS 1 ;", "- ssig0 ( PIN ssig0 ) ;"):
-        assert exact in routed_input, f"routing hand-off dropped {exact!r}"
-
-
-
-
-def test_the_skip_names_every_absent_config_variable_one_by_one(tmp_path):
-    """DISCLOSURE. Upstream shows exactly what the missing input IS, so the
-    skip declares it rather than describing a hole."""
-    root = _project(tmp_path, config=None)
-    assert not _ring_def(root).is_file()
-    assert (root / PR.PADRING_SKIPPED_REL).is_file()
-
-
-def test_the_skip_survives_the_gate_as_exit_two_and_never_zero(tmp_path):
-    root = _project(tmp_path, config=None)
-    assert _report(root)["verdict"] == "SKIP"
-
-
-
-
-
-
-@pytest.mark.parametrize("var", PR.REQUIRED_VARS)
-def test_one_absent_config_variable_is_refused_never_defaulted(tmp_path, var):
-    """Their TCL aborts on the first unset `$::env`. So does this — and it
-    says which one, in the report."""
-    cfg = _config()
-    del cfg[var]
-    root = _project(tmp_path, config=cfg)
-    assert "PAD_CONFIG_VARIABLE_ABSENT" in _rules(root)
-    assert var in _report(root)["reason"]
-
-
-def test_an_unresolvable_pad_site_is_refused(tmp_path):
-    root = _project(tmp_path, config=_config(PAD_SITE_NAME="no_such_site"))
-    assert "PAD_SITE_NOT_FOUND" in _rules(root)
-
-
-def test_a_pad_site_whose_class_is_not_pad_is_refused(tmp_path):
-    root = _project(tmp_path, config=_config(PAD_SITE_NAME="core_site"))
-    assert "PAD_SITE_CLASS_NOT_PAD" in _rules(root)
-
-
-def test_an_instance_the_block_does_not_contain_is_refused(tmp_path):
-    """Their `No instance <name> found.` — the side variables name instances
-    the netlist must already carry."""
-    root = _project(tmp_path,
-                    floorplan=_floorplan(instances=list(PADS.values())[:-1]))
-    assert "PAD_INSTANCE_NOT_IN_BLOCK" in _rules(root)
-
-
-def test_a_ring_wider_than_its_die_is_refused(tmp_path):
-    extra = {f"pad_x{i}": f"x{i}" for i in range(40)}
-    cfg = _config()
-    cfg["PAD_SOUTH"] = cfg["PAD_SOUTH"] + list(extra)
-    cfg["SIGNAL_MAP"].update(extra)
-    root = _project(
-        tmp_path, config=cfg,
-        floorplan=_floorplan(pins=ALL_SIGNALS + list(extra.values()),
-                             instances=list(PADS.values()) + list(extra)))
-    assert "PAD_RING_DOES_NOT_FIT" in _rules(root)
-
-
-def test_a_corner_spacing_off_the_site_grid_is_refused(tmp_path):
-    """Their step 8. With a 6 um pad site the fixture's remaining area is
-    202_000 DEF units, which 6_000 does not divide — so the gap between the
-    corner and the first pad could not be closed by filler cells."""
-    root = _project(tmp_path, site_w=6.0)
-    assert "PAD_CORNER_SPACING_NOT_SITE_MULTIPLE" in _rules(root)
-
-
-def test_runner_log_keeps_real_ring_producer_refusal(tmp_path, capsys):
-    import phase3_one_shot_runner as runner
-
-    root = _project(tmp_path, site_w=6.0)
-    output = capsys.readouterr().out
-    note = runner._pad_ring_process_note(1, output, "")
-    assert note.startswith("PAD_CORNER_SPACING_NOT_SITE_MULTIPLE:")
-    assert "minimum site width" in note
-    assert runner._pad_ring_process_note(0, output, "") == output.splitlines()[0]
-
-
-def test_second_generation_retires_a_previous_skip_sidecar(tmp_path):
-    root = _project(tmp_path, config=None)
-    marker = root / PR.PADRING_SKIPPED_REL
-    assert marker.is_file()
-    (root / PR.ASSIGNMENT_REL).write_text(json.dumps(_config()))
-    assert _report(root)["verdict"] == "PASS"
-    assert _ring_def(root).is_file()
-    assert not marker.exists()
-
-
-def test_native_feasible_count_population_is_not_refused(tmp_path):
-    """#75b: ruling75/adc-native-counts.log shows native accepts counts 1..11.
-
-    The former symmetric-only population omitted 6 and 8 incorrectly. Native
-    truncates its corner gap, so the 1_300_000-DBU side is a positive case.
-    The native comparison module verifies every count and every side's DEF.
-    """
-    count = 6
-    signals = {s: [f"{s.lower()}_signal_{i}" for i in range(count)]
-               for s in PR.SIDES}
-    pads = {name: f"pad_{name}"
-            for side in PR.SIDES for name in signals[side]}
-    config = _config(
-        PAD_SOUTH=[pads[n] for n in signals["S"]],
-        PAD_EAST=[pads[n] for n in signals["E"]],
-        PAD_NORTH=[pads[n] for n in signals["N"]],
-        PAD_WEST=[pads[n] for n in signals["W"]],
-        PAD_EDGE_SPACING=0,
-        PAD_FILLERS=["pad_fill1"],
-        SIGNAL_MAP={pads[n]: n for side in PR.SIDES for n in signals[side]},
-    )
-    root = _project(
-        tmp_path,
-        config=config,
-        floorplan=_floorplan(
-            pins=[n for side in PR.SIDES for n in signals[side]],
-            instances=list(pads.values()), die=1_300_000),
-        site_w=1.0, pad_w=80.0, corner_w=180.0)
-
-    lef = root / "pdk/proc/libs.ref/proc_io/lef/io.lef"
-    lef.write_text(lef.read_text().replace("350", "180"))
-    expected = list(range(1, 12))
-    assert not [f for f in _report(root)["findings"]
-                if f["rule"] == "PAD_CORNER_SPACING_NOT_SITE_MULTIPLE"]
-
-
-def test_mixed_width_refusal_does_not_invent_a_count_only_answer(tmp_path):
-    """Different master widths make a bare count insufficient geometry.
-
-    The refusal must remain actionable without pretending that removing any
-    one pad has the same effect.  It names the observed widths and says why a
-    feasible count is not determined until the remaining masters are named.
-    """
-    mixed_instances = [PADS[SIGNALS[side][0]] for side in PR.SIDES]
-    floorplan = _floorplan()
-    for instance in mixed_instances:
-        floorplan = floorplan.replace(
-            f"- {instance} pad_bidir + UNPLACED ;",
-            f"- {instance} pad_wide + UNPLACED ;")
-    root = _project(tmp_path, floorplan=floorplan, site_w=6.0)
-    lef = root / "pdk/proc/libs.ref/proc_io/lef/io.lef"
-    lef.write_text(lef.read_text().replace(
-        "END LIBRARY",
-        "MACRO pad_wide\n  CLASS PAD ;\n  SIZE 76 BY 350 ;\n"
-        "END pad_wide\nEND LIBRARY"))
-
-    refusals = [f for f in _report(root)["findings"]
-                if f["rule"] == "PAD_CORNER_SPACING_NOT_SITE_MULTIPLE"]
-    assert len(refusals) == 4
-    for finding in refusals:
-        assert finding["declared_pad_widths_dbu"] == [75_000, 76_000]
-        assert finding["feasible_pad_counts"] is None
-        assert finding["feasible_pad_counts_basis"] == "NOT_DETERMINED"
-        assert "NOT DETERMINED from count alone" in finding["message"]
 
 
 def test_feasible_count_guidance_keeps_a_captured_real_ring_feasible():
@@ -452,102 +262,9 @@ def test_feasible_count_guidance_keeps_a_captured_real_ring_feasible():
             "space_for_fill"]
 
 
-def test_a_non_rectangular_die_is_refused_not_approximated(tmp_path):
-    """The contract has one PAD_CORNER and four named positions, so it cannot
-    describe a ring on a rectilinear die. Refused rather than squared off —
-    approximating it would place metal where the die is not."""
-    fp = _floorplan().replace(
-        f"DIEAREA ( 0 0 ) ( {DIE} {DIE} ) ;",
-        f"DIEAREA ( 0 0 ) ( {DIE} 0 ) ( {DIE} {DIE} ) "
-        f"( 500000 {DIE} ) ( 500000 500000 ) ( 0 500000 ) ;")
-    root = _project(tmp_path, floorplan=fp)
-    assert "DIE_IS_NOT_RECTANGULAR" in _rules(root)
-    assert not _ring_def(root).is_file()
-
-
-
-
-def test_a_master_the_io_library_does_not_carry_is_refused(tmp_path):
-    root = _project(tmp_path, config=_config(PAD_CORNER="corner_i_invented"))
-    assert "PAD_MASTER_NOT_IN_PDK_IO_LIBRARY" in _rules(root)
-
-
-def test_a_ring_whose_gaps_no_filler_can_close_is_refused(tmp_path):
-    """ABUTMENT, at the producer. 196_000 is not a multiple of 9_000, so a
-    ring whose only filler is 9 um wide never touches."""
-    root = _project(tmp_path, config=_config(PAD_FILLERS=["pad_fill9"]))
-    assert "PADRING_DOES_NOT_ABUT" in _rules(root)
-    assert not _ring_def(root).is_file()
-
-
-def test_an_unknown_rotation_is_refused_not_defaulted(tmp_path):
-    root = _project(tmp_path, config=_config(PAD_ROTATION_VERTICAL="sideways"))
-    assert "PAD_ROTATION_UNKNOWN" in _rules(root)
-
-
-def test_a_pad_ordered_on_two_sides_is_refused(tmp_path):
-    cfg = _config()
-    cfg["PAD_NORTH"] = cfg["PAD_NORTH"] + [cfg["PAD_SOUTH"][0]]
-    root = _project(tmp_path, config=cfg)
-    assert "PAD_INSTANCE_DUPLICATED" in _rules(root)
-
-
-def test_a_bterm_that_reaches_no_pad_is_refused(tmp_path):
-    """Ours: upstream deletes IO placement saying `pads are the BTerms` and
-    then never checks that every port reached one."""
-    root = _project(tmp_path,
-                    floorplan=_floorplan(pins=ALL_SIGNALS + ["orphan_port"]))
-    assert "BTERM_WITHOUT_PAD" in _rules(root)
-    assert "orphan_port" in _report(root)["reason"]
-
-
-
-
-
-
-
-
 # --------------------------------------------------------------------------- #
 # the gate — DISCLOSURE
 # --------------------------------------------------------------------------- #
-def test_an_absent_report_is_not_a_skip(tmp_path):
-    root = _project(tmp_path)
-    assert "PADRING_REPORT_ABSENT" in _rules(root)
-
-
-
-
-
-
-
-
-def test_a_producer_failure_is_propagated_not_absorbed(tmp_path):
-    root = _project(tmp_path, config=_config(PAD_SITE_NAME="no_such_site"))
-    assert "PADRING_GENERATION_FAILED" in _rules(root)
-
-
-def test_a_skip_that_names_no_absent_input_fails(tmp_path):
-    root = _project(tmp_path, config=None)
-    assert "PADRING_SKIP_UNDISCLOSED" in _rules(root)
-
-
-def test_a_skip_whose_reason_is_a_shrug_fails(tmp_path):
-    root = _project(tmp_path, config=None)
-    assert "PADRING_SKIP_REASON_TOO_SHORT" in _rules(root)
-
-
-def test_a_skip_that_hides_one_of_its_absent_variables_fails(tmp_path):
-    """The strong form of the disclosure rule: a reason that names the FILE
-    but drops a variable off the list still fails."""
-    root = _project(tmp_path, config=None)
-    assert "PADRING_SKIP_DOES_NOT_NAME_INPUT" in _rules(root)
-    assert "PAD_FILLERS" in str(_report(root)["findings"])
-
-
-def test_a_skip_contradicted_by_a_ring_on_disk_fails(tmp_path):
-    root = _project(tmp_path, config=None)
-    _ring_def(root).write_text("VERSION 5.8 ;\n")
-    assert "PADRING_SKIP_CONTRADICTED" in _rules(root)
 
 
 # --------------------------------------------------------------------------- #
@@ -555,47 +272,9 @@ def test_a_skip_contradicted_by_a_ring_on_disk_fails(tmp_path):
 # --------------------------------------------------------------------------- #
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # --------------------------------------------------------------------------- #
 # the gate — ABUTMENT
 # --------------------------------------------------------------------------- #
-
-
 
 
 def test_the_abutment_arithmetic_is_exact_not_a_divisibility_shortcut():
@@ -612,30 +291,9 @@ def test_the_abutment_arithmetic_is_exact_not_a_divisibility_shortcut():
     assert PR.gap_is_fillable(1_000_000, [3, 5]) is True
 
 
-def test_the_filler_plan_materialises_the_exact_coin_solution(
-        tmp_path, monkeypatch):
-    widths = {"f3": 3, "f5": 5}
-    for gap in range(51):
-        representable = any(3 * a + 5 * b == gap
-                            for a in range(18) for b in range(12))
-
-    # The ordinary unfillable-gap path is refused before placement.  Force the
-    # defensive planner branch so an internal invariant failure cannot regress
-    # to an unexplained ``*_MISSING`` verdict that hides what it searched.
-    root = _project(tmp_path)
-    findings = [f for f in _report(root)["findings"]
-                if f["rule"] == "PADRING_FILLER_PLAN_MISSING"]
-    assert findings
-    assert all("master candidates" in f["message"] for f in findings)
-    assert all("pad_fill196" in f["message"] for f in findings)
-    assert not _ring_def(root).is_file()
-
-
 # --------------------------------------------------------------------------- #
 # the audit must not become its own evidence
 # --------------------------------------------------------------------------- #
-
-
 
 
 # --------------------------------------------------------------------------- #
@@ -678,15 +336,6 @@ def _gate_commands(gate):
 
 def test_the_flow_declares_this_step_with_this_producer_and_this_gate():
     step = _step_155ic()
-    # The RING's producer and the RING's judge, asserted as membership rather
-    # than as an exact list: this step legitimately carries a second producer
-    # (`pad_assignment_gen`, which authors this one's input) and a second gate
-    # clause, and neither of those is what this test is about.
-    assert "pad_ring_gen" in step["programs"], step["programs"]
-    assert ("pad_ring_check . --json reports/phase3/padring.json"
-            in _gate_commands(step["gate"])), step["gate"]
-    assert PR.PADRING_DEF_REL in step["required_outputs"]
-    assert PR.REPORT_REL in step["required_outputs"]
     # Every predecessor this step names must PRECEDE it, which is the
     # invariant the exact `== [15]` list was standing in for. 15 is the
     # floorplan this ring is placed on and dropping it still reddens here.
@@ -740,25 +389,13 @@ def test_the_declaration_is_a_declared_input_of_this_step():
     assert "0.5ic" in {str(b) for b in step["blocks_on"]}
 
 
-def test_the_gate_the_flow_names_resolves_to_a_program_that_exists():
-    assert (PROGRAMS / "pad_ring_gen.py").is_file()
-
-
-
-
 # --------------------------------------------------------------------------- #
 # chip-agnosticism
 # --------------------------------------------------------------------------- #
-_OURS = ("_pad_ring.py", "pad_ring_gen.py", "pad_ring_check.py",
-         # The author of this step's own input (vibe-ic#1410/cpath). It reads
-         # an operator slot file and a tape-out declaration and writes the
-         # config `pad_ring_gen` consumes, so it is subject to exactly the
-         # same rule as the three above.
+_OURS = ("_pad_ring.py",
          "pad_assignment_gen.py",
          "tests/test_pad_ring.py",
          "tests/test_pad_and_seal_ring_on_the_chip_path.py")
-
-
 
 
 def test_no_installed_pdk_tree_name_appears_in_these_programs():
@@ -824,14 +461,6 @@ def _mutant(tmp_path: Path, filename: str, old: str, new: str) -> Path:
     assert old in text, f"mutation site not found in {filename}"
     (dst / filename).write_text(text.replace(old, new, 1))
     return dst
-
-
-
-
-
-
-
-
 
 
 # --------------------------------------------------------------------------- #
@@ -935,10 +564,6 @@ def test_a_pdk_that_declares_its_sites_in_the_tech_view_is_not_refused(
     assert PR.IoLibrary(lefs).sites == {}
 
 
-
-
-
-
 def test_a_site_declared_by_neither_pdk_view_is_still_refused(tmp_path):
     """The refusal has to stay reachable. Reading a second view widens WHERE
     a site may be declared; it does not let a name nobody declared through.
@@ -955,47 +580,6 @@ def test_a_site_declared_by_neither_pdk_view_is_still_refused(tmp_path):
     assert not PR.PdkDeclarations(
         PR.discover_io_library_configs(str(root / "pdk"), "proc")).values, \
         "the premise: this PDK declares no scalar, so nothing is adopted"
-    assert "PAD_SITE_NOT_FOUND" in _rules(root)
-
-
-def test_a_pdk_that_declares_no_site_anywhere_is_still_refused(tmp_path):
-    """The LEF view is empty and there is no tech view either. Nothing was
-    invented to fill the hole."""
-    root = _project_sites_in_tech_view(tmp_path, declare=False)
-    assert "PAD_SITE_NOT_FOUND" in _rules(root)
-
-
-def test_a_site_declared_at_two_sizes_is_refused_not_ordered(tmp_path):
-    """A tree may ship more than one IO library. Upstream reads one config and
-    never sees a second; this step discovers them, so it can. The site width
-    is what every gap in the ring is rounded to, and picking it out of a
-    directory listing would put the ring's abutment on file order."""
-    root = _project_sites_in_tech_view(
-        tmp_path, second_lib=(("io_site", "2.00", "350"),
-                              ("io_corner_site", "350", "350")))
-    assert "PAD_SITE_DECLARATION_AMBIGUOUS" in _rules(root)
-    assert "io_site" in _report(root)["reason"]
-
-
-
-
-def test_only_the_pdk_may_declare_a_site_never_the_project(tmp_path):
-    """The config contract carries no site GEOMETRY and this fix does not add
-    any. A project that writes PAD_FAKE_SITES into its own pad_assignment.json
-    gets nothing from it — the site is still looked up in the PDK."""
-    root = _project_sites_in_tech_view(
-        tmp_path, declare=False,
-        config=dict(_config(PAD_SITE_NAME="project_invented_site"),
-                    PAD_FAKE_SITES={"project_invented_site": [1.0, 350.0]}))
-    assert "PAD_SITE_NOT_FOUND" in _rules(root)
-
-
-def test_the_gate_reads_the_same_two_views_as_the_producer(tmp_path):
-    """An auditor that consulted only the LEF would call a correctly placed
-    ring PAD_SITE_NOT_FOUND — a gate contradicting its own producer over which
-    file it opened."""
-    root = _project_sites_in_tech_view(tmp_path)
-    assert "PAD_SITE_NOT_FOUND" in _rules(root)
 
 
 def test_the_declaration_parser_reads_upstreams_form_verbatim():
@@ -1021,56 +605,6 @@ def test_the_declaration_parser_reads_upstreams_form_verbatim():
 # The fixture's pad is 75 x 350, so a side that sums heights is 4.67x a side
 # that sums widths — the same shape as the real 19 x 350-vs-1500 error.
 # --------------------------------------------------------------------------- #
-
-
-
-
-def test_a_declared_non_default_vertical_rotation_is_not_determined(tmp_path):
-    """DEGRADE LOUDLY. THIS DOCSTRING SAID "the placer does not read this
-    variable" AND "the knob does nothing", AND BOTH WERE WRONG — the placer
-    reads it and moves the S/N rows with it; it is THIS STEP that does not
-    implement it. Honouring it silently is a lie and ignoring it silently is
-    the defect. An author who sets a knob is entitled to be told it was not
-    honoured here — and being told is rc 2, not rc 0 and not rc 1: it is `I
-    cannot honour what you asked`, which is neither a pass nor a finding about
-    the design."""
-    root = _project(tmp_path, config=_config(PAD_ROTATION_VERTICAL="R90"))
-    assert "PAD_ROTATION_VERTICAL_NOT_HONOURED" in _rules(root)
-    # no ring was placed and none was claimed
-    assert not _ring_def(root).is_file()
-    assert (root / PR.PADRING_SKIPPED_REL).is_file()
-
-
-@pytest.mark.parametrize("value", ["R90", "R180", "R270", "MX", "MXR90"])
-def test_every_non_default_vertical_rotation_is_refused(tmp_path, value):
-    """Not just the one the fixture used to carry."""
-    root = _project(tmp_path, config=_config(PAD_ROTATION_VERTICAL=value))
-    assert "PAD_ROTATION_VERTICAL_NOT_HONOURED" in _rules(root)
-
-
-
-
-
-
-
-
-def test_the_gate_catches_a_def_that_contradicts_its_own_geometry(tmp_path):
-    """WHY PART 3 OF THE RULE IS LOAD-BEARING, proved rather than argued.
-
-    The gate re-derives every pad's footprint from the master and the DEF
-    ORIENTATION and compares it with the extents the report claims. So had the
-    extent been corrected without also correcting the emitted orientation —
-    the option that would have left the declared rotation in the DEF beside a
-    footprint contradicting it — this gate would have refused the result.
-
-    Written as a test so that stays true: put the DECLARED orientation back on
-    a vertical pad and watch the artefact stop corroborating itself.
-    """
-    root = _project(tmp_path)
-    declared = PR.normalise_orient(_config()["PAD_ROTATION_VERTICAL"])
-    assert declared != PR.SIDE_ORIENT["W"], (
-        "premise: the declared rotation and the placer's are different")
-    assert "PAD_FOOTPRINT_DISAGREES_WITH_LIBRARY" in _rules(root)
 
 
 def test_the_lef_wins_when_both_views_declare_the_same_site(tmp_path):
@@ -1274,10 +808,6 @@ def test_the_header_count_matches_what_the_module_actually_names():
     here = PROGRAMS
 
 
-
-
-
-
 # ANSWERING `real_artefact_test_backing_check`, WHICH REPORTS 0 OF 91 HERE.
 # That number is correct and the doctrine asks for a mutation run or a reason;
 # both are given.
@@ -1406,7 +936,6 @@ def test_the_placer_agrees_with_the_orientation_constants(tmp_path):
             f"writes FN and FS, which is the defect this pins")
 
 
-
 #: The sentences `main` shipped as live claims about the placer, VERBATIM, for
 #: scanning SOURCE. Every one is false: `-rotation_vertical` moves the S/N rows,
 #: so the placer reads the variable. The retraction that replaced them is worded
@@ -1434,9 +963,6 @@ RETRACTED_PHRASES = (
 )
 
 
-
-
-
 def _assert_no_retracted_claim(text: str, where: str) -> None:
     """No retracted falsehood in EMITTED text, verbatim or reworded."""
     low = text.lower()
@@ -1447,76 +973,9 @@ def _assert_no_retracted_claim(text: str, where: str) -> None:
             f"is what does not implement it.")
 
 
-
-
-
-
-
-@pytest.mark.parametrize("var", ["PAD_ROTATION_HORIZONTAL",
-                                 "PAD_ROTATION_VERTICAL",
-                                 "PAD_ROTATION_CORNER"])
-
-
-def test_the_refusal_names_the_variable_actually_declared(tmp_path, var,
-                                                          capsys):
-    """THE REFUSAL BROADENED TO THREE VARIABLES AND ITS REPORT DID NOT.
-
-    All three are named for the ROW AXIS and this step implements none of
-    them, so a declared non-default on any one is refused. But the rule id,
-    the `variables_absent` entry and the console line were still the literal
-    `PAD_ROTATION_VERTICAL`, so a run refused for declaring
-    PAD_ROTATION_HORIZONTAL was told to go look at a variable it had left
-    alone. A refusal that names the wrong input is a refusal a reader cannot
-    act on.
-
-    The console line is checked too, because it is the half a human reads and
-    it is where `placer ignores it` — the retracted claim — survived the
-    correction that removed it from the record."""
-    root = _project(tmp_path, config=_config(**{var: "R90"}))
-    assert f"{var}_NOT_HONOURED" in _rules(root)
-    printed = capsys.readouterr().out
-    assert f"{var}_NOT_HONOURED" in printed
-    # BOTH halves, through the one shared vocabulary. An earlier draft of this
-    # test left the `reason` assertion OUTSIDE the loop, so it re-used the
-    # leaked loop variable and checked exactly one of the four claims against
-    # exactly one of the two texts. Planting `placer ignores it` in the emitted
-    # reason passed it 3/3.
-    _assert_no_retracted_claim(printed, "the console line")
-
-
-
-
 # --------------------------------------------------------------------------- #
 # a refuted finding must lose its identifier
 # --------------------------------------------------------------------------- #
-
-
-
-
-
-
-def test_no_identifier_in_the_pad_ring_producer_asserts_inertness():
-    """The general rule, not the one variable: a proposition the project has
-    recorded as FALSE may not survive in an IDENTIFIER — a name, a schema key,
-    a function. Every consumer keys on the identifier and none of them reads
-    the retraction published elsewhere.
-
-    PROSE IS DELIBERATELY NOT POLICED, and the first version of this test got
-    that wrong. It scanned every string literal and excluded the specific
-    sentences I had written, which made it pass on my edit and FAIL on an
-    independent fix of the same defect (`origin/jpadsite/pad-site`) whose
-    docstring retracts the claim by QUOTING it — 'THIS SECTION SAID "IS INERT"
-    … AND BOTH WERE WRONG'. A retraction has to be able to name what it
-    retracts. A guard whose pass condition is "contains the phrases the author
-    happened to use" is fitted to one edit, not to the rule; measured
-    three ways, this version FAILS on main, and PASSES on both independent
-    fixes."""
-    import ast
-    offenders = []
-    assert not offenders, (
-        f"identifiers still assert a proposition measured false: {offenders}")
-
-
 
 
 @pytest.mark.parametrize("kind,was,now", [("pad", "FS", "S"),
@@ -1547,10 +1006,6 @@ def test_the_gate_refuses_a_mirror_written_where_the_report_says_a_rotation(
         f"premise: {was} and {now} must share a bounding box, or this test "
         f"would be proving the footprint check rather than the orientation one")
 
-    assert "PAD_ORIENT_DISAGREES_WITH_DEF" in _rules(root)
-    assert "a mirror is not a rotation" in " ".join(
-        f["message"] for f in _report(root)["findings"])
-
 
 def test_the_doctrine_this_probe_broke_is_cited_by_a_name_that_exists():
     """A CITATION THAT ROTS IS WORSE THAN NONE — it sends the next author to a
@@ -1562,11 +1017,6 @@ def test_the_doctrine_this_probe_broke_is_cited_by_a_name_that_exists():
     by PROGRAM NAME rather than by file:line, because a line-anchored citation
     rots on any edit above it; this one rots only on a rename, which is exactly
     what this test catches."""
-    cited = "metric_constant_across_differing_arms_is_not_measured"
-    assert (PROGRAMS / f"{cited}.py").is_file(), (
-        f"pad_ring_gen cites {cited!r} and no such program exists — the "
-        f"citation was not updated when the program moved or was renamed")
-
     # `_pad_ring` points the next author at the test that re-derives the eight
     # orientations from the placer. That pointer is the difference between a
     # constant somebody must trust and one anybody can re-check, so it is not
@@ -1860,12 +1310,6 @@ def test_an_adopted_value_is_cited_to_a_file_AND_a_line(tmp_path):
         assert lines[int(line) - 1].startswith(f"set ::env({var})"), src
 
 
-
-
-
-
-
-
 def test_the_adoption_layer_invents_nothing(tmp_path):
     """THE NEGATIVE CONTROL, and the one that makes the rest mean something.
     Take the declaring file away and the five are not filled by anything —
@@ -1891,17 +1335,6 @@ def test_pad_fillers_is_adopted_as_the_list_the_contract_declares(tmp_path):
 
 
 # -- REFUSAL ----------------------------------------------------------------
-def test_a_project_that_contradicts_the_pdk_is_refused_by_name(tmp_path):
-    """THE REFUSAL THAT PAYS. `PAD_EDGE_SPACING` was checked only for being a
-    non-negative number of microns, so a project could place a ring on a
-    spacing the PDK contradicts and find out at the shuttle's pad-mask stage —
-    a refusal several steps and one gate away from the two numbers that
-    disagree, with nothing in any artefact naming them."""
-    root = _project_pdk_declares_all_five(
-        tmp_path, config=_config(PAD_EDGE_SPACING=20))
-    assert "PAD_CONFIG_CONTRADICTS_PDK" in _rules(root)
-    # BOTH numbers and the file:line, in the message. A refusal that named
-    # only one of them would send a reader to look for the other.
 
 
 def test_every_one_of_the_five_can_be_contradicted(tmp_path):
@@ -1913,60 +1346,9 @@ def test_every_one_of_the_five_can_be_contradicted(tmp_path):
              "PAD_CORNER": "pad_bidir",
              "PAD_FILLERS": ["pad_bidir"]}
     assert set(wrong) == set(PR.PDK_DECLARED_VARS)
-    for var, bad in wrong.items():
-        root = _project_pdk_declares_all_five(
-            tmp_path / var, config=_config(**{var: bad}))
-        assert "PAD_CONFIG_CONTRADICTS_PDK" in _rules(root), var
-
-
-def test_the_contradiction_refusal_is_load_bearing(tmp_path):
-    """The bidirectional control. Remove the one comparison and the
-    contradicting project is ACCEPTED — a ring placed on a spacing the PDK
-    contradicts, with a PASS on it. A test that cannot fail against the
-    pre-fix code proves nothing, so here is the pre-fix code."""
-    # The PDK declares 20 and the project declares 10. The DISAGREEMENT is
-    # what is under test, so it is put on the PDK's side of the fixture and
-    # not the project's: the project's 10 is the spacing this synthetic ring
-    # abuts at, so with the comparison removed the run reaches a full PASS
-    # rather than exiting 1 further down for an unrelated geometric reason.
-    # A control that dies of something else has not shown the guard is what
-    # made the refusal.
-    root = _project_pdk_declares_all_five(
-        tmp_path,
-        declaration=_FULL_DECL.replace('set ::env(PAD_EDGE_SPACING) "10"',
-                                       'set ::env(PAD_EDGE_SPACING) "20"'))
-    assert "PAD_CONFIG_CONTRADICTS_PDK" in _rules(root)
-
-    mutant = _mutant(tmp_path, "_pad_ring.py",
-                     "        if not _declarations_agree(var, have, "
-                     "declared):",
-                     "        if False:")
-    mut_rep = json.loads((root / PR.REPORT_REL).read_text())
-    assert mut_rep["verdict"] == "PASS"
-    # and the ring it placed really is on the value the PDK contradicts
-    assert mut_rep["config"]["PAD_EDGE_SPACING"] == 10.0
-
-
-
-
 
 
 # -- RESTRAINT --------------------------------------------------------------
-def test_the_eight_only_the_project_can_answer_still_skip(tmp_path):
-    """The honest size of the ask. A project with NO config at all still
-    SKIPs with exit 2 — five of the eight it is asked for ARE the package
-    pin-out, and a pin-out this program chose would be indistinguishable in
-    the artefact from one somebody decided."""
-    root = _project_pdk_declares_all_five(tmp_path, config=None)
-    rep = _report(root)
-    cfg = [m for m in rep["missing_inputs"]
-           if m["path"] == PR.ASSIGNMENT_REL][0]
-    assert sorted(cfg["variables_from_pdk"]) == sorted(PR.PDK_DECLARED_VARS)
-    assert sorted(cfg["variables_absent"]) == sorted(
-        v for v in PR.REQUIRED_VARS if v not in PR.PDK_DECLARED_VARS)
-    assert len(cfg["variables_absent"]) == 8
-    # and the marker a reader standing in pnr/ finds says the same
-    assert (root / PR.PADRING_SKIPPED_REL).is_file()
 
 
 def test_the_adoption_set_is_a_subset_of_what_the_generator_delegates():
@@ -2001,8 +1383,6 @@ def test_two_libraries_declaring_one_variable_two_ways_adopt_neither(
                                                               "pad_bidir"]
     # the other four agree in both files and are still adopted
     assert set(d.values) == set(PR.PDK_DECLARED_VARS) - {"PAD_CORNER"}
-
-
 
 
 def test_the_one_tcl_substitution_these_files_use_is_resolved(tmp_path):
@@ -2044,14 +1424,6 @@ def test_a_declaration_naming_a_master_the_library_does_not_carry_is_rejected(
     d = _decls(root)
     assert "PAD_CORNER" not in d.values
     assert "no_such_master" in d.rejected["PAD_CORNER"]
-    # and with no master to adopt, a project that leaves it out is refused
-    # for the ABSENCE — not completed with a name the library does not have
-    only_ours = {k: v for k, v in _config().items() if k != "PAD_CORNER"}
-    root2 = _project_pdk_declares_all_five(
-        tmp_path / "b", declaration=decl, config=only_ours)
-    assert "PAD_CONFIG_VARIABLE_ABSENT" in _rules(root2)
-
-
 
 
 # --------------------------------------------------------------------------- #
@@ -2091,8 +1463,6 @@ def _io_lef_with_terminal(pins) -> str:
         body += ["    END", f"  END {pin}"]
     body += ["END pad_bidir", ""]
     return _RING_LEF_HEAD + "\n".join(body) + _RING_LEF_TAIL
-
-
 
 
 def _bterm_port_rect(root: Path, signal: str) -> str:

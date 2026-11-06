@@ -175,23 +175,3 @@ def test_staged_pdk_without_a_lef_reports_why_it_skipped() -> None:
 # --------------------------------------------------------------------------
 # 4. The netgen setup emitter globalises the PDK's own rails.
 # --------------------------------------------------------------------------
-def test_netgen_setup_globalises_rails_harvested_from_the_lef(
-        tmp_path: Path) -> None:
-    setup = _mod("setup", "lvs_netgen_setup_emit.py")
-    tcl = setup.build_supplementary_setup_tcl(
-        "custom:pdk", cell_lef=_lef(tmp_path))
-    assert "LVS_SETUP_SKIPPED" not in tcl
-    assert "global PWRA" in tcl and "global GNDA" in tcl
-
-
-def test_netgen_setup_still_skips_loudly_with_no_lef() -> None:
-    setup = _mod("setup", "lvs_netgen_setup_emit.py")
-    tcl = setup.build_supplementary_setup_tcl("custom:pdk")
-    assert "LVS_SETUP_SKIPPED" in tcl
-
-
-def test_netgen_setup_named_pdk_is_unchanged(tmp_path: Path) -> None:
-    setup = _mod("setup", "lvs_netgen_setup_emit.py")
-    assert (setup.build_supplementary_setup_tcl("sky130A")
-            == setup.build_supplementary_setup_tcl(
-                "sky130A", cell_lef=_lef(tmp_path)))

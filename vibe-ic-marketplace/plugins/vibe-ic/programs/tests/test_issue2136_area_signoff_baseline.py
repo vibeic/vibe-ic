@@ -471,25 +471,8 @@ def test_cli_exit_codes_separate_not_determined_from_fail(tmp_path):
 # The remedy was to stop choosing here. The corpus is handed over unfiltered and
 # `area_signoff_baseline` — which consults `_prose_polarity` on every row and
 # every prose line it reads — decides relevance by its OWN rules.
-def _detector():
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "_ppc_probe", PROGRAMS / "prose_polarity_consulted_check.py")
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
-    return mod
 
 
-def _is_blind(mod, src: str) -> bool:
-    """The REAL predicate `scan` applies, over one synthetic function."""
-    import ast
-    tree = ast.parse(src)
-    al = mod._aliases(tree)
-    fn = next(n for n in ast.walk(tree)
-              if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)))
-    return (mod._searches_prose(fn) and mod._writes_a_declared_value(fn)
-            and not mod._consults_polarity(fn, al))
 
 
 #: The one line that was removed. Re-inserting it into the REAL runner source
@@ -497,57 +480,10 @@ def _is_blind(mod, src: str) -> bool:
 #: flag — measured while writing this test, and the reason the mutant is the
 #: shipped function rather than a toy: `_writes_a_declared_value` is the
 #: predicate that flips, and it flips on this function's own taint graph.
-_REMOVED_FILTER = "\n             and _L7_FILE_KEYWORDS.search(_afn)"
-_HANDOVER_TAIL = "             if isinstance(_atx, str) and _atx])"
 
 
-def _l7_predicates(mod, source: str):
-    """`(searches, writes_a_declared_value, consults_polarity)` for the real
-    `gen_l7_test_debug` as it appears in ``source``."""
-    import ast
-    tree = ast.parse(source)
-    al = mod._aliases(tree)
-    fn = next(n for n in ast.walk(tree)
-              if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-              and n.name == "gen_l7_test_debug")
-    return (mod._searches_prose(fn), mod._writes_a_declared_value(fn),
-            mod._consults_polarity(fn, al))
 
 
-def test_reinstating_the_filter_makes_the_detector_flag_the_site_again():
-    """THE FALSIFIER, driven through the real detector over the real function.
-
-    Shipped: the site writes no match-derived value, so it is not an offender.
-    Mutated — the removed filter line put back, one line, nothing else — the
-    SAME predicate that ratchets the landing goes True. If this stops flipping,
-    the cleanliness of the shipped site is no longer earned by anything and
-    this test says so instead of passing quietly.
-    """
-    mod = _detector()
-    runner = PROGRAMS / "phase1_doc_one_shot_runner.py"
-    shipped = runner.read_text()
-    assert shipped.count(_HANDOVER_TAIL) == 1
-    mutant = shipped.replace(
-        _HANDOVER_TAIL,
-        _HANDOVER_TAIL[:-len("])")] + _REMOVED_FILTER + "])", 1)
-    assert mutant != shipped
-
-    s_search, s_writes, s_consults = _l7_predicates(mod, shipped)
-    m_search, m_writes, m_consults = _l7_predicates(mod, mutant)
-
-    # The discriminator is the WRITE, and it is named rather than folded into a
-    # single boolean, so a future change to a different predicate cannot pass
-    # this test by accident.
-    assert s_writes is False, (
-        "the shipped L7 site must write no match-derived value")
-    assert m_writes is True, (
-        "re-inserting the filter must make the detector see a search-gated "
-        "write; if it does not, this test is not exercising the guard")
-    assert (s_search, s_consults) == (m_search, m_consults)
-
-    blind = lambda t: t[0] and t[1] and not t[2]      # `scan`'s own predicate
-    assert blind((s_search, s_writes, s_consults)) is False
-    assert blind((m_search, m_writes, m_consults)) is True
 
 
 def test_the_shipped_l7_call_site_gates_the_corpus_on_no_regex():

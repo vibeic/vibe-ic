@@ -7,6 +7,8 @@ description: The natural-language FRONT DOOR to Phase 1 AND the silicon-depth re
 
 **Read `CHARTER.md` first. It is fixed by the owner and overrides everything below that conflicts with it.**
 
+All Vibe-IC execution writes only under ~/vibe-ic-temp. Clean up after use; never leave anything for the user to clean. Use `programs/vibeic_temp.py` (`VIBEIC_TMP` may override the root), with `exec -- <command>` for standalone commands: each execution owns `tmp/<run-id>/`, sets child `TMPDIR` there, and removes it on exit, including errors. Copy results to the user's project, benchmark-data or their real results destination, then remove `runs/<date>-<who>-<what>/`; preserve it only on an explicit keep request. The user's project stays where they put it.
+
 ## User-facing step numbering (owner directive, 2026-10-23)
 
 All progress reports to the user MUST use the 1-based position of the row in

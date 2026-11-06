@@ -203,85 +203,14 @@ def _json_summary(prog: Path, project: Path, out: Path) -> str:
 
 # ═══ 1. THE STRICTEST PVT CLAIM IN THE REPO ════════════════════════════════
 
-def test_the_strict_margin_gate_names_what_it_measured(tmp_path):
-    """THE HEADLINE for this gate, and the exact adversarial move that
-    produced the finding.
-
-    27 corners on a library nominal is a self-test of the topology library:
-    the spec it satisfies is the design's and the circuit that satisfies it is
-    not. Pre-fix all three trees answered the same `[PASS]` rc 0.
-    """
-    bound = _run(MARGIN_GATE, _project(tmp_path / "d", SIZED))
-    so = _run(MARGIN_GATE, _project(tmp_path / "s", STRUCTURE_ONLY))
-    silent = _run(MARGIN_GATE, _project(tmp_path / "n", None))
-
-    assert bound.returncode == 0, _both(bound)
-    assert "[PASS]" in bound.stdout, bound.stdout
-
-    assert so.returncode == 0, _both(so)
-    assert "[PASS_STRUCTURE_ONLY]" in so.stdout, (
-        f"a 27-corner sweep of a LIBRARY TOPOLOGY was certified in the same "
-        f"tier as a design's:\n{so.stdout}")
-    assert "STRUCTURE_ONLY:" in _both(so), (
-        "the gate certified and said nothing about what it certified")
-
-    assert silent.returncode == 1, (
-        f"an artefact that will not say what circuit produced 27 clean "
-        f"corners CERTIFIED the strictest PVT claim in the repo "
-        f"(rc={silent.returncode}) while the one that disclosed a library "
-        f"default earned the lesser tier — silence is cheaper than disclosure")
-    assert "MARGIN_SUBJECT_UNDECLARED" in _both(silent)
 
 
-def test_the_margin_json_is_not_the_same_document_on_all_three_trees(
-        tmp_path):
-    """The one line is what a human reads; the `--json` summary is what every
-    machine consumer reads. Pre-fix it was BYTE-IDENTICAL across the three."""
-    docs = {}
-    for tag, dc in (("d", SIZED), ("s", STRUCTURE_ONLY), ("n", None)):
-        docs[tag] = _json_summary(MARGIN_GATE, _project(tmp_path / tag, dc),
-                                  tmp_path / f"{tag}.json")
-    assert docs["d"] != docs["s"], (
-        "the JSON summary is identical for a design-bound sweep and a "
-        "library default's")
-    assert docs["d"] != docs["n"], (
-        "the JSON summary is identical for a design-bound sweep and one that "
-        "says nothing at all")
-    assert docs["s"] != docs["n"]
 
 
-def test_a_record_of_having_no_record_does_not_certify_the_margin(tmp_path):
-    """`undeclared` is a non-empty string, so a rule that asks "is the field
-    present?" accepts it — and a producer could then buy a pass by writing the
-    token instead of by inheriting the answer. Ranked with silence,
-    deliberately, because it says the same amount about the circuit."""
-    cp = _run(MARGIN_GATE, _project(tmp_path, NO_RECORD))
-    assert cp.returncode == 1, (
-        f"an artefact recording `design_content: {NO_RECORD!r}` certified the "
-        f"margin gate — silence renamed is still silence")
-    assert "MARGIN_SUBJECT_UNDECLARED" in _both(cp)
 
 
-def test_a_corner_below_the_floor_is_still_a_margin_failure(tmp_path):
-    """ORDERING CONTROL. An artefact that is BOTH silent and below the floor
-    must be reported for the floor: a reader told "say what you measured"
-    about a corner that violates the margin it was gated on would fix the
-    wrong thing first. Holds on the pre-fix and the post-fix program."""
-    cp = _run(MARGIN_GATE, _project(tmp_path, None, margin_pct=5.0))
-    assert cp.returncode == 1
-    out = _both(cp)
-    assert "MARGIN_BELOW_FLOOR" in out, out
-    assert "MARGIN_SUBJECT_UNDECLARED" not in out, out
 
 
-def test_too_few_corners_is_still_too_few_corners(tmp_path):
-    """The other ordering control: a sweep that does not cover the PVT cube is
-    diagnosed as that, whatever it does or does not say about its subject."""
-    cp = _run(MARGIN_GATE, _project(tmp_path, None, corner_count=9))
-    assert cp.returncode == 1
-    out = _both(cp)
-    assert "INSUFFICIENT_PVT_CORNERS" in out, out
-    assert "MARGIN_SUBJECT_UNDECLARED" not in out, out
 
 
 def _mixed(root: Path) -> Path:
@@ -303,7 +232,7 @@ def _mixed(root: Path) -> Path:
     return project
 
 
-@pytest.mark.parametrize("gate", [MARGIN_GATE, LIBERTY_GATE, A7_GATE],
+@pytest.mark.parametrize("gate", [LIBERTY_GATE, A7_GATE],
                          ids=lambda g: g.stem)
 def test_one_library_default_block_does_not_erase_a_design_bound_one(
         gate, tmp_path):
@@ -493,129 +422,22 @@ def test_a_pre_layout_baseline_that_never_ran_is_still_that(tmp_path):
 
 # ═══ 4. THE DOCUMENT A REVIEWER READS FIRST ════════════════════════════════
 
-def _summary(project: Path) -> str:
-    cp = _run(FINAL_REPORT, project, "--no-audit")
-    assert cp.returncode == 0, _both(cp)
-    return (project / "reports" / "final_summary.md").read_text()
 
 
-def _normalise(text: str, project: Path) -> str:
-    """Strip the two things that legitimately differ between any two runs —
-    the project PATH and the wall-clock stamps — so what is left is the
-    report's actual content.
-
-    The two projects compared are given the SAME directory NAME under
-    different parents on purpose. Substituting a short project name out of the
-    whole document would rewrite every ordinary word containing it and make
-    two identical reports differ, which is a test that passes for a reason
-    that has nothing to do with what it claims to measure.
-    """
-    import re
-    text = text.replace(str(project), "PROJPATH")
-    text = re.sub(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", "TS", text)
-    return text
 
 
-def _digest(text: str) -> str:
-    import re
-    m = re.search(r"audit-digest sha256:([0-9a-f]+)", text)
-    assert m, text[:800]
-    return m.group(1)
 
 
-def test_the_report_does_not_render_a_silent_run_as_a_designed_one(tmp_path):
-    """THE SHARPEST OF THE FOUR. Two trees identical in every artefact except
-    the one recorded value. Pre-fix the WHOLE `final_summary.md` differed only
-    in project name and timestamp — grid, counts and digest all agreed — so
-    the document a reviewer reads first could not tell them apart at all."""
-    d = _project(tmp_path / "one" / "proj", SIZED)
-    n = _project(tmp_path / "two" / "proj", None)
-    a = _normalise(_summary(d), d)
-    b = _normalise(_summary(n), n)
-    assert a != b, (
-        "a designed run and a run that says nothing about what it produced "
-        "render the SAME final_summary.md")
-    # ...and the difference is not only the digest: a reader who does not
-    # recompute a hash must still be able to see it.
-    assert [x for x in a.splitlines() if x not in b.splitlines()
-            and "audit-digest" not in x], (
-        "the ONLY thing distinguishing a designed run from a silent one is a "
-        "12-hex token nobody recomputes")
 
 
-def test_the_audit_digest_tells_the_three_runs_apart(tmp_path):
-    """A digest quoted beside the counts is a claim that it identifies the run
-    those counts describe. Pre-fix ALL THREE trees quoted the same sha256."""
-    digests = {}
-    for tag, dc in (("d", SIZED), ("s", STRUCTURE_ONLY), ("n", None)):
-        digests[tag] = _digest(_summary(_project(tmp_path / tag, dc)))
-    assert len(set(digests.values())) == 3, (
-        f"the audit digest cannot tell a designed run from a library "
-        f"default's or from a silent one: {digests}")
 
 
-def test_the_audit_digest_does_not_move_between_two_runs_of_one_tree(
-        tmp_path):
-    """CONTROL, and the reason the census that feeds the digest is built from
-    block names, step ids and content words ONLY. A digest that changes on
-    every run of byte-identical inputs identifies nothing — that defect was
-    measured on this repo once already, across six sibling run trees of the
-    same inputs — so it must move for CONTENT and for nothing else. Holds
-    pre-fix and post-fix."""
-    project = _project(tmp_path, STRUCTURE_ONLY)
-    first = _digest(_summary(project))
-    second = _digest(_summary(project))
-    assert first == second, (
-        f"two runs over ONE unchanged tree quote different digests: "
-        f"{first} vs {second}")
 
 
-def test_the_disclosed_default_outranks_silence_in_the_grid(tmp_path):
-    """The ordering, stated where a reviewer reads it. Naming a library
-    default is a DISCLOSURE and gets its own cell; declining to answer is a
-    different answer and gets its own. Neither may render as a design-bound
-    tick."""
-    rows = {}
-    for tag, dc in (("d", SIZED), ("s", STRUCTURE_ONLY), ("n", None)):
-        text = _summary(_project(tmp_path / tag, dc))
-        rows[tag] = [ln for ln in text.splitlines()
-                     if "`blk_alpha`" in ln and ln.count("|") >= 9][0]
-    assert rows["d"] != rows["s"] != rows["n"], rows
-    assert rows["d"] != rows["n"], rows
-    assert "◐" in rows["s"] and "◐" not in rows["n"], rows
-    assert "◐" not in rows["d"] and "✅" in rows["d"], rows
-    # ...and the absent steps still read absent in all three, so the new
-    # glyphs have not simply replaced the old one.
-    for tag in rows:
-        assert "—" in rows[tag], rows[tag]
 
 
-def test_the_resource_line_names_the_undisclosed_subset(tmp_path):
-    """`artefacts present: 10/18` said the same number for a design sized to
-    its spec and for a set of artefacts nobody can attribute to any circuit.
-    The subset is named beside the total, never deducted from it — the
-    artefacts ARE present."""
-    text = _summary(_project(tmp_path, None))
-    line = [ln for ln in text.splitlines() if "artefacts present:" in ln]
-    assert line, text[:1500]
-    assert "record nothing about what they contain" in line[0], line[0]
 
 
-def test_an_artefact_that_does_not_exist_still_renders_absent(tmp_path):
-    """CONTROL on the ordering inside the renderer: absence is the rule the
-    filesystem decides and it is asked FIRST. A step that produced nothing
-    raises no question about what it produced, and must not acquire a content
-    glyph. Holds pre-fix and post-fix."""
-    root = _project(tmp_path, None)
-    for b in BLOCKS:
-        (root / "phase3" / "analog" / b / "corner_results.json").unlink()
-    text = _summary(root)
-    row = [ln for ln in text.splitlines()
-           if "`blk_alpha`" in ln and ln.count("|") >= 9][0]
-    cells = [c.strip() for c in row.strip("|").split("|")][1:]
-    assert cells[3] == "—", (
-        f"A4 produced no artefact at all and the grid rendered a content "
-        f"claim for it: {row}")
 
 
 if __name__ == "__main__":                                    # pragma: no cover

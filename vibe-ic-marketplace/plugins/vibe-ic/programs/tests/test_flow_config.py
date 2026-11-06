@@ -296,6 +296,48 @@ def test_config_uses_documents_and_leaves_pdk_defaults(project):
     assert "FP_CORE_UTIL" not in config
 
 
+def test_open_l9_top_is_recorded_from_single_authored_rtl_top(project):
+    l9_path = project / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+    l9 = json.loads(l9_path.read_text())
+    l9["top_module"] = None
+    l9_path.write_text(json.dumps(l9))
+
+    try:
+        files, top = resolve_rtl_inputs(project)
+    except FileNotFoundError as exc:
+        files, top = [], str(exc)
+
+    assert top == "unit"
+    assert [path.name for path in files] == ["unit.v"]
+    recorded = json.loads(l9_path.read_text())
+    assert recorded["top_module"] == "unit"
+    assert recorded["top_module_source"] == {
+        "step": "RTL authoring",
+        "artifact": "phase2/stage1/rtl",
+        "method": "yosys hierarchy -auto-top",
+    }
+
+
+def test_open_l9_top_refuses_multiple_authored_rtl_roots(project):
+    l9_path = project / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+    l9 = json.loads(l9_path.read_text())
+    l9["top_module"] = None
+    l9_path.write_text(json.dumps(l9))
+    rtl = project / "phase2/stage1/rtl/unit.v"
+    rtl.write_text("module alpha(input a); endmodule\nmodule beta(input b); endmodule\n")
+
+    try:
+        resolve_rtl_inputs(project)
+    except FileNotFoundError as exc:
+        detail = str(exc)
+    else:
+        detail = "top was selected"
+
+    assert detail == ("RTL authored at step 17 has ambiguous candidate top modules: "
+                     "alpha, beta")
+    assert json.loads(l9_path.read_text())["top_module"] is None
+
+
 def test_authored_integration_top_and_sdc_reach_native_config(project):
     rtl = project / "phase2/stage1/rtl"
     (rtl / "wrapper.sv").write_text(

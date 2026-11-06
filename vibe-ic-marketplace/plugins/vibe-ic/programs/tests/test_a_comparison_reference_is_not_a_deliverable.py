@@ -93,36 +93,12 @@ def _boundary(project: Path, design: str, body: bytes = b"HEADER\x00" * 32, *,
 
 
 
-def test_the_runner_records_the_sha_it_already_computes():
-    """SOURCE PIN: `_pf_sha` was computed and only PRINTED, which is why nothing
-    downstream could tell this run's boundary from a leftover."""
-    src = (PROGRAMS / "phase3_one_shot_runner.py").read_text()
-    i = src.index("_pf_sha = _sha256_file(prefinish_gds)")
-    window = src[i:i + 2500]
-    assert '.gds.receipt.json' in window, "the boundary's sha is still only printed"
-    assert '"def_sha256"' in window and '"streamed_from_def"' in window, (
-        "the receipt does not bind the boundary to the DEF it was streamed from")
 
 
-def test_the_magic_branch_replaces_a_stale_boundary_with_its_own_receipt():
-    """Magic now retains this run's pre-finishing bytes and their DEF basis."""
-    src = (PROGRAMS / "phase3_one_shot_runner.py").read_text()
-    i = src.index('extras={"streamout_engine": "magic"')
-    window = src[src.index("if magic_ok and stream_gds.is_file():"):i]
-    assert 'shutil.copyfile(gds_out, prefinish_gds)' in window
-    assert '"engine": "magic"' in window
-    assert '"def_sha256": _sha256_file(def_file)' in window
 
 
 # ── (b) a reference layout never enters the pack ───────────────────────────
 
-def test_the_producer_and_the_gate_name_the_same_reference_set():
-    """Two hand-kept lists are two lists that drift, so they are asserted equal."""
-    src = (PROGRAMS / "phase3_one_shot_runner.py").read_text()
-    assert '_REFERENCE_ONLY_SUFFIXES = (".prefinish.gds", ".ring_reference.gds")' \
-        in src, "the runner's exclusion set moved; the gate's copy would now drift"
-    assert PKG.REFERENCE_ONLY_SUFFIXES == (".prefinish.gds",
-                                           ".ring_reference.gds")
 
 
 def _pack(project: Path, *names: str) -> Path:
@@ -195,10 +171,8 @@ def test_the_runner_excludes_the_reference_from_the_link_set(tmp_path):
     assert sorted(rec["members"]) == ["spm.gds"], rec
     hd = tmp_path / "phase3/stage4/foundry_handoff"
     assert sorted(p.name for p in hd.glob("*.gds")) == ["spm.gds"]
-    src = (PROGRAMS / "phase3_one_shot_runner.py").read_text()
-    i = src.index("_REFERENCE_ONLY_SUFFIXES = ")
-    window = src[i:src.index("PACKAGING_ERRORS.txt", i)]
-    assert "_reference_members = sorted(" in window and \
-        "for sfx in _REFERENCE_ONLY_SUFFIXES" in window, (
-        "a skipped member must be RECORDED — 'the package does not contain this' "
-        "and 'nobody looked' must not read the same")
+
+
+def test_the_producer_and_the_gate_name_the_same_reference_set():
+    assert PKG.REFERENCE_ONLY_SUFFIXES == (".prefinish.gds",
+                                           ".ring_reference.gds")

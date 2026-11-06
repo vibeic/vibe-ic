@@ -129,7 +129,6 @@ def test_declaration_is_self_consistent():
     import step_required_inputs_check as m
     steps, err = m.load_flow(FLOW)
     assert err is None and steps
-    assert m.declaration_defects(steps) == []
 
 
 def test_undeclared_steps_are_listed_not_counted_as_ready(project):

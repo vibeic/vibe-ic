@@ -62,6 +62,8 @@ engine-limited" policy is enforced.
 """
 from __future__ import annotations
 
+import vibeic_temp as _vtmp
+
 # --- sibling-import path (vibe-ic#2104) ------------------------------------
 # `programs/` is a flat directory whose modules import each other by BARE
 # name. Python puts a file's own directory on `sys.path` only when that file
@@ -1564,7 +1566,7 @@ def _run_docker(
     cname = (_dwd.ephemeral_container_name("vibeic_atpg") if supervised
              else None)
     docker_cmd = [
-        "docker", "run", "--rm",
+        "docker", "run", *_vtmp.docker_mounts(), "--rm",
         *(["--name", cname] if cname else []),
         *_dmem.docker_memory_flags(),
         "--entrypoint", "bash",

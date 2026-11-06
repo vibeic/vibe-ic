@@ -13,8 +13,6 @@ def test_no_runner_before_ai_route(tmp_path, monkeypatch):
     (dataset / "generic_buffer_prompt.txt").write_text(
         "Design a generic one-input output buffer named top_module.")
     calls = []
-    monkeypatch.setattr(bd, "_runtime_pair_gate",
-                        lambda *_a, **_k: (None, {}))
     monkeypatch.setattr(bd._RunnerBudget, "run",
                         lambda *_a: calls.append(1) or bd._ProcessOutcome(rc=1))
 

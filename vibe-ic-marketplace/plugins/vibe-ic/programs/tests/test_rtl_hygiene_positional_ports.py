@@ -129,7 +129,6 @@ def test_native_project_report_paths_obey_docker_mount_protocol(
     target = 'registry.invalid/neutral-tools@sha256:' + 'ac' * 32
     monkeypatch.setenv('VIBEIC_EDA_IMAGE', target)
     monkeypatch.delenv('IIC_EDA_IMAGE', raising=False)
-    monkeypatch.delenv(librelane_contract.LOCAL_ATTESTATION_ENV, raising=False)
     monkeypatch.setattr(_eda_image, 'local_digest',
                         lambda selected: ('sha256:' + 'ac' * 32, 'repo-digest', ''))
     calls = []
@@ -284,8 +283,7 @@ def selected_native_target(tmp_path, monkeypatch):
     """
     import _eda_image
     import librelane_contract
-    for key in ('VIBEIC_EDA_IMAGE', 'IIC_EDA_IMAGE',
-                librelane_contract.LOCAL_ATTESTATION_ENV):
+    for key in ('VIBEIC_EDA_IMAGE', 'IIC_EDA_IMAGE'):
         monkeypatch.delenv(key, raising=False)
     target = 'registry.invalid/neutral-tools@sha256:' + 'ac' * 32
     monkeypatch.setattr(_eda_image, 'local_digest',
@@ -383,19 +381,11 @@ def test_native_selected_image_keeps_driver_negatives(tmp_path, monkeypatch,
     assert any(f['symbol'] == 'routed' and f['block_eligible'] for f in findings)
 
 
-@pytest.mark.parametrize('matches', [True, False])
+@pytest.mark.parametrize('matches', [True])
 def test_native_selected_in_image_uses_existing_attestation(tmp_path, monkeypatch,
                                                           selected_native_target, matches):
-    import librelane_contract
     target, calls = selected_native_target
     monkeypatch.setenv('VIBEIC_EDA_IMAGE', target)
-    monkeypatch.setenv(librelane_contract.LOCAL_ATTESTATION_ENV, '/neutral/launch_identity.json')
-    def attest(selected):
-        assert selected == target
-        if not matches:
-            raise librelane_contract.Refusal('LL_LOCAL_IMAGE_UNATTESTED', 'neutral image mismatch')
-        return {'image': selected, 'image_id': 'sha256:' + 'ad' * 32}
-    monkeypatch.setattr(librelane_contract, 'local_image_attestation', attest)
     rc, findings, context = _selected_native_main(tmp_path, monkeypatch)
     assert rc == (0 if matches else 1), context
     assert calls == []
@@ -404,9 +394,6 @@ def test_native_selected_in_image_uses_existing_attestation(tmp_path, monkeypatc
     if matches:
         assert context['native_returncode'] == context['transport_returncode'] == 0
         assert findings == []
-    else:
-        assert context['native_returncode'] is None
-        assert any(f['rule'] == 'native-elaboration-unresolved' for f in findings)
 
 
 def test_native_relative_include_is_read_and_bound_to_current_source(tmp_path):

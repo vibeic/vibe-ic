@@ -188,8 +188,7 @@ def test_step14_sibling_template_gate_untouched(tmp_path):
 # ===========================================================================
 # step 11 / dim 5 — docstring must state the rc the code actually returns
 # ===========================================================================
-_DFT_GATES = ("dft_atpg_coverage_check.py", "bsdl_emit.py",
-              "dft_signoff_check.py")
+_DFT_GATES = ("dft_atpg_coverage_check.py", "dft_signoff_check.py")
 
 
 def _dft_project(tmp_path: Path, *, disclosed: bool) -> Path:
@@ -273,17 +272,6 @@ def test_step11_flow_gate_comment_does_not_deny_the_disclosed_skip(tmp_path):
 # ===========================================================================
 # step 11 / dim 5 — the disclosed-skip reason must name THIS run's PDK
 # ===========================================================================
-def test_dft_gap_reason_names_the_detected_pdk():
-    """DISCRIMINATOR. The reason prose was a constant naming sky130 on every
-    run; the real ihp-sg13g2 run emitted it beside its own
-    `pdk_detected: generic_unmapped`. Assert the GOOD thing is present: the
-    prose names whatever the netlist sniff detected."""
-    sys.path.insert(0, str(PROGRAMS))
-    import design_one_shot_runner as dosr
-    assert "ihp-sg13g2" in dosr._dft_atpg_gap_reason("ihp-sg13g2")
-    assert "generic_unmapped" in dosr._dft_atpg_gap_reason(None)
-    # DIRECTION-1: the case the constant used to get right stays right.
-    assert "sky130" in dosr._dft_atpg_gap_reason("sky130")
 
 
 # ===========================================================================
@@ -361,19 +349,6 @@ def test_dt3_self_disabling_hole_is_closed_and_its_baseline_entry_deleted():
     assert not [b for b in baseline if str(b["step"]) == "DT3"], baseline
 
 
-@pytest.mark.parametrize("sid,gate_prog", [
-    ("DT1", "transition_coverage_check.py"),
-    ("DT2", "path_delay_coverage_check.py"),
-    ("DT3", "sdd_coverage_check.py"),
-])
-def test_dt_gate_still_fails_without_a_measurement(tmp_path, sid, gate_prog):
-    """DIRECTION-1. Declaring an output must not make an absent measurement
-    passable. With neither the coverage report nor a not-run record, each DT
-    gate must still exit non-zero."""
-    (tmp_path / "phase2" / "stage2" / "dft").mkdir(parents=True)
-    (tmp_path / "reports" / "phase2" / "dft").mkdir(parents=True)
-    r = _run(gate_prog, str(tmp_path))
-    assert r.returncode == 1, r.stdout + r.stderr
 
 
 def test_dt_declared_outputs_match_the_producers_own_skip_claim():

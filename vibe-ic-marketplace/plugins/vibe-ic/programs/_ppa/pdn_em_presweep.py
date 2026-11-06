@@ -88,7 +88,7 @@ import math
 import os
 import re
 import sys
-import tempfile
+import vibeic_temp as tempfile
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
@@ -506,7 +506,7 @@ def _worst_layer(result: Mapping[str, Any]) -> Optional[str]:
 
 def _write_json(path: Path, doc: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
+    fd, tmp = tempfile.atomic_mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
     with os.fdopen(fd, "w") as fh:
         fh.write(json.dumps(doc, indent=2, sort_keys=True) + "\n")
     os.replace(tmp, path)

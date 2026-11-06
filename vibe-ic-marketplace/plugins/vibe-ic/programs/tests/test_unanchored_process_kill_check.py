@@ -17,6 +17,7 @@ shipped defect and GREEN on the tree that replaced it. A ratchet only tested on
 the good tree cannot tell "detector works" from "detector never fires".
 """
 import sys
+import shutil
 from pathlib import Path
 
 import pytest
@@ -191,7 +192,7 @@ def test_phase3_delegates_the_reap_instead_of_reimplementing_it():
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(R.subprocess, "run",
                    lambda argv, **_kw: (seen.append(list(argv)), _CP())[1])
-        mp.setattr(R.shutil, "which", lambda n, *a, **k: None)   # local route:
+        mp.setattr(shutil, "which", lambda n, *a, **k: None)   # local route:
         mp.setattr(R, "_LOCAL_EXEC_MODE", None, raising=False)   # no host read
         R._docker_exec_raw("cz2099_no_such_container", "yosys -V", timeout=600)
     assert seen, "the raw entry point launched nothing"

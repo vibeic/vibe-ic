@@ -9,7 +9,7 @@ import shlex
 import shutil
 import subprocess
 import sys
-import tempfile
+import vibeic_temp as tempfile
 import time
 
 
@@ -418,7 +418,9 @@ def simulation(project, directory, tool, commands):
 
 
 def formal(project, directory, tool, commands):
-    from formal_property_run import _ensure_expert_observers_bound, _model_texts, frontend_aborted_the_read
+    from formal_property_run import (
+        _ensure_expert_observers_bound, _model_texts, frontend_aborted_the_read, resolve_include_headers,
+    )
     from formal_harness_gen import _resolve_top
 
     authored = {}
@@ -446,8 +448,9 @@ def formal(project, directory, tool, commands):
         return commands.result(detail="The owner program has not emitted a native formal .sby input.")
     statuses, covers, reports, required, observed, native_steps, scope, proof_scopes = [], [], [], [], [], [], [], []
     frontend_failures = set()
+    unmodeled_inputs = set()
 
-    def cover_model(output, key, options):
+    def cover_model(output, key, options, *, inspect_only=False):
         model, cells = output / "model/design.il", output / "model/cover_inputs.json"
         if not model.is_file():
             native_steps.append({"name": key + ".Cover.Input", "ran": False,
@@ -462,6 +465,28 @@ def formal(project, directory, tool, commands):
             return None
         conditional, assertions, explicit, subjects = [], 0, 0, set()
         modules = json.loads(cells.read_text())["modules"]
+        missing = []
+        for module, body in modules.items():
+            for kind in ("anyseq", "anyconst"):
+                free = {bit for cell in body.get("cells", {}).values() if cell["type"] == "$" + kind
+                        for bit in cell["connections"].get("Y", []) if isinstance(bit, int)}
+                if kind == "anyseq":
+                    free.update(bit for port in body.get("ports", {}).values() if port["direction"] == "input"
+                                for bit in port["bits"])
+                for name, wire in body.get("netnames", {}).items():
+                    if str(wire.get("attributes", {}).get(kind, 0)).strip("0"):
+                        lost = sum(bit not in free for bit in wire["bits"])
+                        if lost:
+                            missing.append(f"{module}.{name}: {lost}/{len(wire['bits'])} {kind} bits lack native free-input drivers")
+        if missing:
+            detail = "Native formal model lost declared free inputs: " + "; ".join(missing)
+            unmodeled_inputs.add(key)
+            scope.append(detail)
+            native_steps.append({"name": key + ".Cover.Input", "ran": True,
+                "exit_code": compiled.returncode, "status": "NOT_MEASURED", "detail": detail})
+            return None
+        if inspect_only:
+            return 0
         for module, body in modules.items():
             for name, cell in body.get("cells", {}).items():
                 if cell["type"] == "$scopeinfo" and "." not in name:
@@ -506,9 +531,16 @@ def formal(project, directory, tool, commands):
         return assertions
 
     for index, source in enumerate(paths):
+        model_text = _model_texts(source, source.parent, None)
         _ensure_expert_observers_bound(source, source.parent,
-                                      harness_text=_model_texts(source, source.parent, None))
-        listing = commands.run(["sby", "--dumptasks", source], cwd=source.parent)
+                                      harness_text=model_text)
+        native_source = source
+        body = source.read_text()
+        if "$global_clock" in model_text and not re.search(r"(?m)^(?:\w+:[ \t]*)?multiclock[ \t]+", body):
+            native_source = directory / f"native_input_{index + 1}.sby"
+            native_source.write_text(body.replace("[options]\n", "[options]\nmulticlock on\n", 1))
+            reports.append(native_source)
+        listing = commands.run(["sby", "--dumptasks", native_source], cwd=source.parent)
         if listing is None:
             return commands.result(reports=reports, detail="SymbiYosys is unavailable.")
         if listing.returncode:
@@ -521,16 +553,32 @@ def formal(project, directory, tool, commands):
             required.append(key)
             output = directory / f"proof_{index + 1}_{task_index + 1}"
             first_read = len(commands.records)
-            completed = commands.run(["sby", "-f", "-d", output, source, *([task] if task else [])], cwd=source.parent)
+            completed = commands.run(["sby", "-f", "-d", output, native_source, *([task] if task else [])], cwd=source.parent)
             if completed is None:
                 return commands.result(reports=reports, detail="SymbiYosys is unavailable.")
             config = output / "config.sby"
             if frontend_aborted_the_read(completed.stdout + completed.stderr) and config.is_file():
                 body = config.read_text()
+                original_body = body
                 reads = list(re.finditer(r"(?m)^read_verilog[ \t]+-formal[ \t]+-sv[ \t]+([^\n]+)", body))
-                converted = (commands.run(["sv2v", "--exclude=Assert", "--exclude=SeverityTask",
-                    "-DFORMAL", "-DYOSYS", "-I.", *shlex.split(reads[0][1])], cwd=output / "src")
-                    if len(reads) == 1 else None)
+                converted = None
+                read_error = ""
+                if len(reads) == 1:
+                    arguments = shlex.split(reads[0][1])
+                    sources = [output / "src" / path for path in arguments
+                               if (output / "src" / path).is_file()]
+                    supplied = staged_rtl_sources(project)
+                    for header in resolve_include_headers(sources, [output / "src", source.parent,
+                            *(path.parent for path in sources), *(path.parent for path in supplied)]):
+                        destination = output / "src" / header.name
+                        if not destination.exists():
+                            shutil.copyfile(header, destination)
+                            reports.append(destination)
+                    argv = ["sv2v", "--exclude=Assert", "--exclude=SeverityTask",
+                            "-DFORMAL", "-DYOSYS", "-I.", *arguments]
+                    converted = commands.run(argv, cwd=output / "src")
+                    if converted is not None and converted.returncode:
+                        read_error = next(iter((converted.stderr or converted.stdout).strip().splitlines()), "")
                 if converted is not None and converted.returncode == 0:
                     lowered = output / "sv_frontend.v"
                     lowered.write_text(converted.stdout)
@@ -544,6 +592,28 @@ def formal(project, directory, tool, commands):
                         frontend_failures.add(first_read)
                         reports.extend([lowered, retry, output / "status"])
                         output, completed = destination, alternate
+                missing_include = converted is not None and "Could not find file" in converted.stdout + converted.stderr
+                if len(reads) == 1 and not missing_include and not (output / "model/design.il").is_file():
+                    top_match = re.search(r"(?m)^(?:prep|hierarchy)\b[^\n]*[ \t]-top[ \t]+(\S+)", original_body)
+                    native_read = "read_slang --single-unit --no-synthesis-define -DFORMAL "
+                    if top_match:
+                        native_read += "--top " + top_match[1] + " "
+                    native_read += "-I " + _word(config.parent / "src") + " " + reads[0][1]
+                    native_read += ("\nsetundef -undriven -anyseq a:anyseq>0"
+                                    "\nsetundef -undriven -anyconst a:anyconst>0")
+                    retry = config.parent / "slang_frontend.sby"
+                    retry.write_text(original_body[:reads[0].start()] + native_read + original_body[reads[0].end():])
+                    destination = config.parent / "slang_frontend"
+                    retry_index = len(commands.records)
+                    alternate = commands.run(["sby", "-f", "-d", destination, retry], cwd=source.parent)
+                    if alternate is not None:
+                        frontend_failures.update(range(first_read, retry_index))
+                        reports.extend([retry, output / "status"])
+                        output, completed = destination, alternate
+                if not (output / "model/design.il").is_file():
+                    errors = [line for line in (completed.stdout + completed.stderr).splitlines()
+                              if "ERROR:" in line or "error:" in line or "Source line " in line]
+                    scope.append(" ".join(part for part in [read_error, *errors[:2]] if part))
             native = sorted(output.rglob("status"))
             config = output / "config.sby"
             word = (output / "status").read_text().strip().split() if (output / "status").is_file() else []
@@ -553,8 +623,6 @@ def formal(project, directory, tool, commands):
                 body = config.read_text()
                 mode_match = re.search(r"^mode\s+(\S+)\s*$", body, re.M)
                 mode = mode_match[1] if mode_match else ""
-                if mode == "cover":
-                    covers.append(status)
             row = {"name": f"SymbiYosys.{task}", "ran": True,
                    "exit_code": completed.returncode,
                    "status": status if status in {"PASS", "FAIL"} else "NOT_MEASURED"}
@@ -562,12 +630,20 @@ def formal(project, directory, tool, commands):
             if mode in {"prove", "bmc"}:
                 options = re.search(r"(?ms)^\[options\]\s*\n(.*?)(?=^\[|\Z)", body)
                 assertions = cover_model(output, key, options[1] if options else "mode cover\n")
-                if status == "PASS" and assertions is None:
+                if assertions is None and (status == "PASS" or key in unmodeled_inputs):
                     status = "NOT_MEASURED"
                     row["status"] = status
-                    row["detail"] = "The native formal model's cover targets could not be read."
+                    row["detail"] = ("The native model lacks declared free inputs." if key in unmodeled_inputs
+                                     else "The native formal model's cover targets could not be read.")
                 if mode == "prove":
                     statuses.append(status)
+            elif mode == "cover":
+                cover_model(output, key, "", inspect_only=True)
+                if key in unmodeled_inputs:
+                    status = "NOT_MEASURED"
+                    row["status"] = status
+                    row["detail"] = "The native model lacks declared free inputs."
+                covers.append(status)
             if status in {"PASS", "FAIL"}:
                 observed.append(key)
             reports.extend(native)
@@ -748,8 +824,8 @@ Path(sys.argv[5]).write_text(json.dumps(result))
     argv = ["python3", "-c", code, str(Path(__file__).resolve().parent),
             str(project), str(work), json.dumps(mapped(tool, mounts)), str(result_path)]
     options = ["-w", mapped(str(work), mounts)]
-    if os.environ.get("TMPDIR"):
-        options.extend(["-e", "TMPDIR=" + mapped(os.environ["TMPDIR"], mounts)])
+    for key, value in tempfile.configure().items():
+        options.extend(["-e", key + "=" + mapped(value, mounts)])
     completed = commands.run(["docker", "exec", *options, container, "bash", "-lc",
                               "exec " + shlex.join(mapped(argv, mounts))])
     if completed is None or completed.returncode or not result_path.is_file():
@@ -763,7 +839,8 @@ Path(sys.argv[5]).write_text(json.dumps(result))
 def execute(project, directory, tool, route, *, state=None, config=None):
     project, directory = Path(project).resolve(), Path(directory).resolve()
     directory.mkdir(parents=True, exist_ok=True)
-    work = Path(tempfile.mkdtemp(prefix="native_", dir=directory))
+    parent = tempfile.current_run("adapter", directory.name) / directory.name
+    work = Path(tempfile.mkdtemp(prefix="native_", dir=parent))
     commands = Commands(work)
     if tool.get("adapter") == "path_delay_atpg":
         from flow_atpg import path_delay

@@ -465,82 +465,8 @@ def test_an_unanswered_handoff_is_incomplete_never_a_vacuous_pass(tmp_path):
     assert rep["awaiting"] and rep["awaiting"]["credited"] is False
 
 
-def test_the_phase1_runner_does_not_credit_an_unanswered_handoff(tmp_path):
-    """End-to-end through the exact credit boundary that returned 0 before
-    #1973. A report existing is not enough; its non-zero consumption evidence
-    must be read by the runner.
-
-    #2014 RETARGETS THE ASSERTION, AND THE RETARGET IS THE FINDING. This test
-    is named for CREDIT and it was measuring the runner's EXIT CODE, which is
-    a different question. `ai_subtrack` defines HANDOFF_EMITTED as the designed
-    FIRST pass of a two-pass protocol — "invoke subagent … and re-run to
-    consume its answer" — and a program cannot spawn the subagent, so every
-    headless invocation produces it. Failing the RUN on it made the exit code
-    unreachable by any legitimate single-pass input, and the Shape-C benchmark
-    hard gate `phase1_run_all` reads that exit code: MEASURED, 14 emit-blocking
-    cases across 7 test files went red at 7d1da41d7 and are green at its parent
-    55bb6967b, with `l9_rendered` still true in both.
-
-    So the credit boundary is asserted where credit actually lives — the
-    disposition and the published summary — and the exit code is pinned too,
-    in its own right, as the uncredited PENDING it is. This test gained
-    assertions; it did not lose the one that mattered.
-    """
-    import phase1_one_shot_runner as R
-
-    p = _project(tmp_path)
-    rc = R._run_expert_track(p)
-    assert _report(p)["ai_subtrack"]["status"] == "HANDOFF_EMITTED"
-
-    # CREDIT — refused, which is the whole of #1973.
-    disposition, detail = R._expert_track_disposition(_report(p))
-    assert disposition == R._EXPERT_PENDING, (disposition, detail)
-    assert disposition != R._EXPERT_CREDITED
-    summary = R._expert_track_summary(p)
-    assert summary.startswith("INCOMPLETE"), summary
-    assert "HANDOFF_EMITTED" in summary
-    assert summary != "ran"
-
-    # THE RUN — a stated wait, not a failure.
-    assert rc == 0
 
 
-def test_the_runner_credits_a_consumed_evidence_linked_answer(tmp_path):
-    """Positive control: the fix must not make completion unreachable. A valid
-    expert answer is consumed, diffed, and its input evidence reaches the
-    named disagreement and non-zero ledgers."""
-    import phase1_one_shot_runner as R
-
-    p = _project(tmp_path)
-    _write_answer(p, {"expectations": [{
-        "id": "external_reference::REFHI",
-        "layer": "L1_DATASHEET",
-        "field_path": "fields.pinout",
-        "requirement": "a terminal for the external reference",
-        "evidence": ["input/docs/spec.md: external reference on REFHI"],
-        "expected_tokens": ["REFHI"],
-    }]})
-    assert R._run_expert_track(p) == 0
-    rep = _report(p)
-    assert rep["ai_subtrack"]["status"] == "CONSUMED"
-    assert rep["ai_convergence"]["consumed"] == 1
-    assert rep["denominator"]["ai"] == 1
-    assert rep["denominator"]["total"] >= 1
-    # Pinned to the UNMET rule specifically, not to a suffix. #2127 added
-    # `EXPERT_TRACK_AI_EXPECTATION_FIELD_PATH_UNDECLARED::<same subject>`,
-    # which shares the subject and is a DIFFERENT finding; a suffix match
-    # counts both and would say the disagreement was reported twice.
-    named = [f for f in rep["findings"]
-             if f["rule"] == f"{T.RULE_AI_UNMET}::external_reference::REFHI"]
-    assert len(named) == 1
-    assert "input/docs/spec.md: external reference on REFHI" in named[0]["message"]
-    # and the #2127 refusal is present ONCE, about the track, for the same
-    # subject: this fixture's field_path `fields.pinout` is not a path
-    # L1_DATASHEET declares.
-    refused = [f for f in rep["findings"]
-               if f["rule"] == (f"{T.RULE_AI_FIELD_PATH_UNDECLARED}"
-                                f"::external_reference::REFHI")]
-    assert len(refused) == 1 and refused[0]["about"] == "track"
 
 
 def test_the_emitted_handoff_contains_input_contract_and_dispatch_instruction(

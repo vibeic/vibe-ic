@@ -46,6 +46,9 @@ CLI:
 Requires the KLayout Python module ('pya', inside vibeic-eda); exits 3 if absent.
 """
 
+import vibeic_temp as _vtmp
+from pathlib import Path
+
 # --- sibling-import path (vibe-ic#2104) ------------------------------------
 # `programs/` is a flat directory whose modules import each other by BARE
 # name. Python puts a file's own directory on `sys.path` only when that file
@@ -267,8 +270,9 @@ def cmd_compare_one(pya, gds, cell, golden_cdl, power, ground, out=None):
         return {"cell": cell, "verdict": "NO_GOLDEN"}
     l2n, nl, ckt = extract_cell(pya, gds, cell, power=power, ground=ground)
     lay_txt, ndev = emit_subckt(ckt, cell, power, ground, None)
-    lay_path = (out or f"/tmp/_a7_{cell}") + ".lay.spice"
-    src_path = (out or f"/tmp/_a7_{cell}") + ".src.spice"
+    base = out or str(Path(_vtmp.mkdtemp(prefix="finfet-lvs-")) / "cell")
+    lay_path = base + ".lay.spice"
+    src_path = base + ".src.spice"
     with atomic_writing(lay_path) as f:
         f.write(lay_txt)
     with atomic_writing(src_path) as f:
@@ -303,7 +307,9 @@ def cmd_batch(pya, gds, golden_cdl, power, ground, json_out=None):
         except Exception as e:
             tally["EXTRACT_ERR"] += 1
             detail.append((cell, "EXTRACT_ERR", str(e)[:80])); continue
-        lay_path = "/tmp/_a7b.lay.spice"; src_path = "/tmp/_a7b.src.spice"
+        base = Path(_vtmp.mkdtemp(prefix="finfet-lvs-"))
+        lay_path = str(base / "layout.spice")
+        src_path = str(base / "source.spice")
         with atomic_writing(lay_path) as f:
             f.write(lay_txt)
         with atomic_writing(src_path) as f:

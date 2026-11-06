@@ -43,6 +43,9 @@ OBSERVABLE-OVER-WORDING doctrine block below.
 """
 from __future__ import annotations
 
+import vibeic_temp as _vtmp
+import shlex
+
 import re
 from pathlib import Path
 from typing import List, Sequence, Tuple, Union
@@ -649,11 +652,12 @@ def synth_frontend_should_retry_under_synthesis(
 # with read_slang?". The probe now TRIES THE CAPABILITY on a tiny synthetic
 # fixture and observes whether a design came out the other side.
 _SLANG_PROBE_MODULE: str = "_vibeic_slang_probe_m"
+_SLANG_PROBE_FILE = str(Path(_vtmp.mkdtemp(prefix="slang-probe-")) / "probe.sv")
 SLANG_PROBE_CMD: str = (
     "export PATH=/foss/tools/yosys/bin:/foss/tools/bin:$PATH && "
-    f"printf 'module {_SLANG_PROBE_MODULE}; endmodule\\n' "
-    f"> /tmp/{_SLANG_PROBE_MODULE}.sv && "
-    f"yosys -p 'read_slang /tmp/{_SLANG_PROBE_MODULE}.sv; stat'"
+    + "printf %s " + shlex.quote(f"module {_SLANG_PROBE_MODULE}; endmodule\n")
+    + " > " + shlex.quote(_SLANG_PROBE_FILE)
+    + " && yosys -p " + shlex.quote(f'read_slang "{_SLANG_PROBE_FILE}"; stat')
 )
 
 

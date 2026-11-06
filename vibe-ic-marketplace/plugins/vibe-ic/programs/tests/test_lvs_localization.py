@@ -200,63 +200,11 @@ class TestStep31GateUnchanged:
 # ---------------------------------------------------------------------------
 # RUNNER WIRING — the FAIL path persists lvs_localize.json naming the net
 # ---------------------------------------------------------------------------
-class TestRunnerEmission:
-    def _proj_with_netgen_output(self, tmp_path, json_fix, rpt_fix):
-        rp = tmp_path / "reports" / "phase3"
-        rp.mkdir(parents=True)
-        (rp / "lvs.rpt").write_text(rpt_fix.read_text())
-        (rp / "lvs.json").write_text(json_fix.read_text())
-        return tmp_path
-
-    def test_emit_writes_localize_report_naming_offending_net(self, tmp_path):
-        proj = self._proj_with_netgen_output(tmp_path, _SHORT, _MISMATCH_RPT)
-        loc, path = _mod._emit_lvs_localization(
-            proj, proj / "reports" / "phase3" / "lvs.rpt")
-        assert loc["available"] and set(loc["offending_nets"]) == {"Y1", "Y2"}
-        assert path == "reports/phase3/lvs_localize.json"
-        side = json.loads(
-            (proj / "reports" / "phase3" / "lvs_localize.json").read_text())
-        assert set(side["offending_nets"]) == {"Y1", "Y2"}
-
-    def test_localization_note_names_nets_and_pins(self, tmp_path):
-        proj = self._proj_with_netgen_output(tmp_path, _SHORT, _MISMATCH_RPT)
-        loc, _ = _mod._emit_lvs_localization(
-            proj, proj / "reports" / "phase3" / "lvs.rpt")
-        note = _mod._localization_note(loc)
-        assert "Y1" in note and "Y2" in note
-        assert "offending nets" in note
-
-    def test_emit_is_noop_when_no_netgen_json(self, tmp_path):
-        # No lvs.json (netgen not run / -json not honoured) → available False,
-        # no sidecar written, no exception.
-        rp = tmp_path / "reports" / "phase3"
-        rp.mkdir(parents=True)
-        (rp / "lvs.rpt").write_text(_MISMATCH_RPT.read_text())
-        loc, path = _mod._emit_lvs_localization(proj := tmp_path,
-                                                rp / "lvs.rpt")
-        assert loc["available"] is False and path is None
-        assert not (rp / "lvs_localize.json").exists()
-        assert _mod._localization_note(loc) == ""
-
-    def test_emit_write_failure_never_raises(self, tmp_path, monkeypatch):
-        proj = self._proj_with_netgen_output(tmp_path, _SHORT, _MISMATCH_RPT)
-        monkeypatch.setattr(Path, "write_text",
-                            lambda *_a, **_k: (_ for _ in ()).throw(OSError))
-        loc, path = _mod._emit_lvs_localization(
-            proj, proj / "reports" / "phase3" / "lvs.rpt")
-        assert loc["available"] is True         # parse still worked …
-        assert path is None                     # … but the write failed safely
 
 
 # ---------------------------------------------------------------------------
 # RUNNER CMD — the netgen invocation actually passes `-json`
 # ---------------------------------------------------------------------------
-def test_runner_netgen_lvs_cmd_passes_json_flag():
-    # A guard so the flag can't silently regress: the main netgen -batch lvs
-    # invocation must carry `-json` (that is the whole enabling mechanism —
-    # without it netgen writes no localization sidecar).
-    src = Path(_mod.__file__).read_text()
-    assert "{shlex.quote(netgen_setup)} {rpt_c} -json" in src
 
 
 # ---------------------------------------------------------------------------

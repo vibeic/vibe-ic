@@ -5,7 +5,11 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import json
+import os
 import re
+import shlex
+import subprocess
+import vibeic_temp as tempfile
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -116,6 +120,53 @@ def explore_synthesis(config, state, directory, on_tool_run=None):
 
 def _load(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text()) if path.is_file() else {}
+
+
+def _authored_rtl_top(rtl: list[Path]) -> str:
+    """Return the unique root selected by native Yosys hierarchy analysis."""
+    with tempfile.TemporaryDirectory(prefix="flow-authored-top-",
+                                     dir=os.environ.get("TMPDIR") or None) as raw:
+        output = Path(raw) / "hierarchy.json"
+        reads = []
+        for path in rtl:
+            include = " ".join("-I" + shlex.quote(str(parent)) for parent in
+                               {path.parent, *(p.parent for p in rtl)})
+            reads.append("read_verilog -sv " + include + " " + shlex.quote(str(path)))
+        script = "; ".join([*reads, "hierarchy -auto-top", "proc",
+                             "write_json " + shlex.quote(str(output))])
+        try:
+            completed = subprocess.run(["yosys", "-Q", "-T", "-p", script],
+                capture_output=True, text=True, check=False)
+        except OSError as exc:
+            raise FileNotFoundError(f"Native Yosys top resolution is unavailable: {exc}") from exc
+        if completed.returncode or not output.is_file():
+            detail = (completed.stderr or completed.stdout).strip()[-1200:]
+            raise FileNotFoundError("Native Yosys could not resolve the RTL-authored top"
+                                    + (f": {detail}" if detail else "."))
+        modules = json.loads(output.read_text()).get("modules", {})
+    marked = sorted(name for name, body in modules.items()
+                    if "top" in body.get("attributes", {}))
+    if len(marked) == 1:
+        return marked[0]
+    instantiated = {cell.get("type") for body in modules.values()
+                    for cell in body.get("cells", {}).values()}
+    candidates = sorted(set(modules) - instantiated)
+    if len(candidates) == 1:
+        return candidates[0]
+    listed = ", ".join(candidates) if candidates else "(none)"
+    raise FileNotFoundError("RTL authored at step 17 has ambiguous candidate top modules: "
+                            + listed)
+
+
+def _record_authored_top(l9_path: Path, l9: dict, top: str) -> None:
+    l9["top_module"] = top
+    l9["top_module_status"] = "resolved_from_rtl_authoring"
+    l9["top_module_source"] = {
+        "step": "RTL authoring",
+        "artifact": "phase2/stage1/rtl",
+        "method": "yosys hierarchy -auto-top",
+    }
+    l9_path.write_text(json.dumps(l9, indent=2, ensure_ascii=False) + "\n")
 
 
 def _value(value: Any) -> Any:
@@ -293,22 +344,18 @@ def _resolve_rtl_inputs(project: Path, sources: dict) -> tuple[list[Path], str]:
     if not rtl:
         raise FileNotFoundError("No produced RTL in phase2/stage1/rtl")
     docs = project / "phase1/generated_docs"
-    l9 = _load(docs / "L9_INTEGRATION_SPEC.json")
+    l9_path = docs / "L9_INTEGRATION_SPEC.json"
+    l9 = _load(l9_path)
     l1 = _load(docs / "L1_DATASHEET.json")
     tapeout_metadata = l1.get("tapeout_metadata") or {}
     top = (_load(project / "plugin_output/declaration.json").get("top_module")
            or l9.get("top_module") or tapeout_metadata.get("top_cell"))
     modules = set().union(*(module_names_in_text(path.read_text(errors="replace"))
                             for path in rtl))
-    if top not in modules:
-        from phase1_doc_one_shot_runner import _extract_top_module_from_docs
-
-        for source, text in _input_docs(project).items():
-            declared = _extract_top_module_from_docs({source: text})
-            if declared in modules:
-                top = declared
-                sources["DESIGN_NAME"] = source
-                break
+    if not top:
+        top = _authored_rtl_top(rtl)
+        _record_authored_top(l9_path, l9, top)
+        sources["DESIGN_NAME"] = "phase2/stage1/rtl (RTL authoring step)"
     if not top or top not in modules:
         raise FileNotFoundError(f"Declared top module {top} is absent from produced RTL")
     return rtl, top

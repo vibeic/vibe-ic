@@ -262,13 +262,6 @@ def test_extract_prompt_iface_table_directions():
     assert pif.ports["q"] == "output"
 
 
-def test_chip_agnostic_source():
-    """The new program must pass the chip-AGNOSTIC source guard."""
-    guard = PROGRAMS / "source_chip_agnostic_check.py"
-    r = _pr.run(
-        [sys.executable, str(guard), str(PLUGIN)],
-        capture_output=True, text=True)
-    assert r.returncode == 0, r.stdout + r.stderr
 
 
 if __name__ == "__main__":

@@ -211,16 +211,16 @@ def test_zero_point_hub_abort_is_inconclusive_not_fail():
 # 5. phase-3 synth applies the same exclusion
 # ---------------------------------------------------------------------------
 def test_phase3_synth_shares_the_same_aggregator_filter(tmp_path):
-    import phase3_one_shot_runner as p3
+    import _rtl_include_hub as include_hub
     d = _hub_design(tmp_path)
     silicon = sorted(d.glob("*.sv")) + sorted(d.glob("*.v"))
-    kept = [p.name for p in p3._drop_include_hubs(silicon)]
+    kept = [p.name for p in include_hub.drop_include_hubs(silicon)]
     assert "uprj_netlists.v" not in kept
     assert set(kept) == {"defines.v", "counter.v", "top.v"}
     # and the no-aggregator control is untouched
     plain = _plain_design(tmp_path / "ctl")
     kept2 = [p.name for p in
-             p3._drop_include_hubs(sorted(plain.glob("*.v")))]
+             include_hub.drop_include_hubs(sorted(plain.glob("*.v")))]
     assert set(kept2) == {"defines.v", "counter.v", "top.v"}
 
 

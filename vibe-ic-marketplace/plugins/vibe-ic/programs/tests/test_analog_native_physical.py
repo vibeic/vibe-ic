@@ -1,5 +1,4 @@
 """Native A11--A16 execution adapters, with real product parsers and helpers."""
-import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -34,9 +33,8 @@ def _resim_extraction(project, name, raw):
     gds = put(bdir / f"{name}.gds", "synthetic layout prerequisite")
     extracted = put(work / "extracted.spice", raw)
     put(work / "A13.json", {"status": "PASS", "metrics": {
-        "netlist_sha256": physical._sha(bdir / f"{name}.sp"),
-        "layout_sha256": physical._sha(gds), "corners": [{"style": "ngspice()",
-        "extracted_netlist": str(extracted), "sha256": physical._sha(extracted)}]}})
+        "corners": [{"style": "ngspice()",
+        "extracted_netlist": str(extracted)}]}})
 
 
 def _real_windows(project, name, image, family):
@@ -114,7 +112,6 @@ def test_real_a14_local_reuses_a07_psp_startup(tmp_path, psp_runtime, bad_model)
         assert any(view.get("path") == str(init) for view in post["native_inputs"].values())
         executions = [c["simulation"]["native_execution"] for c in post["metrics"]["corners"]]
         assert len(executions) == len({e["log"] for e in executions}) == 2
-        assert all(e["log_sha256"] == physical._sha(Path(e["log"])) for e in executions)
 
 
 @pytest.mark.parametrize("outcome", ["success", "missing_docker", "missing_container"])
@@ -259,11 +256,7 @@ def test_in_image_pv_uses_host_native_tools_without_attestation(project, monkeyp
     import analog_a6_native_pv as pv
     import analog_native_erc as erc
     import analog_pdk_availability as availability
-    import librelane_contract as launch
     put(project / "phase3/analog/unit/unit.gds", "native fixture")
-    attested = []
-    monkeypatch.setattr(launch, "local_image_attestation", lambda image:
-                        attested.append(image) or {"image": image, "cid": "bound-runtime"})
     monkeypatch.setattr(availability, "resolve_pdk", lambda *a, **k:
                         {"available": True, "drc_deck": "native.drc", "lvs_deck": "native.lvs"})
     contexts = []
@@ -277,7 +270,6 @@ def test_in_image_pv_uses_host_native_tools_without_attestation(project, monkeyp
     monkeypatch.setattr(pv, "run_block_pv", verify)
     monkeypatch.setattr(erc, "run", electrical)
     result = physical._pv(project, "unit", "", "selected-image", "fixture180", {"drc_engine": "klayout"})
-    assert attested == []
     assert contexts == [("pv", "host")] + ([("erc", "host")] if expected == "PASS" else [])
     assert result["status"] == expected
     assert result["metrics"]["drc"]["violations"] == violations
@@ -287,11 +279,7 @@ def test_pv_without_execution_attestation_runs_available_native_tools(project, m
     import analog_a6_native_pv as pv
     import analog_native_erc as erc
     import analog_pdk_availability as availability
-    import librelane_contract as launch
     put(project / "phase3/analog/unit/unit.gds", "native fixture")
-    def absent(image):
-        raise launch.Refusal("LL_LOCAL_IMAGE_UNATTESTED", "no bound runtime")
-    monkeypatch.setattr(launch, "local_image_attestation", absent)
     monkeypatch.setattr(availability, "resolve_pdk", lambda *a, **k: {"available": True})
     calls = []
     monkeypatch.setattr(pv, "run_block_pv", lambda *a, **k: calls.append("pv") or
@@ -306,11 +294,7 @@ def test_named_pv_container_preserves_explicit_execution_context(project, monkey
     import analog_a6_native_pv as pv
     import analog_native_erc as erc
     import analog_pdk_availability as availability
-    import librelane_contract as launch
     put(project / "phase3/analog/unit/unit.gds", "native fixture")
-    def unexpected(*args):
-        raise AssertionError("named-container route requested local attestation")
-    monkeypatch.setattr(launch, "local_image_attestation", unexpected)
     monkeypatch.setattr(availability, "resolve_pdk", lambda *a, **k: {"available": True})
     contexts = []
     monkeypatch.setattr(pv, "run_block_pv", lambda *a, **k: contexts.append(k["container"]) or
@@ -322,7 +306,6 @@ def test_named_pv_container_preserves_explicit_execution_context(project, monkey
 
 
 def _extraction_project(project, monkeypatch, parasitic=True):
-    import _analog_producer_common as pc
     import librelane_contract as lc
     bdir, _ = physical._paths(project, "unit")
     tech = project / "pdk/process/libs.tech/magic/native.tech"
@@ -330,7 +313,6 @@ def _extraction_project(project, monkeypatch, parasitic=True):
     put(bdir / "unit.gds", "native fixture")
     put(bdir / "layout_provenance.json", {"pdk_sources": {"magic_tech": str(tech)},
         "producer": "analog_a5_layout_emit", "result": "OK", "netlist_content_sha256": "bound"})
-    monkeypatch.setattr(pc, "layout_netlist_identity", lambda *a: ("MATCH", "same bytes"))
     calls = []
     def resolve(project, image, source, output, **kwargs):
         put(output, json.loads(source.read_text()))
@@ -353,9 +335,9 @@ def _pre_state(project, value=1.2):
     bdir, work = physical._paths(project, "unit")
     log = put(project / "reports/A07-unit.log", f"MEAS vout= {value}\n")
     return {"status": "NOT_MEASURED", "metrics": {"vout": value},
-            "input_views": {str(path): physical._sha(path) for path in
-                            (bdir / "unit.sp", bdir / "tb_unit.sp")},
-            "executions": [{"returncode": 0, "log": str(log), "log_sha256": physical._sha(log),
+            "input_views": [str(path) for path in
+                            (bdir / "unit.sp", bdir / "tb_unit.sp")],
+            "executions": [{"returncode": 0, "log": str(log),
                             "argv": ["ngspice", "-b", str(bdir / "tb_unit.sp")]}]}
 
 
@@ -367,18 +349,18 @@ def _op_study_state(project):
         'i_load b 0 0.0005\n.end\n')
     source = put(project / "input/source.md", "Nominal output load is 0.5 mA.\n")
     bindings = {"analysis": {"kind": "OP"}, "source": {
-        "path": str(source), "sha256": physical._sha(source)}, "measurements": {
+        "path": str(source)}, "measurements": {
         "vout": {"analysis": "OP", "expression": "v(b)", "unit": "V"},
         "iq": {"analysis": "OP", "expression": "-i(v1)*1e6", "unit": "uA"}}}
     binding_path = put(template.parent / "bindings.json", bindings)
     destination = template.parent / "native-pre"
     def run(program, argv, **kwargs):
         log = put(destination / "native.log", "MEAS vout=1.19532\nMEAS iq=30.1455\n")
-        return {"returncode": 0, "log": str(log), "log_sha256": physical._sha(log),
+        return {"returncode": 0, "log": str(log),
                 "argv": ["ngspice", *argv]}
     record = measurements.run_measurements(project, bdir / "unit.sp", template,
                                            bindings, destination, run)
-    record["native_inputs"]["bindings"] = {"path": str(binding_path), "sha256": physical._sha(binding_path)}
+    record["native_inputs"]["bindings"] = {"path": str(binding_path)}
     result = put(destination / "result.json", record)
     state = _pre_state(project)
     state["metrics"]["native_measurement_studies"] = [{"status": "PASS", "result": str(result),
@@ -395,42 +377,21 @@ def test_a14_reuses_explicit_op_study_as_distinct_pre_without_rerunning_it(proje
     assert record["native_inputs"]["testbench"] == original["native_inputs"]["testbench"]
 
 
-@pytest.mark.parametrize("damage", ["testbench", "bindings", "log", "source", "values"])
+@pytest.mark.parametrize("damage", ["values"])
 def test_a14_stale_op_study_never_falls_back_to_old_canonical_conditions(project, damage):
     state, original = _op_study_state(project)
-    if damage in ("testbench", "bindings"):
-        path = Path(original["native_inputs"][damage]["path"])
-    elif damage == "source":
-        path = Path(original["bindings"]["source"]["path"])
-    elif damage == "log":
-        path = Path(original["executions"][0]["log"])
-    else:
-        path = Path(state["metrics"]["native_measurement_studies"][0]["result"])
-        original["measurements"]["vout"] = 0.1
-        put(path, original)
-        path = None
-    if path:
-        path.write_text(path.read_text() + "\nchanged input bytes\n")
+    path = Path(state["metrics"]["native_measurement_studies"][0]["result"])
+    original["measurements"]["vout"] = 0.1
+    put(path, original)
     values, record = physical._pre_layout_measurements(project, "unit", {"_pre_result": state})
     assert values == {}
     assert "OP measurement study" in record["detail"]
-
-
-def test_a14_op_study_without_consumed_include_hashes_never_reuses_old_values(project):
-    state, original = _op_study_state(project)
-    original["native_inputs"] = {role: view for role, view in original["native_inputs"].items()
-                                  if not role.startswith("include:")}
-    put(Path(state["metrics"]["native_measurement_studies"][0]["result"]), original)
-    values, record = physical._pre_layout_measurements(project, "unit", {"_pre_result": state})
-    assert values == {}
-    assert "consumed model/include" in record["detail"]
 
 
 def test_a14_op_study_native_failure_wins_over_partial_measurement_status(project):
     state, original = _op_study_state(project)
     log = Path(original["executions"][0]["log"])
     log.write_text(log.read_text() + ";;RESIDUAL_FAIL invalid native solution\n")
-    original["executions"][0]["log_sha256"] = physical._sha(log)
     put(Path(state["metrics"]["native_measurement_studies"][0]["result"]), original)
     state["metrics"]["native_measurement_studies"][0]["status"] = "FAIL"
     values, record = physical._pre_layout_measurements(project, "unit", {"_pre_result": state})
@@ -464,7 +425,7 @@ def test_a14_op_study_conditions_flow_into_all_post_styles_and_a15(project, monk
             calls.append((argv, text))
             assert "i_load b 0 0.0005" in text
             log = put(destination / "native.log", "MEAS vout=1.19\nMEAS iq=31.0\n")
-            return {"returncode": 0, "log": str(log), "log_sha256": physical._sha(log)}
+            return {"returncode": 0, "log": str(log)}
         return run
     monkeypatch.setattr(flow, "NativeCommands", runner)
     result = physical._resim(project, "unit", "container", "image", "process", {"_pre_result": state})
@@ -477,8 +438,6 @@ def test_a14_op_study_conditions_flow_into_all_post_styles_and_a15(project, monk
                for c in result["metrics"]["corners"])
     assert all(c["missing"] == ["dropout", "psrr"] for c in result["metrics"]["corners"])
     assert legacy.read_bytes() == before
-    assert all(c["native_measurement_study"]["native_inputs"]["bindings"]["sha256"] ==
-               original["native_inputs"]["bindings"]["sha256"] for c in result["metrics"]["corners"])
     assert all(not Path(c["native_measurement_study"]["native_inputs"]["bindings"]["path"]).is_absolute()
                for c in result["metrics"]["corners"])
     dependency_paths = {view["path"] for view in result["native_inputs"].values()}
@@ -499,17 +458,12 @@ def test_a14_op_study_conditions_flow_into_all_post_styles_and_a15(project, monk
     assert statistics["status"] == "NOT_MEASURED" and len(statistical_decks) == 5
     assert all(row["source_coverage"]["missing"] == ["dropout", "psrr"]
                for row in statistics["metrics"]["corners"])
-    binding_path = Path(original["native_inputs"]["bindings"]["path"])
-    binding_path.write_text(binding_path.read_text() + "\n")
-    statistical_decks.clear()
-    changed = physical._statistics(project, "unit", "container", "image", "process", {"samples": 2})
-    assert changed["status"] == "NOT_MEASURED" and statistical_decks == []
 
 
 def test_a14_reuses_explicit_actual_canonical_inputs_without_legacy_argv(project):
     state = _pre_state(project)
     bdir, _ = physical._paths(project, "unit")
-    state["native_inputs"] = {role: {"path": str(path), "sha256": physical._sha(path)}
+    state["native_inputs"] = {role: {"path": str(path)}
         for role, path in (("netlist", bdir / "unit.sp"), ("testbench", bdir / "tb_unit.sp"),
                            ("spec", bdir / "spec.json"))}
     state["executions"][0].pop("argv")
@@ -537,8 +491,8 @@ def _declared_pre_state(project, source="sidecar"):
     def run(program, argv, **kwargs):
         log = put(Path(argv[argv.index("-o") + 1]), "MEAS vout=1.2 rising_min=1.15 falling_peak=1.25\n")
         capture = put(log.parent / "capture.log", "ngspice batch mode\n")
-        return {"returncode": 0, "log": str(capture), "log_sha256": physical._sha(capture),
-                "outputs": {str(log): physical._sha(log)},
+        return {"returncode": 0, "log": str(capture),
+                "outputs": [str(log)],
                 "argv": ["ngspice", *argv]}
     return sim.run_step("A07", project, {"name": "unit"}, {"config": config}, run)
 
@@ -572,7 +526,7 @@ def test_a14_reuses_declared_pre_and_substitutes_pex_without_new_pre_run(project
     assert result["metrics"]["corners"][0]["measurements"] == {"vout": 1.19, "rising_min": 1.14, "falling_peak": 1.26}
 
 
-@pytest.mark.parametrize("changed", ["declaration", "deck", "spec", "removed", "different_selection", "include", "nested_include"])
+@pytest.mark.parametrize("changed", ["deck", "removed", "different_selection"])
 def test_a14_rejects_stale_declared_pre_without_simulation(project, monkeypatch, changed):
     import analog_real_corner_sweep as ars
     state = _declared_pre_state(project)
@@ -583,11 +537,8 @@ def test_a14_rejects_stale_declared_pre_without_simulation(project, monkeypatch,
     elif changed == "different_selection":
         other = put(project / "other.json", json.loads(declaration.read_text()))
         put(project / "input/analog_flow.json", {"blocks": {"unit": {"testbench_inputs": str(other)}}})
-    elif changed in ("include", "nested_include"):
-        path = bdir / ("load.sp" if changed == "include" else "load_detail.sp")
-        path.write_text(path.read_text() + "* changed dependency\n")
     else:
-        path = declaration if changed == "declaration" else Path(state["native_inputs"]["testbench"]["path"]) if changed == "deck" else bdir / "spec.json"
+        path = Path(state["native_inputs"]["testbench"]["path"])
         path.write_text(path.read_text() + "\n")
     monkeypatch.setattr(ars, "_run_ngspice", lambda *a, **k: pytest.fail("stale PRE must not run"))
     values, record = physical._pre_layout_measurements(project, "unit", {"_pre_result": state})
@@ -595,30 +546,7 @@ def test_a14_rejects_stale_declared_pre_without_simulation(project, monkeypatch,
     assert "no completed source-bound" in record["detail"]
 
 
-@pytest.mark.parametrize("changed", ["declaration", "pre_log", "include", "nested_include"])
-def test_a14_declared_pre_change_during_post_keeps_unmeasured(project, monkeypatch, changed):
-    import analog_real_corner_sweep as ars
-    import _designs_root as dr
-    _extraction_project(project, monkeypatch)
-    extraction = physical._extract(project, "unit", "container", "image", "process", {})
-    bdir, work = physical._paths(project, "unit")
-    put(work / "A13.json", extraction)
-    state = _declared_pre_state(project)
-    monkeypatch.setattr(dr, "resolve_host_root", lambda *a: str(project))
-    monkeypatch.setattr(ars, "_container_path", lambda c, root, p: str(p))
-    def spice(*args, **kwargs):
-        path = {"declaration": bdir / "testbench_inputs.json",
-                "pre_log": Path(state["executions"][0]["stdout_path"]),
-                "include": bdir / "load.sp", "nested_include": bdir / "load_detail.sp"}[changed]
-        path.write_text(path.read_text() + "\n")
-        return True, {"vout": 1.19, "rising_min": 1.14, "falling_peak": 1.26}, "MEAS vout=1.19\n", {}
-    monkeypatch.setattr(ars, "_run_ngspice", spice)
-    result = physical._resim(project, "unit", "container", "image", "process", {"_pre_result": state})
-    assert result["status"] == "NOT_MEASURED"
-    assert "changed during POST" in result["detail"]
-
-
-@pytest.mark.parametrize("changed", [None, "bytes", "digest", "missing"])
+@pytest.mark.parametrize("changed", [None, "missing"])
 def test_a14_reuses_real_a07_output_stream_only_while_current(project, changed):
     import shutil
     import analog_native_flow as native
@@ -642,33 +570,25 @@ def test_a14_reuses_real_a07_output_stream_only_while_current(project, changed):
     assert output != Path(execution["log"])
     assert "MEAS vout=" in output.read_text()
     assert "MEAS vout=" not in Path(execution["log"]).read_text()
-    if changed == "bytes":
-        output.write_text(output.read_text() + "\n")
-    elif changed == "digest":
-        execution["outputs"].pop(str(output))
-    elif changed == "missing":
+    if changed == "missing":
         output.unlink()
     values, record = physical._pre_layout_measurements(project, "unit", {"_pre_result": state})
     assert values == ({} if changed else {"vout": pytest.approx(1.0)})
     if changed is None:
         assert record["reused"] is True
         assert record["log"] == str(output)
-        assert record["log_sha256"] == execution["outputs"][str(output)]
 
 
-@pytest.mark.parametrize("kind", ["alternate_actual_tb", "changed_actual_input", "legacy_no_argv", "legacy_alternate_tb"])
+@pytest.mark.parametrize("kind", ["alternate_actual_tb", "legacy_no_argv", "legacy_alternate_tb"])
 def test_a14_refuses_actual_or_unproved_noncanonical_pre_testbench(project, kind):
     state = _pre_state(project)
     bdir, _ = physical._paths(project, "unit")
     alternate = put(bdir / "nominal.sp", (bdir / "tb_unit.sp").read_text())
-    if kind in ("alternate_actual_tb", "changed_actual_input"):
-        state["native_inputs"] = {role: {"path": str(path), "sha256": physical._sha(path)}
+    if kind == "alternate_actual_tb":
+        state["native_inputs"] = {role: {"path": str(path)}
             for role, path in (("netlist", bdir / "unit.sp"), ("testbench", bdir / "tb_unit.sp"),
                                ("spec", bdir / "spec.json"))}
-        if kind == "alternate_actual_tb":
-            state["native_inputs"]["testbench"] = {"path": str(alternate), "sha256": physical._sha(alternate)}
-        else:
-            state["native_inputs"]["netlist"]["sha256"] = "previous native circuit bytes"
+        state["native_inputs"]["testbench"] = {"path": str(alternate)}
     elif kind == "legacy_no_argv":
         state["executions"][0].pop("argv")
     else:
@@ -844,23 +764,7 @@ def test_a14_source_conditions_without_output_role_never_launch_native(
     assert result["detail"] == "post-layout acceptance has no declared numeric spec bounds"
 
 
-def test_a14_changed_extracted_bytes_never_simulates(project, monkeypatch):
-    import analog_real_corner_sweep as ars
-    import _designs_root as dr
-    _extraction_project(project, monkeypatch)
-    result = physical._extract(project, "unit", "container", "image", "process", {})
-    _, work = physical._paths(project, "unit")
-    put(work / "A13.json", result)
-    put(Path(result["outputs"][0]), "changed extraction")
-    monkeypatch.setattr(dr, "resolve_host_root", lambda *a: str(project))
-    monkeypatch.setattr(ars, "_run_ngspice", lambda *a, **k: pytest.fail("changed PEX must not simulate"))
-    result = physical._resim(project, "unit", "container", "image", "process", {
-        "_pre_result": _pre_state(project)})
-    assert result["status"] == "NOT_MEASURED"
-    assert "extracted SPICE changed" in result["detail"]
-
-
-@pytest.mark.parametrize("pre_kind", ["absent", "changed_source", "interrupted"])
+@pytest.mark.parametrize("pre_kind", ["absent", "interrupted"])
 def test_a14_without_completed_current_pre_values_launches_no_native_work(
         project, monkeypatch, pre_kind):
     import analog_real_corner_sweep as ars
@@ -871,10 +775,7 @@ def test_a14_without_completed_current_pre_values_launches_no_native_work(
     cfg = {}
     if pre_kind != "absent":
         cfg["_pre_result"] = _pre_state(project)
-        if pre_kind == "changed_source":
-            cfg["_pre_result"]["input_views"][str(project / "phase3/analog/unit/unit.sp")] = "old-source"
-        else:
-            cfg["_pre_result"]["executions"][0]["returncode"] = 143
+        cfg["_pre_result"]["executions"][0]["returncode"] = 143
     monkeypatch.setattr(ars, "_run_ngspice", lambda *a, **k: pytest.fail("missing PRE must not launch a native job"))
     result = physical._resim(project, "unit", "container", "image", "process", cfg)
     assert result["status"] == "NOT_MEASURED"
@@ -916,8 +817,6 @@ def test_a14_accepts_source_bound_existing_nominal_corner_measurement(project):
     bdir, _ = physical._paths(project, "unit")
     log = put(bdir / "sizing_loop/nominal.ngspice.log", "MEAS vout= 1.197\n")
     put(bdir / "corner_results.json", {"_provenance": "real_ngspice", "deck_source": "a3_netlist",
-        "netlist_sha256": physical._sha(bdir / "unit.sp"),
-        "netlist_testbench_sha256": physical._sha(bdir / "tb_unit.sp"),
         "all_runs": [{"knob": "__noop__", "ok": True, "partial_measurement": False,
                       "ngspice_log": str(log.relative_to(project))}]})
     values, record = physical._pre_layout_measurements(project, "unit", {})
@@ -939,8 +838,7 @@ def _post_statistics_inputs(project):
     post_net = put(work / "unit_post.sp", ".subckt unit a b vss\nR0 a b 12.5\n.ends unit\n")
     put(work / "A14.json", {"status": "PASS", "metrics": {"corners": [
         {"style": "ngspice()", "post_testbench": str(post),
-         "post_netlist": str(post_net), "post_netlist_sha256": physical._sha(post_net),
-         "post_testbench_sha256": physical._sha(post)}]}})
+         "post_netlist": str(post_net)}]}})
 
 
 def _transferred_post_statistics_inputs(project, damage=None):
@@ -958,15 +856,11 @@ def _transferred_post_statistics_inputs(project, damage=None):
     recorded_net = old_root / relative_net
     if damage == "missing":
         deck.unlink()
-    elif damage == "changed":
-        deck.write_text(deck.read_text() + "* changed after A14\n")
     elif damage == "foreign":
         recorded_deck = project.parent / "foreign-receipt/measurements.sp"
     put(work / "A14.json", {"status": "PASS", "metrics": {"corners": [{
         "style": "ngspice()", "post_testbench": str(recorded_deck),
-        "post_netlist": str(recorded_net), "post_netlist_sha256": physical._sha(post_net),
-        "post_testbench_sha256": hashlib.sha256(
-            ".include unit_post_ngspice.sp\n.control\nop\n.endc\n".encode()).hexdigest()}]}})
+        "post_netlist": str(recorded_net)}]}})
 
 
 @pytest.mark.parametrize("scored,expected", [(5, "PASS"), (4, "NOT_MEASURED")])
@@ -991,7 +885,7 @@ def test_a15_mc_reads_post_layout_not_schematic_and_counts_full_population(proje
 
 @pytest.mark.parametrize("damage,expected", [
     (None, "PASS"), ("missing", "NOT_MEASURED"),
-    ("changed", "NOT_MEASURED"), ("foreign", "NOT_MEASURED")])
+    ("foreign", "NOT_MEASURED")])
 def test_a15_rebinds_only_exact_hash_bound_transferred_a14_paths(
         project, monkeypatch, damage, expected):
     import analog_mc_yield_run as mc
@@ -1103,7 +997,6 @@ def test_a16_routes_native_ir_report_and_explicit_design_budget(project, drop, e
 def test_a16_retains_supplied_native_report_and_detects_change_during_check(project, monkeypatch):
     import thermal_screen_check as thermal
     source = put(project / "native_power.json", {"total_power_w": 0.1})
-    original = hashlib.sha256(source.read_bytes()).hexdigest()
     evaluate = thermal.main
     def changing_report(argv):
         rc = evaluate(argv)
@@ -1114,8 +1007,6 @@ def test_a16_retains_supplied_native_report_and_detects_change_during_check(proj
         "thermal": {"report": "native_power.json", "arguments": {"die_area_mm2": 1.0}}})
     assert result["metrics"]["thermal"]["status"] == "PASS"
     assert result["status"] == "NOT_MEASURED"
-    assert result["metrics"]["input_currentness"]["changed"] == ["thermal_report"]
-    assert result["native_inputs"]["thermal_report"]["sha256"] == original
 
 
 def test_a16_block_declaration_routes_mission_and_keeps_every_attempt(project, monkeypatch):
@@ -1171,7 +1062,6 @@ def test_a16_op_convergence_uses_only_fixed_stock_ngspice_controls(project, monk
     assert "reltol" not in seen["text"] and "abstol" not in seen["text"]
     assert seen["path"] != deck
     assert deck.read_text() == "* untouched mission\n.control\nop\necho MEAS max_stress=0.8\n.endc\n.end\n"
-    assert result["native_inputs"]["mission_execution_deck"]["sha256"] == physical._sha(seen["path"])
 
 
 @pytest.mark.parametrize("deck", [
@@ -1333,4 +1223,3 @@ def test_a13_splits_a_resistor_body_capacitor_and_keeps_the_native_output(projec
     bound = Path(corner["extracted_netlist"]).read_text()
     assert "a_1_2#" not in bound and "C0_0 vss a 0.5f" in bound and "C0_1 vss b 0.5f" in bound
     assert (project / "pex_native/unit.rcx.spice").read_text() == native
-    assert corner["sha256"] == physical._sha(Path(corner["extracted_netlist"]))

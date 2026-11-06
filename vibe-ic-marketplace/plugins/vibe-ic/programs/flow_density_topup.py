@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
-import tempfile
+import vibeic_temp as tempfile
 
 from librelane.common import Path as NativePath, get_script_dir
 from librelane.state import DesignFormat, State
@@ -119,7 +119,7 @@ class DensityTopUp(Density):
         if helpers is None or not all((helpers / name).is_file() for name in
                                       ("generate_fill.py", "check_density.py")):
             raise StepException("NOT_MEASURED: no configured native density runset or Magic helpers")
-        work = Path(tempfile.mkdtemp(prefix="magic-", dir=self.step_dir))
+        work = Path(tempfile.mkdtemp(prefix="magic-", dir=tempfile.current_run() / "density"))
         fill_dir, checked_dir = work / "fill", work / "checked"
         fill_dir.mkdir()
         checked_dir.mkdir()

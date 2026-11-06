@@ -105,7 +105,7 @@ import os
 import re
 import signal
 import subprocess
-import tempfile
+import vibeic_temp as tempfile
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Tuple

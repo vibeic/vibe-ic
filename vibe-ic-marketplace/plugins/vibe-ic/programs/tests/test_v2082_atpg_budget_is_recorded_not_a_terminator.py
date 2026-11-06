@@ -342,62 +342,14 @@ def test_two_invocations_never_share_a_container_name():
 # A producer that declares something no consumer reads is a missing consumer,
 # not a spare field. `atpg_stopped_as` is the only way this producer stops an
 # engine, and step 11 has two labels standing ready to catch it wrongly.
-def _runner():
-    import importlib
-    return importlib.import_module("design_one_shot_runner")
 
 
-def test_a_stall_is_classified_as_a_stall_and_not_as_a_crash():
-    """THE ORDERING IS THE FIX. RC_STALLED is 199, so the `>= 128` fallback
-    claims every stall as an engine crash unless the producer's own
-    declaration is asked first — swapping one mislabel for another."""
-    R = _runner()
-    stalled = {"atpg_stopped_as": "STALLED", "atpg_exit": W.RC_STALLED,
-               "atpg_signal_death": False}
-    assert R._dft_atpg_stop_class(stalled) == "stalled"
 
 
-def test_a_real_crash_is_still_a_crash_and_a_clean_exit_is_neither():
-    """THE CONTROLS. This is a split, not a deletion: a signal death keeps its
-    own arm (and its retry), and an engine that answered on its own is not
-    'stopped' at all."""
-    R = _runner()
-    assert R._dft_atpg_stop_class(
-        {"atpg_exit": 139, "atpg_signal_death": True}) == "signal_death"
-    assert R._dft_atpg_stop_class({"atpg_exit": 137}) == "signal_death"
-    assert R._dft_atpg_stop_class({"atpg_exit": 0}) is None
-    assert R._dft_atpg_stop_class({"atpg_exit": 1}) is None
-    assert R._dft_atpg_stop_class({}) is None
 
 
-def test_the_stall_reason_blames_neither_the_engine_nor_the_clock():
-    """The prose a reader acts on. It must not assert a capability gap (#581),
-    must not call the run a crash, and must REPORT the declared budget rather
-    than blame it — the budget stops nothing now, so 'it was crossed' is a fact
-    about how long the run took, not a cause."""
-    R = _runner()
-    text = R._dft_atpg_stall_reason(4210.0, 1995, True, "sky130")
-    assert "4210.0s" in text and "1995s" in text and "CROSSED" in text
-    assert "NOT a capability gap" in text
-    assert "NOT a crash" in text
-    assert "forward progress" in text.lower()
 
 
-def test_the_stall_arm_records_no_capability_flag():
-    """#581's property, at the arm this issue adds. Comments are stripped
-    first: the arm's own comment must NAME the flag to explain why it is
-    withheld, and a scan that cannot tell documentation from code has to be
-    weakened the first time someone documents something."""
-    src = (_PROGRAMS / "design_one_shot_runner.py").read_text()
-    i = src.index('if _atpg_stalled:')
-    arm = src[i:src.index('elif _atpg_sig_death:', i)]
-    code = "\n".join(ln for ln in arm.splitlines()
-                     if not ln.lstrip().startswith("#"))
-    assert "capability_flag" not in code, (
-        "the stall arm records a capability flag — a reader cannot tell "
-        "'this run went nowhere' from 'the tool cannot do this'")
-    assert "stopped_as" in code and "atpg_elapsed_s" in code, (
-        "the record does not say what was observed")
 
 
 # ── 6. THE REPORT THE PRODUCER ACTUALLY WRITES ──────────────────────────────

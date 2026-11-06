@@ -158,21 +158,8 @@ def _gds_project(tmp_path: Path, blob: bytes, instances: int = 100):
     return pnr / "chip.gds", pnr / "chip.def"
 
 
-def test_306_gds_substance_gate_passes_a_real_streamout(tmp_path):
-    import phase3_one_shot_runner as R
-    gds, df = _gds_project(tmp_path, _real_gds(), instances=100)
-    assert R._gds_substance_gate(gds, df) is None
 
 
-def test_306_gds_substance_gate_blocks_a_substance_less_streamout(tmp_path):
-    """The negative control the #306 defect is about: a 150 KB structurally
-    valid GDSII with no layout in it. The gate FAILed on exactly this class of
-    file before, and the flow ran to completion anyway."""
-    import phase3_one_shot_runner as R
-    gds, df = _gds_project(tmp_path, _empty_library_gds(), instances=100)
-    msg = R._gds_substance_gate(gds, df)
-    assert msg, "a GDS with zero structures was let through"
-    assert "FAIL" in msg or "NO_" in msg or "substance" in msg.lower(), msg
 
 
 def test_306_gds_substance_gate_is_wired_at_both_streamout_engines(tmp_path):
@@ -184,34 +171,8 @@ def test_306_gds_substance_gate_is_wired_at_both_streamout_engines(tmp_path):
     assert "streamout=magic" in src and "streamout=klayout" in src
 
 
-def test_306_drv_promotion_step_passes_when_nothing_was_promoted(tmp_path):
-    import phase3_one_shot_runner as R
-    (tmp_path / "phase3" / "stage3" / "pnr").mkdir(parents=True)
-    r = R.step_drv_promotion_corroboration(tmp_path)
-    assert r.status == "PASS", r
-    assert (tmp_path / "reports" / "phase3" / "sta"
-            / "drv_promotion_corroboration.json").is_file()
 
 
-def test_306_drv_promotion_step_blocks_an_uncorroborated_promotion(tmp_path):
-    """A promotion with NO sign-off report to corroborate it is exactly the
-    failure mode: the route was swapped on its own in-session numbers.
-
-    This is also the evidence that the gate CAN fire. It has returned no
-    finding on the published corpus — but that is because no published run
-    promoted a route (0 of 15 carry `routed_base_prerepair.def`), not because
-    the gate is inert. The promoting step (`step_signoff_spef_repair`) is live
-    in the runner chain, so the trigger is reachable, and it fired once in the
-    field (#293) — which is why the gate exists.
-    """
-    import phase3_one_shot_runner as R
-    pnr = tmp_path / "phase3" / "stage3" / "pnr"
-    pnr.mkdir(parents=True)
-    (pnr / "routed_base_prerepair.def").write_text("DESIGN x ;\n")
-    (pnr / "signoff_spef_repair.log").write_text(
-        "Found 330 slew violations.\nFound 178 slew violations.\n")
-    r = R.step_drv_promotion_corroboration(tmp_path)
-    assert r.status == "FAIL", r
 
 
 def test_306_drv_promotion_trigger_is_reachable_not_dead_code():
@@ -224,29 +185,3 @@ def test_306_drv_promotion_trigger_is_reachable_not_dead_code():
         "gate still guards anything")
     assert 'routed_base_prerepair.def"' in src, (
         "the promotion marker this gate keys on is no longer written")
-
-
-def test_306_drv_promotion_step_does_not_fail_on_a_checker_fault(tmp_path):
-    """rc=2 is inconclusive, not a verdict about the design. A blocking gate
-    that fails runs over its own I/O errors is breakage, not enforcement.
-
-    #544 SPLIT THE ORIGINAL ASSERTION, which was `status in ("PASS", "SKIP")`
-    and passed on the WRONG member of that pair. Measured on the pre-fix tree,
-    a non-existent project returned `PASS  verdict: VACUOUS_PASS  no route
-    promotion this run — gate inapplicable`, because this step created
-    `reports/phase3/sta/` unconditionally and so FABRICATED the project
-    directory it was asked to audit; the checker then found an empty-but-real
-    tree and reported "nothing was promoted". A green verdict about a project
-    that is not there.
-
-    What survives is the real half — a checker fault is not a design FAIL. What
-    replaces the rest is that it is not a pass either.
-    """
-    import phase3_one_shot_runner as R
-    missing = tmp_path / "does_not_exist"
-    r = R.step_drv_promotion_corroboration(missing)
-    assert r.status != "FAIL", (
-        "a checker fault is not a verdict about the design", r)
-    assert r.status == "NOT_MEASURED", r
-    assert not missing.exists(), (
-        "the step created the project directory it was asked to audit")

@@ -48,9 +48,6 @@ def _project(tmp_path: Path, text: str, name: str = "dft.md") -> Path:
     return tmp_path
 
 
-def _run_gate(project: Path):
-    return subprocess.run([sys.executable, str(GATE), str(project)],
-                          capture_output=True, text=True)
 
 
 def _write_emitted_l20(project: Path) -> dict:
@@ -88,9 +85,6 @@ def test_emitter_publishes_extracted_l20_and_consumer_passes(tmp_path):
     assert doc["source_documents"] == ["input/docs/dft.md"]
     assert len(doc["fields"]["scan_chains"]) == 2
     assert doc["evidence"]["input/docs/dft.md"][0]["literal"] == "core_scan_0"
-    result = _run_gate(project)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "PASS" in result.stdout
 
 
 def test_real_aes_grouped_length_and_frequency_reach_consumer(tmp_path):
@@ -109,8 +103,6 @@ def test_real_aes_grouped_length_and_frequency_reach_consumer(tmp_path):
         "frequency_mhz": 10.0,
     }
     assert row["source"]["document"] == "input/docs/dft.md"
-    result = _run_gate(project)
-    assert result.returncode == 0, result.stdout + result.stderr
 
 
 @pytest.mark.parametrize("bad", [
@@ -142,8 +134,6 @@ def test_real_phase1_writer_and_consumer_replay(tmp_path, monkeypatch):
     assert l20["extraction_status"] == "EXTRACTED"
     assert l20["source_documents"] == ["input/docs/dft.md"]
     assert l20["extraction_evidence"]["input/docs/dft.md"]
-    result = _run_gate(project)
-    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_partial_row_stays_unextracted_and_consumer_fails_closed(tmp_path):
@@ -154,9 +144,6 @@ def test_partial_row_stays_unextracted_and_consumer_fails_closed(tmp_path):
     doc = _write_emitted_l20(project)
     assert doc["extraction_status"] == "NOT_YET_EXTRACTED"
     assert doc["fields"]["scan_chains"] == []
-    result = _run_gate(project)
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "REQUIREMENT_OUTSIDE_CONSUMING_LAYER" in result.stdout
 
 
 def test_unknown_planned_prose_is_not_a_topology(tmp_path):

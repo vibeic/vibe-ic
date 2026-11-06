@@ -749,7 +749,7 @@ def test_issue3128_async_keeps_clocked_writes_and_all_scoreboard_obligations(
         return text.split(start, 1)[1].split("\n  end\n", 1)[0]
     assert monitor(tb) == monitor(sync["tb_text"]).replace(
         "          rpipe[0] <= mem[raddr];\n", "")
-    for obligation in ("we === 1'bx || we === 1'bz", "ren === 1'bx || ren === 1'bz",
+    for obligation in ("$isunknown({we, ren})",
                        "^raddr === 1'bx || raddr >= MEMSIZE",
                        "^waddr === 1'bx || waddr >= MEMSIZE",
                        "^wdata === 1'bx", "mem[waddr] <= wdata;",
@@ -785,13 +785,10 @@ def _memory_timed_cpu(latency, with_ren, rtl=CPU_V):
     return rtl
 
 
-def _native_datapath(tmp_path, latency=0, with_ren=False, rtl=CPU_V,
-                     load=GOOD_LOAD, ports=None):
-    """Actual owner -> Icarus -> actual re-deriving owner; no dispatch,
-    transcript, score, input-reader or ISA-credit stand-in."""
+def _run_native_datapath(tmp_path, latency=0, with_ren=False, rtl=CPU_V,
+                         load=GOOD_LOAD, ports=None):
     _require_iverilog()
     import testbench_gen as tbg
-    import bit_level_full_stack_tb_check as gate
     decl = json.loads(json.dumps(DECL))
     decl["sram_interface"]["read_latency_cycles"] = latency
     if not with_ren:
@@ -811,6 +808,16 @@ def _native_datapath(tmp_path, latency=0, with_ren=False, rtl=CPU_V,
     fdir.mkdir(parents=True, exist_ok=True)
     dp = fsf._datapath_case(proj, mod, parsed, top, sources, fdir,
                             fdir / "run", fsf.default_dispatch, None, set())
+    return proj, dp, top
+
+
+def _native_datapath(tmp_path, latency=0, with_ren=False, rtl=CPU_V,
+                     load=GOOD_LOAD, ports=None):
+    """Actual owner -> Icarus -> actual re-deriving owner; no dispatch,
+    transcript, score, input-reader or ISA-credit stand-in."""
+    import bit_level_full_stack_tb_check as gate
+    fsf = _fsf()
+    proj, dp, top = _run_native_datapath(tmp_path, latency, with_ren, rtl, load, ports)
     problems = []
     got = gate._verify_datapath(proj, {fsf.DATAPATH_KEY: dp}, top, problems)
     assert not problems, problems
@@ -889,6 +896,42 @@ def test_async_native_datapath_keeps_unknown_read_enable_negative(tmp_path):
     assert dp["state"] == got["state"] == "failed", dp
     assert "DATAPATH_CHECK reset_vector_fetch MISS" in log
     assert "DATAPATH_CHECK write_discipline MISS" in log
+
+
+@pytest.mark.parametrize("control", ["no_ren", "known_ren", "x", "z", "write_x", "write_z"])
+def test_generated_datapath_monitor_preserves_control_semantics(tmp_path, control):
+    if not shutil.which("verilator"):
+        pytest.skip("Native Verilator is required")
+    import subprocess
+    from verilator_coverage_measure import _tb_top_module
+
+    rtl = CPU_V
+    if control in {"x", "z"}:
+        rtl = rtl.replace("o_mem_ren <= 1;", f"o_mem_ren <= 1'b{control};")
+    elif control.startswith("write_"):
+        rtl = rtl.replace("o_mem_we <= 1;", f"o_mem_we <= 1'b{control[-1]};")
+    proj, dp, _top = _run_native_datapath(tmp_path, with_ren=control != "no_ren", rtl=rtl)
+    log = (proj / dp["run_log"]).read_text()
+    if control in {"x", "z", "write_x", "write_z"}:
+        assert dp["state"] == "failed", dp
+        assert "DATAPATH_CHECK write_discipline MISS" in log, log
+        return
+    assert dp["state"] == "passed" and "ORACLE_TB_DONE pass=5/5" in log
+    bench = proj / dp["tb"]
+    top = _fsf().required_full_stack_top(proj, "DIE")
+    sources = [proj / "phase2/stage1/rtl" / f"{CPU}.v", proj / top["source"], proj / "models/pads.v"]
+    build = tmp_path / "verilator"
+    compiled = subprocess.run(["verilator", "--binary", "--timing", "--assert", "-Wno-fatal", "-j", "8",
+        "--Mdir", str(build), "--top-module", _tb_top_module(bench), *map(str, sources), str(bench)],
+        cwd=bench.parent, capture_output=True, text=True)
+    (tmp_path / "verilator-build.log").write_text(compiled.stdout + compiled.stderr)
+    assert compiled.returncode == 0, (compiled.stdout + compiled.stderr)[-2000:]
+    executed = subprocess.run([str(build / ("V" + _tb_top_module(bench)))], cwd=(proj / dp["hex"]).parent,
+                              capture_output=True, text=True)
+    (tmp_path / "verilator-run.log").write_text(executed.stdout + executed.stderr)
+    assert executed.returncode == 0, executed
+    assert "ORACLE_TB_DONE pass=5/5" in executed.stdout, executed.stdout
+    assert "xctl=0" in executed.stdout, executed.stdout
 
 
 @pytest.mark.parametrize("latency", [-1, None, True])

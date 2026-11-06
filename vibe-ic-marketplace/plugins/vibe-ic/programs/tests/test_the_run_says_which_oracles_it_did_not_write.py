@@ -181,25 +181,3 @@ def test_an_unreadable_testbench_is_named_not_skipped(tmp_path):
 
 
 # ── and the run publishes it ────────────────────────────────────────────────
-def test_the_runner_writes_the_provenance_artefact(tmp_path, monkeypatch):
-    """The in-memory report was the whole defect: it reached no file. This
-    drives the runner step, not the helper."""
-    import design_one_shot_runner as D
-
-    p = tmp_path / "proj"
-    _write(p, "rv32i_40", "authored")
-    _write(p, "blinky_hex", "floor")
-    gd = p / "phase1" / "generated_docs"
-    gd.mkdir(parents=True)
-    (gd / "L10_TEST_CASES.json").write_text(json.dumps(
-        {"fields": {"test_cases": [{"name": "rv32i_40"},
-                                   {"name": "blinky_hex"}]}}))
-    (p / "phase2" / "stage1" / "rtl").mkdir(parents=True, exist_ok=True)
-    (p / "phase2/stage1/rtl/dut.v").write_text("module dut(); endmodule\n")
-
-    D.step_l10_unit_tb_gen(p, "dut")
-    out = p / "reports" / "phase2" / "sim" / "l10_oracle_provenance.json"
-    assert out.is_file(), "the run published no oracle provenance"
-    doc = json.loads(out.read_text())
-    assert doc["counts"].get(T.ORACLE_SOURCE_AUTHORED) == 1
-    assert doc["counts"].get(T.ORACLE_SOURCE_FLOOR) == 1

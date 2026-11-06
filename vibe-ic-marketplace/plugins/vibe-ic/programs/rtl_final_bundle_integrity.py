@@ -28,7 +28,7 @@ import hashlib
 import re
 import shutil
 import subprocess
-import tempfile
+import vibeic_temp as tempfile
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 

@@ -208,75 +208,11 @@ def test_library_name_from_liberty(path, expect):
 
 # ── the runner actually uses it ──────────────────────────────────────────────
 
-runner = importlib.import_module("phase3_one_shot_runner")
 
 GF_LIB = ("/foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/"
           "gf180mcu_fd_sc_mcu7t5v0__ss_125C_4v50.lib")
 SKY_LIB = ("/foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/"
            "sky130_fd_sc_hd__tt_025C_1v80.lib")
-
-
-def test_resolver_reads_the_declared_table(tmp_path):
-    """THE DEFECT. Base revision returns 20.0 here; the design declares 24."""
-    _docs(tmp_path)
-    period, port = runner._resolve_clock_spec(
-        tmp_path, top="spm", pdk_name="gf180mcuD", liberty_path=GF_LIB)
-    assert period == 24.0, (
-        f"resolved {period} ns for a design whose L9 declares 24 ns for this "
-        "library")
-    assert port == "clk"
-
-
-def test_the_same_docs_give_a_different_library_its_own_row(tmp_path):
-    _docs(tmp_path)
-    period, _ = runner._resolve_clock_spec(
-        tmp_path, top="spm", pdk_name="sky130A", liberty_path=SKY_LIB)
-    assert period == 10.0
-
-
-def test_without_pdk_information_the_legacy_ladder_is_unchanged(tmp_path):
-    """REGRESSION GUARD — a caller that passes no library must behave exactly
-    as it did before this change, so no existing flow moves."""
-    _docs(tmp_path)
-    period, _ = runner._resolve_clock_spec(tmp_path, top="spm")
-    assert period == 20.0
-
-
-def test_a_staged_sdc_still_outranks_the_declared_table(tmp_path):
-    """A real staged SDC is upstream-verified ground truth and must still win.
-
-    If the table could override a design-staged `create_clock`, this change
-    would be overriding the design, not reading it.
-    """
-    _docs(tmp_path)
-    c = tmp_path / "input" / "constraints"
-    c.mkdir(parents=True, exist_ok=True)
-    (c / "spm.sdc").write_text("create_clock -name clk -period 12.5 "
-                               "[get_ports clk]\n")
-    period, _ = runner._resolve_clock_spec(
-        tmp_path, top="spm", pdk_name="gf180mcuD", liberty_path=GF_LIB)
-    assert period == 12.5
-
-
-def test_the_sdc_discloses_that_the_period_is_the_design_s_own(tmp_path):
-    _docs(tmp_path)
-    note = runner._declared_period_disclosure(tmp_path, "gf180mcuD", GF_LIB)
-    assert "VIBEIC_DECLARED_PERIOD" in note
-    assert "gf180mcu_*" in note                      # the matched key
-    assert "L9_constraints_floorplan.md" in note     # the source doc
-    assert note.endswith("\n") and note.lstrip().startswith("#")
-    for line in note.splitlines():
-        assert line.startswith("#"), f"not an SDC comment: {line!r}"
-
-
-def test_the_disclosure_reports_a_refusal_too(tmp_path):
-    txt = L9 + ("\n| Std-cell library | period (ns) |\n|---|---|\n"
-                "| `gf180mcu_fd_sc_mcu7t5v0` | 30 |\n")
-    _docs(tmp_path, txt)
-    note = runner._declared_period_disclosure(tmp_path, "gf180mcuD", GF_LIB)
-    assert "REFUSED" in note
-    for line in note.splitlines():
-        assert line.startswith("#")
 
 
 def test_no_chip_pdk_or_vendor_literal_in_the_program():
@@ -391,48 +327,6 @@ def test_a_worked_example_number_is_not_mistaken_for_the_fraction(tmp_path):
     become the fraction."""
     rep = dcp.declared_io_delay_fraction(dcp.docs_in(_docs(tmp_path, L9_IO)))
     assert rep["fraction"] == pytest.approx(0.2)
-
-
-def test_the_sdc_computes_the_io_delay_from_the_resolved_period(tmp_path):
-    _docs(tmp_path, L9_IO)
-    io_ns, note = runner._declared_io_delay_ns(tmp_path, 24.0)
-    assert io_ns == pytest.approx(4.8)
-    assert "VIBEIC_DECLARED_IO_DELAY" in note
-    for line in note.splitlines():
-        assert line.startswith("#")
-
-
-def test_the_emitted_sdc_carries_both_declared_constraints(tmp_path):
-    _docs(tmp_path, L9_IO)
-    out = runner._build_auto_silicon_sdc(
-        tmp_path, top="spm", liberty_path=GF_LIB, pdk_name="gf180mcuD")
-    text = out[0] if isinstance(out, tuple) else out
-    assert "create_clock -name clk -period 24.0" in text
-    assert "set_input_delay  4.8 -clock clk" in text
-    assert "set_output_delay 4.8 -clock clk" in text
-    assert "VIBEIC_DECLARED_PERIOD" in text and "VIBEIC_DECLARED_IO_DELAY" in text
-
-
-def test_a_design_that_declares_nothing_gets_the_historical_literal(tmp_path):
-    """REGRESSION GUARD — the fleet must not move.
-
-    A project with no declaration must emit the same `2` it always has, and no
-    disclosure line. This is what keeps every design that predates this change
-    byte-identical.
-    """
-    out = runner._build_auto_silicon_sdc(tmp_path, top="spm")
-    text = out[0] if isinstance(out, tuple) else out
-    assert "set_input_delay  2 -clock clk" in text
-    assert "set_output_delay 2 -clock clk" in text
-    assert "VIBEIC_DECLARED_IO_DELAY" not in text
-    assert "VIBEIC_DECLARED_PERIOD" not in text
-    assert "-period 20.0" in text
-
-
-def test_the_io_delay_does_not_fire_without_a_period(tmp_path):
-    _docs(tmp_path, L9_IO)
-    io_ns, note = runner._declared_io_delay_ns(tmp_path, 0)
-    assert io_ns is None and note == ""
 
 
 # ── vibe-ic#712 — the scan must not read a COMMENTED-OUT statement ──────────

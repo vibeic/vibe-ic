@@ -181,12 +181,6 @@ def _planned(project, intent=None, *, route='ic'):
     assert l20_dft_intent_emit.run(project)['status'] == 'OK'
     (project / 'input/feature-decisions.json').write_text(json.dumps({'dft': intent or _intent()}))
     assert DECL.main([str(project), '--set', 'dft=' + json.dumps(intent or _intent())]) == 0
-    import phase1_one_shot_runner as phase1
-    assert __import__('_delivery_route').admit(project, route) is None
-    output = phase1._d01_emit_dft_intent(project)
-    if output is not None:
-        report = layout.report_path(project, 'phase1_one_shot.json'); report.parent.mkdir(parents=True, exist_ok=True)
-        report.write_text(json.dumps({'project': str(project.resolve()), **__import__('_delivery_route').report_label(project), 'dft_intent_output': output}))
     net = project / 'phase2/stage2/synth/netlist.v'
     net.parent.mkdir(parents=True)
     net.write_text(_mapped())

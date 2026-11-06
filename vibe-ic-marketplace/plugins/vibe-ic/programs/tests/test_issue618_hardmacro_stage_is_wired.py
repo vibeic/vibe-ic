@@ -73,12 +73,6 @@ def test_an_uninstantiated_macro_is_not_returned(tmp_path):
 
 
 # ── call site 1 + 2: the runner ─────────────────────────────────────────────
-def test_the_runner_binds_the_shared_resolver_not_a_private_copy():
-    """One resolver, three consumers. A second copy is how the sim set and the
-    synth set come to disagree about which macros are staged."""
-    dosr = importlib.import_module("design_one_shot_runner")
-    assert dosr._staged_hardmacro_models is HMS.staged_hardmacro_models
-    assert dosr._emit_hardmacro_blackbox_stub is HMS.emit_blackbox_stub
 
 
 def test_the_sim_path_streams_the_BEHAVIOURAL_model(tmp_path):

@@ -519,7 +519,10 @@ if {{$valid_count == 0}} {{
     puts [format "ADC_RESULT: valid=%d avg_code=%.2f voltage_mv=%.2f" $valid_count $avg_code $voltage_mv]
 }}
 """
-    import tempfile
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[5] / "programs"))
+    import vibeic_temp as tempfile
     tcl_path = os.path.join(tempfile.mkdtemp(prefix="de10_adc_"), "adc_read.tcl")
     with open(tcl_path, "w") as f:
         f.write(tcl_script)

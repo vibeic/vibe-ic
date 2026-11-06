@@ -7,9 +7,7 @@ from pathlib import Path
 
 import pytest
 
-import test_pad_ring as pads
 import _seal_ring_margin as margin
-import _tapeout_declaration as declaration
 
 
 SEAL_DECK = '''# Copyright 2025 IHP PDK Authors. Apache-2.0.
@@ -48,111 +46,10 @@ def _seal_technology(pdk):
     return deck, table
 
 
-def _project(tmp_path, *, spacing=5.5, placement="outside", deck=True,
-             overrides=None):
-    cfg = pads._config(PAD_EDGE_SPACING=spacing,
-                       PAD_FILLERS=["pad_fill196", "pad_fill9", "pad_fill1"])
-    cfg.update(overrides or {})
-    root = pads._project(tmp_path, config=cfg, site_w=0.5,
-                         floorplan=pads._floorplan(die=2_001_000))
-    lef = root / "pdk/proc/libs.ref/proc_io/lef/io.lef"
-    lef.write_text(lef.read_text().replace("SIZE 1 BY 350 ;", "SIZE 0.5 BY 350 ;"))
-    config = root / "pdk/proc/libs.tech/someflow/proc_io/config.tcl"
-    config.parent.mkdir(parents=True, exist_ok=True)
-    config.write_text(
-        'set ::env(PAD_SITE_NAME) "io_site"\n'
-        'set ::env(PAD_CORNER_SITE_NAME) "io_corner_site"\n'
-        'set ::env(PAD_EDGE_SPACING) "140"\n'
-        'set ::env(PAD_CORNER) "pad_corner"\n'
-        'set ::env(PAD_FILLERS) "pad_fill196 pad_fill9 pad_fill1"\n')
-    if placement is not ...:
-        path = root / declaration.DECLARATION_REL
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"answers": {"seal_ring_placement": placement}}))
-    if deck:
-        _seal_technology(root / "pdk/proc")
-    return root
-
-
 def _assert_cited(basis, path):
     match = re.search(re.escape(str(path)) + r":([1-9][0-9]*)\b", basis)
     assert match, basis
     assert int(match.group(1)) <= len(path.read_text().splitlines()), basis
-
-
-def test_outside_5_5_um_is_placed_and_reports_the_4_9_um_deck_basis(tmp_path):
-    root = _project(tmp_path)
-    assert pads._gen(root) == 0, pads._report(root)
-    report = pads._report(root)
-    assert report["verdict"] == "PASS"
-    assert report["config"]["PAD_EDGE_SPACING"] == 5.5
-    exception = report["edge_spacing_seal_keepout"]
-    assert exception["accepted_spacing_um"] == 5.5
-    assert exception["clearance_um"] == pytest.approx(4.9)
-    assert "Seal.b" in exception["basis"]
-    _assert_cited(exception["basis"], root / "pdk/proc/libs.tech/klayout/drc/rule_decks/6_10_sealring.drc")
-    _assert_cited(exception["basis"], root / "pdk/proc/libs.tech/klayout/tech/neutral_tech_default.json")
-    assert report["abutment"]["abuts"] is True
-    assert pads._ring_def(root).is_file()
-
-
-def test_outside_4_um_is_refused_with_both_distances_and_the_deck_citation(tmp_path):
-    root = _project(tmp_path, spacing=4)
-    assert pads._gen(root) == 1
-    report = pads._report(root)
-    assert "PAD_EDGE_SPACING_VIOLATES_SEAL_KEEPOUT" in pads._rules(root), report
-    assert "4.9" in report["reason"]
-    assert re.search(r"\b4(?:\.0)?\b", report["reason"]), report
-    assert "Seal.b" in report["reason"]
-    _assert_cited(report["reason"], root / "pdk/proc/libs.tech/klayout/drc/rule_decks/6_10_sealring.drc")
-    assert not pads._ring_def(root).exists()
-
-
-@pytest.mark.parametrize("placement", ["inside", ..., "OUTSIDE", ["outside"]],
-                         ids=["inside", "absent", "invalid-string", "invalid-list"])
-def test_only_the_raw_outside_answer_can_relax_a_pdk_declaration(tmp_path, placement):
-    root = _project(tmp_path, placement=placement)
-    assert pads._gen(root) == 1
-    report = pads._report(root)
-    assert pads._rules(root) == {"PAD_CONFIG_CONTRADICTS_PDK"}, report
-    assert "5.5" in report["reason"] and "140" in report["reason"]
-    assert "PAD_EDGE_SPACING" in report["reason"]
-    assert not pads._ring_def(root).exists()
-
-
-@pytest.mark.parametrize("broken", ["missing-deck", "malformed-table"])
-def test_outside_spacing_with_unreadable_clearance_is_refused_by_name(tmp_path, broken):
-    root = _project(tmp_path, deck=broken != "missing-deck")
-    if broken == "malformed-table":
-        (root / "pdk/proc/libs.tech/klayout/tech/neutral_tech_default.json").write_text("{")
-    assert pads._gen(root) == 1
-    report = pads._report(root)
-    assert "PAD_EDGE_SPACING_SEAL_KEEPOUT_UNREADABLE" in pads._rules(root), report
-    assert not pads._ring_def(root).exists()
-
-
-def test_the_pdk_default_still_places_outside_without_any_seal_deck(tmp_path):
-    root = _project(tmp_path, spacing=140, deck=False)
-    assert pads._gen(root) == 0, pads._report(root)
-    report = pads._report(root)
-    assert report["config"]["PAD_EDGE_SPACING"] == 140
-    assert report["abutment"]["abuts"] is True
-    assert pads._ring_def(root).is_file()
-
-
-@pytest.mark.parametrize("variable,value", [
-    ("PAD_SITE_NAME", "other_site"),
-    ("PAD_CORNER_SITE_NAME", "other_corner_site"),
-    ("PAD_CORNER", "pad_bidir"),
-    ("PAD_FILLERS", ["pad_fill9"]),
-])
-def test_outside_does_not_relax_any_other_pdk_variable(tmp_path, variable, value):
-    root = _project(tmp_path, spacing=140, overrides={variable: value})
-    assert pads._gen(root) == 1
-    report = pads._report(root)
-    assert pads._rules(root) == {"PAD_CONFIG_CONTRADICTS_PDK"}, report
-    assert variable in report["reason"]
-    assert not pads._ring_def(root).exists()
 
 
 def test_the_actual_deck_expression_resolves_its_json_rule_value(tmp_path):

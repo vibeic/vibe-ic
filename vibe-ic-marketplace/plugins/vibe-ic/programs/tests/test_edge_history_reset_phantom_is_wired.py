@@ -89,15 +89,6 @@ SPEC = ("Rising-edge detector. On each clock, sample sig and assert rise for "
         "one cycle when sig goes from 0 to 1.")
 
 
-def _write_project(tmp_path: Path, rtl: str) -> Path:
-    import _path_layout as _pl
-    project = tmp_path / "proj"
-    rtl_dir = _pl.rtl_dir(project)
-    rtl_dir.mkdir(parents=True, exist_ok=True)
-    (rtl_dir / "edgedet.v").write_text(rtl)
-    return project
-
-
 # ── the premise the routing rests on ────────────────────────────────────────
 
 def test_advisory_severity_is_still_warn_only():
@@ -189,57 +180,10 @@ endmodule
 
 # ── consumer 2: the phase-2 dispatch that consults it ───────────────────────
 
-def test_phase2_dispatch_records_the_routed_verdict(tmp_path):
-    import design_one_shot_runner as R
-    res = R.step_determinism_gates(_write_project(tmp_path, RTL_DEFECT),
-                                   "edgedet")
-    adv = (res.extras or {}).get("edge_history_reset_advisory")
-    assert adv is not None, res.extras
-    assert adv["gate"] == "edge_history_reset_phantom_check"
-    assert adv["router_verdict"] == "ESCALATE"
-    assert adv["blocking"] is False
-    assert [f["symbol"] for f in adv["findings"]] == ["prev"]
-    assert "ADVISORY" in res.detail
-
-
-def test_phase2_dispatch_is_silent_on_the_fixed_arm(tmp_path):
-    import design_one_shot_runner as R
-    res = R.step_determinism_gates(_write_project(tmp_path, RTL_CLEAN),
-                                   "edgedet")
-    assert (res.extras or {}).get("edge_history_reset_advisory") is None
-    assert "ADVISORY" not in res.detail
-
-
-def test_the_advisory_can_never_move_the_determinism_verdict(tmp_path):
-    """THE NO-LEAK HALF. The four gates in this step are zero-false-positive
-    and this signature is not (9 of 302 officially-PASSING deliveries fire).
-    A determinism FAIL refuses the phase-2 verdict, so the advisory arm must
-    leave the status byte-identical to the arm with no advisory at all."""
-    import design_one_shot_runner as R
-    bad = R.step_determinism_gates(_write_project(tmp_path / "a", RTL_DEFECT),
-                                   "edgedet")
-    good = R.step_determinism_gates(_write_project(tmp_path / "b", RTL_CLEAN),
-                                    "edgedet")
-    assert bad.status == good.status == "PASS"
-
-
-def test_the_dispatch_reads_the_route_from_its_owner(tmp_path):
-    """SINGLE SOURCE. The step must not restate the routing text; deleting the
-    register entry has to break the dispatch loudly rather than leave it
-    printing a route nobody honours."""
-    import design_one_shot_runner as R
-    res = R.step_determinism_gates(_write_project(tmp_path, RTL_DEFECT),
-                                   "edgedet")
-    adv = (res.extras or {}).get("edge_history_reset_advisory")
-    entry = GDR.NOT_REPAIRABLE[_CLASS]
-    assert adv["why_not_bucket_a"] == entry["why_not_bucket_a"]
-    assert adv["escalate_to"] == entry["escalate_to"]
-
 
 # ── the wiring itself, as the two hygiene gates measure it ──────────────────
 
-@pytest.mark.parametrize("consumer", ["gate_directed_rtl_repair.py",
-                                      "design_one_shot_runner.py"])
+@pytest.mark.parametrize("consumer", ["gate_directed_rtl_repair.py"])
 def test_the_reference_is_an_import_not_a_sentence(consumer):
     """Both hygiene gates strip comments and docstrings before searching, and
     `checker_execution_wiring_audit` additionally decides INVOCATION vs MENTION

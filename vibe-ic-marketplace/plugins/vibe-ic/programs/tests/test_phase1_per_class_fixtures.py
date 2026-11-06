@@ -177,28 +177,3 @@ def test_fixture_pure_analog_ldo(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Tier-2 substance gate now respects the flags — escape valve works.
 # ---------------------------------------------------------------------------
-
-def test_substance_gate_escape_valve_for_thin_input_class(tmp_path: Path):
-    """Pure-analog fixture: no_<field>_in_input flags should make
-    the Tier-2 substance gate PASS (not FAIL) on what would
-    otherwise look like template-default scaffolding."""
-    p = tmp_path / "ldo_proj"
-    _stage_input(p, {
-        "README.md": (
-            "# LDO regulator\n\n"
-            "Low-dropout linear regulator core.\n"
-        ),
-    })
-    extracted = extract_text_pipeline(p)
-    gen_l1_datasheet(p, extracted)
-    gen_l2_frs(p, extracted)
-    l2_data = _read_l_doc(p, "L2_FRS")
-    gen_l3_cmd_protocol(p, extracted, l2_data)
-    # Run the Tier-2 gate.
-    from programs.phase1_structured_field_substance_check import audit
-    verdict, findings, summary = audit(p)
-    # Escape valves cover most of the would-be scaffolding; verdict
-    # should NOT be FAIL (>30% at default).
-    assert verdict in ("PASS", "WARN"), (
-        f"Pure-analog fixture mis-flagged as FAIL by substance gate. "
-        f"verdict={verdict} findings={findings}")

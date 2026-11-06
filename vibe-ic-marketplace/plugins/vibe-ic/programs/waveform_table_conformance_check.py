@@ -29,7 +29,7 @@ EXIT CODES
             | WTC_COMPILE_FAIL
   2  iverilog/vvp absent AND --require-tools  (else SKIP, never a fabricated PASS)
 """
-import re, sys, subprocess, tempfile, os, shutil, argparse, shutil as _sh
+import re, sys, subprocess, vibeic_temp as tempfile, os, shutil, argparse, shutil as _sh
 
 
 def parse_table(text):

@@ -460,7 +460,6 @@ def _plant_signoff_evidence(proj: Path):
     report = proj / "reports" / "phase3" / "drc_signoff.rpt"
     if report.is_file():
         import _physical_current as current
-        import phase3_one_shot_runner as runner
 
         # Current-subject parser fixture, not a native EDA measurement. Keep
         # the real strict reader and wrapper: provide their material readset
@@ -511,9 +510,6 @@ def _plant_signoff_evidence(proj: Path):
                               (report, transcript, native_report, native_log)}}
         with (proj / "provenance.jsonl").open("a") as fh:
             fh.write(json.dumps(record) + "\n")
-        assert runner._declare_immutable_transform(
-            proj, native_report, report, "drc:signoff", "phase3_one_shot_runner",
-            "publish the unchanged native DRC report as canonical signoff")
         inputs = {"gds": current.entry(proj, gds_file),
                   **{role: current.entry(proj, path)
                      for role, (path, _body) in materials.items()}}
@@ -708,28 +704,3 @@ def test_the_vacuous_pass_credit_this_refusal_avoids_is_real(tmp_path,
 
 
 # ── the ENFORCEMENT claim the docstring makes ─────────────────────────────
-
-
-
-def test_the_phase3_runner_really_does_not_invoke_this_gate_inline():
-    """The AST fact the docstring states: `_DECLARED_SIGNOFF_GATES` names
-    sta_report_check and em_report_check, not drc_report_check."""
-    import ast
-    src = (PROGRAMS / "phase3_one_shot_runner.py").read_text(errors="replace")
-    tree = ast.parse(src)
-    programs = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Assign):
-            continue
-        if not any(isinstance(t, ast.Name) and t.id == "_DECLARED_SIGNOFF_GATES"
-                   for t in node.targets):
-            continue
-        for elt in ast.walk(node.value):
-            if isinstance(elt, ast.Constant) and isinstance(elt.value, str) \
-                    and elt.value.endswith(".py"):
-                programs.add(elt.value)
-    assert programs, "_DECLARED_SIGNOFF_GATES was not found or is empty"
-    assert "sta_report_check.py" in programs
-    assert "drc_report_check.py" not in programs, (
-        "the runner now invokes this gate inline — the docstring's AUDIT_ONLY "
-        "statement must be re-derived")

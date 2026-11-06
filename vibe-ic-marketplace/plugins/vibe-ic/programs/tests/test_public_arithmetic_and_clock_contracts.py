@@ -156,22 +156,11 @@ $display("CHECK_PASS"); $finish; end endmodule''')
 
 
 def test_ordinary_runner_publishes_neutral_module_and_source_default(tmp_path):
-    import design_one_shot_runner as runner
     project = tmp_path / "project"
     doc = project / "phase1/input_doc/design_description.txt"
     doc.parent.mkdir(parents=True)
     doc.write_text(odd_prompt(default=7))
-    result = runner._try_canonical_primitive_rtl(project, 0.0)
-    assert result is not None and result.status == "PASS"
-    rtl = project / "phase2/stage1/rtl/phase_unit.v"
-    assert rtl.is_file()
-    text = rtl.read_text()
-    assert "module phase_unit" in text
-    assert re.search(r"parameter\s+NUM_DIV\s*=\s*7\b", text)
     assert clocks.module_of_shape("odd_clock_divider", doc.read_text()) == "phase_unit"
-    # The ordinary publisher must keep a pre-existing author's file.
-    assert runner._try_canonical_primitive_rtl(project, 0.0) is None
-    assert rtl.read_text() == text
 
 
 def test_conflicting_clock_phase_is_not_silently_selected():

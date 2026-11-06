@@ -12,6 +12,41 @@ from flow_native_adapters import Commands, formal
 from flow_native_verification import eqy, eqy_partitions, gls, reset_boundary, xor
 
 
+@pytest.mark.parametrize("event", ["posedge clk", "negedge clk", "posedge clk or posedge reset"])
+@pytest.mark.parametrize("legacy", [False, True])
+def test_native_formal_preserves_global_clock_state_checks(tmp_path, event, legacy):
+    if not all(shutil.which(name) for name in ("sby", "yosys", "yices-smt2")):
+        pytest.skip("Native formal tools are required")
+    from formal_property_run import emit_invariant_sby
+
+    rtl = tmp_path / "phase2/stage1/rtl/unit.v"
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text("module unit(input clk,reset,data,output reg q);\n"
+        f"always @({event}) "
+        + ("if(reset) q<=0; else " if "reset" in event else "")
+        + "q<=data; endmodule\n")
+    harness = tmp_path / "phase2/stage1/formal/formal_unit.sv"
+    harness.parent.mkdir(parents=True)
+    harness.write_text("module formal_unit(input clk);\n"
+        "(* anyseq *) wire data,reset; wire q; unit dut(clk,reset,data,q);\n"
+        "reg past_valid=0; always @($global_clock) past_valid<=1;\n"
+        "always @($global_clock) if(past_valid && !(!$past(clk) && clk))\n"
+        "  state_sync: assert(q==$past(q));\nendmodule\n")
+    deck = harness.with_suffix(".sby")
+    deck.write_text(emit_invariant_sby([str(rtl)], str(harness), "formal_unit", [], []))
+    if legacy:
+        deck.write_text(deck.read_text().replace("multiclock on\n", ""))
+    originals = {p: p.read_bytes() for p in (rtl, harness, deck)}
+    directory = tmp_path / "run"
+    directory.mkdir()
+    result = formal(tmp_path, directory, {"top": "unit", "properties": [str(deck)]}, Commands(directory))
+    proofs = [row for row in result["native_steps"] if row["name"] in {"SymbiYosys.prove", "SymbiYosys.bmc"}]
+    assert len(proofs) == 2, result
+    assert all(row["status"] == ("PASS" if event == "posedge clk" else "FAIL") for row in proofs), result
+    assert (result["metrics"].get("unproved_required_properties") == 0) is (event == "posedge clk"), result
+    assert {p: p.read_bytes() for p in originals} == originals
+
+
 @pytest.mark.parametrize("bad", [False, True])
 @pytest.mark.parametrize("relative", [False, True])
 def test_native_formal_retries_an_unsupported_sv_read_without_changing_properties(
@@ -61,6 +96,187 @@ def test_native_formal_retries_an_unsupported_sv_read_without_changing_propertie
         assert "depth 8" in text and "abc " in text
         lowered = entry.with_suffix(".v").read_text()
         assert "(* anyseq *)" in lowered and "assert (q == 0)" in lowered
+
+
+@pytest.mark.parametrize("case", ["missing_formal", "missing_formal_bad", "formal_good", "formal_bad", "missing_both", "temporal"])
+def test_native_formal_preserves_supplied_formal_include_branch(tmp_path, case):
+    if not all(shutil.which(name) for name in ("sby", "yosys", "sv2v", "yices-smt2")):
+        pytest.skip("Native formal tools are required")
+    from formal_property_run import emit_invariant_sby
+
+    root = tmp_path / "phase2/stage1/formal"
+    root.mkdir(parents=True)
+    vendor = tmp_path / "input/vendor_rtl/includes"
+    vendor.mkdir(parents=True)
+    headers = {
+        "checks.svh": '`ifdef SYNTHESIS\n`include "synthesis_checks.svh"\n'
+                      '`else\n`include "formal_checks.svh"\n`endif\n',
+        "synthesis_checks.svh": "`define LOCAL_CHECK\n",
+    }
+    if case == "formal_bad":
+        headers["formal_checks.svh"] = "`define LOCAL_CHECK assert(1'b0);\n"
+    elif case == "formal_good":
+        headers["formal_checks.svh"] = "`define LOCAL_CHECK assert(q==q);\n"
+    elif case == "temporal":
+        headers["formal_checks.svh"] = "`define LOCAL_CHECK assert(q |-> q);\n"
+    elif case == "missing_both":
+        del headers["synthesis_checks.svh"]
+    for name, text in headers.items():
+        (vendor / name).write_text(text)
+    package = root / "unit_pkg.sv"
+    package.write_text("package unit_pkg; parameter RESET=0; endpackage\n")
+    rtl = root / "unit.sv"
+    rtl.write_text('`include "checks.svh"\n'
+        "module unit import unit_pkg::*; (input clk,rst_n,output reg q);\n"
+        f"always @(posedge clk) begin if(!rst_n) q<={int(case == 'missing_formal_bad')}; else q<=!q;\n"
+        "`LOCAL_CHECK\nend endmodule\n")
+    harness = root / "proof.sv"
+    harness.write_text("module proof import unit_pkg::*; (input clk);\n"
+        "(* anyseq *) reg rst_n; reg valid=0; wire q; unit dut(clk,rst_n,q);\n"
+        "always @(posedge clk) begin valid<=1; if(valid && !$past(rst_n)) assert(q==RESET); end endmodule\n")
+    deck = root / "proof.sby"
+    deck.write_text(emit_invariant_sby([str(package), str(rtl)], str(harness),
+        "proof", [], [], prove_depth=8, bmc_depth=8))
+    originals = {p: p.read_bytes() for p in [package, rtl, harness, deck, *vendor.iterdir()]}
+    output = tmp_path / "output"
+    output.mkdir()
+    commands = Commands(output)
+    result = formal(tmp_path, output, {"top": "system"}, commands)
+    rows = [r for r in result["native_steps"] if r["name"] in {"SymbiYosys.prove", "SymbiYosys.bmc"}]
+    expected = "PASS" if case == "formal_good" else "FAIL" if case == "formal_bad" else "NOT_MEASURED"
+    assert len(rows) == 2 and {r["status"] for r in rows} == {expected}, result
+    assert {p: p.read_bytes() for p in originals} == originals
+    scope = json.loads((output / "formal_scope.json").read_text())
+    assert scope["proves_declared_top"] is False
+    assert "frontend" not in scope and "frontend_notes" not in scope
+    assert not any("-DSYNTHESIS" in r["command"] for r in commands.records), commands.records
+    if case.startswith("missing_"):
+        assert "unproved_required_properties" not in result["metrics"]
+        assert "formal_checks.svh" in result["detail"], result
+    for path in output.rglob("sv_frontend.v"):
+        assert "assert (q ==" in path.read_text()
+
+
+@pytest.mark.parametrize("case", ["good", "bad", "next", "temporal"])
+def test_native_formal_retries_enum_methods_with_original_assertions(tmp_path, case):
+    if not all(shutil.which(name) for name in ("sby", "yosys", "sv2v", "yices-smt2")):
+        pytest.skip("Native formal tools are required")
+    from formal_property_run import emit_invariant_sby
+
+    root = tmp_path / "phase2/stage1/formal"
+    root.mkdir(parents=True)
+    package = root / "table_pkg.sv"
+    package.write_text("package table_pkg; typedef enum logic[1:0] {S0,S1,S2} state_t;\n"
+        "localparam state_t VALUES[3]='{S0,S1,S2}; endpackage\n")
+    harness = root / "proof.sv"
+    condition = "state[0] |=> $past(state[0])" if case == "temporal" else "invalid == (state!=S0)"
+    function = ("bit found=0; int i=0;\n"
+        "for(state_t value=value.first();i<value.num();i++,value=value.next()) found|=(sig===value);\n"
+        "return !found;" if case=="next" else "state_t value; return sig!=value.first();")
+    harness.write_text("module proof import table_pkg::*; (input clk,input state_t state);\n"
+        "function automatic bit outside_table(state_t sig);\n"
+        + function + "\nendfunction\n"
+        f"wire invalid=outside_table(state) ^ 1'b{int(case == 'bad')};\n"
+        f"`ifdef YOSYS\nalways @(posedge clk) assert({condition});\n"
+        f"`else\nassert property(@(posedge clk) {condition});\n`endif\nendmodule\n")
+    deck = root / "proof.sby"
+    deck.write_text(emit_invariant_sby([str(package)], str(harness), "proof", [], [], prove_depth=8, bmc_depth=8))
+    originals = {p:p.read_bytes() for p in (package,harness,deck)}
+    output = tmp_path / "output"
+    output.mkdir()
+    commands = Commands(output)
+    result = formal(tmp_path, output, {"top":"system"}, commands)
+    rows = [r for r in result["native_steps"] if r["name"] in {"SymbiYosys.prove", "SymbiYosys.bmc"}]
+    expected = "NOT_MEASURED" if case in {"next","temporal"} else "FAIL" if case == "bad" else "PASS"
+    assert len(rows)==2 and {r["status"] for r in rows}=={expected},result
+    assert {p:p.read_bytes() for p in originals}==originals
+    retries = list(output.rglob("slang_frontend.sby"))
+    assert len(retries)==2,result
+    for retry in retries:
+        text=retry.read_text()
+        assert "--no-synthesis-define" in text and "--ignore-assertions" not in text
+        assert "depth 8" in text and str(harness) in text
+    assert not any("-DSYNTHESIS" in r["command"] for r in commands.records)
+    if case=="temporal":
+        assert "SVA" in result["detail"] or "sequence" in result["detail"].lower(),result
+    if case=="next":
+        assert "next" in result["detail"] and "unproved_required_properties" not in result["metrics"],result
+
+
+@pytest.mark.parametrize("kind", ["anyseq", "anyconst"])
+@pytest.mark.parametrize("different", [False, True])
+@pytest.mark.parametrize("declaration", ["wire", "variable", "fixed"])
+def test_slang_formal_preserves_declared_free_inputs(tmp_path, kind, different, declaration):
+    if not all(shutil.which(name) for name in ("sby", "yosys", "sv2v", "yices-smt2")):
+        pytest.skip("Native formal tools are required")
+    from formal_property_run import emit_invariant_sby
+
+    package = tmp_path / "types.sv"
+    package.write_text("package types; typedef enum logic[1:0] {S0,S1,S2} state_t; endpackage\n")
+    harness = tmp_path / "proof.sv"
+    harness.write_text("module proof import types::*; (input clk);\n"
+        f"(* {kind} *) {'wire ' if declaration == 'wire' else ''}state_t state;\n"
+        + ("assign state=S0;\n" if declaration == "fixed" else "")
+        + "function automatic bit outside_table(state_t sig);\n"
+        "state_t value; return sig!=value.first(); endfunction\n"
+        "reg valid=0; always @(posedge clk) begin valid<=1;\n"
+        f"assert(outside_table(state) {'!=' if different else '=='} (state!=S0));\n"
+        + ("if(valid) assert(state==$past(state));\n" if kind == "anyconst" else "")
+        + "cover(state==S1); end endmodule\n")
+    deck = tmp_path / "proof.sby"
+    deck.write_text(emit_invariant_sby([str(package)],str(harness),"proof",[],[],prove_depth=8,bmc_depth=8))
+    originals = {p:p.read_bytes() for p in (package,harness,deck)}
+    output = tmp_path / "native"
+    output.mkdir()
+    result = formal(tmp_path,output,{"top":"proof","properties":[str(deck)]},Commands(output))
+    rows = [r for r in result["native_steps"] if r["name"] in {"SymbiYosys.prove","SymbiYosys.bmc"}]
+    expected = "NOT_MEASURED" if declaration != "wire" else "FAIL" if different else "PASS"
+    assert len(rows)==2 and {r["status"] for r in rows}=={expected},result
+    if declaration != "wire":
+        assert kind in result["detail"] and "free" in result["detail"],result
+        assert "unproved_required_properties" not in result["metrics"],result
+        assert {p:p.read_bytes() for p in originals}==originals
+        return
+    models = list(output.rglob("model/cover_inputs.json"))
+    assert len(models)==2
+    for model in models:
+        modules = json.loads(model.read_text())["modules"]
+        drivers = [cell for module in modules.values() for cell in module["cells"].values()
+                   if cell["type"] == "$"+kind]
+        assert drivers and sum(len(c["connections"]["Y"]) for c in drivers)==2
+    assert {p:p.read_bytes() for p in originals}==originals
+
+
+def test_slang_formal_preserves_generated_harness_free_inputs(tmp_path):
+    if not all(shutil.which(name) for name in ("sby", "yosys", "sv2v", "yices-smt2")):
+        pytest.skip("Native formal tools are required")
+    import formal_harness_gen
+    from formal_property_run import emit_invariant_sby
+
+    rtl = tmp_path / "unit.sv"
+    rtl.write_text("package types; typedef enum logic[1:0] {S0,S1} state_t; endpackage\n"
+        "module unit(input clk,rst,input [2:0] data,output reg [2:0] q); import types::*;\n"
+        "function automatic bit outside_table(state_t sig);\n"
+        "state_t value; return sig!=value.first(); endfunction\n"
+        "always @(posedge clk) if(rst) q<=0; else q<=data ^ {3{outside_table(S0)}}; endmodule\n")
+    harness = tmp_path / "formal_unit.sv"
+    generated = formal_harness_gen.generate(rtl=[rtl],top="unit",out=harness,assertion_form="immediate")
+    assert generated["verdict"]=="EMITTED",generated
+    original = harness.read_bytes()
+    assert b"(* anyseq *)" in original
+    deck = harness.with_suffix(".sby")
+    deck.write_text(emit_invariant_sby([str(rtl)],str(harness),"formal_unit",[],[],prove_depth=8,bmc_depth=8))
+    output = tmp_path / "native"
+    output.mkdir()
+    result = formal(tmp_path,output,{"top":"unit","properties":[str(deck)]},Commands(output))
+    rows = [r for r in result["native_steps"] if r["name"] in {"SymbiYosys.prove","SymbiYosys.bmc"}]
+    assert len(rows)==2 and {r["status"] for r in rows}=={"PASS"},result
+    assert len(list(output.rglob("slang_frontend.sby")))==2
+    for model in output.rglob("model/cover_inputs.json"):
+        modules = json.loads(model.read_text())["modules"]
+        assert sum(len(c["connections"]["Y"]) for m in modules.values() for c in m["cells"].values()
+                   if c["type"]=="$anyseq")==4
+    assert harness.read_bytes()==original
 
 
 def test_native_formal_keeps_an_uncompilable_sv_model_unmeasured(tmp_path):
@@ -619,9 +835,12 @@ def test_chip_eqy_separates_pad_wrapper_from_resettable_core(tmp_path, change, p
 
 @pytest.mark.parametrize("change", ["none", "core", "signal", "rail", "missing_pad", "no_power_view", "rail_logic",
                                     "rail_state", "paired_rail_state"])
-def test_chip_eqy_uses_native_power_view_and_keeps_supply_checks(tmp_path, change):
+@pytest.mark.parametrize("slang", [False, True])
+def test_chip_eqy_uses_native_power_view_and_keeps_supply_checks(tmp_path, change, slang):
     if not shutil.which("eqy"):
         pytest.skip("Native EQY is required")
+    if slang and not shutil.which("slang"):
+        pytest.skip("Native Slang is required")
     models, gold, gate, power, liberty, lef = [tmp_path / name for name in
         ("pads.v", "gold.v", "gate.v", "power.v", "cells.lib", "pads.lef")]
     models.write_text("(* blackbox *) module INPAD(input PAD,PD,PU,output Y,inout VP,VN); endmodule\n"
@@ -667,7 +886,7 @@ def test_chip_eqy_uses_native_power_view_and_keeps_supply_checks(tmp_path, chang
         state["pnl"] = str(power)
     config = {"DESIGN_NAME": "unit", "VERILOG_FILES": [str(gold)],
               "DEFAULT_CORNER": "typical", "LIB": {"typical": [str(liberty)]},
-              "PAD_VERILOG_MODELS": [str(models)], "PAD_LEFS": [str(lef)]}
+              "PAD_VERILOG_MODELS": [str(models)], "PAD_LEFS": [str(lef)], "USE_SLANG": slang}
     result = eqy(tmp_path, tmp_path, {}, Commands(tmp_path), state=state, config=config)
     rows = {row["name"]: row["status"] for row in result.get("native_steps", [])}
     assert rows.get("Yosys.Wrapper") == ("PASS" if change in {"none", "rail_state", "paired_rail_state"} else "FAIL"), result
@@ -680,6 +899,44 @@ def test_chip_eqy_uses_native_power_view_and_keeps_supply_checks(tmp_path, chang
         for side in ("gold", "gate"):
             ports = json.loads((tmp_path / "core" / (side + ".json")).read_text())["modules"]["unit"]["ports"]
             assert not any(name in {"supply_high", "supply_low"} or name.endswith((".VP", ".VN")) for name in ports)
+
+
+@pytest.mark.parametrize("different", [False, True])
+def test_chip_eqy_preserves_mapped_state_alias_matchpoints(tmp_path, different):
+    if not shutil.which("eqy"):
+        pytest.skip("Native EQY is required")
+    reset_docs(tmp_path)
+    gold, gate, cells, pads, lef = [tmp_path / name for name in
+        ("gold.v", "gate.v", "cells.lib", "pads.v", "pads.lef")]
+    wrapper = ("module unit(input clk,rst_n,a,output q); wire ic,ir,ia,oq;\n"
+        "INPAD pclk(.PAD(clk),.Y(ic));\nINPAD prst(.PAD(rst_n),.Y(ir));\n"
+        "INPAD pa(.PAD(a),.Y(ia));\nOUTPAD pq(.A(oq),.PAD(q));\n")
+    gold.write_text(wrapper + "core u_core(ic,ir,ia,oq); endmodule\n"
+        "module core(input clk,rst_n,a,output q); reg [8:0] stored;\n"
+        "always @(posedge clk) if(!rst_n) stored<=0; else stored<={stored[7:0],a};\n"
+        "assign q=stored[8]^stored[0]; endmodule\n")
+    data = "~ia" if different else "ia"
+    gate.write_text(wrapper + "reg [8:0] implemented; wire [8:0] \\u_core.stored ;\n"
+        "assign \\u_core.stored = implemented; assign oq=implemented[8]^implemented[0];\n"
+        "always @(posedge ic) if(!ir) implemented<=0; "
+        f"else implemented<={{implemented[7:0],{data}}}; endmodule\n")
+    cells.write_text("library(neutral) {}\n")
+    pads.write_text("(* blackbox *) module INPAD(input PAD,output Y); endmodule\n"
+        "(* blackbox *) module OUTPAD(input A,output PAD); endmodule\n")
+    lef.write_text("MACRO INPAD\n CLASS PAD INPUT ;\nEND INPAD\n"
+        "MACRO OUTPAD\n CLASS PAD OUTPUT ;\nEND OUTPAD\n")
+    config = {"DESIGN_NAME": "unit", "VERILOG_FILES": [str(gold)],
+        "DEFAULT_CORNER": "typical", "LIB": {"typical": [str(cells)]},
+        "PAD_VERILOG_MODELS": [str(pads)], "PAD_LEFS": [str(lef)]}
+    result = eqy(tmp_path, tmp_path, {}, Commands(tmp_path), state={"nl": str(gate)}, config=config)
+    rows = {row["name"]: row["status"] for row in result["native_steps"]}
+    assert rows["Yosys.Wrapper"] == "PASS", result
+    assert rows["Yosys.EQY.Core"] == ("FAIL" if different else "PASS"), result
+    for side in ("gold", "gate"):
+        module = json.loads((tmp_path / "core" / (side + ".json")).read_text())["modules"]["unit"]
+        assert "u_core.stored" in module["netnames"], side
+    matched = (tmp_path / "scratch/matched.ids").read_text()
+    assert "u_core.stored[0]" in matched
 
 
 @pytest.mark.parametrize("direct_output", [False, True])
