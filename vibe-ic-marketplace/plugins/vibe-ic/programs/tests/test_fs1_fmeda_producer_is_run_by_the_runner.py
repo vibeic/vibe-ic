@@ -55,6 +55,29 @@ def test_the_command_is_the_one_the_fs1_gate_states():
                     "phase2/stage1/rtl --asil D --json " + REPORT)
 
 
+def test_the_runner_writes_the_report_on_a_design_without_a_mechanism(tmp_path, monkeypatch):
+    mod = _runner()
+    project = _project(tmp_path, {"cnt.v": COUNTER})
+    step = getattr(mod, "step_fmeda_fault_injection", None)
+    assert step is not None, "no runner step produces FS1's report"
+    actual_run = mod._pr.run
+    called = []
+    def observed_run(argv, *args, **kwargs):
+        called.append(Path(argv[1]).name)
+        return actual_run(argv, *args, **kwargs)
+    monkeypatch.setattr(mod._pr, 'run', observed_run)
+    row = step(project)
+    report = json.loads((project / REPORT).read_text())
+    assert report["program"] == "fmeda_fault_injection_coverage"
+    assert report["verdict"] == "NOT_APPLICABLE"
+    assert row.status == "NOT_MEASURED"
+    assert row.output_files == [REPORT]
+    # The reader has no native diagnostic counts for a non-safety design.
+    assert called == ['fmeda_fault_injection_coverage.py', 'fmeda_coverage_check.py']
+    recomputed = project / 'reports/phase2/safety/fmeda_coverage_gate.json'
+    assert recomputed.is_file()
+    assert json.loads(recomputed.read_text())['verdict'] == 'NOT_MEASURED'
+
 
 
 def test_an_rtl_dir_with_no_source_is_not_measured(tmp_path):

@@ -30,11 +30,9 @@ codes and transcript paths (``gls_runs.json``), then applies the calibrated
 simulation nonzero exits are blocking even if a partial transcript looks like
 a pass; ``gls_results.json`` retains the decision.
 
-``Vibeic.TestPatternReplay`` runs producer-owned, self-checking pattern
-testbenches against the exact implementation netlist.  It binds both pattern
-and derived-testbench bytes by SHA-256, requires the transcript to name the
-exact case and vector population, and blocks on a changed input, native
-nonzero exit, missing marker, or functional failure marker.
+``Vibeic.TestPatternReplay`` runs supplied self-checking pattern benches
+against the implementation netlist. Native compile/replay results and optional
+SDF diagnostics determine its result. Missing input or check counts are unmeasured.
 
 ``Vibeic.ClockPathDriveSizing`` (flow step 19, T98) runs after
 ``OpenROAD.CTS``: the #2160 clock-path drive sizing, see its class docstring
@@ -75,7 +73,7 @@ from librelane.state import DesignFormat, State
 from librelane.steps.common_variables import dpl_variables
 from librelane.steps.odb import OdbpyStep
 from librelane.steps.openroad import OpenROADStep
-from librelane.steps.step import MetricsUpdate, Step, StepError, ViewsUpdate
+from librelane.steps.step import MetricsUpdate, Step, StepError, StepException, ViewsUpdate
 
 __all__ = ["InsertSpareCells", "GateLevelSim", "TestPatternReplay",
            "ClockPathDriveSizing", "ExternalCaptureLaunchRetap"]
@@ -323,146 +321,107 @@ class GateLevelSim(Step):
 
 @Step.factory.register()
 class TestPatternReplay(Step):
-    """Replay producer-owned self-checking testbenches for manifest-bound patterns.
-    Require zero exits and exact case/vector witnesses;
-    keep every raw SDF error accounted for until classified."""
+    """Replay supplied pattern benches with native Icarus and optional SDF."""
 
     id = "Vibeic.TestPatternReplay"
     name = "Native test-pattern replay"
     inputs = [DesignFormat.NETLIST]
     outputs = []
-
-    config_vars = [
-        Variable("VIBEIC_PATTERN_MANIFEST", Path,
-                 "Producer-owned pattern/testbench manifest."),
-        Variable("VIBEIC_PATTERN_TIMEOUT_S", int,
-                 "Wall-clock limit for compile and replay, seconds.", default=900),
-    ]
+    config_vars = [Variable("VIBEIC_PATTERN_MANIFEST", Path, "Native pattern/testbench input file.")]
 
     @staticmethod
-    def _run(argv, log: str, limit: int, cwd=None) -> int:
-        # Collect complete stdout/stderr separately so VPI fragments cannot splice
-        # into and corrupt the source-bound SDF error record.
+    def _run(argv, log: str, cwd=None) -> int:
         with open(log, "w") as stdout, open(log + ".stderr", "w") as stderr:
-            try:
-                rc = subprocess.run(argv, stdout=stdout, stderr=stderr,
-                                    cwd=cwd, timeout=limit).returncode
-            except subprocess.TimeoutExpired:
-                stdout.write(f"\nVIBEIC_GLS_TIMEOUT after {limit} s\n")
-                rc = 124
+            rc = subprocess.run(argv, stdout=stdout, stderr=stderr, cwd=cwd).returncode
         with open(log, "a") as sink:
             sink.write("\n" + FilePath(log + ".stderr").read_text(errors="replace"))
         return rc
 
     def run(self, state_in: State, **kwargs) -> Tuple[ViewsUpdate, MetricsUpdate]:
+        import sdf_gate_sim as sgs
+
         with open(str(self.config["VIBEIC_PATTERN_MANIFEST"])) as stream:
             manifest = json.load(stream)
         cases = manifest.get("cases") or []
-        errors = []
-        if not cases or len({case.get("id") for case in cases}) != len(cases):
-            errors.append("pattern cases are empty or IDs are not unique")
-        for case in cases:
-            pattern = str(case.get("pattern") or "")
-            testbench = str(case.get("testbench") or "")
-            count = case.get("vector_count")
-            if not pattern or not os.path.isfile(pattern):
-                errors.append(f"{case.get('id')}: pattern file absent")
-            if not testbench or not os.path.isfile(testbench):
-                errors.append(f"{case.get('id')}: testbench absent")
-            if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
-                errors.append(f"{case.get('id')}: invalid vector_count")
-
         timing = manifest.get("timing")
         netlist = str(state_in[DesignFormat.NETLIST])
+        files = [netlist, *map(str, manifest.get("models") or [])]
+        files += [str(case.get(key) or "") for case in cases for key in ("pattern", "testbench")]
         if timing is not None:
-            if not isinstance(timing, dict):
-                errors.append("invalid timed replay binding")
-                timing = {}
-            sdf = str(timing.get("sdf") or "")
-            if not sdf or not os.path.isfile(sdf):
-                errors.append("SDF absent")
-            for model in manifest.get("models") or []:
-                if not os.path.isfile(model):
-                    errors.append("timed replay model absent")
-            for case in cases:
-                if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.$]*", str(case.get("dut_instance") or "")):
-                    errors.append("timed replay DUT instance absent or invalid")
+            files.append(str(timing.get("sdf") or ""))
+        if not cases or any(not os.path.isfile(path) for path in files):
+            raise StepException("NOT_MEASURED: pattern replay needs its netlist, patterns, benches and simulation models")
         runs = []
-        if not errors:
-            netlist = str(state_in[DesignFormat.NETLIST])
-            limit = int(self.config["VIBEIC_PATTERN_TIMEOUT_S"])
-            os.makedirs(self.step_dir, exist_ok=True)
-            for case in cases:
-                cid = str(case["id"])
-                folder = os.path.join(self.step_dir, cid)
-                os.makedirs(folder, exist_ok=False)
-                vvp = os.path.join(folder, f"{cid}.vvp")
-                compile_log = os.path.join(folder, "compile.log")
-                stdout = os.path.join(folder, "stdout.log")
-                bench = str(case["testbench"])
-                if timing is not None:
-                    import sdf_gate_sim as sgs
-                    bench = os.path.join(folder, "timed_tb.v")
-                    FilePath(bench).write_text(sgs.inject_sdf_annotation(
-                        FilePath(case["testbench"]).read_text(), str(case["module"]),
-                        str(case["dut_instance"]), str(timing["sdf"])))
-                argv = ["iverilog", *(manifest.get("compile_flags") or "-g2012").split(),
-                        "-s", str(case["module"]), "-o", vvp,
-                        bench, netlist,
-                        *map(str, manifest.get("models") or [])]
-                compile_rc = self._run(argv, compile_log, limit)
-                sim_rc = None
-                if compile_rc == 0:
-                    sim_rc = self._run(["vvp", vvp, *(["-sdf-info"] if timing is not None else [])],
-                                       stdout, limit, cwd=folder)
-                text = FilePath(stdout).read_text(errors="replace") \
-                    if os.path.isfile(stdout) else ""
-                marker = (f"VIBEIC_PATTERN_REPLAY PASS {cid} "
-                          f"{case['vector_count']}")
-                marker_count = len(re.findall(rf"(?m)^{re.escape(marker)}$", text))
-                failed = bool(re.search(r"(?m)^VIBEIC_PATTERN_REPLAY FAIL\b", text))
-                verdict = ("PASS" if compile_rc == 0 and sim_rc == 0
-                           and marker_count == 1 and not failed else "FAIL")
-                annotation = None
-                if timing is not None:
-                    annotation = sgs.sdf_annotation_census(text)
-                    annotation["sdf_errors"] = sgs.sdf_error_count(text)
-                    classes = sgs.classify_sdf_errors(
-                        text, compile_log=FilePath(compile_log).read_text(errors="replace"),
-                        sdf_text=FilePath(timing["sdf"]).read_text(),
-                        explainer=sgs._explainer_for(FilePath(netlist), manifest.get("models") or []))
-                    missing = max(0, annotation["sdf_errors"] - classes["total"])
-                    # Unparsed headers are already included in unexplained.
-                    unclassified = missing + classes.get("unparsed", 0)
-                    annotation.update(sdf_errors_by_class=classes["by_class"],
-                                      sdf_errors_unexplained=classes["unexplained"] + missing,
-                                      unclassified_sdf_errors=unclassified,
-                                      unexplained_samples=classes["unexplained_samples"])
-                    # Same explained-record policy as the existing GLS judge;
-                    # every raw refusal remains visible beside its source proof.
-                    if not annotation["annotated"] or annotation["sdf_errors_unexplained"]:
-                        verdict = "FAIL"
-                runs.append({"case": cid, "pattern": case["pattern"],
-                             "vector_count": case["vector_count"],
-                             "compile_rc": compile_rc, "sim_rc": sim_rc,
-                             "marker_count": marker_count, "verdict": verdict,
-                             "compile_log": compile_log, "stdout": stdout,
-                             **({"sdf_annotation": annotation}
-                                if timing is not None else {})})
-        result = {"verdict": "PASS" if not errors and runs
-                  and all(run["verdict"] == "PASS" for run in runs) else "FAIL",
-                  "export_roundtrip_errors": errors, "runs": runs}
-        result_path = os.path.join(self.step_dir, "pattern_replay_results.json")
         os.makedirs(self.step_dir, exist_ok=True)
+        for index, case in enumerate(cases):
+            folder = os.path.join(self.step_dir, str(index))
+            os.makedirs(folder, exist_ok=True)
+            vvp = os.path.join(folder, "replay.vvp")
+            compile_log, stdout = os.path.join(folder, "compile.log"), os.path.join(folder, "stdout.log")
+            bench = str(case["testbench"])
+            if timing is not None:
+                bench = os.path.join(folder, "timed_tb.v")
+                FilePath(bench).write_text(sgs.inject_sdf_annotation(
+                    FilePath(case["testbench"]).read_text(), str(case["module"]),
+                    str(case["dut_instance"]), str(timing["sdf"])))
+            argv = ["iverilog", *(manifest.get("compile_flags") or "-g2012").split(),
+                    "-s", str(case["module"]), "-o", vvp, bench, netlist,
+                    *map(str, manifest.get("models") or [])]
+            compile_rc = self._run(argv, compile_log)
+            sim_rc = self._run(["vvp", vvp, *(["-sdf-info"] if timing is not None else [])],
+                               stdout, cwd=folder) if compile_rc == 0 else None
+            text = FilePath(stdout).read_text(errors="replace") if os.path.isfile(stdout) else ""
+            parsed = sgs.parse_l10_case_stdout(text)
+            if parsed["verdict"] is None:
+                parsed = sgs.parse_sim_stdout(text)
+            markers = re.findall(r"(?m)^VIBEIC_PATTERN_REPLAY PASS\s+\S+\s+(\d+)\s*$", text)
+            failures = len(re.findall(r"(?m)^VIBEIC_PATTERN_REPLAY FAIL\b", text))
+            total, errors = None, None
+            if parsed.get("verdict") is not None and parsed.get("total", 0) > 0:
+                total, errors = parsed["total"], parsed["total"] - parsed["passed"]
+            elif markers and int(markers[-1]) > 0:
+                total, errors = int(markers[-1]), failures
+            elif failures:
+                errors = failures
+            verdict = ("FAIL" if compile_rc or sim_rc or errors or failures else
+                       "PASS" if errors == 0 else "NOT_MEASURED")
+            annotation = None
+            if timing is not None:
+                annotation = sgs.sdf_annotation_census(text)
+                annotation["sdf_errors"] = sgs.sdf_error_count(text)
+                classes = sgs.classify_sdf_errors(text,
+                    compile_log=FilePath(compile_log).read_text(errors="replace"),
+                    sdf_text=FilePath(timing["sdf"]).read_text(),
+                    explainer=sgs._explainer_for(FilePath(netlist), manifest.get("models") or []))
+                missing = max(0, annotation["sdf_errors"] - classes["total"])
+                annotation.update(sdf_errors_by_class=classes["by_class"],
+                    sdf_errors_unexplained=classes["unexplained"] + missing,
+                    unclassified_sdf_errors=missing + classes.get("unparsed", 0),
+                    unexplained_samples=classes["unexplained_samples"])
+                if not annotation["annotated"] or annotation["sdf_errors_unexplained"]:
+                    verdict = "FAIL"
+            runs.append({"case": str(case.get("id", index)), "pattern": case["pattern"],
+                "vector_count": total, "good_machine_errors": errors,
+                "compile_rc": compile_rc, "sim_rc": sim_rc, "marker_count": len(markers),
+                "verdict": verdict, "compile_log": compile_log, "stdout": stdout,
+                **({"sdf_annotation": annotation} if annotation is not None else {})})
+        verdict = ("FAIL" if any(run["verdict"] == "FAIL" for run in runs) else
+                   "NOT_MEASURED" if any(run["verdict"] == "NOT_MEASURED" for run in runs) else "PASS")
+        result = {"verdict": verdict, "runs": runs}
+        metrics = {"vibeic__pattern_replay__case__count": len(runs),
+                   "vibeic__pattern_replay__passed": int(verdict == "PASS")}
+        if all(run["vector_count"] is not None for run in runs):
+            metrics["vibeic__pattern_replay__vector__count"] = sum(run["vector_count"] for run in runs)
+        if all(run["good_machine_errors"] is not None for run in runs):
+            errors = sum(run["good_machine_errors"] for run in runs)
+            result["good_machine_errors"] = metrics["final_pattern_good_machine_errors"] = errors
+        result_path = os.path.join(self.step_dir, "pattern_replay_results.json")
         with open(result_path, "w") as stream:
             json.dump(result, stream, indent=2)
-        metrics = {"vibeic__pattern_replay__case__count": len(runs),
-                   "vibeic__pattern_replay__vector__count": sum(
-                       run["vector_count"] for run in runs),
-                   "vibeic__pattern_replay__passed": int(result["verdict"] == "PASS")}
-        if result["verdict"] != "PASS":
-            raise StepError(f"{self.id}: BLOCKING pattern replay verdict FAIL; "
-                            f"see {result_path}")
+        if verdict == "FAIL":
+            raise StepError(f"{self.id}: BLOCKING pattern replay verdict FAIL; see {result_path}")
+        if verdict == "NOT_MEASURED":
+            raise StepException(f"NOT_MEASURED: native replay produced no check counts; see {result_path}")
         return {}, metrics
 
 

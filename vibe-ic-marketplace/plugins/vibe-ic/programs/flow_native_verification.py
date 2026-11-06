@@ -89,10 +89,14 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
     reads = [f"read_verilog -lib -nooverwrite -sv {defines} {includes} " + _word(path) for path in models]
     reads += ["read_liberty -lib -nooverwrite -ignore_miss_func -ignore_miss_dir " + _word(path)
               for path in pads["liberty"]]
+    pg_pins = pads.get("pg_pins", {})
+    # Liberty omits the supply terminals that the native power netlist names.
+    power_ports = "\n".join(f"add -{direction} \\{pin} 1 ={master}"
+        for master, pins in sorted(pg_pins.items()) for pin, direction in sorted(pins.items()))
     views, reports, outputs, disconnected_ports = {}, [], {}, {}
     for side, source in (("gold", gold.replace("[gold]", "")), ("gate", gate)):
         path = directory / f"{side}_pads.ys"
-        path.write_text("\n".join(reads) + "\n" + source + "\n"
+        path.write_text("\n".join(reads) + "\n" + source + "\n" + power_ports + "\n"
             + f"hierarchy -check -top {top}\nproc\nflatten\n"
             + f"write_json {_word(directory / (side + '.before-normalization.json'))}\n"
             + f"select -set terminals {top}/i:* {top}/o:* %u\n"
@@ -120,6 +124,17 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
         disconnected = [f"{top}/{name}" for name, port in exposed["ports"].items()
                         if port["direction"] == "output" and name not in module["ports"]
                         and name not in connected_ports]
+        power_bits = {bit for cell in module["cells"].values() if cell["type"] in pads["types"]
+                      for pin, bits in cell["connections"].items() if pin in pg_pins.get(cell["type"], {})
+                      for bit in bits}
+        signal_bits = core_connections | {bit for cell in module["cells"].values() if cell["type"] in pads["types"]
+            for pin, bits in cell["connections"].items() if pin not in pg_pins.get(cell["type"], {}) for bit in bits}
+        disconnected.extend(f"{top}/{instance}.{pin}" for instance, cell in module["cells"].items()
+            if cell["type"] in pads["types"] for pin in pg_pins.get(cell["type"], {})
+            if f"{instance}.{pin}" in exposed["ports"]
+            and not set(cell["connections"].get(pin, [])) & signal_bits)
+        disconnected.extend(f"{top}/{name}" for name, port in module["ports"].items()
+            if port["bits"] and set(port["bits"]) <= power_bits and not set(port["bits"]) & signal_bits)
         pad_terminals = {bit for cell in module["cells"].values() if cell["type"] in pads["types"]
                          for pin, bits in cell["connections"].items()
                          for bit in bits}
@@ -136,7 +151,7 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
     for side, module in views.items():
         preserved_outputs = [f"{top}/{name}" for name, port in module["ports"].items()
                              if port["direction"] == "output" and f"{top}/{name}" not in package_outputs]
-        disconnected = disconnected_ports[side]
+        disconnected = sorted(set(disconnected_ports[side]))
         projection = ["expose " + " ".join(preserved_outputs)] if preserved_outputs else []
         if package_outputs:
             projection.extend(["expose -input " + " ".join(package_outputs),
@@ -206,11 +221,10 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
 
 def eqy(project, directory, tool, commands, *, state, config):
     from librelane_eqy import eqy_script
-    from lec_run import DEFAULT_YOSYS_TIMEOUT_S
     from sdf_gate_sim import netlist_used_cells, verilog_model_closure
     from lec_post_layout_check import _LIB_CELL_RE
     from flow_chip_inputs import _paths
-    from _pad_ring import parse_lef_macro_classes
+    from _pad_ring import parse_lef_macro_classes, parse_lef_pin_roles
 
     project, directory = Path(project), Path(directory)
     top, netlist = config.get("DESIGN_NAME"), state.get("nl") if state is not None else None
@@ -218,12 +232,17 @@ def eqy(project, directory, tool, commands, *, state, config):
     if not top or not netlist or not Path(netlist).is_file() or not rtl or any(not path.is_file() for path in rtl):
         return commands.result(detail="EQY needs produced RTL, State netlist and the configured corner's Liberty models.")
     used = set().union(*(netlist_used_cells(path.read_text()) for path in [*rtl, Path(netlist)]))
-    classes = {}
+    classes, pg_pins = {}, {}
     for key in ("CELL_LEFS", "PAD_LEFS", "EXTRA_LEFS"):
         for path in _paths(config.get(key)):
             path = path if path.is_absolute() else project / path
             if path.is_file():
-                classes.update(parse_lef_macro_classes(path.read_text()))
+                text = path.read_text()
+                classes.update(parse_lef_macro_classes(text))
+                for master, pins in parse_lef_pin_roles(text).items():
+                    pg_pins.setdefault(master, {}).update({pin: direction.lower()
+                        for pin, (direction, use) in pins.items()
+                        if use in {"POWER", "GROUND"} and direction in {"INPUT", "OUTPUT", "INOUT"}})
     physical = {name for name, kind in classes.items() if name in used
                 and (kind in {"PAD SPACER", "CORE SPACER", "CORE WELLTAP"} or kind.startswith("ENDCAP "))}
     corner = config.get("DEFAULT_CORNER", "")
@@ -273,10 +292,11 @@ def eqy(project, directory, tool, commands, *, state, config):
                      for match in _NETLIST_MODULE_RE.finditer(path.read_text()))
     pad_types &= used
     pad_types -= physical
+    if pad_types and state.get("pnl"):
+        netlist = state["pnl"]
     script = directory / "equivalence.eqy"
     source = eqy_script(top, rtl, Path(netlist), liberty[0], synthesis=config,
-        views=directory, liberty_files=list(map(Path, liberty)), model_verilog=models,
-        timeout=DEFAULT_YOSYS_TIMEOUT_S)
+        views=directory, liberty_files=list(map(Path, liberty)), model_verilog=models)
     if physical:
         removal = "\n".join("delete */t:" + master for master in sorted(physical)) + "\n"
         source = source.replace("[gate]", removal + "[gate]", 1).replace("[script]", removal + "[script]", 1)
@@ -290,6 +310,7 @@ def eqy(project, directory, tool, commands, *, state, config):
             prepared_models.append(prepared)
         source, wrapper_count, wrapper_reports, wrapper_detail = eqy_pad_views(directory, top, source,
             {"liberty": pad_liberty, "types": pad_types, "defines": config.get("VERILOG_DEFINES") or [],
+             "pg_pins": {master: pins for master, pins in pg_pins.items() if pins and master in used - physical},
              "include_dirs": sorted({path.parent for path in pad_models})},
             prepared_models, commands, reset_boundary(project))
         if source is None:
@@ -601,6 +622,31 @@ def gls(project, directory, tool, commands, *, state, config):
                 generated = (sample.get("topology") == "serial_parallel"
                              and project / sample.get("tb", "") == bench)
                 try:
+                    if module and not (plan or generated) and not native._tb_dut_instance(tb_text, top):
+                        from testbench_gen import (
+                            _DELIVERED_RE, _is_authored_tb, delivered_case_oracle, emit_unit_tbs,
+                        )
+                        if (not _is_authored_tb(bench) and not _DELIVERED_RE.search(bench.read_text())
+                                and delivered_case_oracle(project, bench.stem) is None):
+                            from _specrtl_common import parse_rtl_ports
+                            _, ports = parse_rtl_ports(text, top)
+                            if not ports or any(type(port.width) is not int or port.width < 1 for port in ports):
+                                raise ValueError("The native top port dimensions are unavailable for the case producer.")
+                            surface = [(port.direction, f"[{port.width - 1}:0]" if port.width > 1 else "", port.name)
+                                       for port in ports]
+                            producer = {}
+                            output = work / "generated_tb"
+                            count = emit_unit_tbs(project, top=top, report=producer, out_dir=output,
+                                scaffold=False, case_stated=True, case_ids=[bench.stem], dut_ports=surface)
+                            rebound = output / (bench.stem + ".v")
+                            if (count != 1 or not rebound.is_file()
+                                    or producer.get("known_answer_vector_unbound")):
+                                raise ValueError("The native chip-port case producer could not ground the declared case: "
+                                                 + json.dumps(producer))
+                            tb_text = native.strip_comments(rebound.read_text())
+                            module = native._TB_MODULE_RE.search(tb_text)
+                            row["generated_testbench"] = str(rebound)
+                            reports.append(rebound)
                     if module and (plan or generated):
                         from _specrtl_common import parse_rtl_ports
                         _, ports = parse_rtl_ports(text, top)

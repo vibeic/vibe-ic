@@ -41,7 +41,22 @@ def test_native_sizing_reports_failed_yosys_run_to_observer(tmp_path, native_inp
     assert any(Path(run["reports"]).glob("*.log"))
     sizing = json.loads((tmp_path / "work/flow/chip/sizing.json").read_text())
     assert sizing == {"runs": [{"name": run["name"], "tool_seconds": run["tool_seconds"]}],
+                      "top": "unit", "state_out": str(Path(run["reports"]).parent / "yosys_synthesis/state_out.json"),
                       "tool_seconds": run["tool_seconds"]}
+
+
+def test_native_sizing_records_the_core_state_for_activity(tmp_path, native_inputs):
+    Path(native_inputs["VERILOG_FILES"][0]).write_text(
+        "module unit(input clk, output reg q); always @(posedge clk) q <= ~q; endmodule\n")
+    destination = tmp_path / "sizing"
+    destination.mkdir()
+
+    chip._native_core(tmp_path, native_inputs, destination)
+
+    sizing = json.loads((destination / "sizing.json").read_text())
+    state = json.loads(Path(sizing["state_out"]).read_text())
+    assert sizing["top"] == "unit"
+    assert Path(state["nl"]).is_file()
 
 
 @pytest.mark.parametrize("failure", [None, "missing_input", "tool_failure"])
@@ -58,6 +73,9 @@ def test_native_sizing_observer_keeps_completed_runs_on_later_failure(
     def start(self, **kwargs):
         if self.id == "Yosys.Synthesis" and failure:
             raise error
+        if self.id == "OpenROAD.Floorplan":
+            (Path(kwargs["step_dir"]) / "or_metrics_out.json").write_text(
+                json.dumps({"design__instance__area": 1}))
         return State({DesignFormat.JSON_HEADER: str(header)},
                      metrics={"design__instance__area": 1})
 
@@ -79,7 +97,8 @@ def test_native_sizing_observer_keeps_completed_runs_on_later_failure(
                                for run in runs]
 
     assert Path.cwd() == cwd
-    assert [run["name"] for run in runs] == ["Yosys.JsonHeader", "Yosys.Synthesis"]
+    assert [run["name"] for run in runs] == ["Yosys.JsonHeader", "Yosys.Synthesis"] + (
+        ["OpenROAD.ReportDesignArea"] if failure is None else [])
     assert runs[0]["status"] == "PASS"
     assert runs[0]["exit_code"] == 0
     assert runs[0]["ran"] is True
@@ -87,6 +106,22 @@ def test_native_sizing_observer_keeps_completed_runs_on_later_failure(
                                   "tool_failure": "FAIL"}[failure]
     assert runs[1]["exit_code"] == {None: 0, "missing_input": None, "tool_failure": 7}[failure]
     assert runs[1]["ran"] is (failure != "missing_input")
+
+
+def test_missing_native_area_does_not_reuse_a_yosys_number(tmp_path, native_inputs, monkeypatch):
+    from librelane.common import Toolbox
+    from librelane.flows import Flow
+    from librelane.state import State
+    from librelane.steps import Step
+
+    owner = Flow.factory.get("Classic")(native_inputs, design_dir=str(tmp_path),
+        pdk_root=os.environ["PDK_ROOT"])
+    stale = State(metrics={"design__instance__area": 999})
+    def no_area(self, **kwargs):
+        (Path(kwargs["step_dir"]) / "or_metrics_out.json").write_text("{}")
+        return stale
+    monkeypatch.setattr(Step, "start", no_area)
+    assert chip.netlist_area(owner.config, stale, Toolbox(str(tmp_path / "tools")), tmp_path / "area") is None
 
 
 def test_native_pathlike_config_values_are_single_paths():
@@ -353,6 +388,7 @@ def test_prepare_writes_usable_chip_inputs_and_preserves_pdn(inputs):
     assert ".Y(_core_port_2[5])" in wrapper
     assert "fixture_tie_hi" in wrapper
     assert ".A(_core_port_3)" in wrapper
+    assert result["FALLBACK_SDC"] == result["PNR_SDC_FILE"] == result["SIGNOFF_SDC_FILE"]
     sdc = Path(result["PNR_SDC_FILE"]).read_text()
     assert "-period 24" in sdc
     assert "set_input_delay 4.8" in sdc
@@ -385,19 +421,147 @@ def test_current_geometry_reaches_floorplan_and_reserves_both_ring_rails(inputs,
     assert geometry["core_inset_um"] >= 8.4 + geometry["pad_depth_um"]
 
 
-def test_nonconverging_current_geometry_stops_with_plain_error(inputs, monkeypatch):
+def test_floorplan_row_reserves_the_ring_sized_after_initial_preparation(inputs, monkeypatch):
+    pytest.importorskip("librelane")
+    from types import SimpleNamespace
+    from librelane.config import Config
+    import flow_engine
     import flow_pdn_current
-    project, config, _, _, _ = inputs
-    calls = []
 
-    def changing_settings(*args):
-        calls.append(args)
-        return {"PDN_VWIDTH": len(calls)}
+    project, config, native, _, _ = inputs
+    native.update(PDN_CORE_RING=True, PDN_CORE_RING_CONNECT_TO_PADS=False,
+                  PDN_CORE_RING_VOFFSET=1, PDN_CORE_RING_HOFFSET=1,
+                  PDN_CORE_RING_VWIDTH=1, PDN_CORE_RING_HWIDTH=1,
+                  PDN_CORE_RING_VSPACING=1, PDN_CORE_RING_HSPACING=1)
+    generated = chip.prepare(project, config)
+    initial_inset = generated["CORE_AREA"][0] - generated["DIE_AREA"][0]
+    power = project / "steps/pre_layout_timing/result.json"
+    _write(power, json.dumps({"native_metrics": {"power__total__corner:nominal": 0.02}}))
+    monkeypatch.setattr(flow_pdn_current, "current_settings", lambda *args, **kwargs: {
+        "PDN_CORE_RING_VWIDTH": 12, "PDN_CORE_RING_HWIDTH": 12})
+    monkeypatch.setattr(chip, "_native_core", lambda *args: pytest.fail("second synthesis"))
+    monkeypatch.setattr(chip, "netlist_area", lambda *args: 40)
+    chain = flow_engine.NativeChain(project, {"delivery_target": "gds"})
+    chain.owner = SimpleNamespace(config=Config({**native, **generated}))
+    chain.config = chain.owner.config.to_raw_dict()
 
-    monkeypatch.setattr(flow_pdn_current, "current_settings", changing_settings)
-    with pytest.raises(ValueError, match="did not converge after eight"):
-        chip.prepare(project, config)
-    assert len(calls) == 9
+    assert chain.prepare(floorplan=True, directory=project / "floorplan") is None
+
+    die, core = chain.config["DIE_AREA"], chain.config["CORE_AREA"]
+    inset = min(core[0] - die[0], core[1] - die[1], die[2] - core[2], die[3] - core[3])
+    assert inset > initial_inset
+    assert inset >= 2 + 20 + 1 + 2 * 12 + 1
+    assert (core[2] - core[0]) * (core[3] - core[1]) >= 40 / 0.4
+    declaration = project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+    docs = json.loads(declaration.read_text())
+    docs["fields"] = {"die_area_um": generated["DIE_AREA"], "core_area_um": generated["CORE_AREA"]}
+    declaration.write_text(json.dumps(docs))
+    error = chain.prepare(floorplan=True, directory=project / "floorplan")
+    assert isinstance(error, ValueError)
+    assert "cannot fit" in str(error)
+
+
+@pytest.mark.parametrize("route", ["ic", "ip"])
+def test_current_scan_netlist_fits_despite_undercounted_yosys_area(inputs, native_inputs, route, monkeypatch):
+    from librelane.common import Path as NativePath, Toolbox
+    from librelane.flows import Flow
+    from librelane.state import State, DesignFormat
+    from librelane.steps import Step
+    import flow_engine
+
+    project, config, native, _, _ = inputs
+    generated = chip.prepare(project, config)
+    pad_lef = Path(native["PAD_LEFS"][0])
+    pad_lef.write_text(pad_lef.read_text().replace("CLASS ENDCAP ;", "CLASS ENDCAP TOPLEFT ;"))
+    netlist = project / "scan.v"
+    netlist.write_text("module unit(input clk, si, se, output so); wire [128:0] chain;\n"
+        "assign chain[0]=si; sky130_fd_sc_hd__inv_1 output_inv(.A(chain[128]),.Y(so));\n" + "\n".join(
+        f"sky130_fd_sc_hd__sdfxtp_1 scan{i}(.CLK(clk),.D(chain[{i}]),.SCD(chain[{i}]),.SCE(se),.Q(chain[{i+1}]));"
+        for i in range(128)) + "\nendmodule\n")
+    owner = Flow.factory.get("Classic")({**native_inputs, "VERILOG_FILES": [str(netlist)]},
+        design_dir=str(project), pdk_root=os.environ["PDK_ROOT"])
+    owner.config = owner.config.copy(**{key: native[key] for key in (
+        "PAD_LEFS", "PAD_LIBS", "PAD_CORNER", "PAD_FILLERS", "PAD_EDGE_SPACING", "PAD_SITE_NAME",
+        "FP_CORE_UTIL", "FP_ASPECT_RATIO", "PDN_CORE_RING")},
+        FP_SIZING="absolute" if route == "ic" else "relative",
+        DIE_AREA=generated["DIE_AREA"] if route == "ic" else None,
+        CORE_AREA=generated["CORE_AREA"] if route == "ic" else None,
+        VDD_NETS=generated["VDD_NETS"], GND_NETS=generated["GND_NETS"])
+    toolbox = Toolbox(str(project / "tool_tmp"))
+    initial = State({DesignFormat.NETLIST: NativePath(str(netlist))})
+    monkeypatch.chdir(project)
+    state = Step.factory.get("Yosys.Resynthesis")(owner.config, initial).start(
+        toolbox=toolbox, step_dir=str(project / "resynthesis"))
+    initial_core = generated["CORE_AREA"]
+    initial_core_area = (initial_core[2] - initial_core[0]) * (initial_core[3] - initial_core[1])
+    assert float(state.metrics["design__instance__area"]) < initial_core_area
+    chain = flow_engine.NativeChain(project, {"delivery_target": "gds" if route == "ic" else "ip_hardmacro"})
+    chain.owner, chain.config, chain.state, chain.toolbox = owner, owner.config.to_raw_dict(), state, toolbox
+    result = chain.execute(project / "floorplan", {"steps": ["OpenROAD.Floorplan"]})
+
+    assert flow_engine.evaluate(result, []) == "PASS", result
+    actual = float(chain.state.metrics["design__instance__area"])
+    assert actual > initial_core_area
+    assert float(chain.state.metrics["design__core__area"]) >= actual
+    assert chain.config["FP_CORE_UTIL"] == native["FP_CORE_UTIL"]
+    if route == "ic":
+        measured = json.loads((project / "work/flow/chip/preparation.json").read_text())
+        assert measured["geometry"]["mapped_cell_area_um2"] == pytest.approx(actual)
+        bounds = {key: [float(value) for value in chain.state.metrics[metric].split()]
+            for metric, key in (("design__die__bbox", "DIE_AREA"), ("design__core__bbox", "CORE_AREA"))}
+        chain.owner.config = chain.owner.config.copy(
+            DIE_AREA=generated["DIE_AREA"], CORE_AREA=generated["CORE_AREA"])
+        chain.config = chain.owner.config.to_raw_dict()
+        chain.restore(project / "floorplan")
+        assert chain.config["DIE_AREA"] == bounds["DIE_AREA"]
+        assert chain.config["CORE_AREA"] == bounds["CORE_AREA"]
+
+
+def test_current_sizing_uses_initial_die_before_final_floorplan(inputs, monkeypatch):
+    import flow_pdn_current
+    project, config, native, _, _ = inputs
+    floorplan = chip._floorplan
+    events, plans = [], []
+
+    def observed_floorplan(*args):
+        events.append(("floorplan", dict(args[0]), args[6] if len(args) > 6 else None))
+        result = floorplan(*args)
+        plans.append(result)
+        return result
+
+    def settings(root, resolved, parallel_length_um=0):
+        events.append(("pdn", root, parallel_length_um))
+        return {"PDN_VWIDTH": 3.2}
+
+    monkeypatch.setattr(chip, "_floorplan", observed_floorplan)
+    monkeypatch.setattr(flow_pdn_current, "current_settings", settings)
+    initial_width = native.get("PDN_VWIDTH")
+    result = chip.prepare(project, config)
+    assert [event[0] for event in events] == ["floorplan", "pdn", "floorplan"]
+    first_die = plans[0][0]
+    assert events[1] == ("pdn", project, max(first_die[2] - first_die[0], first_die[3] - first_die[1]))
+    assert events[0][1].get("PDN_VWIDTH") == initial_width
+    assert events[0][2] is None
+    assert events[2][1]["PDN_VWIDTH"] == 3.2
+    assert events[2][2] == {"PDN_VWIDTH": 3.2}
+    assert result["PDN_VWIDTH"] == 3.2
+    assert result["DIE_AREA"] == plans[1][0]
+    assert result["CORE_AREA"] == plans[1][1]
+
+
+def test_chip_forwards_generated_clock_wire_budget(inputs, monkeypatch):
+    import flow_clock_geometry
+    project, config, native, _, _ = inputs
+    observed = []
+
+    def settings(resolved):
+        observed.append(resolved)
+        return {"CTS_CLK_MAX_WIRE_LENGTH": 120}
+
+    monkeypatch.setattr(flow_clock_geometry, "clock_settings", settings)
+    result = chip.prepare(project, config)
+    assert observed == [native]
+    assert result["CTS_CLK_MAX_WIRE_LENGTH"] == 120
 
 
 def test_native_timing_environment_and_pad_edge_bracket_reach_sdc(inputs):
@@ -736,3 +900,33 @@ def test_escaped_core_identifiers_have_legal_verilog_names(inputs):
     assert "input wire [5:2] \\data.value " in wrapper
     assert ".\\data.value (_core_port_2)" in wrapper
     assert ".PAD(\\data.value [5])" in wrapper
+
+
+@pytest.mark.parametrize("override", [None, 12])
+@pytest.mark.parametrize("period_field", ["period_ns", "freq_mhz"])
+@pytest.mark.parametrize("clock_count", [1, 2])
+def test_each_primary_clock_keeps_its_declared_period_and_io_budget(inputs, override, period_field, clock_count):
+    from sdc_constraints import create_clocks_in_text
+
+    project, config, _, ports, _ = inputs
+    config["CLOCK_PORT"] = ["clk", "other_clock"][:clock_count]
+    ports = [*ports, {"name": "other_clock", "direction": "input", "width": 1,
+                     "indexed": False, "msb": 0, "lsb": 0}]
+    docs = project / "phase1/generated_docs"
+    clocks = [
+        {"domain_kind": "primary", "source_pin": "clk", "period_ns": 20},
+        {"domain_kind": "primary", "source_pin": "other_clock", period_field: 50 if period_field == "period_ns" else 20}]
+    (docs / "L8_TIMING_WAVEFORM.json").write_text(json.dumps({"clock_domains": [
+        *clocks[:clock_count], {"domain_kind": "generated", "source_pin": "derived_clock", "period_ns": 2}]}))
+    if override is not None:
+        path = docs / "L19_CONSTRAINTS_PDK.json"
+        document = json.loads(path.read_text())
+        document.setdefault("fields", {})["clock_target"] = {"period_ns": override}
+        path.write_text(json.dumps(document))
+    text = chip._sdc(project, config, ports)
+    periods = [clock["period_ns"] for clock in create_clocks_in_text(text)]
+    assert periods == ([override or 20] if clock_count == 1 else [20, 50])
+    budget = ((override or 20) if clock_count == 1 else 50) * 0.2
+    clock = f"core_clock_{clock_count - 1}" + (" -add_delay" if clock_count == 2 else "")
+    assert f"set_input_delay {budget:g} -clock {clock}" in text
+    assert f"set_output_delay {budget:g} -clock {clock}" in text

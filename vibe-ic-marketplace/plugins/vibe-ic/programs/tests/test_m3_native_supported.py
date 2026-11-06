@@ -1,6 +1,7 @@
 """Native model component controls; never certify physical/whole-design PASS."""
 import json
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -37,10 +38,6 @@ def measured(project):
     return project
 
 
-def save_record(project, receipt):
-    write(project / m3.RECEIPT, receipt)
-
-
 def test_ordinary_producer_runs_native_component_cosim(measured):
     evidence = read(measured / m3.COSIM)
     assert evidence["verdict"] == "PASS"
@@ -48,9 +45,9 @@ def test_ordinary_producer_runs_native_component_cosim(measured):
     assert scenario["sample_count"] >= 3
     assert scenario["criteria"][0]["measured"] >= 0.99
     assert scenario["metrics"]["drive_transitions"] == 1
-    receipt = read(measured / m3.RECEIPT)
-    assert len(receipt["execution"]) == 5
-    assert 0 < receipt["execution"][2]["peak_rss_kib"] < 8 * 1024**2
+    assert len(evidence["execution"]) == 8
+    assert set(evidence["tool_versions"]) == {"ngspice", "iverilog", "vvp"}
+    assert 0 < evidence["execution"][5]["peak_rss_kib"] < 8 * 1024**2
     assert cosim_gate.main([str(measured), "--require-current-production"]) == 0
     assert si_gate.main([str(measured), "--require-current-production"]) == 1
     assert read(measured / m3.SI)["coverage"]["noise"] == "NOT_MEASURED"
@@ -66,47 +63,36 @@ def test_ordinary_producer_runs_native_component_cosim(measured):
     assert checks["PV_drc"] == "NOT_MEASURED"
 
 
-@pytest.mark.parametrize("damage,rule", [('missing_execution', 'MISSING_EXECUTION'), ('syntax_only', 'MISSING_EXECUTION'), ('wrong_path', 'INVALID_EVIDENCE'), ('empty_scenarios', 'CONTRADICTS_NATIVE_OUTPUT'), ('empty_plan', 'WRONG_SCENARIOS'), ('wrong_run_token', 'MISSING_EXECUTION'), ('unordered_wave', 'FAILED_MEASUREMENT'), ('fabricated_measurement', 'CONTRADICTS_NATIVE_OUTPUT'), ('absent_wave', 'INVALID_EVIDENCE')])
-def test_native_reverse_mutations_rejected(measured, damage, rule):
-    import os
-    receipt = read(measured / m3.RECEIPT)
-    root = measured / receipt["native_root"]
-    work = root / "enable_receiver"
-    if damage == "missing_execution":
-        receipt["execution"] = []
-    elif damage == "syntax_only":
-        receipt["execution"] = [e for e in receipt["execution"] if e["stage"] != "measurement"]
-    elif damage == "wrong_path":
-        receipt["native_root"] = m3.DIR + "/native/foreign"
-    elif damage == "empty_scenarios":
-        result = read(measured / m3.COSIM); result["scenarios"] = []
-        write(measured / m3.COSIM, result)
-    elif damage == "empty_plan":
-        plan = measured / "phase1/generated_docs/L22_VERIFICATION_PLAN.json"
-        data = read(plan); data["fields"]["verification_plan"]["cosim_scenarios"] = []
-        write(plan, data)
-    elif damage == "wrong_run_token":
-        path = work / "drive.log"
-        stamp = path.stat().st_mtime_ns
-        path.write_text(path.read_text().replace(receipt["run_id"], "f" * 32))
-        os.utime(path, ns=(stamp, stamp))
-    elif damage == "unordered_wave":
-        path = work / "wave.txt"
-        stamp = path.stat().st_mtime_ns
-        lines = path.read_text().splitlines(); lines[2], lines[3] = lines[3], lines[2]
-        path.write_text("\n".join(lines) + "\n")
-        os.utime(path, ns=(stamp, stamp))
-    elif damage == "fabricated_measurement":
-        result = read(measured / m3.COSIM)
-        result["scenarios"][0]["metrics"]["settled_voltage_min_v"] = 42
-        write(measured / m3.COSIM, result)
-    elif damage == "absent_wave":
-        (work / "wave.txt").unlink()
-    save_record(measured, receipt)
-    rejected = m3.audit(measured, "cosim")
-    assert rejected["passed"] is False
-    assert rejected["findings"][0]["rule"] == rule, rejected
+def test_declared_stricter_limit_fails_audit(measured):
+    plan = measured / "phase1/generated_docs/L22_VERIFICATION_PLAN.json"
+    data = read(plan)
+    data["fields"]["verification_plan"]["cosim_scenarios"][0]["criteria"][0]["min"] = 1.1
+    write(plan, data)
+    report = m3.audit(measured, "cosim")
+    assert report["verdict"] == "FAIL"
+    assert report["findings"][0]["rule"] == "FAILED_MEASUREMENT"
     assert cosim_gate.main([str(measured), "--require-current-production"]) == 1
+
+
+
+def test_native_execution_failure_remains_a_failure(measured):
+    path = measured / m3.COSIM
+    data = read(path)
+    data["execution"][-1]["exit_code"] = 1
+    write(path, data)
+    report = m3.audit(measured, "cosim")
+    assert report["verdict"] == "FAIL"
+    assert report["findings"][0]["rule"] == "NATIVE_EXECUTION_FAILED"
+
+
+def test_missing_native_measurement_is_not_a_pass(measured):
+    path = measured / m3.COSIM
+    data = read(path)
+    data["scenarios"][0]["metrics"].pop("settled_voltage_min_v")
+    write(path, data)
+    report = m3.audit(measured, "cosim")
+    assert report["verdict"] == "NOT_MEASURED"
+    assert report["findings"][0]["rule"] == "MISSING_MEASUREMENT"
 
 
 @pytest.mark.parametrize("damage", ["wrong_response", "slow_receiver", "failed_spice"])
@@ -133,12 +119,24 @@ def test_actual_failed_measurement_propagates_to_m4(project, damage):
     assert m4.audit(project)["verdict"] == "FAIL"
 
 
+def test_native_adapter_runs_real_scenarios_and_both_reports(project):
+    from flow_native_adapters import execute
+    from flow_engine import ToolResult, evaluate
+    top = read(project / "input/mixed_signal/native.json")["top"]
+    tool = {"adapter": "mixed", "step": "pre_layout_mixed_signal_verification", "top": top}
+    result = execute(project, project / "adapter_work", tool, "")
+    assert result["ran"] and evaluate(ToolResult(**result), []) == "NOT_MEASURED"
+    scenario = read(project / m3.COSIM)["scenarios"][0]
+    assert scenario["status"] == "PASS" and scenario["metrics"]["settled_voltage_min_v"] >= 0.99
+    assert cosim_gate.main([str(project), "--require-current-production"]) == 0
+    assert si_gate.main([str(project), "--require-current-production"]) == 1
+    assert read(project / m3.SI)["coverage"]["noise"] == "NOT_MEASURED"
 
 
 @pytest.mark.parametrize("kind", ["cosim", "si"])
 def test_native_audit_cannot_overwrite_execution_artifacts(measured, kind):
-    receipt = read(measured / m3.RECEIPT)
-    wave = measured / receipt["native_root"] / "enable_receiver/wave.txt"
+    report = read(measured / m3.COSIM)
+    wave = measured / report["native_root"] / "enable_receiver/wave.txt"
     before = wave.read_bytes()
     gate = cosim_gate if kind == "cosim" else si_gate
     assert gate.main([str(measured), "--require-current-production", "--json", str(wave)]) == 1
@@ -174,6 +172,10 @@ def test_si_incomplete_current_views_remain_unmeasured(project, damage):
         assert "complete extracted D_NET" in si["blockers"][0]
 
 
+def test_absent_native_report_is_not_measured(measured):
+    (measured / m3.COSIM).unlink()
+    assert m3.audit(measured, "cosim")["verdict"] == "NOT_MEASURED"
+    assert cosim_gate.main([str(measured), "--require-current-production"]) == 1
 
 
 def test_driver_changed_by_measured_feedback_requires_coupled_solver(project):
@@ -266,6 +268,7 @@ endmodule
     for name in ("state_out.json", "input_fingerprint.json", "pdk_root.json"):
         write(step / name, {"scope": "SOURCE_CONTROL"})
     (step / "invocation.log").write_text("SOURCE_CONTROL, not native extraction proof\n")
+    monkeypatch.setattr(lc, "validate_step_receipt", lambda folder, sid: {"sha256": {"receiver.spice": sha(extracted)}})
     record = {"producer": "analog_a7_post_layout_emit", "schema": 1, "block": "receiver", "step": "A7",
         "result": "PRODUCED", "layout_path": str(layout.relative_to(project)), "layout_sha256": sha(layout),
         "layout_netlist_identity": {"state": "MATCH"}, "pdk": "neutral", "pdk_root": str(project / "input/pdk"),
@@ -279,10 +282,15 @@ endmodule
     macro_v = put("phase3/analog/hardmacro/receiver/receiver.v", "module receiver(inout drive,sense); endmodule\n")
     for suffix, text in ((".gds", layout.read_text()), (".lib", lib.read_text()), (".lef", "SOURCE_CONTROL abstract\n")):
         put("phase3/analog/hardmacro/receiver/receiver" + suffix, text)
+    write(macro / "a8_views_provenance.json", {"producer": "analog_a8_hardmacro_emit", "schema": merge._A8_MANIFEST_SCHEMA,
+        "block": "receiver", "source_gds": record["layout_path"], "source_gds_sha256": record["layout_sha256"],
+        "views": {suffix: {"path": str((macro / ("receiver" + suffix)).relative_to(project)), "sha256": sha(macro / ("receiver" + suffix))}
+                  for suffix in (".gds", ".v", ".lib", ".lef")}})
     put("phase3/mixed_signal/top_merged.gds", "SOURCE_CONTROL M1 merge\n")
     write(project / "phase3/mixed_signal/m1_merge_receipt.json", {"scope": "SOURCE_CONTROL"})
     report = project / "reports/analog/mixed_signal"
     write(report / "top_lvs.json", {"verdict": "PASS", "scope": "SOURCE_CONTROL"})
+    monkeypatch.setattr(merge, "validate_current_receipt", lambda p, result: None if result["scope"] == "SOURCE_CONTROL" else "unsupported")
     write(report / "power_domain_run.json", {"scope": "SOURCE_CONTROL"})
     monkeypatch.setattr(power, "verify", lambda p: read(p / "reports/analog/mixed_signal/power_domain_run.json"))
     write(report / "power_domain_tool/netlist.json", {"modules": {"bridge_top": {
@@ -343,17 +351,17 @@ def test_current_interface_consumes_native_rc_with_controlled_ancestors(current_
     record_property("producer_report", read(report) if report.is_file() else None)
     measurement_count = sum(call["stage"] == "measurement" and "ngspice" in call["command"] for call in calls)
     record_property("native_ngspice_invocations", measurement_count)
-    receipt = read(project / m3.RECEIPT) if (project / m3.RECEIPT).is_file() else {}
-    assert rc == {"pass": 0, "threshold_fail": 1, "incomplete_population": 2}[outcome], receipt
+    native_result = read(report) if report.is_file() else {}
+    assert rc == {"pass": 0, "threshold_fail": 1, "incomplete_population": 2}[outcome], native_result
     if outcome == "incomplete_population":
         assert measurement_count == 0
         assert read(report)["verdict"] == "NOT_MEASURED"
-        assert not receipt
+        assert not (project / m3.RECEIPT).exists()
         return
     assert measurement_count == 1
-    assert receipt["verdict"] == ("PASS" if outcome == "pass" else "FAIL")
-    assert receipt["scope"] == "current_post_layout_interface"
-    assert receipt["full_design_verified"] is False
+    assert native_result["verdict"] == ("PASS" if outcome == "pass" else "FAIL")
+    assert native_result["scope"] == "current_post_layout_interface"
+    assert native_result["full_design_verified"] is False
     si = read(project / m3.SI)
     assert si["coverage"] == {"timing": "MEASURED", "noise": "MEASURED", "crosstalk": "MEASURED"}
     measured = si["current_interfaces"][0]
@@ -362,3 +370,34 @@ def test_current_interface_consumes_native_rc_with_controlled_ancestors(current_
     expected = 0 if outcome == "pass" else 1
     assert cosim_gate.main([str(project), "--require-current-production"]) == expected
     assert si_gate.main([str(project), "--require-current-production"]) == expected
+
+
+def test_si_audit_rechecks_declared_bounds_and_measured_values(current_interface_project):
+    import copy
+    project = current_interface_project
+    native_path = project / "input/mixed_signal/native.json"
+    spec = read(native_path)
+    assert m3.main([str(project), "--top", spec["top"], "--container", "host"]) == 0
+    assert m3.audit(project, "si")["verdict"] == "PASS"
+    report_path = project / m3.SI
+    report = read(report_path)
+    for kind in ("timing", "noise", "crosstalk"):
+        modified = copy.deepcopy(spec)
+        if kind == "timing":
+            criterion = modified["si"]["interfaces"][0]["criteria"][0]
+            measured = report["interfaces"][0]["metrics"][criterion["metric"]]["measured"]
+        else:
+            criterion = modified["canonical"][kind]["criteria"][0]
+            measured = report["current_interfaces"][0][kind]["criteria"][0]["measured"]
+        criterion["max"] = measured / 2
+        write(native_path, modified)
+        assert m3.audit(project, "si")["verdict"] == "FAIL", kind
+        write(native_path, spec)
+        incomplete = copy.deepcopy(report)
+        if kind == "timing":
+            del incomplete["interfaces"][0]["metrics"][criterion["metric"]]["measured"]
+        else:
+            del incomplete["current_interfaces"][0][kind]["criteria"][0]["measured"]
+        write(report_path, incomplete)
+        assert m3.audit(project, "si")["verdict"] == "NOT_MEASURED", kind
+        write(report_path, report)

@@ -27,7 +27,7 @@ SETTINGS = {
     "PDN_VPITCH", "PDN_HPITCH", "PDN_VSPACING", "PDN_HSPACING",
 }
 IMPLEMENTATION_SETTINGS = {"RUN_POST_GRT_RESIZER_TIMING", "RUN_POST_GRT_DESIGN_REPAIR",
-                           "EXTRA_EXCLUDED_CELLS", "FP_CORE_UTIL", "PL_TARGET_DENSITY_PCT"}
+                           "SYNTH_STRATEGY", "EXTRA_EXCLUDED_CELLS", "DECAP_CELLS", "FP_CORE_UTIL", "PL_TARGET_DENSITY_PCT"}
 
 
 def implementation_setting(key: str) -> bool:
@@ -35,12 +35,20 @@ def implementation_setting(key: str) -> bool:
 
 
 def native_defaults(config):
-    """Exclude delay-cell families through LibreLane's native wildcard setting."""
+    """Apply native cell exclusions and bounded CTS characterization defaults."""
     excluded = [*(config.get("EXTRA_EXCLUDED_CELLS") or []), "*dly*", "*delay*"]
     if str(config.get("PDK", "")).lower().startswith("gf180mcu"):
         # OpenROAD-flow-scripts flow/platforms/gf180/config.mk sets DONT_USE_CELLS = *_1.
         excluded.append("*_1")
-    return config.copy(EXTRA_EXCLUDED_CELLS=list(dict.fromkeys(excluded)))
+    changes = {"EXTRA_EXCLUDED_CELLS": list(dict.fromkeys(excluded))}
+    caps = [value for value in (config.get("MAX_CAPACITANCE_CONSTRAINT"),
+                               config.get("CTS_MAX_CAP") or None) if value is not None]
+    slews = [value for value in (config.get("MAX_TRANSITION_CONSTRAINT"),
+                                config.get("CTS_MAX_SLEW") or None) if value is not None]
+    # Zero requests native auto; CTS resets both axes when either is unspecified.
+    if caps and slews:
+        changes.update(CTS_MAX_CAP=min(caps), CTS_MAX_SLEW=min(slews))
+    return config.copy(**changes)
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -226,11 +234,23 @@ def resolve_rtl_inputs(project: Path | str) -> tuple[list[Path], str]:
     return _resolve_rtl_inputs(Path(project).resolve(), {})
 
 
+def declared_clocks(project: Path, pdk: str) -> list[dict]:
+    docs = project / "phase1/generated_docs"
+    clocks = [clock for clock in _load(docs / "L8_TIMING_WAVEFORM.json").get("clock_domains", [])
+              if (clock.get("domain_kind") == "primary" or clock.get("role") in {"primary", "master"})
+              and clock.get("pdk_scoped_target") in {None, pdk}]
+    return clocks or _load(docs / "L8_RTL_CONSTANTS.json").get("clock_domains", [])
+
+
+def clock_period_ns(clock: dict):
+    return (float(clock["period_ns"]) if clock.get("period_ns") is not None else
+            1000 / float(clock["freq_mhz"]) if clock.get("freq_mhz") else None)
+
+
 def build_config(project: Path | str, *, route: str | None = None, pdk: str | None = None) -> dict[str, Any]:
     """Read L documents and produced RTL; route is supplied by the Router caller."""
     project = Path(project).resolve()
     docs = project / "phase1/generated_docs"
-    l8 = _load(docs / "L8_TIMING_WAVEFORM.json")
     l19 = _load(docs / "L19_CONSTRAINTS_PDK.json")
     fields = l19.get("fields", {})
     pdk = pdk or fields.get("pdk_target") or l19.get("pdk_target")
@@ -264,12 +284,7 @@ def build_config(project: Path | str, *, route: str | None = None, pdk: str | No
             config[key] = fields[field]
     if "DIE_AREA" in config:
         config["FP_SIZING"] = "absolute"
-    clocks = [clock for clock in l8.get("clock_domains", [])
-              if (clock.get("domain_kind") == "primary"
-                  or clock.get("role") in {"primary", "master"})
-              and clock.get("pdk_scoped_target") in {None, pdk}]
-    if not clocks:
-        clocks = _load(docs / "L8_RTL_CONSTANTS.json").get("clock_domains", [])
+    clocks = declared_clocks(project, pdk)
     if not clocks:
         from phase1_doc_one_shot_runner import _v638_comportable_interface_harvest
 
@@ -282,9 +297,9 @@ def build_config(project: Path | str, *, route: str | None = None, pdk: str | No
     if clocks:
         ports = [clock.get("source_pin") or clock.get("name") for clock in clocks]
         config["CLOCK_PORT"] = ports[0] if len(ports) == 1 else ports
-        period = fields.get("clock_target", {}).get("period_ns") or clocks[0].get("period_ns")
-        if period is None and clocks[0].get("freq_mhz"):
-            period = 1000 / clocks[0]["freq_mhz"]
+        periods = [value for clock in clocks if (value := clock_period_ns(clock)) is not None]
+        override = fields.get("clock_target", {}).get("period_ns") if len(clocks) == 1 else None
+        period = override or (min(periods) if periods else None)
         if period is not None:
             config["CLOCK_PERIOD"] = period
     if "CLOCK_PERIOD" not in config:
@@ -298,6 +313,7 @@ def build_config(project: Path | str, *, route: str | None = None, pdk: str | No
     config.update({key: value for key, value in implementation.items()
                    if implementation_setting(key)})
     config.update(_settings(fields, pdk))
+    config.update({key: value for key, value in implementation.items() if key.startswith("PDN_")})
     sdc = project / "phase3/stage3/pnr/constraint.sdc"
     if sdc.is_file():
         from sdc_constraints import create_clocks_in_text
@@ -319,11 +335,17 @@ def build_config(project: Path | str, *, route: str | None = None, pdk: str | No
 def build_native_config(project: Path | str, *, route: str | None = None, pdk: str | None = None,
                         on_tool_run=None) -> dict[str, Any]:
     config = build_config(project, route=route, **({"pdk": pdk} if pdk else {}))
+    config = _native_pdn_numbers(config)
     if route in {"ic", "DIE"}:
         from flow_chip_inputs import prepare
         config = prepare(Path(project).resolve(), config,
                          **({"on_tool_run": on_tool_run} if on_tool_run is not None else {}))
-    return config
+    return _native_pdn_numbers(config)
+
+
+def _native_pdn_numbers(config):
+    return {key: Decimal(str(value)) if key.startswith("PDN_") and isinstance(value, float)
+            else value for key, value in config.items()}
 
 
 def write_config(project: Path | str, *, route: str | None = None,

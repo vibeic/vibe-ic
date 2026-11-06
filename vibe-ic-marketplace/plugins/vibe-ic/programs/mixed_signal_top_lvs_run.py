@@ -804,7 +804,7 @@ def run(project: Path, top: str, container: str, pdk: str,
         pending.replace(merged)
     except (InputRefusal, OSError, ValueError, KeyError, TypeError) as exc:
         pending.unlink(missing_ok=True)
-        return {"verdict": "FAIL", "rc": 1, "compared": False,
+        return {"verdict": "FAIL", "rc": 1, "ran": True, "compared": False,
                 "reason": str(exc), "transcript_tail": (out + err)[-600:]}
     merge_provenance = "KLayout merged the supplied digital and macro layouts"
 
@@ -849,12 +849,12 @@ def run(project: Path, top: str, container: str, pdk: str,
     rc, out, err = _docker_exec(
         container, cmd, marker=_to_container_path(tcl, container))
     if not spice_out.is_file() or spice_out.stat().st_size == 0:
-        return {"verdict": "FAIL", "rc": 1,
+        return {"verdict": "FAIL", "rc": 1, "ran": True,
                 "reason": (f"Magic ext2spice on the MERGED GDS produced no "
                            f"netlist (rc={rc})"),
                 "transcript_tail": (out + err)[-600:]}
     if rc != 0 or (not ext_log.is_file() or "MAGIC_EXT2SPICE_DONE" not in ext_log.read_text(errors="replace")):
-        return {"verdict": "FAIL", "rc": 1,
+        return {"verdict": "FAIL", "rc": 1, "ran": True,
                 "reason": (f"Magic ext2spice did not complete in THIS run "
                            f"(rc={rc}): {ext_log.name} carries no "
                            f"MAGIC_EXT2SPICE_DONE from this invocation. The "

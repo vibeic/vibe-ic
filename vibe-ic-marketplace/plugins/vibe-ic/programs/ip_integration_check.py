@@ -45,18 +45,19 @@ _SUPPLY_RE = re.compile(
     r"([A-Za-z_]\w*)", re.IGNORECASE)
 
 
-def _macro_roots(project: Path):
-    roots = {}
-    for base in (project / "input" / "pdk_local",
-                 project / "phase3" / "analog" / "hardmacro"):
+def _macro_roots(project: Path, roots=None):
+    packages = {}
+    for base in (roots if roots is not None else (project / "input" / "pdk_local",
+                 project / "phase3" / "analog" / "hardmacro")):
         if not base.is_dir():
             continue
-        for d in sorted(p for p in base.rglob("*") if p.is_dir()):
+        directories = [base] if roots is not None else sorted(p for p in base.rglob("*") if p.is_dir())
+        for d in directories:
             files = [f for f in d.iterdir() if f.is_file()]
             if any(f.suffix.lower() in (".lef", ".gds", ".lib", ".v")
                    for f in files):
-                roots[str(d.relative_to(project))] = files
-    return roots
+                packages[str(d.relative_to(project))] = files
+    return packages
 
 
 def _corners_of(libs):
@@ -82,8 +83,8 @@ def _l21_supplies(project: Path):
     return supplies or None
 
 
-def audit(project: Path) -> dict:
-    macros = _macro_roots(project)
+def audit(project: Path, *, roots=None) -> dict:
+    macros = _macro_roots(project, roots)
     if not macros:
         return {"verdict": "SKIP", "rc": 2,
                 "reason": ("no hard macros under input/pdk_local/ or "

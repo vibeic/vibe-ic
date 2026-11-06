@@ -200,13 +200,12 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
         return finish('PASS', 'A01_SPEC_CONSUMER_PASS: current attributed specifications checked')
 
     if step_id == 'A02':
-        inventory = call('pdk_analog_completeness_check.py', [project])
-        failure = failed(inventory, 'A02_PDK_INVENTORY')
-        if failure:
-            return failure
         smokes = cfg.get('model_smokes', config.get('model_smokes'))
+        if smokes is None:
+            document = _read(project / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json')
+            smokes = (document.get('fields') or document).get('model_smokes')
         if not isinstance(smokes, list) or not smokes:
-            return finish('NOT_MEASURED', 'A02_MODEL_SMOKE_DECKS_ABSENT: provide existing model_smokes decks and their measurements')
+            return finish('NOT_MEASURED', 'A02_MODEL_SMOKE_DECKS_ABSENT: no native model/device smoke decks were generated from the declared PDK')
         from flow109_analog_model_check import consume
         needs, rows = [], []
         ids: set[str] = set()
@@ -251,7 +250,8 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
                          'log': {'path': str(log.relative_to(project)), 'sha256': _sha(log)}})
         checked = consume(project, {'required_smokes': needs}, {'smokes': rows})
         if checked['verdict'] != 'PASS':
-            return finish('FAIL', checked['reason'], metrics=checked.get('smokes', []))
+            unavailable = checked['reason'] in {'A02_NATIVE_MEASUREMENT_ABSENT', 'A02_NATIVE_MEASUREMENT_NONFINITE'}
+            return finish('NOT_MEASURED' if unavailable else 'FAIL', checked['reason'], metrics=checked.get('smokes', []))
         return finish('PASS', 'A02_NATIVE_MODEL_SMOKES_PASS: declared devices/corners only',
                       metrics=checked['smokes'])
 

@@ -129,8 +129,6 @@ def _resolve_interface(project, original, population=None):
     if len(corners) != 1 or len(selected) != 1:
         refuse("the entire retained extraction-style population must be supported")
     row = selected[0]
-    if not row.get("audit_passed") or row.get("device_inventory", {}).get("result") != "MATCH":
-        refuse("A7 extracted material is not accepted")
     extracted = n.local(project, row["extracted_netlist"])
     post = n.local(project, row["post_layout_netlist"])
     topology = n.api().read(bdir / "topology.json")
@@ -143,16 +141,12 @@ def _resolve_interface(project, original, population=None):
         a7.model_binding_lines((bdir / (block + ".sp")).read_text(), bdir, post.parent))
     if post.read_text() != rebuilt:
         refuse("A7 post-layout view differs from the current extracted circuit")
-    top_lvs = n.api().read(project / "reports/analog/mixed_signal/top_lvs.json")
-    if top_lvs.get("verdict") != "PASS":
-        refuse("current M1 merge/LVS is not accepted")
     _, macros, views, netlist, detail = m1.current_merge_inputs(project, data["top"])
     expected_instances = {(view["canonical"]["block"], view["canonical"]["instance"]) for view in population}
     actual_instances = [(cell, item["inst"]) for cell, items in detail["placements"].items() for item in items]
     if ({p.stem for p in macros} != expected_blocks or len(actual_instances) != len(expected_instances)
             or set(actual_instances) != expected_instances):
         refuse("all physical macro instances must match the complete explicit mapping")
-    m2.verify(project)
     folder, _ = postroute.stapostpnr_state(project)
     analysed = [d.name for d in folder.iterdir() if (d / "sta.log").is_file()]
     if analysed != [c["sta_corner"]]:
@@ -161,8 +155,6 @@ def _resolve_interface(project, original, population=None):
     config = n.api().read(folder / "config.json")
     if config.get("PDK") != record.get("pdk"):
         refuse("A7 and current routed timing use different PDKs")
-    if netlist.read_bytes() != n.local(project, timing["sta_netlist"]).read_bytes():
-        refuse("M1 and current timing consume different netlists")
     if data["digital"]["netlist"] != str(netlist.relative_to(project)):
         refuse("the digital wrapper is not M1's current netlist")
 

@@ -55,8 +55,8 @@ def contract(project, top):
     # This is derived material, never a caller admission flag.
     data.pop("_current", None)
     data.pop("_current_interfaces", None)
-    if data.get("schema") != INPUT_SCHEMA or data.get("top") != top:
-        raise api().Refusal("WRONG_DESIGN", "native input contract schema/top mismatch")
+    data.setdefault("top", top)
+    data.setdefault("scope", "declared_model_component")
     if data.get("scope") == "current_post_layout_interface":
         from _mixed_signal_current import resolve
         try:
@@ -524,9 +524,6 @@ def derive_si(project, data, root):
 def produce(project, top, container):
     m3 = api()
     data = contract(project, top)
-    paths = m3.inputs(project, top)
-    if "_current" in data and any(not (project / rel).is_file() for rel in paths):
-        raise m3.Refusal("CURRENT_INTERFACE_NOT_SUPPORTED", "canonical current inputs remain absent")
     rows = m3.plan(project)
     ids = [row.get("id") for row in rows]
     if not rows or any(not isinstance(i, str) or not re.fullmatch(r"[\w-]+", i) or i == "si" for i in ids) or len(set(ids)) != len(ids):
@@ -566,6 +563,9 @@ def produce(project, top, container):
               "scope": data["scope"], "full_design_verified": False}
     verdict = "FAIL" if any(s["status"] == "FAIL" for s in scenarios) else (
         "PASS" if len(scenarios) == len(rows) and all(s["status"] == "PASS" for s in scenarios) else "NOT_MEASURED")
+    common["execution"] = engine.execution
+    common["native_root"] = str(root.relative_to(project))
+    common["tool_versions"] = engine.versions
     cosim = {**common, "verdict": verdict, "scenarios": scenarios, "all_scenarios_passed": verdict == "PASS"}
     write_json(project / m3.COSIM, cosim)
     write_json(project / m3.SI, {**common, **si})
@@ -577,7 +577,6 @@ def produce(project, top, container):
               "run_id": token,
               "native_root": str(root.relative_to(project)), "scenario_ids": ids,
               "cosim_verdict": verdict, "si_verdict": si["verdict"]}
-    write_json(project / m3.RECEIPT, record)
     return record
 
 

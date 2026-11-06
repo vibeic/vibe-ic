@@ -399,24 +399,6 @@ def native_diagnostics(process, argv, project, require_phase2=True):
             "argv": argv, "rc": process.rc, "native_verdict": report["verdict"]}
 
 
-def _run_public_window(project, engine, options):
-    from flow_pdn_current import needs_estimate
-    route = options["route"]
-    original_common = None
-    if route["delivery_target"] in {"gds", "shippable_gds", "foundry_handoff"}:
-        table = json.loads(engine.TABLE.read_text())
-        window = {**route, "verify_through": options.get("to_name") or route["verify_through"]}
-        if needs_estimate(window, options.get("from_name"), table):
-            estimate = engine.run(project, **{**options, "to_name": "pre_layout_timing"})
-            if estimate.get("common_wall_seconds") is not None:
-                original_common = time.perf_counter() - estimate["common_wall_seconds"]
-            if options.get("from_name"):
-                options = {**options, "from_name": "die_floorplan_and_macros"}
-    summary = engine.run(project, **options)
-    if original_common is not None:
-        summary["common_wall_seconds"] = time.perf_counter() - original_common
-        engine.write_json(project / "reports/flow_engine.json", summary)
-    return summary
 
 
 def run_public(args):
@@ -464,7 +446,7 @@ def run_public(args):
         for name in ("from_name", "to_name"):
             if getattr(args, name, None):
                 options[name] = getattr(args, name)
-        summary = _run_public_window(project, flow_engine, options)
+        summary = flow_engine.run(project, **options)
         return 1 if summary.get("fail") else 2 if summary.get("not_measured") else 0
     table = flow_engine.read_json(flow_engine.TABLE)
     selected = flow_engine.select_steps(table, route,
@@ -490,7 +472,7 @@ def run_public(args):
         options["from_name"] = first
     if last:
         options["to_name"] = last
-    summary = _run_public_window(project, flow_engine, options)
+    summary = flow_engine.run(project, **options)
 
     return 1 if summary.get("fail") else 2 if summary.get("not_measured") else 0
 

@@ -927,6 +927,16 @@ def levelisation_failure_reason(flat_verilog_text: str, liberty: str) -> str:
         f"and none is reported.")
 
 
+def _local_script(project: Path, text: str, pdk_dir=None, extra_mounts=None) -> str:
+    if not _CE.no_container_route():
+        return text
+    mounts = [("/work", str(project))]
+    mounts.extend((str(container), str(host)) for host, container in extra_mounts or [])
+    if pdk_dir is not None:
+        mounts.append(("/pdk", str(pdk_dir)))
+    return _CE.localise_mounted_paths(text, mounts)
+
+
 def _gate_levelise(project: Path, cut_rel: str, liberty_ctr: "str | list[str]",
                    top: str, flat_rel: str, pdk_dir: Path | None,
                    timeout: int,
@@ -943,6 +953,7 @@ def _gate_levelise(project: Path, cut_rel: str, liberty_ctr: "str | list[str]",
     # abort the whole batch mid-run. This keeps every fault site referenceable
     # across yosys builds that name flattened cell nets `<inst>.<pin>`.
     script = _tdf_pre_flatten_script(liberty_ctr, cut_rel, top, flat_rel)
+    script = _local_script(project, script, pdk_dir, extra_mounts)
     script_rel = str(Path(flat_rel).parent / "_tdf_pre.ys")
     (project / script_rel).write_text(script)
     ec, out, err = _run_in_docker(
@@ -1274,34 +1285,8 @@ def _detect_sat_solver(project: Path, pdk_dir: Path | None,
 
 def _build_batch_script(flat_rel: str, miter_rel: str, top: str,
                         faults: list, prim_in_names: list[str],
-                        sat_timeout: int = DEFAULT_PER_FAULT_SAT_TIMEOUT,
                         select_solver: str = "") -> str:
-    """One Yosys script that solves every fault in the sample in a single
-    process. #154 FLATTEN-ONCE: the faulty core copy is created and the 3×-core
-    2-frame miter is resolved + flattened EXACTLY ONCE, then snapshotted with
-    `design -save`. Each fault reloads that flat snapshot and injects the
-    launch-frame stuck-at directly on the ALREADY-flattened faulty-instance net
-    `fb.<net>` (the `fb` frame-2 faulty instance of the core), then runs
-    `sat -prove trig 0 -timeout <T> -set f1.<net> <init>` with the primary
-    inputs -show'd so the detecting 2-pattern can be recovered.
-
-    Why this is equivalent to (and much cheaper than) the old per-fault recipe:
-    the OLD script reloaded an UN-flattened base, `copy`-d the core, injected
-    into the copy, then RE-RAN `hierarchy`+`flatten` on the whole miter FOR
-    EVERY FAULT — and that per-fault re-flatten forced a fresh ~461 k-var CNF
-    build + SAT solve each time (measured ~25 s/fault → a 400-fault batch is
-    killed by the wall before any verdict → 0 %). Injecting on the flat net via
-    `connect -nomap -set fb.<net>` reaches the identical physical wire the old
-    in-module `connect -nomap -set <net>` reached after flatten (f1/g2/fb are
-    the same core flattened the same way, so `fb.<net>` mirrors the `f1.<net>`
-    the sat `-set` already addresses); an A/B parity run confirmed byte-identical
-    per-fault verdicts. `-nomap` is REQUIRED so the forced net is not silently
-    remapped to its driver alias (else the fault is NOT injected → spurious
-    detections). The per-fault `sat -timeout <T>` caps one pathological deep-cone
-    fault (undecided → conservative ABORT, never a false detection). A one-time
-    `VIBEICTDF_SETUP_DONE` marker + a per-fault `VIBEICTDF <net> <kind>` marker
-    let the parser tell a fault that was NEVER REACHED (batch killed by the wall
-    budget before its block) from one that was attempted-but-undecided."""
+    """Solve each requested fault in one native SAT batch."""
     show = " ".join(f"-show {n}" for n in prim_in_names)
     # #ATPG-SAT: route the per-fault prove at a modern external CDCL solver
     # (kissat/cadical) wired into the fork's `sat` command when the image
@@ -1329,7 +1314,7 @@ def _build_batch_script(flat_rel: str, miter_rel: str, top: str,
             # value the transition launches FROM.
             f"connect -nomap -set fb.{net} {stuck}",
             f"log VIBEICTDF {raw} {kind}",
-            f"sat -prove trig 0 -timeout {int(sat_timeout)} "
+            "sat -prove trig 0 "
             f"{sel}-set f1.{net} {init} {show}".rstrip(),
         ]
     return "\n".join(L) + "\n"
@@ -1428,17 +1413,10 @@ def _parse_batch_log(log: str, faults: list, prim_in_names: list[str]):
                     script). NOT a per-fault outcome, NOT a design property; it
                     must never enter the coverage denominator and must never be
                     described as "attempted but left undecided".
-      * 'ABORT'     marker present, no sat verdict, and NO fatal error — the
-                    fault WAS attempted but left undecided (per-fault `sat
-                    -timeout` hit, solver interrupted, or the batch was killed
-                    WHILE solving it). Conservatively undetected — never a
-                    false detection.
-      * 'UNREACHED' NO marker at all — the batch never got to this fault (e.g.
-                    the wall budget killed yosys first, #154). The caller
-                    EXCLUDES these from the graded sample (an honest, disclosed
-                    budget-truncation) rather than counting them undetected — so
-                    a design's real coverage over the graded faults is not
-                    depressed by faults the tool simply ran out of time to try.
+      * 'ABORT'     marker present, no verdict and no fatal error. The solver
+                    left the attempted fault undecided; it is not detected.
+      * 'UNREACHED' no marker. The caller reports incomplete measurement
+                    instead of scoring a shortened fault population.
     `setup_done` is True iff the one-time flatten/setup marker was emitted (the
     miter flattened and at least the first fault block began). Pure."""
     setup_done = _SETUP_MARKER in (log or "")
@@ -1480,8 +1458,7 @@ def _to_container_path(project: Path, p: str) -> str:
 def run_tdf_atpg(project: Path, netlist_rel: str, cut_rel: str, liberty: str,
                  top: str, clock: str, dff_cells: str | None,
                  floor: float, max_faults: int, pdk_dir: Path | None,
-                 timeout: int = 1800,
-                 sat_timeout: int = DEFAULT_PER_FAULT_SAT_TIMEOUT
+                 timeout: int = 1800
                  ) -> tuple[int, dict]:
     """Full producer. Returns (exit_code, report_dict)."""
     dft_dir = (_pl.dft_dir(project) if _pl is not None
@@ -1634,140 +1611,30 @@ def run_tdf_atpg(project: Path, netlist_rel: str, cut_rel: str, liberty: str,
     nets = enumerate_fault_sites(flat_text)
     all_faults = enumerate_tdf_faults(nets)
     scan_flops = len(pairs)
-    # SIZE-SCALED WALL: the caller's --timeout is the FLOOR; the effective wall
-    # (and, below, the calibration setup-allowance) scales with THIS design's
-    # own flop count so a large design's sample is not starved and its one-time
-    # flatten is never killed by a fixed ceiling. See _scaled_wall_budget.
-    wall = _scaled_wall_budget(timeout, scan_flops)
-    base.update({
-        "scan_flops": scan_flops,
-        "fault_sites_total": len(nets),
-        "tdf_faults_total": len(all_faults),
-        "wall_budget_floor_sec": timeout,
-        "wall_budget_sec": wall,
-    })
+    base.update({"scan_flops": scan_flops, "fault_sites_total": len(nets),
+                 "tdf_faults_total": len(all_faults)})
 
-    # Build the 2-frame LOC miter ONCE (reused by the calibration probe and the
-    # real run). The batch itself does the flatten-once (see _build_batch_script).
     miter_text = build_loc_miter(_top, prim_in, prim_out, pairs)
     (project / miter_rel).write_text(miter_text)
 
-    # Select a modern external CDCL `sat` backend (kissat/cadical) if the fork
-    # image provides one — this is the fix for the MiniSAT-timeout aborts that
-    # collapsed at-speed coverage. Self-validating + fail-safe to the built-in
-    # engine (see _detect_sat_solver). Probed ONCE, reused by both batches.
-    select_solver = _detect_sat_solver(project, pdk_dir, timeout=min(timeout, 120))
-    base["sat_solver"] = select_solver or "minisat (built-in ezSAT)"
+    base["sat_solver"] = "native default"
 
-    def _run_batch(sample, wall, tag):
+    def _run_batch(sample, tag):
         batch = _build_batch_script(flat_rel, miter_rel, _top, sample,
-                                    prim_in_names, sat_timeout=sat_timeout,
-                                    select_solver=select_solver)
+                                    prim_in_names)
+        batch = _local_script(project, batch, pdk_dir)
         batch_rel = f"phase2/stage2/dft/tdf/_tdf_{tag}.ys"
         (project / batch_rel).write_text(batch)
         t0 = time.time()
         ec, out, err = _run_in_docker(project, f"yosys /work/{batch_rel}",
-                                      timeout=max(30, int(wall)), pdk_dir=pdk_dir)
+                                      timeout=timeout, pdk_dir=pdk_dir)
         return ec, (out + "\n" + err), time.time() - t0
 
-    # 3a. CALIBRATION (#154 lever c) — measure THIS design's per-fault SAT
-    # seconds on a tiny strided probe so the real sample is sized to COMPLETE
-    # within the wall budget (a smaller, fully-graded, design-spread sample beats
-    # a max-faults batch that all-ABORTs → 0 %). Bounded so it cannot itself eat
-    # the whole budget.
-    cal_n = min(_CALIBRATION_FAULTS, len(all_faults))
-    cal_faults, _ = sample_faults(all_faults, cal_n)
-    # The calibration probe must survive the one-time flatten of THIS design's
-    # miter (which grows with flop count) plus its `cal_n` SAT solves; the
-    # setup-allowance therefore scales with scan_flops instead of a fixed 60 s.
-    # Bounded by half the scaled wall so calibration can never eat the budget.
-    cal_wall = min(wall // 2,
-                   _scaled_setup_allowance(scan_flops) + cal_n * sat_timeout)
-    cal_ec, cal_log, cal_elapsed = _run_batch(cal_faults, cal_wall, "cal")
-    (tdf_dir / "cal_run.log").write_text(cal_log[-100000:])
-    sat_calls, sat_sec, flatten_sec = _parse_time_spent(cal_log)
-    cal_results, _, cal_setup_done = _parse_batch_log(cal_log, cal_faults,
-                                                      prim_in_names)
-    cal_graded = sum(1 for _, _, v in cal_results if v in ("DET", "RED", "ABORT"))
-    # per-fault SAT seconds: prefer Yosys' own timing breakdown; else derive from
-    # the measured wall over however many faults actually graded (conservative).
-    if sat_calls > 0 and sat_sec > 0:
-        per_fault_sec = sat_sec / sat_calls
-        setup_sec = float(flatten_sec)
-    elif cal_graded > 0:
-        per_fault_sec = max(1.0, (cal_elapsed - flatten_sec) / cal_graded)
-        setup_sec = float(flatten_sec)
-    else:
-        # the probe could not grade even one fault in its slice → the design is
-        # extremely heavy; fall back to a conservative sat_timeout-based estimate.
-        per_fault_sec = float(sat_timeout)
-        setup_sec = float(flatten_sec or 30)
-
-    # A fatal tool error during CALIBRATION is an ERROR, not a speed sample.
-    # (Measured: the calibration hit the same "No SAT model available" crash,
-    # timed it, and reported per_fault_sat_sec = 1.0 — declaring all 398 faults
-    # comfortably affordable. It was timing a crash. The pre-existing guard
-    # below could not fire because the setup marker IS emitted before the first
-    # `sat`, so cal_setup_done was True.)
-    cal_tool_err = [(n, k) for n, k, v in cal_results if v == "TOOL_ERROR"]
-    if cal_tool_err:
-        base.update({"verdict": "ERROR", "status": "ERROR",
-                     "tool_error": True,
-                     "reasons": [
-                         f"ATPG TOOL FAILURE during calibration (yosys exit "
-                         f"{cal_ec}): the at-speed engine did not run. This is "
-                         f"NOT a coverage measurement and no coverage is "
-                         f"reported.",
-                         _fatal_tool_message(cal_log)]})
-        return 1, base
-
-    if not cal_setup_done and cal_graded == 0:
-        base.update({"verdict": "ERROR", "status": "ERROR",
-                     "reasons": [f"ATPG calibration produced no setup marker or "
-                                 f"verdict (yosys exit {cal_ec}) within the "
-                                 f"{cal_wall}s size-scaled calibration wall "
-                                 f"(setup-allowance {_scaled_setup_allowance(scan_flops)}s "
-                                 f"for {scan_flops} flops); cannot measure TDF "
-                                 f"coverage", (cal_log[-400:] or "").strip()]})
-        return 1, base
-
-    # 3b. RIGHT-SIZE + SPREAD the real sample against the remaining budget.
-    remaining = wall - cal_elapsed
-    n_target = _rightsize_sample(per_fault_sec, setup_sec, remaining,
-                                 max_faults, len(all_faults))
-    faults, _ = sample_faults(all_faults, n_target)
-    # A bit-reversal spread so that IF the wall still truncates the batch, the
-    # graded prefix samples the WHOLE design, not a low-net-id cluster.
-    faults = _spread_order(faults)
-    budget_bounded = n_target < min(max_faults, len(all_faults))
-    base["calibration"] = {
-        "probe_faults": cal_n,
-        "per_fault_sat_sec": round(per_fault_sec, 2),
-        "setup_sec": round(setup_sec, 2),
-        "wall_budget_sec": wall,
-        "wall_budget_floor_sec": timeout,
-        "cal_wall_sec": cal_wall,
-        "setup_allowance_sec": _scaled_setup_allowance(scan_flops),
-        "per_fault_sat_timeout_sec": sat_timeout,
-        "sized_to_budget": budget_bounded,
-        "n_target": n_target,
-    }
-
-    # 4. SOLVE the right-sized sample within the remaining wall budget.
-    real_ec, log, real_elapsed = _run_batch(faults, remaining, "batch")
+    faults, _ = sample_faults(all_faults, max_faults)
+    real_ec, log, real_elapsed = _run_batch(faults, "batch")
     (tdf_dir / "sat_run.log").write_text(log[-200000:])
     results, example, setup_done = _parse_batch_log(log, faults, prim_in_names)
 
-    # #154 completed-prefix: a fault the batch NEVER REACHED (wall killed yosys
-    # first) is EXCLUDED from the graded sample AND disclosed — never counted as
-    # undetected (counting un-reached faults undetected is exactly what scored a
-    # too-large batch 0 %). Genuine per-fault aborts (marker present, undecided)
-    # STILL count as undetected — anti-gaming intact.
-    # A TOOL FAILURE is not a fault verdict. A batch that died inside yosys
-    # produced NO measurement of this design, so it is reported as what it is
-    # and NOTHING is graded from it — the crash must reach the operator as a
-    # tool failure, never as a coverage number. This is checked BEFORE the
-    # grading arithmetic so a crash can never reach `coverage_math` at all.
     tool_err = [(n, k) for n, k, v in results if v == "TOOL_ERROR"]
     if tool_err:
         nets = ", ".join(f"{n}/{k}" for n, k in tool_err[:4])
@@ -1780,7 +1647,7 @@ def run_tdf_atpg(project: Path, netlist_rel: str, cut_rel: str, liberty: str,
             "reasons": [
                 f"ATPG TOOL FAILURE (yosys exit {real_ec}): the at-speed "
                 f"engine aborted at {nets}{more} after "
-                f"{real_elapsed:.0f}s of its {int(remaining)}s budget. The "
+                f"{real_elapsed:.0f}s. The "
                 f"engine did not run, so NO at-speed coverage was measured and "
                 f"none is reported. This is a statement about the TOOL, not "
                 f"about the design's testability -- do NOT read it as a "
@@ -1795,6 +1662,13 @@ def run_tdf_atpg(project: Path, netlist_rel: str, cut_rel: str, liberty: str,
     red = sum(1 for _, _, v in graded if v == "RED")
     abort = sum(1 for _, _, v in graded if v == "ABORT")
 
+    if unreached:
+        base.update({"verdict": "NOT_MEASURED", "status": "NOT_MEASURED",
+                     "tdf_faults_sampled": len(faults), "tdf_faults_graded": len(graded),
+                     "ungraded_faults": unreached,
+                     "reasons": [f"Native SAT left {unreached} of {len(faults)} requested faults ungraded."]})
+        return 2, base
+
     if det + red + abort == 0:
         base.update({"verdict": "ERROR", "status": "ERROR",
                      "reasons": [f"ATPG produced no gradeable verdicts (yosys "
@@ -1802,12 +1676,11 @@ def run_tdf_atpg(project: Path, netlist_rel: str, cut_rel: str, liberty: str,
                                  (log[-400:] or "").strip()]})
         return 1, base
 
-    # 5. GRADE over the faults that were actually attempted (completed prefix).
     cov = coverage_math(det, red, abort)
     base.update(cov)
     base["tdf_faults_sampled"] = cov["sampled_faults"]     # = graded count
     base["tdf_faults_graded"] = cov["sampled_faults"]
-    base["budget_truncated_faults"] = unreached
+    base["ungraded_faults"] = unreached
     base["fault_sample_applied"] = (cov["sampled_faults"] < len(all_faults))
     test_cov = cov["tdf_test_coverage_pct"]
     ge_floor = (test_cov is not None and test_cov >= floor)
@@ -1818,35 +1691,6 @@ def run_tdf_atpg(project: Path, netlist_rel: str, cut_rel: str, liberty: str,
             f"(detected {det}/(graded {cov['sampled_faults']} - redundant "
             f"{red}) = {cov['testable_faults']} testable; aborted {abort} "
             "counted as undetected)")
-    if unreached:
-        # "Raise --timeout" is only true advice if the batch actually SPENT its
-        # wall. A batch that stopped after a small fraction of its budget did
-        # not run out of time — it stopped early, and telling the operator to
-        # raise the timeout sends them to burn the wall for no change.
-        # (Measured: 397 of 398 faults were reported "not reached within the
-        # 1995s wall budget" by a process that had consumed ~2s of it.)
-        spent_frac = (real_elapsed / remaining) if remaining > 0 else 1.0
-        disclosure = (
-            f"DISCLOSED budget-truncation: {unreached} of {len(faults)} sampled "
-            f"faults were not reached and are EXCLUDED from the graded sample "
-            f"(NOT counted undetected); coverage is over the "
-            f"{cov['sampled_faults']} graded faults.")
-        if spent_frac >= _WALL_SPENT_FRACTION:
-            reasons.append(
-                disclosure +
-                f" The batch spent {real_elapsed:.0f}s of its {int(remaining)}s "
-                f"share of the {wall}s size-scaled wall budget (floor "
-                f"{timeout}s + {WALL_PER_SCAN_FLOP:g}s/scan-flop, {scan_flops} "
-                f"flops). Raise --timeout or lower --max-faults for a fuller "
-                f"sample.")
-        else:
-            reasons.append(
-                disclosure +
-                f" The batch did NOT run out of time: it stopped after "
-                f"{real_elapsed:.0f}s of its {int(remaining)}s share of the "
-                f"{wall}s wall budget (yosys exit {real_ec}). Raising --timeout "
-                f"will NOT reach more faults -- investigate why the batch "
-                f"stopped early instead.")
     base.update({
         "ge_floor": ge_floor,
         "launch_capture_pattern_count": det,   # each detection IS a 2-pattern
@@ -1950,12 +1794,6 @@ def main(argv: list[str] | None = None) -> int:
                    help="PDK dir mounted at /pdk (default ../shared_pdk for the "
                         "commercial model, if present)")
     p.add_argument("--timeout", type=int, default=1800)
-    p.add_argument("--sat-timeout", type=int,
-                   default=DEFAULT_PER_FAULT_SAT_TIMEOUT,
-                   help="Per-fault SAT wall cap in seconds (default "
-                        "%(default)s; #154 outlier guard: one pathological "
-                        "deep-cone fault cannot stall the batch — an undecided "
-                        "fault is a conservative ABORT, never a false detect).")
     p.add_argument("--json", default=None,
                    help="Report path (default reports/phase2/dft/"
                         "transition_coverage.json)")
@@ -2029,7 +1867,7 @@ def main(argv: list[str] | None = None) -> int:
         project, netlist_rel=args.netlist, cut_rel=args.cut_netlist,
         liberty=args.liberty, top=args.top, clock=args.clock,
         dff_cells=args.dff_cells, floor=args.floor, max_faults=args.max_faults,
-        pdk_dir=pdk_dir, timeout=args.timeout, sat_timeout=args.sat_timeout)
+        pdk_dir=pdk_dir, timeout=args.timeout)
 
     if args.json:
         json_path = Path(args.json)
@@ -2041,14 +1879,14 @@ def main(argv: list[str] | None = None) -> int:
     json_path.write_text(json.dumps(report, indent=2))
 
     v = report.get("verdict")
-    trunc = report.get("budget_truncated_faults") or 0
+    trunc = report.get("ungraded_faults") or 0
     print(f"{_PROGRAM}: verdict={v} "
           f"test_cov={report.get('tdf_test_coverage_pct')}% "
           f"detected={report.get('detected')} redundant={report.get('redundant')} "
           f"aborted={report.get('aborted')} "
           f"graded={report.get('tdf_faults_sampled')}/"
           f"{report.get('tdf_faults_total')} "
-          + (f"budget_truncated={trunc} " if trunc else "")
+          + (f"ungraded={trunc} " if trunc else "")
           + f"patterns={report.get('launch_capture_pattern_count')}")
     if exit_code != 0 and v != "NOT_APPLICABLE":
         print(f"  (see {json_path})", file=sys.stderr)

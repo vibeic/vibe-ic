@@ -418,19 +418,34 @@ def test_public_native_resume_forwards_pdk_and_from_without_rerouting(tmp_path, 
     assert observed[0]["route"]["verify_closed_steps"] == ["1", "2"]
 
 
-def test_sizing_prepass_forced_synthesis_resume_replays_physical_geometry(tmp_path, monkeypatch):
+def test_public_entry_runs_one_pass_from_requested_step(tmp_path, monkeypatch):
     import flow_pdn_current
     observed = []
     table = tmp_path / "table.json"
     table.write_text("{}")
     engine = SimpleNamespace(TABLE=table, run=lambda project, **kwargs: observed.append(kwargs) or {})
     monkeypatch.setitem(sys.modules, "flow_engine", engine)
-    monkeypatch.setattr(flow_pdn_current, "needs_estimate", lambda *args: True)
     args = SimpleNamespace(project=tmp_path, entry_step="requirements_and_delivery_route",
                            exit_step="candidate_electromigration", rtl_input="structured",
                            delivery_target="shippable_gds", route="ic", from_name="synthesis", pdk="gf180mcuD")
     assert frontend.run_public(args) == 0
     assert observed[0]["from_name"] == "synthesis"
-    assert observed[0]["to_name"] == "pre_layout_timing"
-    assert observed[1]["from_name"] == "die_floorplan_and_macros"
-    assert "to_name" not in observed[1]
+    assert len(observed) == 1
+    assert "to_name" not in observed[0]
+
+
+def test_public_em_failure_returns_native_failure_without_replay(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import sys
+    observed = []
+    native = {"fail": 1, "not_measured": 0, "steps": [{
+        "name": "candidate_electromigration", "status": "FAIL",
+        "native_metrics": {"em_violations": 2}}]}
+    monkeypatch.setitem(sys.modules, "flow_engine", SimpleNamespace(
+        run=lambda project, **kwargs: observed.append(kwargs) or native))
+    args = SimpleNamespace(project=tmp_path, entry_step="requirements_and_delivery_route",
+        exit_step="candidate_electromigration", rtl_input="structured",
+        delivery_target="ip_hardmacro", route="ip", from_name=None, pdk="auto")
+    assert frontend.run_public(args) == 1
+    assert len(observed) == 1
+    assert native["steps"][0]["native_metrics"] == {"em_violations": 2}

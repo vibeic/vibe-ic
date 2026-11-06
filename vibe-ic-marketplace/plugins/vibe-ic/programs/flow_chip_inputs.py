@@ -49,6 +49,39 @@ def _bits(port: dict) -> list[str]:
     return [f"{port['name']}[{i}]" for i in range(port["msb"], port["lsb"] + step, step)]
 
 
+def netlist_area(config, state, toolbox, directory, on_tool_run=None):
+    """Read OpenROAD's area with the floorplanner's native netlist/library inputs."""
+    from librelane.steps import Step, StepError, StepException
+
+    directory.mkdir(parents=True, exist_ok=True)
+    script = directory / "area.tcl"
+    script.write_text("source $::env(SCRIPTS_DIR)/openroad/common/io.tcl\n"
+        "read_pnr_libs\nread_lefs\nread_current_netlist\nreport_design_area_metrics\n")
+    step = Step.factory.get("OpenROAD.Floorplan")(config, state)
+    step.get_script_path = lambda: str(script)
+    started = time.monotonic()
+    code, ran, status, detail = None, False, "NOT_MEASURED", ""
+    try:
+        step.start(toolbox=toolbox, step_dir=str(directory))
+        area = json.loads((directory / "or_metrics_out.json").read_text()).get("design__instance__area")
+        code, ran, status = 0, True, "PASS" if area is not None else "NOT_MEASURED"
+        return area
+    except (StepException, FileNotFoundError) as exc:
+        code, ran, status, detail = None, False, "NOT_MEASURED", str(exc)
+        raise
+    except StepError as exc:
+        code, ran, status, detail = getattr(getattr(exc, "underlying_error", None), "returncode", 1) or 1, True, "FAIL", str(exc)
+        raise
+    except Exception as exc:
+        detail = str(exc)
+        raise
+    finally:
+        if on_tool_run is not None:
+            on_tool_run({"name": "OpenROAD.ReportDesignArea", "ran": ran, "exit_code": code,
+                "status": status, "tool_seconds": time.monotonic() - started,
+                "detail": detail, "reports": str(directory)})
+
+
 def _native_core(project: Path, core_config: dict, destination: Path, on_tool_run=None):
     from flow_config import native_defaults
     from librelane.common import Toolbox
@@ -65,6 +98,10 @@ def _native_core(project: Path, core_config: dict, destination: Path, on_tool_ru
     toolbox = Toolbox(str(run_root / "tool_tmp"))
     state = State()
     runs = []
+    def observed(run):
+        runs.append({"name": run["name"], "tool_seconds": run["tool_seconds"]})
+        if on_tool_run is not None:
+            on_tool_run(run)
     try:
         for name in ("Yosys.JsonHeader", "Yosys.Synthesis"):
             step = Step.factory.get(name)(owner.config, state)
@@ -90,18 +127,17 @@ def _native_core(project: Path, core_config: dict, destination: Path, on_tool_ru
             finally:
                 os.chdir(cwd)
                 elapsed = time.monotonic() - started
-                runs.append({"name": name, "tool_seconds": elapsed})
-                if on_tool_run is not None:
-                    on_tool_run({"name": name, "ran": ran, "exit_code": code,
-                                 "status": status, "tool_seconds": elapsed,
-                                 "detail": detail, "reports": str(directory)})
+                observed({"name": name, "ran": ran, "exit_code": code,
+                          "status": status, "tool_seconds": elapsed,
+                          "detail": detail, "reports": str(directory)})
+        area = netlist_area(owner.config, state, toolbox, run_root / "openroad_area", observed)
     finally:
         (destination / "sizing.json").write_text(json.dumps({"runs": runs,
+            "top": core_config["DESIGN_NAME"], "state_out": str(run_root / "yosys_synthesis/state_out.json"),
             "tool_seconds": sum(run["tool_seconds"] for run in runs)}, indent=2) + "\n")
     header = json.loads(Path(str(state[DesignFormat.JSON_HEADER])).read_text())
-    area = state.metrics.get("design__instance__area")
     if area is None or float(area) <= 0:
-        raise FileNotFoundError("Missing native Yosys mapped design__instance__area")
+        raise FileNotFoundError("Missing native OpenROAD design__instance__area")
     return native, _ports(header, core_config["DESIGN_NAME"]), float(area), runs
 
 
@@ -450,6 +486,25 @@ def _floorplan(native: dict, chosen: dict, ordered: dict, library: dict, area: f
                        "pad_side_widths_um": spans, "manufacturing_grid_um": grid}
 
 
+def sized_floorplan(project: Path, native: dict, settings: dict, area: float) -> dict:
+    from flow_config import _load
+
+    path = project / "work/flow/chip/preparation.json"
+    prepared = _load(path)
+    fields = _load(project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json").get("fields", {})
+    native = {**native, **settings, "DIE_AREA": fields.get("die_area_um"),
+              "CORE_AREA": fields.get("core_area_um")}
+    slot = _selected_slot(project)
+    if slot is not None:
+        native = _slot_geometry(native, slot)
+    _, placement, _ = _side_ports(project, prepared["ports"])
+    die, core, geometry = _floorplan(native, prepared["pads"], prepared["pad_sides"],
+        _library(native), area, placement, settings)
+    prepared.update(geometry=geometry, die_area_um=die, core_area_um=core)
+    path.write_text(json.dumps(prepared, indent=2, default=str) + "\n")
+    return {"DIE_AREA": die, "CORE_AREA": core}
+
+
 def _identifier(name: str) -> str:
     return name if re.fullmatch(r"[A-Za-z_][A-Za-z_0-9$]*", name) else "\\" + name.lstrip("\\") + " "
 
@@ -514,6 +569,17 @@ def _tcl_word(value):
         "\\" + char if char in '\\ $;{}[]"' else char) for char in str(value))
 
 
+def _clock_periods(project: Path, config: dict) -> dict:
+    from flow_config import declared_clocks, clock_period_ns
+    path = project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+    document = json.loads(path.read_text()) if path.is_file() else {}
+    override = document.get('fields', {}).get('clock_target', {}).get('period_ns')
+    clocks = declared_clocks(project, config['PDK'])
+    return {clock.get('source_pin') or clock.get('name'):
+            override if override is not None and len(clocks) == 1 else clock_period_ns(clock)
+            for clock in clocks}
+
+
 def _sdc(project: Path, config: dict, ports: list[dict], input_masters: set[str] | None = None) -> str:
     directions = {bit: port["direction"] for port in ports for bit in _bits(port)}
     def collection(names):
@@ -537,12 +603,13 @@ def _sdc(project: Path, config: dict, ports: list[dict], input_masters: set[str]
     clocks = _required(config, "CLOCK_PORT")
     if isinstance(clocks, str):
         clocks = [clocks]
-    period = float(_required(config, "CLOCK_PERIOD"))
-    budget = period * float(delay) / 100
+    periods = _clock_periods(project, config)
     if any(clock not in directions or directions[clock] != "input" for clock in clocks):
         raise ValueError("CLOCK_PORT must name an elaborated core input")
     lines = ["set_units -time ns"]
     for index, clock in enumerate(clocks):
+        period = float(periods.get(clock) or _required(config, "CLOCK_PERIOD"))
+        budget = period * float(delay) / 100
         lines.append(f"create_clock -name core_clock_{index} -period {period:g} {collection([clock])}")
         for key, command in (("CLOCK_UNCERTAINTY_CONSTRAINT", "set_clock_uncertainty"),
                              ("CLOCK_TRANSITION_CONSTRAINT", "set_clock_transition")):
@@ -610,16 +677,10 @@ def prepare(project: Path, core_config: dict[str, Any], on_tool_run=None) -> dic
         chosen, ordered = _slot_pads(project, chosen, ordered, slot)
     from flow_pdn_current import current_settings
     native.update(VDD_NETS=[power], GND_NETS=[ground])
-    pdn_settings = current_settings(project, native)
-    for _ in range(8):
-        native.update(pdn_settings)
-        die, core, geometry = _floorplan(native, chosen, ordered, library, area, placement, pdn_settings)
-        updated = current_settings(project, native, max(die[2] - die[0], die[3] - die[1]))
-        if updated == pdn_settings:
-            break
-        pdn_settings = updated
-    else:
-        raise ValueError("PDN geometry did not converge after eight floorplan updates.")
+    die, _, _ = _floorplan(native, chosen, ordered, library, area, placement)
+    pdn_settings = current_settings(project, native, max(die[2] - die[0], die[3] - die[1]))
+    native.update(pdn_settings)
+    die, core, geometry = _floorplan(native, chosen, ordered, library, area, placement, pdn_settings)
     top = core_config["DESIGN_NAME"] + "_chip"
     wrapper = destination / "wrapper.v"
     wrapper.write_text(_wrapper(core_config["DESIGN_NAME"], top, ports, chosen, ordered,
@@ -629,6 +690,8 @@ def prepare(project: Path, core_config: dict[str, Any], on_tool_run=None) -> dic
     sdc.write_text(_sdc(project, {**native, **core_config}, ports, input_masters))
     result = dict(core_config)
     result.update(pdn_settings)
+    from flow_clock_geometry import clock_settings
+    result.update(clock_settings(native))
     for axis in ("VERTICAL", "HORIZONTAL"):
         key = f"PDN_CORE_{axis}_LAYER"
         if result.get(key) == native.get(f"PDN_{axis}_LAYER"):
@@ -636,7 +699,8 @@ def prepare(project: Path, core_config: dict[str, Any], on_tool_run=None) -> dic
     result.update(DESIGN_NAME=top, VERILOG_FILES=[*core_config["VERILOG_FILES"], str(wrapper)],
                   FP_SIZING="absolute", DIE_AREA=die, CORE_AREA=core,
                   PDN_ENABLE_PINS=False, MAGIC_EXT_USE_GDS=True,
-                  VDD_NETS=[power], GND_NETS=[ground], PNR_SDC_FILE=str(sdc), SIGNOFF_SDC_FILE=str(sdc))
+                  VDD_NETS=[power], GND_NETS=[ground], FALLBACK_SDC=str(sdc),
+                  PNR_SDC_FILE=str(sdc), SIGNOFF_SDC_FILE=str(sdc))
     if native.get("PDN_CORE_RING") and native.get("PDN_CORE_RING_CONNECT_TO_PADS"):
         ring_layers = {native.get(f"PDN_CORE_{axis}_LAYER") or native[f"PDN_{axis}_LAYER"]
                        for axis in ("VERTICAL", "HORIZONTAL")}

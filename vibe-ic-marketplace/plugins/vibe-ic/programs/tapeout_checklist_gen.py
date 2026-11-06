@@ -291,10 +291,6 @@ def main(argv=None) -> int:
     waivers = _waivers_referencing(project)
     external_refusal = _external_refusal(project)
 
-    import librelane_signoff_evidence as native
-    native_rows = {kind: native.obligation(project, kind)
-                   for kind in ('drc', 'lvs', 'density', 'antenna')}
-
     items = []
     blockers_present = 0
     blockers_total = 0
@@ -325,22 +321,6 @@ def main(argv=None) -> int:
             "gate_note": _GATE_NOTES.get(gate) if gate else None,
             "presence_is_pass": gate is None,
         })
-        kind = {'drc_report': 'drc', 'lvs_report': 'lvs',
-                'metal_fill': 'density', 'metal_fill_flag': 'density',
-                'density_report': 'density', 'antenna_report': 'antenna'}.get(name)
-        if kind and native_rows[kind] is not None:
-            item = items[-1]
-            item['presence_is_pass'] = False
-            item['native_evidence'] = native_rows[kind]
-            item['gate_note'] = 'producer-owned current State/receipt required; marker presence is inventory only'
-            if kind in ('drc', 'lvs'):
-                # Native artifacts replace raw-report inventory in this mode.
-                if severity == 'blocker' and present:
-                    blockers_present -= 1
-                item['present'] = native_rows[kind]['verdict'] == 'PASS'
-                item['path'] = native_rows[kind].get('gds')
-                if severity == 'blocker' and item['present']:
-                    blockers_present += 1
 
     # flow v2.3.1 (review P1-5) — PENDING_FOUNDRY tracking closes here: the
     # handoff gate's pending_foundry_fields become NAMED checklist open

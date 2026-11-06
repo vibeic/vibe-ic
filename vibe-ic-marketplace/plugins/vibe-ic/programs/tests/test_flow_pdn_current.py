@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from flow_pdn_current import coherent_geometry, current_settings, estimated_current, needs_estimate, sized_widths
+from flow_pdn_current import coherent_geometry, current_settings, estimated_current, sized_widths
 
 
 LEF = """MANUFACTURINGGRID 0.005 ;
@@ -73,7 +73,8 @@ def test_custom_pdn_script_keeps_its_control(tmp_path):
     (.001793, 2.68, 1.6, 7.34, 7.),
     (.006871, 10.26, 4.59, 11.13, 8.495),
 ])
-def test_native_geometry_is_resolved_before_floorplan(tmp_path, current, vertical, horizontal, voffset, hoffset):
+@pytest.mark.parametrize("default_supplies", [False, True])
+def test_native_geometry_is_resolved_before_floorplan(tmp_path, current, vertical, horizontal, voffset, hoffset, default_supplies):
     pytest.importorskip("odb")
     native = config()
     library, tech = tmp_path / "corner.lib", tmp_path / "technology.lef"
@@ -90,6 +91,8 @@ def test_native_geometry_is_resolved_before_floorplan(tmp_path, current, vertica
     power = tmp_path / "steps/pre_layout_timing/result.json"
     power.parent.mkdir(parents=True)
     power.write_text(json.dumps({"native_metrics": {"power__total__corner:nom_corner": current * 5}}))
+    if default_supplies:
+        native.update(VDD_NETS=None, GND_NETS=None, VDD_PIN="supply", GND_PIN="ground", PDN_CFG=None)
     values = current_settings(tmp_path, native)
     assert values["PDN_VWIDTH"] == vertical
     assert values["PDN_CORE_RING_VWIDTH"] == vertical
@@ -101,16 +104,6 @@ def test_native_geometry_is_resolved_before_floorplan(tmp_path, current, vertica
     assert not (tmp_path / "work/flow/chip/pdn_current.tcl").exists()
 
 
-def test_estimate_window_is_only_for_chip_before_physical_geometry():
-    from flow_engine import TABLE
-    table = json.loads(TABLE.read_text())
-    route = {"delivery_target": "shippable_gds", "entry_step": "requirements_and_delivery_route",
-             "verify_through": "compliance_and_final_adoption"}
-    assert needs_estimate(route, None, table)
-    assert needs_estimate(route, "synthesis", table)
-    assert not needs_estimate(route, "die_floorplan_and_macros", table)
-    assert not needs_estimate({**route, "delivery_target": "ip_hardmacro"}, None, table)
-    assert not needs_estimate({**route, "verify_through": "pre_layout_timing"}, None, table)
 
 
 def test_native_parallel_run_length_rules_and_explicit_geometry(tmp_path):
@@ -141,6 +134,11 @@ END {layer}
         values = coherent_geometry(native, widths, database.getTech(), 200)
         assert values["PDN_VSPACING"] == 3
         assert values["PDN_CORE_RING_VSPACING"] == 3
+        known = coherent_geometry(native, widths, database.getTech(), 80, {"PDN_VSPACING"})
+        assert known["PDN_VSPACING"] == 1.7
+        bound = coherent_geometry(native, widths, database.getTech(), None)
+        assert bound["PDN_VSPACING"] == 3
+        assert bound["PDN_CORE_RING_VSPACING"] == 3
         with pytest.raises(ValueError, match="Declared PDN_VSPACING"):
             coherent_geometry(native, widths, database.getTech(), 200, {"PDN_VSPACING"})
         native["PDN_VSPACING"] = 3.0015

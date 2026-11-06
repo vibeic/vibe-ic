@@ -55,6 +55,67 @@ def test_native_delay_defaults_need_no_library_scan(existing):
     assert config["EXTRA_EXCLUDED_CELLS"] == existing
 
 
+@pytest.mark.parametrize("cap,slew,expected_cap,expected_slew", [
+    (None, None, ".2", "3"),
+    (".1", "1", ".1", "1"),
+    (".5", "5", ".2", "3"),
+    (".1", None, ".1", "3"),
+    ("0", None, ".2", "3"),
+    (None, "0", ".2", "3"),
+    ("0", "0", ".2", "3"),
+    ("-.1", None, "-.1", "3"),
+    (None, "-1", ".2", "-1"),
+])
+def test_native_cts_characterization_respects_core_limits(cap, slew, expected_cap, expected_slew):
+    pytest.importorskip("librelane")
+    from librelane.config import Config
+    from flow_config import native_defaults
+
+    config = Config({"MAX_CAPACITANCE_CONSTRAINT": Decimal(".2"),
+                     "MAX_TRANSITION_CONSTRAINT": Decimal("3"),
+                     "CTS_MAX_CAP": Decimal(cap) if cap else None,
+                     "CTS_MAX_SLEW": Decimal(slew) if slew else None})
+    result = native_defaults(config)
+    assert result["CTS_MAX_CAP"] == Decimal(expected_cap)
+    assert result["CTS_MAX_SLEW"] == Decimal(expected_slew)
+    assert native_defaults(result)["CTS_MAX_CAP"] == result["CTS_MAX_CAP"]
+    assert config["CTS_MAX_CAP"] == (Decimal(cap) if cap else None)
+
+
+@pytest.mark.parametrize("core_cap,core_slew,cap,slew", [
+    (".2", None, None, None),
+    (None, "3", "0", None),
+    (".2", None, None, "0"),
+    (None, None, "0", "0"),
+])
+def test_native_cts_characterization_does_not_invent_a_missing_axis(core_cap, core_slew, cap, slew):
+    pytest.importorskip("librelane")
+    from librelane.config import Config
+    from flow_config import native_defaults
+
+    config = Config({"MAX_CAPACITANCE_CONSTRAINT": Decimal(core_cap) if core_cap else None,
+                     "MAX_TRANSITION_CONSTRAINT": Decimal(core_slew) if core_slew else None,
+                     "CTS_MAX_CAP": Decimal(cap) if cap else None,
+                     "CTS_MAX_SLEW": Decimal(slew) if slew else None})
+    result = native_defaults(config)
+    assert result["CTS_MAX_CAP"] == config["CTS_MAX_CAP"]
+    assert result["CTS_MAX_SLEW"] == config["CTS_MAX_SLEW"]
+
+
+@pytest.mark.parametrize("core_cap,core_slew", [("0", "3"), (".2", "0"), ("0", "0")])
+def test_native_cts_characterization_preserves_zero_engineering_limits(core_cap, core_slew):
+    pytest.importorskip("librelane")
+    from librelane.config import Config
+    from flow_config import native_defaults
+
+    config = Config({"MAX_CAPACITANCE_CONSTRAINT": Decimal(core_cap),
+                     "MAX_TRANSITION_CONSTRAINT": Decimal(core_slew),
+                     "CTS_MAX_CAP": None, "CTS_MAX_SLEW": None})
+    result = native_defaults(config)
+    assert result["CTS_MAX_CAP"] == Decimal(core_cap)
+    assert result["CTS_MAX_SLEW"] == Decimal(core_slew)
+
+
 @pytest.mark.parametrize("pdk,gf180", [("gf180mcuD", True), ("GF180MCUA", True),
                                       ("sky130A", False), (None, False)])
 def test_native_platform_defaults_exclude_weak_cells_only_for_gf180(tmp_path, pdk, gf180):
@@ -417,9 +478,11 @@ def test_implementation_pdn_widths_reach_native_configuration(project):
 
 
 @pytest.mark.parametrize(("key", "value"), [
+    ("SYNTH_STRATEGY", "DELAY 4"),
     ("PDN_VWIDTH", 2.4), ("RUN_POST_GRT_DESIGN_REPAIR", True),
     ("GRT_DESIGN_REPAIR_MAX_CAP_PCT", 30), ("GRT_DESIGN_REPAIR_MAX_SLEW_PCT", 30),
     ("EXTRA_EXCLUDED_CELLS", ["delay_weak*"]),
+    ("DECAP_CELLS", []), ("DECAP_CELLS", ["native_decap*"]),
 ])
 def test_cli_records_supported_implementation_choice(project, key, value):
     output = project / "config.json"
@@ -516,3 +579,67 @@ def test_shared_input_resolver_recovers_declared_top_without_config_side_effects
     assert top == "unit"
     assert files == [project / "phase2/stage1/rtl/unit.v"]
     assert not (project / "work").exists()
+
+
+def test_explicit_pdn_actuator_overrides_documentary_starting_geometry(project):
+    docs = project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+    docs.write_text(json.dumps({"fields": {"pdk_target": "sky130A", "constraint_declarations": [
+        {"kind": "flow_setting", "token": "PDN_VPITCH", "value": "160"}]}}))
+    declaration = project / "plugin_output/declaration.json"
+    declaration.parent.mkdir()
+    declaration.write_text(json.dumps({"PDN_VPITCH": 80}))
+    assert build_config(project, route="ip")["PDN_VPITCH"] == 80
+
+
+def test_native_config_does_not_reuse_an_existing_power_estimate(project, monkeypatch):
+    from flow_config import build_native_config
+    import flow_pdn_current
+    def unexpected(*args, **kwargs):
+        raise AssertionError("PDN sizing belongs at floorplan, after current native timing")
+    monkeypatch.setattr(flow_pdn_current, "current_settings", unexpected)
+    power = project / "steps/pre_layout_timing/result.json"
+    power.parent.mkdir(parents=True)
+    power.write_text("{}")
+    assert build_native_config(project, route="ip")["PDK"] == build_config(project, route="ip")["PDK"]
+
+
+@pytest.mark.parametrize("vertical,horizontal,legal", [(76.8, 76.59, True), (76.801, 76.59, False)])
+def test_native_pdn_actuator_roundtrip_keeps_decimal_grid_exact(project, monkeypatch, vertical, horizontal, legal):
+    pytest.importorskip("librelane")
+    pytest.importorskip("odb")
+    from librelane.flows import Flow
+    import flow_config
+    (project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json").write_text(
+        json.dumps({"fields": {"pdk_target": "gf180mcuD"}}))
+    power = project / "steps/pre_layout_timing/result.json"
+    power.parent.mkdir(parents=True)
+    power.write_text("{}")
+    monkeypatch.setattr(sys, "argv", ["flow_config.py", "--project", str(project), "--route", "ip",
+        "--set", f"PDN_VPITCH={vertical}", "--set", f"PDN_HPITCH={horizontal}"])
+    assert flow_config.main() == 0
+    if not legal:
+        with pytest.raises(ValueError, match="manufacturing grid"):
+            from flow_pdn_current import current_settings
+            config = flow_config.build_native_config(project, route="ip")
+            owner = Flow.factory.get("Classic")(config, design_dir=str(project))
+            current_settings(project, owner.config.to_raw_dict())
+        return
+    native = flow_config.build_native_config(project, route="ip")
+    owner = Flow.factory.get("Classic")(native, design_dir=str(project))
+    assert owner.config["PDN_VPITCH"] == Decimal(str(vertical))
+    assert owner.config["PDN_HPITCH"] == Decimal(str(horizontal))
+
+
+@pytest.mark.parametrize("override", [None, 8])
+def test_scalar_native_clock_target_uses_the_fastest_declared_clock(project, override):
+    (project / "phase1/generated_docs/L8_TIMING_WAVEFORM.json").write_text(json.dumps({"clock_domains": [
+        {"domain_kind": "primary", "source_pin": "slow_clock", "period_ns": 50},
+        {"domain_kind": "primary", "source_pin": "clk", "freq_mhz": 50}]}))
+    if override is not None:
+        path = project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+        document = json.loads(path.read_text())
+        document["fields"]["clock_target"] = {"period_ns": override}
+        path.write_text(json.dumps(document))
+    config = build_config(project, route="ip")
+    assert config["CLOCK_PORT"] == ["slow_clock", "clk"]
+    assert config["CLOCK_PERIOD"] == 20

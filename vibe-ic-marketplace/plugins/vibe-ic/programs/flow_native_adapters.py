@@ -23,14 +23,19 @@ class Commands:
         self.records = []
         self.seconds = 0.0
 
-    def run(self, argv, cwd=None):
+    def run(self, argv, cwd=None, *, input_text=None):
         started = time.perf_counter()
         argv = list(map(str, argv))
         log = self.directory / f"command_{len(self.records) + 1}.log"
+        input_stream = tempfile.TemporaryFile() if input_text is not None else None
         try:
+            if input_stream is not None:
+                input_stream.write(input_text.encode())
+                input_stream.seek(0)
             with log.open("wb") as output:
                 with subprocess.Popen(argv, cwd=cwd or self.directory, stdout=subprocess.PIPE,
-                                      stderr=subprocess.PIPE, text=True) as process, selectors.DefaultSelector() as selector:
+                                      stderr=subprocess.PIPE, stdin=input_stream,
+                                      text=True) as process, selectors.DefaultSelector() as selector:
                     captured = {process.stdout: bytearray(), process.stderr: bytearray()}
                     for pipe in captured:
                         selector.register(pipe, selectors.EVENT_READ)
@@ -49,6 +54,9 @@ class Commands:
         except FileNotFoundError:
             log.unlink(missing_ok=True)
             return None
+        finally:
+            if input_stream is not None:
+                input_stream.close()
         self.seconds += time.perf_counter() - started
         self.records.append({"command": argv, "exit_code": completed.returncode,
                              "log": str(log)})
@@ -738,6 +746,98 @@ def execute(project, directory, tool, route, *, state=None, config=None):
     directory.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="native_", dir=directory))
     commands = Commands(work)
+    if tool.get("adapter") == "path_delay_atpg":
+        from flow_atpg import path_delay
+        return path_delay(project, work, state=state, config=config)
+    if tool.get("adapter") == "small_delay_atpg":
+        from flow_atpg import small_delay
+        return small_delay(project, work, config=config)
+    if tool.get("adapter") == "final_patterns":
+        from flow_atpg import final_patterns
+        return final_patterns(project, work, state=state, config=config)
+    if tool.get("adapter") in {"security_requirements", "implemented_security"}:
+        from flow_security import requirements
+        return requirements(project, work, tool)
+    if tool.get("adapter") == "safety_injection":
+        from flow_safety import injection
+        return injection(project, work, tool)
+    if tool.get("adapter") == "safety_case":
+        from flow_safety import safety_case
+        return safety_case(project, work, tool)
+    if tool.get("adapter") == "system_scenarios":
+        from flow_system_scenarios import execute as system_scenarios
+        return system_scenarios(project, work, tool)
+    if tool.get("adapter") == "power_intent":
+        from flow_power import intent
+        return intent(project, work, tool)
+    if tool.get("adapter") == "power_simulation":
+        from flow_power import simulation
+        return simulation(project, work, tool)
+    if tool.get("adapter") == "implemented_power_intent":
+        from flow_power import implemented
+        return implemented(project, work, state=state, config=config)
+    if tool.get("adapter") == "transition_atpg":
+        from flow_atpg import transition
+        return transition(project, work, state=state, config=config)
+    if tool.get("adapter") == "final_atpg":
+        from flow_atpg import stuck_at
+        return stuck_at(project, work, state=state, config=config)
+    if tool.get("adapter") == "design_release":
+        from foundry_handoff_pack_gen import execute as release
+        return release(project, work, tool, route, state=state, config=config)
+    if tool.get("adapter") == "package_readiness":
+        from fnmatch import fnmatch
+        import flow109_package_ready
+        config = config or {}
+        tech = [path for pattern, path in config.get("TECH_LEFS", {}).items()
+                if fnmatch(config.get("DEFAULT_CORNER", ""), pattern)]
+        started = time.perf_counter()
+        result = flow109_package_ready.execute(project,
+            def_path=state.get("def") if state is not None else None,
+            tech_lef=tech[0] if len(tech) == 1 else None, io_lefs=config.get("PAD_LEFS"))
+        report = work / "pad_readiness.json"
+        report.write_text(json.dumps(result, indent=2) + "\n")
+        pads = next((row["detail"] for row in result["checks"]
+                     if row["check"] == "pad_bterm_coincidence_check"), {})
+        metrics = {"pad_" + key + "_count": len(pads[key])
+                   for key in ("connected_nets", "not_connected_nets", "undecided_nets") if key in pads}
+        return {"ran": result["native_started"],
+                "exit_code": 1 if result["component_status"] == "FAIL" else 0 if result["native_started"] else None,
+                "metrics": metrics, "reports": [str(report)],
+                "tool_seconds": time.perf_counter() - started, "detail": result["reason"],
+                "native_steps": [{"name": row["check"], "status": row["status"],
+                    "ran": row["check"] != "missing_input",
+                    "exit_code": 1 if row["status"] == "FAIL" else 0,
+                    "detail": row["detail"]} for row in result["checks"]]}
+    if tool.get("adapter") in {"analog", "mixed"}:
+        import importlib
+        native = importlib.import_module("flow_native_" + tool["adapter"])
+        return native.execute(project, work, tool, commands, state=state, config=config or {}, route=route)
+    if tool.get("adapter") == "ip_release_docs":
+        from ip_release_docs_gen import execute as release_docs
+        return release_docs(project, work, tool, route, state=state, config=config)
+    if tool.get("adapter") == "dfm":
+        from dfm_screen_check import execute as dfm
+        return dfm(project, work, tool, route, state=state, config=config)
+    if tool.get("adapter") == "ir_drop":
+        from flow_ir_corners import execute as ir_drop
+        return ir_drop(project, work, tool, route, state=state, config=config)
+    if tool.get("adapter") == "tapeout_precheck":
+        import tapeout_precheck
+        if state is None or not state.get("gds"):
+            return commands.result(detail="Tapeout precheck needs the final GDS in native State.")
+        started = time.perf_counter()
+        result = tapeout_precheck.execute(project, gds=state.get("gds"),
+                                          config=config or {}, directory=work)
+        code = result.get("exit_code")
+        metrics = result.get("measurement") or {}
+        return {"ran": code is not None, "exit_code": code, "metrics": metrics,
+                "reports": [str(path) for path in work.rglob("*") if path.is_file()],
+                "tool_seconds": time.perf_counter() - started,
+                "detail": result.get("reason", ""),
+                "native_steps": [{"name": "KLayout tapeout precheck", "ran": code is not None,
+                                  "exit_code": code, "status": result["verdict"],
+                                  "checks": result.get("checks", [])}]}
     if tool.get("adapter") == "physical_declarations":
         return physical_declarations(project, work, tool, commands, route)
     if tool.get("adapter") == "functional_activity":

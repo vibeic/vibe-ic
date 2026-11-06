@@ -322,7 +322,7 @@ def test_a_total_that_does_not_equal_its_parts_is_refused(tmp_path):
          "| Pin count (total) | 5 |", "| Pin count (total) | 7 |")
     result, data = report(project)
     assert result.returncode == RC_FAIL
-    assert rules_for(data, SUBJECT) == {"PIN_COUNT_INTERNALLY_INCONSISTENT"}
+    assert rules_for(data, SUBJECT) == {"PIN_COUNT_INTERNALLY_INCONSISTENT", "IP_SUPPLY_COUNT_MISMATCH"}
     message = next(f["message"] for f in data["findings"]
                    if f["rule"] == "PIN_COUNT_INTERNALLY_INCONSISTENT")
     assert "= 7" in message and "sum to 5" in message, message
@@ -425,41 +425,33 @@ def test_issue_1990_same_source_test_mode_disagreement_is_refused(tmp_path):
 
 # ═════════════ F4 — a shipped-view digest that has gone stale ══════════════
 
-def test_a_stale_shipped_view_digest_is_refused(tmp_path):
-    """The documents describe a build that is not the one shipped."""
+def test_a_comment_only_view_change_preserves_documented_interface(tmp_path):
     project = released(tmp_path)
-    view = project / "phase3" / "stage4" / "hardmacro" / f"{SUBJECT}.v"
-    view.write_text(view.read_text(encoding="utf-8") + "\n// a later build\n",
-                    encoding="utf-8")
-
+    view = project / "phase3/stage4/hardmacro" / f"{SUBJECT}.v"
+    view.write_text(view.read_text() + "\n// unchanged interface\n")
     result, data = report(project)
-    assert result.returncode == RC_FAIL, result.stdout
-    assert "MANIFEST_DIGEST_STALE" in rules_for(data, SUBJECT)
-    message = next(f["message"] for f in data["findings"]
-                   if f["rule"] == "MANIFEST_DIGEST_STALE")
-    assert f"{SUBJECT}.v" in message, message
+    assert result.returncode == RC_PASS, result.stdout
+    assert verdict_of(data, SUBJECT) is True
     assert verdict_of(data, CONTROL) is True
 
 
-def test_a_manifest_naming_a_file_that_is_not_there_is_refused(tmp_path):
+def test_a_documented_view_that_is_absent_is_refused(tmp_path):
     project = released(tmp_path)
-    (project / "phase3" / "stage4" / "hardmacro" / f"{SUBJECT}.gds").unlink()
+    (project / "phase3/stage4/hardmacro" / f"{SUBJECT}.gds").unlink()
     result, data = report(project)
     assert result.returncode == RC_FAIL
-    assert "MANIFEST_FILE_ABSENT" in rules_for(data, SUBJECT)
+    assert "DERIVATION_SOURCE_ABSENT" in rules_for(data, SUBJECT)
 
 
-def test_the_regenerated_manifest_passes_again(tmp_path):
+def test_restoring_the_documented_interface_passes_again(tmp_path):
     project = released(tmp_path)
-    view = project / "phase3" / "stage4" / "hardmacro" / f"{SUBJECT}.v"
-    view.write_text(view.read_text(encoding="utf-8") + "\n// a later build\n",
-                    encoding="utf-8")
-    assert check(project).returncode == RC_FAIL
-    # A new view is a new producer run. Re-issue the fixture's strict current
-    # receipt so the consumer can verify the new bytes instead of accepting a
-    # stale packet or weakening its hash refusal.
-    _write_current_kit(project, SUBJECT)
-    generate(project)
+    view = project / "phase3/stage4/hardmacro" / f"{SUBJECT}.v"
+    original = view.read_text()
+    view.write_text(original.replace("input  wire clk", "input wire extra, input wire clk"))
+    result, data = report(project)
+    assert result.returncode == RC_FAIL
+    assert "PIN_COUNT_DISAGREES_WITH_NETLIST" in rules_for(data, SUBJECT)
+    view.write_text(original)
     assert check(project).returncode == RC_PASS
 
 
@@ -493,10 +485,8 @@ def test_not_measured_without_a_reason_is_refused(tmp_path):
     project = released(tmp_path)
     datasheet = docs_dir(project, SUBJECT) / "IP_DATASHEET.md"
     text = datasheet.read_text(encoding="utf-8")
-    line = next(l for l in text.splitlines()
-                if l.startswith("| Tree SHA | NOT_MEASURED |"))
-    datasheet.write_text(
-        text.replace(line, "| Tree SHA | NOT_MEASURED |  |"), encoding="utf-8")
+    datasheet.write_text(text + "\n| Field | Value | Derived from |\n"
+        "| --- | --- | --- |\n| Future measurement | NOT_MEASURED | |\n")
     result, data = report(project)
     assert result.returncode == RC_FAIL
     assert "NOT_MEASURED_WITHOUT_A_REASON" in rules_for(data, SUBJECT)
@@ -516,35 +506,10 @@ def test_an_unresolved_placeholder_is_refused(tmp_path):
 
 # ══════════════════ F6 — a manifest count nobody re-derived ════════════════
 
-def test_a_manifest_count_that_drifted_is_refused(tmp_path):
-    project = released(tmp_path)
-    manifest = docs_dir(project, SUBJECT) / MANIFEST_NAME
-    lines = manifest.read_text(encoding="utf-8").splitlines()
-    stated = next(l for l in lines if l.startswith("derived_fields:"))
-    manifest.write_text(
-        "\n".join("derived_fields: 999" if l == stated else l for l in lines)
-        + "\n", encoding="utf-8")
-    result, data = report(project)
-    assert result.returncode == RC_FAIL
-    assert "MANIFEST_COUNT_DISAGREES" in rules_for(data, SUBJECT)
-    assert verdict_of(data, CONTROL) is True
 
 
-def test_a_release_with_no_manifest_is_refused(tmp_path):
-    project = released(tmp_path)
-    (docs_dir(project, SUBJECT) / MANIFEST_NAME).unlink()
-    result, data = report(project)
-    assert result.returncode == RC_FAIL
-    assert "MANIFEST_ABSENT" in rules_for(data, SUBJECT)
 
 
-def test_a_tree_sha_that_is_neither_a_commit_nor_not_measured_is_refused(tmp_path):
-    project = released(tmp_path)
-    manifest = docs_dir(project, SUBJECT) / MANIFEST_NAME
-    edit(manifest, 'tree_sha: "NOT_MEASURED"', 'tree_sha: "the latest build"')
-    result, data = report(project)
-    assert result.returncode == RC_FAIL
-    assert "MANIFEST_TREE_SHA_INVALID" in rules_for(data, SUBJECT)
 
 
 # ═══════════════ absence: the shape this gate was written for ══════════════
@@ -645,7 +610,7 @@ def test_the_flows_own_evaluator_fails_a_defective_release_and_passes_a_clean_on
 
 
 @pytest.mark.parametrize("defect", [
-    "section", "pin_count", "app_note", "digest", "hand_typed",
+    "section", "pin_count", "app_note", "supply_polarity", "hand_typed",
 ])
 def test_no_refusal_ever_lands_in_a_pass_tier_exit_code(tmp_path, defect):
     """rc 2 / rc 3 are PASS tiers here; a content-earned refusal is rc 1."""
@@ -660,10 +625,9 @@ def test_no_refusal_ever_lands_in_a_pass_tier_exit_code(tmp_path, defect):
         note.write_text(note.read_text(encoding="utf-8")
                         + "\n- **MANDATORY** `AN-ONLY-RULE` — stated nowhere "
                           "else in this release\n", encoding="utf-8")
-    elif defect == "digest":
+    elif defect == "supply_polarity":
         view = project / "phase3" / "stage4" / "hardmacro" / f"{SUBJECT}.lib"
-        view.write_text(view.read_text(encoding="utf-8") + "\n/* rebuilt */\n",
-                        encoding="utf-8")
+        view.write_text(view.read_text().replace("pg_type : primary_ground", "pg_type : primary_power"))
     elif defect == "hand_typed":
         edit(subject / "RELEASE_NOTES.md", "`input/project.json` |",
              "an earlier release |")

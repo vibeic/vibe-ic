@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1470
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1470)
+- **Total programs (excluding helpers / shims):** 1480
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1480)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1461 |
+| `any` | 1471 |
 
 ## Alphabetical listing
 
@@ -521,14 +521,16 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow109_netlist_cdc` | any | — | D45 adopted-netlist CDC/RDC adapter over the existing native consumers. |
 | `flow109_package_electrical` | any | — | D67: BLOCKING checks of owner-provided, bounded passive package RLC models. |
 | `flow109_package_plan` | any | — | D06 Default adapter for the existing pad/package-interface producers. |
-| `flow109_package_ready` | any | — | D75 consumes the run's pad, package, CVC and test interface results. |
+| `flow109_package_ready` | any | — | Measure pad-side and bond-terminal geometry from native physical views. |
 | `flow109_route_check` | any | — | D42 Default routed-candidate checks on the adopted D41 database. |
 | `flow109_scan_physical` | any | — | D36 BLOCKING native leaf for the existing Phase-3 physical owner. |
 | `flow109_system_security` | any | — | D16/D17/D73 readers for existing full-stack and formal producers. |
-| `flow109_technology_qualification` | any | — | D03 native technology selection. BLOCKING on native config/pin refusal. |
-| `flow_adapter_jobs` | any | — | One FIFO subprocess lane for independent native adapters. |
+| `flow109_technology_qualification` | any | — | Resolve the documented technology with LibreLane; revisions are observations. |
+| `flow_activity` | any | — | Run functional activity and native vector power on a captured State. |
 | `flow_artifact_paths` | any | — | flow_artifact_paths |
+| `flow_atpg` | any | — | Run the existing ATPG programs on native State views. |
 | `flow_chip_inputs` | any | — | Generate native Chip inputs from the elaborated core and active PDK. |
+| `flow_clock_geometry` | any | — | Derive native clock-wire repair length from the core capacitance budget. |
 | `flow_compliance_check` | any | Wave 91 | Strict Vibe-IC phase 2+3 gate (40 main-track steps + A1-A9 analog + M1-M4 mixed-signal + P0 structural-RTL umbrella in v1.6.15). |
 | `flow_condition_reachability_check` | any | — | the self-disabling-condition guard. |
 | `flow_config` | any | — | Translate generated design documents into native LibreLane configuration. |
@@ -539,21 +541,28 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow_declared_producer_run` | any | — | run the producers the FLOW already declares, so the RUN writes the documents it is supposed to write. |
 | `flow_density_topup` | any | — | flow_density_topup |
 | `flow_dependency_graph_check` | any | — | recompute the flow-gate's dependency dimension. |
+| `flow_dft_steps` | any | — | Native scan replacement, stitching and serial replay on LibreLane State. |
 | `flow_em_corners` | any | — | flow_em_corners |
 | `flow_engine` | any | — | Run the Router-selected window of the native step table. |
 | `flow_engine_frontend` | any | — | flow_engine_frontend |
 | `flow_engine_report` | any | — | Render measured engine results and an integration guide for exported views. |
-| `flow_engine_timing` | any | — | Reduce recorded native, independent-check and review times. |
+| `flow_engine_timing` | any | — | Plain totals of the recorded row durations. |
 | `flow_gate_enforcement_audit` | any | — | which flow gates can actually STOP a run, and which only get to complain afterwards (#306). |
 | `flow_gate_grid` | any | — | recompute the flow-gate grid, and say which cells cannot be. |
 | `flow_ic_checks` | any | — | flow_ic_checks |
 | `flow_ir_corners` | any | — | flow_ir_corners |
 | `flow_native_adapters` | any | — | flow_native_adapters |
+| `flow_native_analog` | any | — | Connect the native analog producers to the current flow's command runner. |
+| `flow_native_analog_die` | any | — | Connect analog physical rows to native State and earlier tool products. |
+| `flow_native_mixed` | any | — | Connect mixed-signal rows to their existing producers. |
 | `flow_native_timing` | any | — | Read OpenSTA's existing reports for the native flow selector. |
 | `flow_native_verification` | any | — | flow_native_verification |
 | `flow_output_substance` | any | — | did the run actually produce this output, or only a file? |
 | `flow_pdn_current` | any | — | flow_pdn_current |
 | `flow_phase_attribution` | any | — | WHO did each of the four phases, and HOW. |
+| `flow_power` | any | — | Call the existing power-intent tools without initializing the physical chain. |
+| `flow_safety` | any | — | Invoke the existing diagnostic injection producer and read its measurements. |
+| `flow_security` | any | — | Run supplied security property decks through the existing native formal adapter. |
 | `flow_spare_cells` | any | — | flow_spare_cells |
 | `flow_stage_check` | any | — | Flow stage check — wrapper for signoff_audit --mode flow. |
 | `flow_stage_membership_single_declaration_check` | any | — | stage membership is declared once. |
@@ -562,7 +571,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow_step_executor_coverage_check` | any | — | "every step has an executor that runs it". |
 | `flow_step_output_content_check` | any | — | Content check for flow step outputs; refusal exits nonzero. |
 | `flow_steps_generate` | any | — | One-time migration of the old registry into the editable native step table. |
-| `fmeda_coverage_check` | any | — | independent anti-fabrication gate over the FMEDA diagnostic-coverage report emitted by `fmeda_fault_injection_coverage.py`. |
+| `flow_system_scenarios` | any | — | Run produced full-stack HDL scenarios through the existing Icarus helper. |
+| `fmeda_coverage_check` | any | — | Read native FMEDA injection counts against the requested ASIL/DC floor. |
 | `fmeda_fault_injection_coverage` | any | — | REAL ISO-26262 FMEDA diagnostic-coverage (DC) measurement by single-stuck-at FAULT INJECTION against a declared safety mechanism (ECC / p... |
 | `fork_downgrade_visibility_check` | any | — | Every abort our EDA fork downgrades to a warning must still be visible to the flow. |
 | `formal_complexity_classify` | any | — | deterministic k-induction feasibility classifier for formal property verification (FPV). |
@@ -760,7 +770,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l21_hard_macro_supply_bind` | any | — | Bind each analog/hard-macro supply PIN to the rail the design's own documents say feeds it — the Phase-1 PRODUCER of `L21.fields.hard_mac... |
 | `l21_macro_supply_rail_declared_check` | any | — | L21 SEMANTIC completeness gate. |
 | `l21_macro_supply_rail_synth` | any | — | Derive the power-intent rail set from the design's OWN hard-macro LEFs. |
-| `l21_to_upf_emit` | any | v0.1.51 | render L21 power intent into an IEEE-1801 UPF handoff artifact (flow v2.3.1, external review R1). |
+| `l21_to_upf_emit` | any | — | Render documented power domains and strategies into UPF. |
 | `l22_analog_verification_plan_emit` | any | — | Project the analog/mixed-signal verification contract into L22. |
 | `l22_checklist_milestone_emit` | any | — | the verification checklist's own milestones. |
 | `l22_coverage_goal_emit` | any | — | lift measurable coverage targets out of the design's own input docs and into L22, the layer that CONSUMES them. |
@@ -1542,7 +1552,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1461 programs)
+### `any` (1471 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `accumulate_synth` — deterministic SOLVER for the CVDP sequential ACCUMULATOR / running-op family:
@@ -2035,14 +2045,16 @@ _(no programs in this group)_
 - `flow109_netlist_cdc` — D45 adopted-netlist CDC/RDC adapter over the existing native consumers.
 - `flow109_package_electrical` — D67: BLOCKING checks of owner-provided, bounded passive package RLC models.
 - `flow109_package_plan` — D06 Default adapter for the existing pad/package-interface producers.
-- `flow109_package_ready` — D75 consumes the run's pad, package, CVC and test interface results.
+- `flow109_package_ready` — Measure pad-side and bond-terminal geometry from native physical views.
 - `flow109_route_check` — D42 Default routed-candidate checks on the adopted D41 database.
 - `flow109_scan_physical` — D36 BLOCKING native leaf for the existing Phase-3 physical owner.
 - `flow109_system_security` — D16/D17/D73 readers for existing full-stack and formal producers.
-- `flow109_technology_qualification` — D03 native technology selection. BLOCKING on native config/pin refusal.
-- `flow_adapter_jobs` — One FIFO subprocess lane for independent native adapters.
+- `flow109_technology_qualification` — Resolve the documented technology with LibreLane; revisions are observations.
+- `flow_activity` — Run functional activity and native vector power on a captured State.
 - `flow_artifact_paths` — flow_artifact_paths
+- `flow_atpg` — Run the existing ATPG programs on native State views.
 - `flow_chip_inputs` — Generate native Chip inputs from the elaborated core and active PDK.
+- `flow_clock_geometry` — Derive native clock-wire repair length from the core capacitance budget.
 - `flow_compliance_check` — Strict Vibe-IC phase 2+3 gate (40 main-track steps + A1-A9 analog + M1-M4 mixed-signal + P0 structural-RTL umbrella in v1.6.15).  _[Wave 91]_
 - `flow_condition_reachability_check` — the self-disabling-condition guard.
 - `flow_config` — Translate generated design documents into native LibreLane configuration.
@@ -2053,21 +2065,28 @@ _(no programs in this group)_
 - `flow_declared_producer_run` — run the producers the FLOW already declares, so the RUN writes the documents it is supposed to write.
 - `flow_density_topup` — flow_density_topup
 - `flow_dependency_graph_check` — recompute the flow-gate's dependency dimension.
+- `flow_dft_steps` — Native scan replacement, stitching and serial replay on LibreLane State.
 - `flow_em_corners` — flow_em_corners
 - `flow_engine` — Run the Router-selected window of the native step table.
 - `flow_engine_frontend` — flow_engine_frontend
 - `flow_engine_report` — Render measured engine results and an integration guide for exported views.
-- `flow_engine_timing` — Reduce recorded native, independent-check and review times.
+- `flow_engine_timing` — Plain totals of the recorded row durations.
 - `flow_gate_enforcement_audit` — which flow gates can actually STOP a run, and which only get to complain afterwards (#306).
 - `flow_gate_grid` — recompute the flow-gate grid, and say which cells cannot be.
 - `flow_ic_checks` — flow_ic_checks
 - `flow_ir_corners` — flow_ir_corners
 - `flow_native_adapters` — flow_native_adapters
+- `flow_native_analog` — Connect the native analog producers to the current flow's command runner.
+- `flow_native_analog_die` — Connect analog physical rows to native State and earlier tool products.
+- `flow_native_mixed` — Connect mixed-signal rows to their existing producers.
 - `flow_native_timing` — Read OpenSTA's existing reports for the native flow selector.
 - `flow_native_verification` — flow_native_verification
 - `flow_output_substance` — did the run actually produce this output, or only a file?
 - `flow_pdn_current` — flow_pdn_current
 - `flow_phase_attribution` — WHO did each of the four phases, and HOW.
+- `flow_power` — Call the existing power-intent tools without initializing the physical chain.
+- `flow_safety` — Invoke the existing diagnostic injection producer and read its measurements.
+- `flow_security` — Run supplied security property decks through the existing native formal adapter.
 - `flow_spare_cells` — flow_spare_cells
 - `flow_stage_check` — Flow stage check — wrapper for signoff_audit --mode flow.
 - `flow_stage_membership_single_declaration_check` — stage membership is declared once.
@@ -2076,7 +2095,8 @@ _(no programs in this group)_
 - `flow_step_executor_coverage_check` — "every step has an executor that runs it".
 - `flow_step_output_content_check` — Content check for flow step outputs; refusal exits nonzero.
 - `flow_steps_generate` — One-time migration of the old registry into the editable native step table.
-- `fmeda_coverage_check` — independent anti-fabrication gate over the FMEDA diagnostic-coverage report emitted by `fmeda_fault_injection_coverage.py`.
+- `flow_system_scenarios` — Run produced full-stack HDL scenarios through the existing Icarus helper.
+- `fmeda_coverage_check` — Read native FMEDA injection counts against the requested ASIL/DC floor.
 - `fmeda_fault_injection_coverage` — REAL ISO-26262 FMEDA diagnostic-coverage (DC) measurement by single-stuck-at FAULT INJECTION against a declared safety mechanism (ECC / p...
 - `fork_downgrade_visibility_check` — Every abort our EDA fork downgrades to a warning must still be visible to the flow.
 - `formal_complexity_classify` — deterministic k-induction feasibility classifier for formal property verification (FPV).
@@ -2274,7 +2294,7 @@ _(no programs in this group)_
 - `l21_hard_macro_supply_bind` — Bind each analog/hard-macro supply PIN to the rail the design's own documents say feeds it — the Phase-1 PRODUCER of `L21.fields.hard_mac...
 - `l21_macro_supply_rail_declared_check` — L21 SEMANTIC completeness gate.
 - `l21_macro_supply_rail_synth` — Derive the power-intent rail set from the design's OWN hard-macro LEFs.
-- `l21_to_upf_emit` — render L21 power intent into an IEEE-1801 UPF handoff artifact (flow v2.3.1, external review R1).  _[v0.1.51]_
+- `l21_to_upf_emit` — Render documented power domains and strategies into UPF.
 - `l22_analog_verification_plan_emit` — Project the analog/mixed-signal verification contract into L22.
 - `l22_checklist_milestone_emit` — the verification checklist's own milestones.
 - `l22_coverage_goal_emit` — lift measurable coverage targets out of the design's own input docs and into L22, the layer that CONSUMES them.

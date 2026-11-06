@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import copy
-import hashlib
 import json
 import subprocess
 import sys
@@ -92,14 +91,16 @@ with open(out, "w") as stream:
 '''
 
 
-def measure_final(project: Path, gds: Optional[Path] = None) -> dict:
+def measure_final(project: Path, gds: Optional[Path] = None, *,
+                  directory: Optional[Path] = None) -> dict:
     """Measure the shipped GDS with KLayout and write the final declaration.
 
     The initial declaration remains the design contract. Measured dimensions
     are published separately and never become a new acceptance limit.
     """
     project = Path(project).resolve()
-    destination = project / FINAL_REL
+    destination = (Path(directory) / Path(FINAL_REL).name
+                   if directory is not None else project / FINAL_REL)
     destination.parent.mkdir(parents=True, exist_ok=True)
     script = destination.with_name("tapeout_declaration_measure.py")
     native = destination.with_name("tapeout_declaration_measure.json")
@@ -110,8 +111,9 @@ def measure_final(project: Path, gds: Optional[Path] = None) -> dict:
         gds = Path(gds) if gds is not None else final_gds(project)
         if not gds.is_absolute():
             gds = project / gds
+        if not gds.is_file():
+            raise FileNotFoundError(f"final GDS is missing: {gds}")
         result["gds"] = str(gds.relative_to(project)) if gds.is_relative_to(project) else str(gds)
-        result["gds_sha256"] = hashlib.sha256(gds.read_bytes()).hexdigest()
         script.write_text(_FINAL_MEASURE)
         native.unlink(missing_ok=True)
         command = ["klayout", "-b", "-r", str(script), "-rd", f"gds={gds}", "-rd", f"out={native}"]
@@ -119,8 +121,11 @@ def measure_final(project: Path, gds: Optional[Path] = None) -> dict:
         with log.open("w") as stream:
             completed = subprocess.run(command, stdout=stream, stderr=subprocess.STDOUT, check=False)
         result["exit_code"] = completed.returncode
+        result["log"] = str(log)
         if completed.returncode != 0 or not native.is_file():
-            raise ValueError(f"KLayout measurement did not complete; see {log.relative_to(project)}")
+            if completed.returncode != 0:
+                result["verdict"] = "FAIL"
+            raise ValueError(f"KLayout measurement did not complete; see {log}")
         measurement = json.loads(native.read_text())
         result["measurement"] = measurement
         result["verdict"] = ("PASS" if measurement["polygon_count"] > 0
@@ -130,7 +135,10 @@ def measure_final(project: Path, gds: Optional[Path] = None) -> dict:
             result["declared_contract"] = json.loads(source.read_text())
             result["declared_contract_path"] = TD.DECLARATION_REL
     except (OSError, ValueError, KeyError, TypeError) as exc:
+        if result["verdict"] == "PASS":
+            result["verdict"] = "NOT_MEASURED"
         result["reason"] = str(exc)
+    result["report"] = str(destination)
     atomic_write_text(destination, json.dumps(result, indent=2) + "\n")
     return result
 

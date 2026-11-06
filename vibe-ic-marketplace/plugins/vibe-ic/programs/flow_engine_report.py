@@ -39,20 +39,20 @@ def integration_guide(project: Path, report: dict) -> None:
     (kit / "README.md").write_text("\n".join(lines))
 
 
-def render(project: Path, output: Path, stage: str, head: str, budget_seconds: float | None,
+def render(project: Path, output: Path, stage: str, head: str,
            tests_report: Path | None = None) -> dict:
-    report = engine.refresh_report(project, budget_seconds)
+    report = engine.refresh_report(project)
     output.mkdir(parents=True, exist_ok=True)
     table = engine.read_json(engine.TABLE)
     positions = {row["name"]: index + 1 for index, row in enumerate(table["steps"])}
     with (output / "STEPS.tsv").open("w", newline="") as stream:
         writer = csv.writer(stream, delimiter="\t")
         writer.writerow(["position", "name", "status", "exit_code", "tool_seconds", "program_seconds",
-                         "ai_seconds", "ai_review", "retained", "report"])
+                         "ai_seconds", "ai_review", "report"])
         for row in report["steps"]:
             writer.writerow([positions[row["name"]], row["name"], row["status"], row["tool_exit_code"],
                              row["tool_seconds"], row["program_seconds"], row.get("ai_seconds"),
-                             row.get("ai_review"), row.get("retained", False),
+                             row.get("ai_review"),
                              project / "steps" / row["name"] / "result.json"])
     with (output / "SELECTED_GAPS.tsv").open("w", newline="") as stream:
         writer = csv.writer(stream, delimiter="\t")
@@ -71,17 +71,12 @@ def render(project: Path, output: Path, stage: str, head: str, budget_seconds: f
              f"Project `{project}`. `{report['fail']}` failed rows and `{report['not_measured']}` unmeasured rows.", "",
              f"FIX-PUSHED head={head} branch=flow-engine NEW_FAILED={json.dumps(new_failed)}", "",
              f"Tool time {duration(report['tool_seconds'])}. Program time {duration(report['program_seconds'])}.",
-             f"Measured AI review time {duration(report['ai_measured_seconds'])}.",
-             f"Common native window including review {duration(report['common_wall_seconds'])}.",
-             f"Budget {duration(report.get('budget_seconds'))}. {report['runtime_status']}.", "",
-             "The timing reference is native synthesis configuration publication through the last native or concurrent review completion.",
-             "This span includes continuation after runner repairs. It is one run, not a speedup claim.", "",
+             f"Measured AI review time {duration(report['ai_seconds'])}.",
+             f"Total row wall time {duration(report['wall_seconds'])}.", "",
              "Slowest tool steps: " + ", ".join(report["slowest_steps"]) + ".", "",
-             "Non-LibreLane steps are timed separately in STEPS.tsv. Missing AI durations are NOT_MEASURED.", "",
+             "Each row is timed in STEPS.tsv. Missing AI durations are NOT_MEASURED.", "",
              "Unmeasured selected obligations are listed in SELECTED_GAPS.tsv. They are measurement gaps, not requests for new limits.", "",
              "The tool chain did not wait for AI review. Native failures and unmeasured obligations remain open.", ""]
-    if report["ai_unmeasured_steps"]:
-        lines += ["AI duration remains unmeasured for " + ", ".join(report["ai_unmeasured_steps"]) + ".", ""]
     (output / "RESULT.md").write_text("\n".join(lines))
     integration_guide(project, report)
     return report
@@ -93,10 +88,9 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--stage", default="verification")
     parser.add_argument("--head", required=True)
-    parser.add_argument("--budget-seconds", type=float)
     parser.add_argument("--tests-report", type=Path)
     args = parser.parse_args()
-    render(args.project.resolve(), args.output.resolve(), args.stage, args.head, args.budget_seconds, args.tests_report)
+    render(args.project.resolve(), args.output.resolve(), args.stage, args.head, args.tests_report)
 
 
 if __name__ == "__main__":

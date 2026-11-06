@@ -37,7 +37,7 @@ def native_run(project: Path, programs: Path) -> dict:
     route = router.route_decision_receipt(
         prompt, nature="spec_generation", delivery_target="ip_hardmacro")
     report = engine.run(project, route=route,
-                        from_name="structural_rtl_preflight", to_name="die_floorplan_and_macros")
+                        from_name="structural_rtl_preflight", to_name="io_pad_ring_and_power_distribution")
     steps = {row["name"]: row for row in report["steps"]}
     for name in ("rtl_validation_and_lint", "synthesis"):
         native_checks = [check for check in steps[name]["metrics"]
@@ -49,6 +49,10 @@ def native_run(project: Path, programs: Path) -> dict:
     assert len(actual) == 1 and actual[0]["ran"] and actual[0]["exit_code"] == 0, floorplan
     state = json.loads((project / "steps/die_floorplan_and_macros/state_out.json").read_text())
     assert Path(state["odb"]).is_file()
+    sizing = json.loads((project / "work/flow/chip/pdn_sizing.json").read_text())
+    config = json.loads((project / "steps/io_pad_ring_and_power_distribution/openroad_generatepdn/config.json").read_text())
+    from decimal import Decimal
+    assert all(Decimal(str(config[key])) == Decimal(str(value)) for key, value in sizing["settings"].items())
     assert report["route"] == route
     assert report["fail"] == 0, report
     return report
@@ -61,7 +65,8 @@ def test_native_lint_synthesis_floorplan(tmp_path):
         "FLOW_ENGINE_PROGRAMS", str(Path(__file__).resolve().parents[1]))))
 
 
-def test_missing_metadata_preserves_a_valid_native_database(tmp_path):
+@pytest.mark.parametrize("lint_errors", [None, 0, 2])
+def test_missing_metadata_preserves_a_valid_native_database(tmp_path, lint_errors):
     if importlib.util.find_spec("librelane") is None:
         pytest.skip("LibreLane runtime is required")
     import flow_engine as engine
@@ -81,14 +86,37 @@ def test_missing_metadata_preserves_a_valid_native_database(tmp_path):
     chain.initialize()
     odb = tmp_path / "valid-input.odb"
     odb.touch()
-    chain.state = State({DesignFormat.ODB: NativePath(str(odb))}, metrics={"upstream": 1})
+    metrics = {"upstream": 1}
+    if lint_errors is not None:
+        metrics["design__lint_error__count"] = lint_errors
+    chain.state = State({DesignFormat.ODB: NativePath(str(odb))}, metrics=metrics)
     output = tmp_path / "step"
     output.mkdir()
-    result = chain.execute(output, {"steps": ["Odb.SetPowerConnections"]})
-    assert result.native_steps[0]["missing_inputs"] == ["json_h"]
+    result = chain.execute(output, {"steps": ["Odb.SetPowerConnections"] +
+        (["Checker.LintErrors"] if lint_errors is not None else [])})
+    assert "missing required input 'json_h'" in result.native_steps[0]["detail"]
+    assert result.native_steps[0]["status"] == "NOT_MEASURED"
+    assert result.native_steps[0]["exit_code"] is None
+    assert (output / "odb_setpowerconnections/state_in.json").is_file()
     assert not result.ran
+    if lint_errors is not None:
+        assert not result.native_steps[1]["ran"]
+        assert result.native_steps[1]["status"] == "NOT_MEASURED"
+        assert "design__lint_error__count" not in result.metrics
+    observed = engine.measure([{"metric": "design__lint_error__count", "operator": "<=", "limit": 0}],
+                              result.metrics, chain.config, {"always": True})
+    assert engine.evaluate(result, observed) == "NOT_MEASURED"
     assert chain.state.get_by_df(DesignFormat.ODB) == str(odb)
     assert chain.state.metrics["upstream"] == 1
+    if lint_errors is not None:
+        chain.owner.config = chain.owner.config.copy(RUN_DRT=False)
+        chain.config = chain.owner.config.to_raw_dict()
+        disabled = chain.execute(tmp_path / "disabled", {"steps": [
+            "OpenROAD.DetailedRouting", "Checker.LintErrors"]})
+        assert disabled.native_steps[0]["native_config_disabled"]
+        assert disabled.native_steps[1]["ran"]
+        assert disabled.metrics["design__lint_error__count"] == lint_errors
+        assert engine.evaluate(disabled, []) == ("FAIL" if lint_errors else "PASS")
 
 
 def test_failed_chip_preparation_charges_native_time_once(tmp_path):
@@ -137,6 +165,26 @@ def test_restoring_native_state_replaces_cached_metrics(tmp_path):
     assert "cached_tool_count" not in chain.state.metrics
     assert dict(chain.state.metrics) == {"native_tool_count": 0, "upstream_area": 5}
     assert chain.state.get_by_df(DesignFormat.ODB) == str(database)
+
+
+def test_resumed_pdn_uses_sized_native_configuration(tmp_path, monkeypatch):
+    pytest.importorskip("librelane")
+    import flow_engine as engine
+    import flow_pdn_current
+
+    report = native_run(tmp_path, Path(__file__).resolve().parents[1])
+    floorplan = tmp_path / "steps/die_floorplan_and_macros/result.json"
+    earlier = floorplan.read_bytes()
+    monkeypatch.setattr(flow_pdn_current, "current_settings", lambda *args, **kwargs: {
+        "PDN_VWIDTH": 2.0, "PDN_HWIDTH": 2.0})
+
+    resumed = engine.run(tmp_path, route=report["route"],
+        from_name="io_pad_ring_and_power_distribution", to_name="io_pad_ring_and_power_distribution")
+
+    config = json.loads((tmp_path / "steps/io_pad_ring_and_power_distribution/openroad_generatepdn/config.json").read_text())
+    assert config["PDN_VWIDTH"] == config["PDN_HWIDTH"] == 2
+    assert resumed["steps"][0]["status"] == "PASS"
+    assert floorplan.read_bytes() == earlier
 
 
 if __name__ == "__main__":

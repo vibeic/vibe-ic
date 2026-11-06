@@ -265,7 +265,7 @@ def test_the_packager_refuses_a_hollow_die(tmp_path):
     p = _project(tmp_path, _hollow_gds(_TOP))
     _admit_layout(p)
     r = _pack(p)
-    assert r.returncode == 2, r.stdout[-400:] + r.stderr[-400:]
+    assert r.returncode == 1, r.stdout[-400:] + r.stderr[-400:]
     assert G.RULE_HOLLOW_CHIP_GDS in r.stderr
 
 
@@ -282,15 +282,16 @@ def test_the_packager_packs_a_real_die(tmp_path):
         assert (p / "phase3/stage4/foundry_handoff" / name).is_file(), name
 
 
-def test_the_packager_is_actually_wired_to_the_predicate():
-    """WIRING. A predicate nothing calls leaves the packaging exactly as it
-    was, which is the whole finding. Asserted on the source the way #654's
-    own wiring test does."""
-    src = (_PROGRAMS / "foundry_handoff_pack_gen.py").read_text(
-        encoding="utf-8")
-    body = "\n".join(l for l in src.splitlines()
-                     if not l.lstrip().startswith("#"))
-    assert "packageable_chip_gds(project)" in body
+def test_the_packager_is_actually_wired_to_the_predicate(tmp_path, monkeypatch):
+    import foundry_handoff_pack_gen as generator
+    import pytest
+
+    def observed(*args, **kwargs):
+        raise RuntimeError("native geometry predicate called")
+
+    monkeypatch.setattr(generator._fhpc, 'packageable_chip_gds', observed)
+    with pytest.raises(RuntimeError, match="native geometry predicate called"):
+        generator.main([str(_project(tmp_path, None))])
 
 
 # ── the gate refuses too: the producer-side refusal is deletable ──────────

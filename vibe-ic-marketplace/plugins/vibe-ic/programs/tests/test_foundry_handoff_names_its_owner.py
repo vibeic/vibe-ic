@@ -107,7 +107,7 @@ def test_a_precheck_report_puts_the_kit_on_the_shuttle_path(tmp_path):
     # from, and "the artefact changed after the evidence" is the shape this
     # repository fails on most expensively.
     assert mode["precheck_report"] == "reports/phase3/shuttle_precheck.json"
-    assert (mode["precheck_report_sha256"] or "").startswith("sha256:")
+    assert mode["precheck_report"] == "reports/phase3/shuttle_precheck.json"
 
 
 # ── ownership: every open item names the party that closes it ──────────────

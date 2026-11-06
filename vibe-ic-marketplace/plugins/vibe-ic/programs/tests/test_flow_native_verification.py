@@ -244,6 +244,22 @@ def test_missing_proof_inputs_do_not_launch(tmp_path):
     assert result["metrics"] == {}
 
 
+def test_eqy_default_strategies_have_no_runtime_cutoff(tmp_path, monkeypatch):
+    gold, gate, liberty = [tmp_path / name for name in ("gold.v", "gate.v", "cells.lib")]
+    gold.write_text("module unit(input a, output y); assign y=a; endmodule\n")
+    gate.write_text(gold.read_text())
+    liberty.write_text("library(neutral) {}\n")
+    config = {"DESIGN_NAME": "unit", "VERILOG_FILES": [str(gold)],
+              "DEFAULT_CORNER": "typical", "LIB": {"typical": [str(liberty)]}}
+    commands = Commands(tmp_path)
+    monkeypatch.setattr(commands, "run", lambda argv: None)
+    eqy(tmp_path, tmp_path, {}, commands, state={"nl": str(gate)}, config=config)
+    script = (tmp_path / "equivalence.eqy").read_text()
+    assert "timeout" not in script
+    assert "[strategy sat]\nuse sat\ndepth 5\n" in script
+    assert "[strategy pdr]\nuse sby\nengine abc pdr -rfi\n" in script
+
+
 def reset_docs(project):
     docs = project / "phase1/generated_docs"
     docs.mkdir(parents=True)
@@ -356,9 +372,15 @@ def test_actual_eqy_undecided_strategy_is_not_a_design_failure(tmp_path):
 def test_actual_eqy_native_strategy_timeout_is_unmeasured(tmp_path, monkeypatch):
     if not shutil.which("eqy"):
         pytest.skip("Native EQY is required")
-    import lec_run
+    import librelane_eqy
 
-    monkeypatch.setattr(lec_run, "DEFAULT_YOSYS_TIMEOUT_S", 1)
+    original_script = librelane_eqy.eqy_script
+
+    def timed_script(*args, **kwargs):
+        kwargs["timeout"] = 1
+        return original_script(*args, **kwargs)
+
+    monkeypatch.setattr(librelane_eqy, "eqy_script", timed_script)
     gold, gate, liberty = [tmp_path / name for name in ("gold.v", "gate.v", "cells.lib")]
     gold.write_text("module unit(input [19:0] a,b,output [39:0] y); assign y=a*b; endmodule\n")
     gate.write_text("module unit(input [19:0] a,b,output reg [39:0] y); integer i; "
@@ -487,7 +509,8 @@ def test_eqy_reports_native_witness_interpreter_failure(tmp_path, monkeypatch):
 @pytest.mark.parametrize("change", ["none", "unused_models", "renamed_core_ports", "open_pad_pins", "unknown_core",
     "inline_unknown_core", "inline_z_core", "inline_undriven_core", "core", "core_pin", "terminal", "instance", "type",
     "direct_output", "direct_bad_output", "direct_unknown_output", "physical_corner", "physical_spacer",
-    "physical_core_spacer", "unclassified_physical", "functional_filler_name", "physical_with_rewire"])
+    "physical_core_spacer", "physical_welltap", "welltap_with_rewire", "welltap_with_core",
+    "unclassified_physical", "functional_filler_name", "physical_with_rewire"])
 @pytest.mark.parametrize("package_output", [False, True])
 @pytest.mark.parametrize("logical_pad_ports", [False, True])
 def test_chip_eqy_separates_pad_wrapper_from_resettable_core(tmp_path, change, package_output, logical_pad_ports):
@@ -512,7 +535,7 @@ def test_chip_eqy_separates_pad_wrapper_from_resettable_core(tmp_path, change, p
     if change == "renamed_core_ports":
         core.write_text(core.read_text().replace("clk", "core_clk").replace("rst_n", "core_rst_n"))
         gold.write_text(gold.read_text().replace(".clk(", ".core_clk(").replace(".rst_n(", ".core_rst_n("))
-    behavior = "~ia" if change == "core" else "ir" if change == "core_pin" else "ia"
+    behavior = "~ia" if change in {"core", "welltap_with_core"} else "ir" if change == "core_pin" else "ia"
     implemented = (wrapper + "reg state;\nassign oq=state;\n"
                    f"always @(posedge ic) if(!ir)state<=1;else state<={behavior};\nendmodule\n")
     if change == "terminal":
@@ -551,7 +574,9 @@ def test_chip_eqy_separates_pad_wrapper_from_resettable_core(tmp_path, change, p
             .replace("INPAD_ALT(inout PAD", "INPAD_ALT(input PAD")
             .replace("OUTPAD(input A,inout PAD", "OUTPAD(input A,output PAD"))
     physical = {"physical_corner": "ENDCAP TOPRIGHT", "physical_spacer": "PAD SPACER",
-                "physical_core_spacer": "CORE SPACER", "unclassified_physical": "PAD INOUT",
+                "physical_core_spacer": "CORE SPACER", "physical_welltap": "CORE WELLTAP",
+                "welltap_with_rewire": "CORE WELLTAP", "welltap_with_core": "CORE WELLTAP",
+                "unclassified_physical": "PAD INOUT",
                 "functional_filler_name": "PAD INPUT", "physical_with_rewire": "PAD SPACER"}
     if change in physical:
         lef = models / "cells.lef"
@@ -563,7 +588,7 @@ def test_chip_eqy_separates_pad_wrapper_from_resettable_core(tmp_path, change, p
             pads.write_text(pads.read_text() + "module FRAME(inout VDD,VSS); endmodule\n")
             instance = "FRAME inserted(.VDD(clk),.VSS(rst_n));"
         gate.write_text(gate.read_text().replace("endmodule", instance + "\nendmodule"))
-        if change == "physical_with_rewire":
+        if change in {"physical_with_rewire", "welltap_with_rewire"}:
             gate.write_text(gate.read_text().replace(".PAD(a)", ".PAD(rst_n)"))
     config = {"DESIGN_NAME": "unit", "VERILOG_FILES": [str(core), str(gold)],
               "DEFAULT_CORNER": "typical", "LIB": {"typical": [str(cells)]},
@@ -573,15 +598,16 @@ def test_chip_eqy_separates_pad_wrapper_from_resettable_core(tmp_path, change, p
     result = eqy(tmp_path, tmp_path, {}, Commands(tmp_path), state={"nl": str(gate)}, config=config)
     rows = {row["name"]: row["status"] for row in result.get("native_steps", [])}
     wrapper_failures = {"terminal", "instance", "type", "direct_bad_output", "unclassified_physical",
-                        "functional_filler_name", "physical_with_rewire"}
+                        "functional_filler_name", "physical_with_rewire", "welltap_with_rewire"}
     assert rows.get("Yosys.Wrapper") == ("FAIL" if change in wrapper_failures else "PASS"), result
-    if change in {"none", "unused_models", "renamed_core_ports", "open_pad_pins", "core", "core_pin", "direct_output", "direct_bad_output"}:
-        assert rows.get("Yosys.EQY.Core") == ("FAIL" if change in {"core", "core_pin", "direct_bad_output"} else "PASS"), result
+    if change in {"none", "unused_models", "renamed_core_ports", "open_pad_pins", "core", "core_pin", "direct_output",
+                  "direct_bad_output", "physical_welltap", "welltap_with_core"}:
+        assert rows.get("Yosys.EQY.Core") == ("FAIL" if change in {"core", "core_pin", "direct_bad_output", "welltap_with_core"} else "PASS"), result
     if change in {"unknown_core", "inline_unknown_core", "inline_z_core", "inline_undriven_core", "direct_unknown_output"}:
         assert rows.get("Yosys.EQY.Core") == "PASS" and result["exit_code"] == 0, result
         assert result["metrics"]["unproved_equivalence"] == 0, result
     elif change in {"none", "unused_models", "renamed_core_ports", "open_pad_pins", "direct_output",
-                    "physical_corner", "physical_spacer", "physical_core_spacer"}:
+                    "physical_corner", "physical_spacer", "physical_core_spacer", "physical_welltap"}:
         assert result["metrics"]["unproved_equivalence"] == 0, result
     else:
         assert result["metrics"].get("unproved_equivalence", 0) > 0, result
@@ -589,6 +615,71 @@ def test_chip_eqy_separates_pad_wrapper_from_resettable_core(tmp_path, change, p
         module = json.loads((tmp_path / "core" / (side + ".json")).read_text())["modules"]["unit"]
         assert not any(cell["type"] in {"INPAD", "INPAD_ALT", "OUTPAD"} for cell in module["cells"].values())
 
+
+
+@pytest.mark.parametrize("change", ["none", "core", "signal", "rail", "missing_pad", "no_power_view", "rail_logic",
+                                    "rail_state", "paired_rail_state"])
+def test_chip_eqy_uses_native_power_view_and_keeps_supply_checks(tmp_path, change):
+    if not shutil.which("eqy"):
+        pytest.skip("Native EQY is required")
+    models, gold, gate, power, liberty, lef = [tmp_path / name for name in
+        ("pads.v", "gold.v", "gate.v", "power.v", "cells.lib", "pads.lef")]
+    models.write_text("(* blackbox *) module INPAD(input PAD,PD,PU,output Y,inout VP,VN); endmodule\n"
+        "(* blackbox *) module OUTPAD(input A,output PAD,inout VP,VN); endmodule\n"
+        "(* blackbox *) module SUPPLY(inout VP,VN); endmodule\n")
+    liberty.write_text('library(neutral) {\ncell(TIELOW) {pin(Y) {direction: output; function: "0";}}\n'
+        'cell(TIEHIGH) {pin(Y) {direction: output; function: "1";}}\n'
+        'cell(BUF) {pin(A) {direction: input;} pin(Y) {direction: output; function: "A";}}\n}\n')
+    lef.write_text("\n".join(f"MACRO {master}\n CLASS {'PAD INOUT' if master in {'INPAD', 'OUTPAD', 'SUPPLY'} else 'CORE'} ;\n"
+        " PIN VP\n  DIRECTION INOUT ;\n  USE POWER ;\n END VP\n"
+        " PIN VN\n  DIRECTION INOUT ;\n  USE GROUND ;\n END VN\n"
+        f"END {master}\n" for master in ("INPAD", "OUTPAD", "SUPPLY", "TIELOW", "TIEHIGH", "BUF")))
+    gold.write_text("module unit(input a,b,output y,inout supply_high,supply_low); wire internal,core_out,high,low;\n"
+        "TIELOW t0(.Y(low));\nTIEHIGH t1(.Y(high));\nBUF core_gate(.A(internal),.Y(core_out));\n"
+        "INPAD pi(.PAD(a),.PD(low),.PU(high),.Y(internal),.VP(supply_high),.VN(supply_low));\n"
+        + ("OUTPAD po(.A(core_out & supply_high)," if change == "rail_logic" else "OUTPAD po(.A(core_out),")
+        + ".PAD(y),.VP(supply_high),.VN(supply_low));\n"
+        "SUPPLY pv(.VP(supply_high),.VN(supply_low)); endmodule\n")
+    operation = "~internal" if change == "core" else "internal"
+    gate.write_text("module unit(input a,b,output y); wire internal,core_out,high,low;\n"
+        f"TIELOW t0(.Y(low));\nTIEHIGH t1(.Y(high));\nBUF core_gate(.A({operation}),.Y(core_out));\n"
+        "INPAD pi(.PAD(a),.PD(low),.PU(high),.Y(internal)); OUTPAD po(.A(core_out),.PAD(y));\n"
+        "SUPPLY pv(); endmodule\n")
+    high, low = ("supply_low", "supply_high") if change == "rail" else ("supply_high", "supply_low")
+    power.write_text("module unit(input a,b,output y,inout supply_high,supply_low); wire internal,core_out,high,low;\n"
+        "TIELOW t0(.Y(low),.VP(supply_high),.VN(supply_low));\n"
+        "TIEHIGH t1(.Y(high),.VP(supply_high),.VN(supply_low));\n"
+        f"BUF core_gate(.A({operation}),.Y(core_out),.VP(supply_high),.VN(supply_low));\n"
+        f"INPAD pi(.PAD({'b' if change == 'signal' else 'a'}),.PD(low),.PU(high),.Y(internal),.VP({high}),.VN({low}));\n"
+        "OUTPAD po(.A(core_out),.PAD(y),.VP(supply_high),.VN(supply_low));\n"
+        + ("" if change == "missing_pad" else "SUPPLY pv(.VP(supply_high),.VN(supply_low)); ")
+        + "endmodule\n")
+    if change in {"rail_state", "paired_rail_state"}:
+        for path in (gold, gate, power):
+            expression = "internal & supply_high" if path == gold or (
+                path == power and change == "paired_rail_state") else "internal"
+            path.write_text(path.read_text().replace("input a,b,", "input a,b,c,")
+                .replace("wire internal,core_out,high,low;", "wire internal,core_out,high,low;\n"
+                         f"reg sampled; always @(posedge c) sampled <= {expression};\n")
+                .replace("BUF core_gate(.A(internal)", "BUF core_gate(.A(sampled)"))
+    state = {"nl": str(gate)}
+    if change != "no_power_view":
+        state["pnl"] = str(power)
+    config = {"DESIGN_NAME": "unit", "VERILOG_FILES": [str(gold)],
+              "DEFAULT_CORNER": "typical", "LIB": {"typical": [str(liberty)]},
+              "PAD_VERILOG_MODELS": [str(models)], "PAD_LEFS": [str(lef)]}
+    result = eqy(tmp_path, tmp_path, {}, Commands(tmp_path), state=state, config=config)
+    rows = {row["name"]: row["status"] for row in result.get("native_steps", [])}
+    assert rows.get("Yosys.Wrapper") == ("PASS" if change in {"none", "rail_state", "paired_rail_state"} else "FAIL"), result
+    if change in {"none", "core", "no_power_view"}:
+        assert rows.get("Yosys.EQY.Core") == ("FAIL" if change == "core" else "PASS"), result
+    assert (result["metrics"].get("unproved_equivalence") == 0) is (change in {"none", "paired_rail_state"}), result
+    if change in {"rail_state", "paired_rail_state"}:
+        assert (rows.get("Yosys.EQY.Core") == "PASS") is (change == "paired_rail_state"), result
+    if change == "none":
+        for side in ("gold", "gate"):
+            ports = json.loads((tmp_path / "core" / (side + ".json")).read_text())["modules"]["unit"]["ports"]
+            assert not any(name in {"supply_high", "supply_low"} or name.endswith((".VP", ".VN")) for name in ports)
 
 
 @pytest.mark.parametrize("direct_output", [False, True])
@@ -792,6 +883,221 @@ def test_native_gls_annotations_and_function(tmp_path, different, annotated, exp
 def test_gls_names_missing_native_inputs(tmp_path):
     result = gls(tmp_path, tmp_path, {}, Commands(tmp_path), state={}, config={})
     assert not result["ran"] and "State netlist" in result["detail"]
+
+
+def declared_vector_chip_fixture(project, *, different=False):
+    from testbench_gen import emit_unit_tbs
+
+    state, config = gls_fixture(project, different=different)
+    rtl = project / "phase2/stage1/rtl"
+    rtl.mkdir(parents=True)
+    (rtl / "core_unit.v").write_text(
+        "module core_unit(input clk,rst_n,input [7:0] message,output [7:0] digest); "
+        "assign digest=message; endmodule\n")
+    docs = project / "phase1/generated_docs"
+    docs.mkdir(parents=True)
+    cases = [{"name": f"vector_{index}", "kind": "known_answer_vector",
+              "inputs": {"message": value}, "expected_outputs": {"digest": value},
+              "citation": "Input vector table", "source": "input_document",
+              "evidence": "input/docs/spec.md"}
+             for index, value in enumerate(("00", "a5", "5a", "ff"))]
+    (docs / "L10_TEST_CASES.json").write_text(json.dumps({"test_cases": cases}))
+    assert emit_unit_tbs(project, top="core_unit", scaffold=False, case_stated=True) == 4
+    benches = sorted((project / "phase2/stage1/sim/tb").glob("*.v"))
+    model = Path(config["CELL_VERILOG_MODELS"][0])
+    model.write_text(model.read_text() + "module clock_cell(input a,output y); "
+        "assign y=a; specify (a=>y)=(1,1); endspecify endmodule\n")
+    Path(state["nl"]).write_text(
+        "module chip_unit(input clk,rst_n,input [7:0] message,output [7:0] digest);\n"
+        "wire delayed_clk; reg [7:0] stored; clock_cell clock_input(.a(clk),.y(delayed_clk));\n"
+        "always @(posedge delayed_clk) stored<=message;\n"
+        + "\n".join(f"delay_cell gate{bit}(.a(stored[{bit}]),.y(digest[{bit}]));" for bit in range(8))
+        + "\nendmodule\n")
+    Path(state["sdf"]["typical"]).write_text(
+        '(DELAYFILE (SDFVERSION "3.0") (DESIGN "chip_unit") (DIVIDER /) (TIMESCALE 1ns)\n'
+        '(CELL (CELLTYPE "chip_unit") (INSTANCE) (DELAY (ABSOLUTE '
+        '(INTERCONNECT clk clock_input/a (0.5:0.5:0.5)))))\n'
+        '(CELL (CELLTYPE "clock_cell") (INSTANCE clock_input) '
+        '(DELAY (ABSOLUTE (IOPATH a y (1:1:1) (1:1:1)))))\n'
+        + "\n".join(f'(CELL (CELLTYPE "delay_cell") (INSTANCE gate{bit}) '
+                       '(DELAY (ABSOLUTE (IOPATH a y (1:1:1) (1:1:1)))))' for bit in range(8)) + ")\n")
+    sdc = project / "timing.sdc"
+    sdc.write_text("set_units -time ns\ncreate_clock -period 24 [get_ports clk]\n")
+    state["sdc"] = str(sdc)
+    config["DESIGN_NAME"] = "chip_unit"
+    return state, config, benches
+
+
+@pytest.mark.parametrize("different", [False, True])
+def test_gls_regenerates_declared_vectors_on_native_chip_ports(tmp_path, different):
+    if not shutil.which("iverilog") or not shutil.which("vvp"):
+        pytest.skip("Native Icarus is required")
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config, benches = declared_vector_chip_fixture(project, different=different)
+    original = {path: path.read_bytes() for path in benches}
+    result = gls(project, directory, {"testbenches": [str(path) for path in benches]},
+                 Commands(directory), state=state, config=config)
+    assert len(result["native_steps"]) == 4, result
+    assert {row["status"] for row in result["native_steps"]} == ({"FAIL"} if different else {"PASS"}), result
+    assert all(row["sdf_delays_applied"] > 0 and row["sdf_errors"] == 0 for row in result["native_steps"]), result
+    assert (result["metrics"]["gls_failures"] > 0) is different, result
+    assert {path: path.read_bytes() for path in benches} == original
+    assert all("chip_unit dut" in Path(row["generated_testbench"]).read_text()
+               for row in result["native_steps"]), result
+    assert all("always #12 clk = ~clk;" in path.read_text()
+               for path in directory.glob("corner_*/annotated_tb.v"))
+
+
+def test_gls_keeps_typed_vector_refusal_instead_of_boot_fallback(tmp_path):
+    if not shutil.which("iverilog") or not shutil.which("vvp"):
+        pytest.skip("Native Icarus is required")
+    from testbench_gen import emit_unit_tbs
+
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config, benches = declared_vector_chip_fixture(project)
+    rtl = project / "phase2/stage1/rtl/core_unit.v"
+    rtl.write_text("module core_unit(input clk,rst_n,input [7:0] message,"
+                   "output [7:0] digest,ciphertext,output req_o); "
+                   "assign digest=message; assign ciphertext=1; assign req_o=1; endmodule\n")
+    l10 = project / "phase1/generated_docs/L10_TEST_CASES.json"
+    document = json.loads(l10.read_text())
+    document["test_cases"][0].update(
+        stimulus="reset release, first bus access within 2 cycles",
+        expected="first bus access within 2 cycles")
+    document["test_cases"][0]["expected_outputs"]["ciphertext"] = "01"
+    l10.write_text(json.dumps(document))
+    assert emit_unit_tbs(project, top="core_unit", scaffold=False, case_stated=True) == 4
+    bench = benches[0]
+    original = {path: path.read_bytes() for path in benches}
+    assert "EXPECTED_DIGEST" in bench.read_text() and "EXPECTED_CIPHERTEXT" in bench.read_text()
+    for different in (False, True):
+        source, executable = directory / f"core_{different}.v", directory / f"core_{different}.vvp"
+        source.write_text(rtl.read_text().replace("assign digest=message", "assign digest=8'hff")
+                          if different else rtl.read_text())
+        compiled = subprocess.run(["iverilog", "-g2012", "-s", bench.stem, "-o", str(executable),
+                                   str(bench), str(source)], capture_output=True, text=True)
+        assert compiled.returncode == 0, compiled.stderr
+        completed = subprocess.run(["vvp", str(executable)], capture_output=True, text=True)
+        assert bool(completed.returncode) is different, (completed.stdout, completed.stderr)
+    netlist = Path(state["nl"])
+    netlist.write_text("module chip_unit(input clk,rst_n,input [7:0] message,"
+        "output [7:0] digest,output req_o);\nwire delayed_clk; wire [7:0] raw=8'hff; "
+        "clock_cell clock_input(.a(clk),.y(delayed_clk)); assign req_o=1;\n"
+        + "\n".join(f"delay_cell gate{bit}(.a(raw[{bit}]),.y(digest[{bit}]));" for bit in range(8))
+        + "\nendmodule\n")
+    result = gls(project, directory, {"testbenches": [str(bench)]},
+                 Commands(directory), state=state, config=config)
+    row = result["native_steps"][0]
+    assert row["status"] == "NOT_MEASURED" and not row["ran"], result
+    assert "ciphertext" in row["detail"], result
+    assert "gls_failures" not in result["metrics"], result
+    assert {path: path.read_bytes() for path in benches} == original
+
+
+@pytest.mark.parametrize("source", ["authored", "delivered", "input_delivered", "unbound", "unknown_case"])
+def test_gls_does_not_replace_unavailable_core_checks(tmp_path, source):
+    if not shutil.which("iverilog") or not shutil.which("vvp"):
+        pytest.skip("Native Icarus is required")
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config, benches = declared_vector_chip_fixture(project)
+    bench = benches[0]
+    if source == "authored":
+        bench.write_text("".join(bench.read_text().splitlines(keepends=True)[1:]))
+    elif source == "delivered":
+        bench.write_text("// DELIVERED: input/sim/tb/vector_0.v\n" + bench.read_text())
+    elif source == "input_delivered":
+        delivered = project / "input/sim/tb/vector_0.v"
+        delivered.parent.mkdir(parents=True)
+        delivered.write_bytes(bench.read_bytes())
+    else:
+        path = project / "phase1/generated_docs/L10_TEST_CASES.json"
+        document = json.loads(path.read_text())
+        if source == "unbound":
+            document["test_cases"][0]["expected_outputs"] = {"unavailable_result": "00"}
+        else:
+            document["test_cases"] = document["test_cases"][1:]
+        path.write_text(json.dumps(document))
+    original = bench.read_bytes()
+    result = gls(project, directory, {"testbenches": [str(bench)]},
+                 Commands(directory), state=state, config=config)
+    assert result["native_steps"][0]["status"] == "NOT_MEASURED", result
+    assert not result["native_steps"][0]["ran"]
+    assert "gls_failures" not in result["metrics"]
+    assert bench.read_bytes() == original
+
+
+@pytest.mark.parametrize("different", [False, True])
+def test_gls_regenerates_declared_register_bus_vectors(tmp_path, different):
+    if not shutil.which("iverilog") or not shutil.which("vvp"):
+        pytest.skip("Native Icarus is required")
+    from testbench_gen import emit_unit_tbs
+
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config = gls_fixture(project, different=different)
+    rtl = project / "phase2/stage1/rtl"
+    rtl.mkdir(parents=True)
+    header = ("(input clk,reset_n,cs,we,input [7:0] address,input [31:0] write_data,"
+              "output [31:0] read_data,output error)")
+    (rtl / "core_unit.v").write_text("module core_unit" + header + "; endmodule\n")
+    docs = project / "phase1/generated_docs"
+    docs.mkdir(parents=True)
+    registers = [{"name": "CTRL", "address": "0x08", "access": "R/W", "fields": [
+        {"field_name": "INIT", "lsb": 0, "bits": "0"},
+        {"field_name": "NEXT", "lsb": 1, "bits": "1"}]},
+        {"name": "STATUS", "address": "0x09", "access": "R", "fields": [
+        {"field_name": "READY", "lsb": 0, "bits": "0"},
+        {"field_name": "VALID", "lsb": 1, "bits": "1"}]}]
+    registers.extend({"name": f"BLOCK{index}", "address": hex(16 + index), "access": "W"}
+                     for index in range(16))
+    registers.extend({"name": f"DIGEST{index}", "address": hex(32 + index), "access": "R"}
+                     for index in range(8))
+    (docs / "L4_REGMAP.json").write_text(json.dumps({"registers": registers}))
+    case = {"name": "bus_vector", "kind": "known_answer_vector",
+            "inputs": {"message": "01"}, "expected_outputs": {"digest": "a5" * 32},
+            "citation": "Input vector table", "source": "input_document",
+            "evidence": "input/docs/spec.md"}
+    (docs / "L10_TEST_CASES.json").write_text(json.dumps({"test_cases": [case]}))
+    assert emit_unit_tbs(project, top="core_unit", scaffold=False, case_stated=True) == 1
+    bench = project / "phase2/stage1/sim/tb/bus_vector.v"
+    original = bench.read_bytes()
+    model = Path(config["CELL_VERILOG_MODELS"][0])
+    model.write_text(model.read_text() + "module clock_cell(input a,output y); "
+        "assign y=a; specify (a=>y)=(1,1); endspecify endmodule\n")
+    Path(state["nl"]).write_text("module chip_unit" + header + ";\n"
+        "wire delayed_clk; reg [31:0] first_word,raw; reg valid;\n"
+        "clock_cell clock_input(.a(clk),.y(delayed_clk)); assign error=0;\n"
+        "always @(posedge delayed_clk or negedge reset_n)\n"
+        "if(!reset_n) begin first_word<=0;valid<=0;end else if(cs&&we) begin\n"
+        "if(address==16) first_word<=write_data;\n"
+        "if(address==8&&write_data[0]) valid<=first_word==32'h01800000; end\n"
+        "always @* begin raw=0; if(address==9) raw={30'b0,valid,1'b1};\n"
+        "else if(address>=32&&address<40) raw=32'ha5a5a5a5;end\n"
+        + "\n".join(f"delay_cell gate{bit}(.a(raw[{bit}]),.y(read_data[{bit}]));" for bit in range(32))
+        + "\nendmodule\n")
+    Path(state["sdf"]["typical"]).write_text(
+        '(DELAYFILE (SDFVERSION "3.0") (DESIGN "chip_unit") (DIVIDER /) (TIMESCALE 1ns)\n'
+        '(CELL (CELLTYPE "chip_unit") (INSTANCE) (DELAY (ABSOLUTE '
+        '(INTERCONNECT clk clock_input/a (0.5:0.5:0.5)))))\n'
+        '(CELL (CELLTYPE "clock_cell") (INSTANCE clock_input) '
+        '(DELAY (ABSOLUTE (IOPATH a y (1:1:1) (1:1:1)))))\n'
+        + "\n".join(f'(CELL (CELLTYPE "delay_cell") (INSTANCE gate{bit}) '
+                       '(DELAY (ABSOLUTE (IOPATH a y (1:1:1) (1:1:1)))))' for bit in range(32)) + ")\n")
+    sdc = project / "timing.sdc"
+    sdc.write_text("set_units -time ns\ncreate_clock -period 24 [get_ports clk]\n")
+    state["sdc"] = str(sdc)
+    config["DESIGN_NAME"] = "chip_unit"
+    result = gls(project, directory, {"testbenches": [str(bench)]},
+                 Commands(directory), state=state, config=config)
+    native = result["native_steps"][0]
+    assert native["status"] == ("FAIL" if different else "PASS"), result
+    assert native["sdf_delays_applied"] > 0 and native["sdf_errors"] == 0, result
+    assert (result["metrics"]["gls_failures"] > 0) is different
+    assert bench.read_bytes() == original
+    assert "always #12 clk = ~clk;" in (directory / "corner_1/annotated_tb.v").read_text()
 
 
 def test_gls_replays_every_state_corner(tmp_path):

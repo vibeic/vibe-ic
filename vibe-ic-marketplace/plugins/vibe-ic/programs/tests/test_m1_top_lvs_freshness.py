@@ -26,7 +26,6 @@ not a subject of these tests.
 chip-AGNOSTIC: monkeypatched container + synthetic fixtures.
 """
 import json
-import hashlib
 import os
 import shlex
 import sys
@@ -143,18 +142,7 @@ def test_no_compare_claimed_when_netgen_did_not_rewrite_the_report(tmp_path):
     p = _carried_forward(_project(tmp_path))
     ms = _ms(p)
 
-    def fake(container, cmd, timeout=600, **_):
-        if cmd.startswith("command -v") or cmd.startswith("test -f") \
-                or cmd.startswith("test -d"):
-            return 0, "", ""
-        if "magic" in cmd:
-            (ms / f"{TOP}_merged_extracted.sp").write_text(
-                f".subckt {TOP} a b\n.ends\n")
-            (ms / "ext2spice_merged.log").write_text("MAGIC_EXT2SPICE_DONE\n")
-            return 0, "MAGIC_EXT2SPICE_DONE", ""
-        if "netgen" in cmd:
-            return 1, "", "netgen: no such file"
-        return 0, "", ""
+    fake = _native_fake(p, netgen_write=False)
 
     TL._docker_exec, orig = fake, TL._docker_exec
     try:
@@ -215,121 +203,56 @@ def test_a_reused_merged_gds_is_disclosed_by_name(tmp_path):
     assert (ms / "top_merged.gds").read_bytes() == b"\x00\x06merged"
 
 
-def _write_a8_manifest(p, *, source_sha=None, view_shas=None):
-    hm = p / "phase3/analog/hardmacro/ldo"
-    source = p / "phase3/analog/ldo/ldo.gds"
-    source.parent.mkdir(parents=True, exist_ok=True)
-    source.write_bytes(b"\x00\x06source")
-    (hm / "ldo.lef").write_text("VERSION 5.8 ;\n")
-    (hm / "ldo.lib").write_text("library(ldo) {}\n")
-    files = {suffix: hm / f"ldo{suffix}"
-             for suffix in (".lef", ".lib", ".gds", ".v")}
-    actual = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
-    manifest = {
-        "schema": "vibe-ic/analog_a8_views/1",
-        "producer": "analog_a8_hardmacro_emit",
-        "block": "ldo",
-        "source_gds": str(source.relative_to(p)),
-        "source_gds_sha256": source_sha or actual(source),
-        "views": {suffix: {"path": str(path.relative_to(p)),
-                            "sha256": (view_shas or {}).get(suffix,
-                                        actual(path))}
-                  for suffix, path in files.items()},
-    }
-    (hm / "a8_views_provenance.json").write_text(json.dumps(manifest))
-
-
-def test_m1_accepts_a_valid_a8_manifest_bound_to_consumed_views(tmp_path):
-    p = _project(tmp_path)
-    _write_a8_manifest(p)
-    _carried_forward(p)
+def _native_fake(p, *, netgen_write=True, netgen_match=True, magic_write=True):
     ms, rp = _ms(p), _rpt(p)
-
     def fake(container, cmd, timeout=600, **_):
-        if cmd.startswith("command -v") or cmd.startswith("test -f") \
-                or cmd.startswith("test -d"):
+        if cmd.startswith(("command -v", "test -f", "test -d")):
             return 0, "", ""
-        if "M1_TOOL_IDENTITY" in cmd:
-            return 0, json.dumps({"executable": "/tools/klayout",
-                                  "sha256": "d" * 64,
-                                  "version": "KLayout fixture"}), ""
         if "klayout -b" in cmd:
-            tokens = shlex.split(cmd)
-            env = dict(t.split("=", 1) for t in tokens if "=" in t)
-            out = Path(env["MERGED_OUT"])
-            out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_bytes(b"fresh merged gds")
+            env = dict(t.split("=", 1) for t in shlex.split(cmd) if "=" in t)
+            Path(env["MERGED_OUT"]).write_bytes(b"fresh merged gds")
             (ms / "merge.log").write_text("KLAYOUT_MERGE_DONE\n")
-            placement = json.loads(
-                Path(env["PLACEMENTS_JSON"]).read_text())["placements"]
-            placed = [{"macro": cell, **item}
-                      for cell, items in placement.items() for item in items]
-            Path(env["MERGE_JSON"]).write_text(json.dumps({
-                "design_top": TOP, "single_top": True,
-                "top_cells_after": [TOP], "placed": placed,
-                "macros": [{"macro": "ldo", "action": "added"}],
-            }))
+            placement = json.loads(Path(env["PLACEMENTS_JSON"]).read_text())["placements"]
+            placed = [{"macro": cell, **item} for cell, items in placement.items() for item in items]
+            Path(env["MERGE_JSON"]).write_text(json.dumps({"design_top": TOP,
+                "single_top": True, "top_cells_after": [TOP], "placed": placed}))
             return 0, "KLAYOUT_MERGE_DONE", ""
         if "magic" in cmd:
-            (ms / f"{TOP}_merged_extracted.sp").write_text(
-                f".subckt {TOP} a b\n.ends\n")
-            (ms / "ext2spice_merged.log").write_text(
-                "MAGIC_EXT2SPICE_DONE\n")
-            return 0, "MAGIC_EXT2SPICE_DONE", ""
+            if magic_write:
+                (ms / f"{TOP}_merged_extracted.sp").write_text(f".subckt {TOP} a b\n.ends\n")
+                (ms / "ext2spice_merged.log").write_text("MAGIC_EXT2SPICE_DONE\n")
+            return (0 if magic_write else 1), "", ""
         if "netgen" in cmd:
-            (rp / "top_lvs.rpt").write_text(
-                "Netgen 1.5\nFinal result: Circuits match uniquely.\n")
-            return 0, "Final result: Circuits match uniquely.", ""
+            if netgen_write:
+                verdict = "Circuits match uniquely" if netgen_match else "Circuits do not match"
+                (rp / "top_lvs.rpt").write_text("Final result: " + verdict + ".\n")
+                return 0, verdict, ""
+            return 1, "", "netgen failed"
         return 0, "", ""
+    return fake
 
-    TL._docker_exec, orig = fake, TL._docker_exec
-    try:
-        rep = TL.run(p, TOP, "x", "sky130A")
-    finally:
-        TL._docker_exec = orig
+
+def test_m1_compares_current_geometry_without_a8_manifest(tmp_path, monkeypatch):
+    p = _project(tmp_path)
+    monkeypatch.setattr(TL, "_docker_exec", _native_fake(p))
+    rep = TL.run(p, TOP, "x", "sky130A")
     assert rep["verdict"] == "PASS" and rep["rc"] == 0
-    assert rep["macro_views_consumed"][0]["a8_view_hashes"][".gds"]
+    assert (p / "phase3/mixed_signal/top_merged.gds").read_bytes() == b"fresh merged gds"
+    assert not (p / "phase3/mixed_signal/m1_merge_receipt.json").exists()
 
 
-def test_m1_refuses_a_mismatched_a8_manifest_before_lvs(tmp_path):
+def test_m1_lvs_mismatch_still_fails(tmp_path, monkeypatch):
     p = _project(tmp_path)
-    _write_a8_manifest(p, source_sha="0" * 64,
-                       view_shas={suffix: "1" * 64
-                                  for suffix in (".lef", ".lib", ".gds", ".v")})
-    def fake(container, cmd, timeout=600, **_):
-        if cmd.startswith("command -v") or cmd.startswith("test -f") \
-                or cmd.startswith("test -d"):
-            return 0, "", ""
-        return 1, "", "not reached"
-    TL._docker_exec, orig = fake, TL._docker_exec
-    try:
-        rep = TL.run(p, TOP, "x", "sky130A")
-    finally:
-        TL._docker_exec = orig
-    assert rep["verdict"] == "SKIP" and rep["rc"] == 2
-    assert "A8_VIEW_PROVENANCE_INVALID" in rep["reason"]
+    monkeypatch.setattr(TL, "_docker_exec", _native_fake(p, netgen_match=False))
+    rep = TL.run(p, TOP, "x", "sky130A")
+    assert rep["verdict"] == "FAIL" and rep["lvs_report"]
 
 
-def test_m1_refuses_the_reviewer_manifest_shape_without_required_views(tmp_path):
+def test_m1_failed_extraction_cannot_pass(tmp_path, monkeypatch):
     p = _project(tmp_path)
-    hm = p / "phase3/analog/hardmacro/ldo"
-    (hm / "a8_views_provenance.json").write_text(json.dumps({
-        "source_gds_sha256": "0" * 64,
-        "views": {"gds": {"sha256": "1" * 64},
-                  "verilog": {"sha256": "2" * 64}},
-    }))
-    def fake(container, cmd, timeout=600, **_):
-        if cmd.startswith("command -v") or cmd.startswith("test -f") \
-                or cmd.startswith("test -d"):
-            return 0, "", ""
-        return 1, "", "not reached"
-    TL._docker_exec, orig = fake, TL._docker_exec
-    try:
-        rep = TL.run(p, TOP, "x", "sky130A")
-    finally:
-        TL._docker_exec = orig
-    assert rep["verdict"] == "SKIP" and rep["rc"] == 2
-    assert "A8_VIEW_PROVENANCE_INVALID" in rep["reason"]
+    monkeypatch.setattr(TL, "_docker_exec", _native_fake(p, magic_write=False))
+    rep = TL.run(p, TOP, "x", "sky130A")
+    assert rep["verdict"] == "FAIL" and "produced no netlist" in rep["reason"]
 
 
 # ── unit: _ran_fresh ──────────────────────────────────────────────────────

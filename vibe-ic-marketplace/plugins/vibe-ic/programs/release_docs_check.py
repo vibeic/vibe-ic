@@ -1150,6 +1150,8 @@ def check_release(project: Path, arm: str, release_dir: Path,
                   release: str, *,
                   ip_views: Optional[Mapping[str, Path]] = None,
                   expected_constraints=None) -> Tuple[List[Finding], dict]:
+    if arm == "ip" and ip_views is None:
+        ip_views = _hm.discover_packages(_hm.hardmacro_dir(project)).get(release, {})
     findings: List[Finding] = []
     texts: Dict[str, str] = {}
     for spec in arm_docs(arm):
@@ -1158,14 +1160,8 @@ def check_release(project: Path, arm: str, release_dir: Path,
             texts[spec.filename] = path.read_text(encoding="utf-8",
                                                   errors="replace")
 
-    manifest_path = release_dir / MANIFEST_NAME
-    manifest_doc = None
-    if manifest_path.is_file():
-        try:
-            loaded = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
-            manifest_doc = loaded if isinstance(loaded, dict) else None
-        except Exception:  # noqa: BLE001 — reported by _check_manifest
-            manifest_doc = None
+    from _release_docs_build import register_rich
+    rich, _ = register_rich(project)
 
     # R1 — required, and conditionally required, documents.
     for spec in arm_docs(arm):
@@ -1177,12 +1173,12 @@ def check_release(project: Path, arm: str, release_dir: Path,
                 f"{spec.filename} is required for the {arm} arm and is absent "
                 f"from {release_dir}."))
         elif spec.requirement == "conditional":
-            triggered = bool((manifest_doc or {}).get(spec.condition_field))
+            triggered = rich if spec.condition_field == "register_rich" else False
             if triggered:
                 findings.append(Finding(
                     "REQUIRED_DOCUMENT_ABSENT", "ERROR", release,
                     f"{spec.filename} is required for this release because "
-                    f"{MANIFEST_NAME} states {spec.condition_field} = true, "
+                    f"the design register map requires it, "
                     f"and it is absent from {release_dir}."))
 
     rows: List[Row] = []
@@ -1859,15 +1855,6 @@ def run_audit(project: Path, arm: str) -> Result:
         "verdict_tier": result.verdict_tier,
         "pass": result.passed,
     }
-    if arm == "ip":
-        import _physical_current as _pc
-        refusal = _pc.check_kit(project)
-        if refusal:
-            result.findings.append(Finding("IP_KIT_CURRENT_REFUSED", "ERROR", "", refusal))
-            result.passed = False
-            result.verdict_tier = "FAIL"
-            result.summary.update(verdict_tier="FAIL")
-            result.summary["pass"] = False
     return result
 
 

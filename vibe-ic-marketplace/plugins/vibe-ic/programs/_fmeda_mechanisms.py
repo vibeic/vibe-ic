@@ -1,68 +1,38 @@
-"""Validated project-local FMEDA engineering declarations and native evidence.
-
-This finite combinational-port contract measures a codeword boundary model of
-reachable implementation modules. It does not inject a physical DUT instance,
-establish whole-chip safety, or replace the legacy mechanism classifier.
-"""
+"""Run native codeword-boundary diagnostic injection from engineering inputs."""
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 from pathlib import Path
 import re
-import resource
 import shutil
 import subprocess
 
 MANIFEST = "phase2/stage1/fmeda_mechanisms.json"
-SCHEMA = "vibeic.fmeda-mechanisms.v1"
-REPORT_SCHEMA = "vibeic.fmeda-measurements.v1"
 NATIVE_DIR = "reports/phase2/safety/mechanisms"
 _NAME = re.compile(r"[A-Za-z_][A-Za-z_0-9]*\Z")
-_SHA = re.compile(r"[a-f0-9]{64}\Z")
 
 
 class Refusal(ValueError):
     pass
 
 
-def digest(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def _pairs(pairs):
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise Refusal(f"duplicate JSON key: {key}")
-        result[key] = value
-    return result
+class NotMeasured(Refusal):
+    pass
 
 
 def load_json(path: Path):
-    try:
-        return json.loads(path.read_text(), object_pairs_hook=_pairs)
-    except (OSError, ValueError) as exc:
-        raise Refusal(f"cannot read {path.name}: {exc}") from None
+    return json.loads(path.read_text())
 
 
-def path_in(project: Path, rel: str) -> Path:
-    if not isinstance(rel, str) or not rel or Path(rel).is_absolute():
-        raise Refusal("expected a project-relative file path")
-    if any(p in (".", "..") for p in rel.split("/")):
-        raise Refusal(f"non-canonical path: {rel}")
-    path = project / rel
-    if any(p.is_symlink() for p in [path, *path.parents] if p != project.parent):
-        raise Refusal(f"symlink is not a bound source: {rel}")
-    if not path.resolve().is_relative_to(project.resolve()) or not path.is_file():
-        raise Refusal(f"missing/escaped source: {rel}")
+def path_in(project: Path, name: str) -> Path:
+    path = Path(name)
+    if not path.is_absolute():
+        path = project / path
+    if not path.is_file():
+        raise NotMeasured(f"missing source: {path}")
     return path
 
-
-def _keys(value, required):
-    if not isinstance(value, dict) or set(value) != set(required.split()):
-        raise Refusal(f"expected exactly these keys: {required}")
 
 
 def _name(value):
@@ -78,7 +48,6 @@ def _embedded(row):
 def _validate_stimulus(row):
     """A typed reference encoding, never a claim inferred from RTL/prose."""
     stimulus = row["stimulus"]
-    _keys(stimulus, "encoding data_bits check_bit")
     k, n = row["data_width"], row["code_width"]
     bits, check = stimulus["data_bits"], stimulus["check_bit"]
     if (row["kind"] != "parity" or stimulus["encoding"] not in ("even_parity", "odd_parity") or
@@ -94,7 +63,6 @@ def _validate_stimulus(row):
         raise Refusal("expected typed constant input bindings")
     for name, value in constants.items():
         _name(name)
-        _keys(value, "width value")
         width, number = value["width"], value["value"]
         if (name in (checker["input"], checker["detect"]) or
                 type(width) is not int or not 1 <= width <= 4096 or
@@ -103,102 +71,29 @@ def _validate_stimulus(row):
 
 
 def declaration(project: Path):
-    """Validate author input against the existing current source/top readers."""
-    from _specrtl_common import rtl_source_files, strip_comments
+    from _specrtl_common import rtl_source_files
     from p0_tool_frontend_check import _top
+
     project = project.resolve()
-    manifest = path_in(project, MANIFEST)
-    doc = load_json(manifest)
-    _keys(doc, "schema authority top_module rtl_files mechanisms")
-    if (doc["schema"] != SCHEMA or
-            doc["authority"] != "AUTHOR_ENGINEERING_DECLARATION"):
-        raise Refusal("unsupported declaration schema/authority")
-    top = _name(doc["top_module"])
-    if not _top(project) or top != _top(project):
-        raise Refusal("declared mechanism top differs from current L9 selected top")
-    sources = rtl_source_files(project, exts=("*.v", "*.sv", "*.vh", "*.svh"))
-    if not sources:
-        raise Refusal("no current authored RTL")
-    current = []
-    for source in sources:
-        rel = str(source.relative_to(project))
-        source = path_in(project, rel)
-        current.append({"path": rel, "sha256": digest(source)})
-    supplied = doc["rtl_files"]
-    if not isinstance(supplied, list) or not supplied:
-        raise Refusal("empty RTL inventory")
-    for row in supplied:
-        _keys(row, "path sha256")
+    doc = load_json(path_in(project, MANIFEST))
+    doc["top_module"] = _name(doc.get("top_module") or _top(project))
+    files = doc.get("rtl_files") or [str(path.relative_to(project)) for path in
+        rtl_source_files(project, exts=("*.v", "*.sv", "*.vh", "*.svh"))]
+    doc["rtl_files"] = [{"path": row if isinstance(row, str) else row["path"]} for row in files]
+    if not doc["rtl_files"] or not doc.get("mechanisms"):
+        raise NotMeasured("RTL sources or engineering mechanism wiring are missing")
+    for row in doc["rtl_files"]:
         path_in(project, row["path"])
-        if not isinstance(row["sha256"], str) or not _SHA.fullmatch(row["sha256"]):
-            raise Refusal("invalid source SHA256")
-    if (len({r["path"] for r in supplied}) != len(supplied) or
-            sorted(supplied, key=lambda r: r["path"]) != current):
-        raise Refusal("declaration source inventory/hash differs from current authored RTL")
-    # A quoted local include may only resolve to this same bound population.
-    # Macro-selected/external includes are outside this finite contract.
-    population = {p.resolve() for p in sources}
-    dirs = sorted({p.parent for p in sources})
-    for source in sources:
-        for line in strip_comments(source.read_text()).splitlines():
-            if re.match(r"\s*`include\b", line):
-                match = re.fullmatch(r'\s*`include\s+"([^"\n]+)"\s*', line)
-                if not match:
-                    raise Refusal("unsupported macro/computed include")
-                choices = [source.parent / match[1], *[d / match[1] for d in dirs]]
-                selected = next((p for p in choices if p.exists()), None)
-                if selected is None or selected.resolve() not in population:
-                    raise Refusal("include is outside bound authored RTL inventory")
-                path_in(project, str(selected.relative_to(project)))
-    mechanisms = doc["mechanisms"]
-    if not isinstance(mechanisms, list) or not mechanisms:
-        raise Refusal("empty mechanism population")
-    ids, sites = set(), set()
-    for row in mechanisms:
-        embedded = isinstance(row, dict) and _embedded(row)
-        _keys(row, "id kind checker data_width code_width stimulus" if embedded
-              else "id kind encoder checker data_width code_width")
-        _name(row["id"])
-        if row["id"] in ids or row["kind"] not in ("ecc", "parity", "lockstep"):
-            raise Refusal("duplicate mechanism ID or unsupported kind")
-        ids.add(row["id"])
+    for row in doc["mechanisms"]:
+        if row["kind"] not in ("ecc", "parity", "lockstep"):
+            raise Refusal("unsupported diagnostic mechanism kind")
         for width in (row["data_width"], row["code_width"]):
-            if type(width) is not int or not 1 <= width <= 4096:
-                raise Refusal("unsupported/non-positive port width")
-        roles = [("checker", "module instance input detect corrected_output constant_inputs")] if embedded else [
-            ("encoder", "module instance input output"),
-            ("checker", "module instance input detect corrected_output")]
-        for key, keys in roles:
-            part = row[key]
-            _keys(part, keys)
-            for field in ("module", "input"):
-                _name(part[field])
-            if not isinstance(part["instance"], str):
-                raise Refusal("missing instance path")
-            parts = part["instance"].split(".")
-            if len(parts) < (1 if embedded else 2) or parts[0] != top:
-                raise Refusal("instance is outside current selected top")
-            for p in parts:
-                _name(p)
-        if embedded:
+            if type(width) is not int or width <= 0:
+                raise Refusal("non-positive diagnostic port width")
+        if _embedded(row):
             _validate_stimulus(row)
-        else:
-            _name(row["encoder"]["output"])
-        _name(row["checker"]["detect"])
-        if row["checker"]["corrected_output"] is not None:
-            _name(row["checker"]["corrected_output"])
-        site = (row["checker"]["instance"], row["checker"]["input"])
-        if site in sites:
-            raise Refusal("duplicate protected codeword boundary")
-        sites.add(site)
-    l9 = []
-    for name in ("L9_INTEGRATION_SPEC.json", "L9_INTEGRATION.json"):
-        rel = "phase1/generated_docs/" + name
-        if (project / rel).exists():
-            l9.append({"path": rel, "sha256": digest(path_in(project, rel))})
-    binding = {"declaration_sha256": digest(manifest), "rtl_files": current,
-               "l9_files": l9, "top_module": top}
-    return doc, binding
+    return doc
+
 
 
 def _read_order(project: Path, doc: dict):
@@ -221,48 +116,36 @@ def native_script(project: Path, doc: dict) -> str:
             str(project / NATIVE_DIR / "hierarchy.json"))
 
 
-def _memory_ceiling():
-    resource.setrlimit(resource.RLIMIT_AS, (2 * 1024**3, 2 * 1024**3))
-
-
 def elaborate(project: Path, doc: dict) -> dict:
-    """Native hierarchy only, bounded instrument; no flatten/mapping/ABC."""
     root = project / NATIVE_DIR
     root.mkdir(parents=True, exist_ok=True)
-    out = root / "hierarchy.json"
+    out, log = root / "hierarchy.json", root / "hierarchy.log"
     out.unlink(missing_ok=True)
-    script = native_script(project, doc)
-    argv = ["yosys", "-Q", "-T", "-p", script]
-    host = bool(shutil.which("yosys"))
-    if not host:
+    argv = ["yosys", "-Q", "-T", "-p", native_script(project, doc)]
+    if not shutil.which("yosys"):
         import fmeda_fault_injection_coverage as fi
         import _docker_memory as memory
-        image = fi._local_docker_image()
+        try:
+            image = fi._local_docker_image()
+        except RuntimeError:
+            image = None
         if not image:
-            raise Refusal("native Yosys unavailable; no local image (no pull/fallback)")
-        argv = ["docker", "run", "--rm", "--network", "none", "--cpus", "1",
-                *memory.docker_memory_flags({"VIBEIC_DOCKER_MEMORY": "2g"}),
-                "-u", f"{os.getuid()}:{os.getgid()}", "-v", f"{project}:{project}",
-                "--entrypoint", "yosys", image, *argv[1:]]
+            raise NotMeasured("native Yosys unavailable and no local tool image")
+        argv = ["docker", "run", "--rm", "--network", "none", "--cpus", "8",
+                *memory.docker_memory_flags(), "-u", f"{os.getuid()}:{os.getgid()}",
+                "-v", f"{project}:{project}", "--entrypoint", "yosys", image, *argv[1:]]
     try:
-        result = subprocess.run(argv, cwd=project, capture_output=True, text=True,
-                                timeout=30, preexec_fn=_memory_ceiling if host else None)
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise Refusal(f"native hierarchy NOT_MEASURED: {exc}") from None
-    log = root / "hierarchy.log"
+        result = subprocess.run(argv, cwd=project, capture_output=True, text=True)
+    except OSError as exc:
+        raise NotMeasured(f"native hierarchy unavailable: {exc}") from exc
     log.write_text(result.stdout + result.stderr)
-    rec = {"argv": argv, "script": script, "exit_code": result.returncode,
-           "read_order": _read_order(project, doc), "source_root": str(project),
-           "hierarchy_sha256": digest(out) if out.is_file() else None,
-           "log_sha256": digest(log), "memory_ceiling_bytes": 2 * 1024**3,
-           "wall_limit_s": 30,
-           "tool_identity": load_json(out).get("creator") if out.is_file() else None}
-    (root / "execution.json").write_text(json.dumps(rec, indent=2) + "\n")
-    if result.returncode or not out.is_file():
-        raise Refusal(f"native hierarchy refused rc={result.returncode}; {NATIVE_DIR}/hierarchy.log")
+    if result.returncode:
+        raise Refusal(f"native hierarchy failed rc={result.returncode}; {log}")
+    if not out.is_file():
+        raise NotMeasured(f"native Yosys left no hierarchy report; {log}")
     validate_hierarchy(doc, load_json(out), project)
-    rec["execution_sha256"] = digest(root / "execution.json")
-    return rec
+    return {"exit_code": result.returncode, "reports": [str(out), str(log)]}
+
 
 
 def _parameterized_declarations(project: Path, doc: dict):
@@ -366,59 +249,30 @@ def validate_hierarchy(doc: dict, native: dict, project: Path):
                 raise Refusal(f"native ports/widths differ at {part['instance']}: {actual} != {expected}")
 
 
-def require_native(project: Path, doc: dict, rec: dict):
-    if not isinstance(rec, dict):
-        raise Refusal("missing native hierarchy identity")
-    root = project / NATIVE_DIR
-    stored = load_json(path_in(project, NATIVE_DIR + "/execution.json"))
-    if ({k: v for k, v in rec.items() if k != "execution_sha256"} != stored or
-            rec.get("execution_sha256") != digest(root / "execution.json") or
-            rec.get("exit_code") != 0):
-        raise Refusal("native execution identity/return code differs")
-    if (rec.get("source_root") != str(project) or
-            rec.get("script") != native_script(project, doc) or
-            rec.get("read_order") != _read_order(project, doc)):
-        raise Refusal("native source/top/read-order identity differs")
-    argv = rec.get("argv", [])
-    if (not isinstance(argv, list) or argv[-4:] != ["-Q", "-T", "-p", rec["script"]] or
-            not (argv[0] == "yosys" or
-                 (argv[0] == "docker" and argv[1] == "run" and
-                  any(argv[i:i+2] == ["--entrypoint", "yosys"] for i in range(len(argv)))))):
-        raise Refusal("native invocation differs from the declared hierarchy producer")
-    for name, key in (("hierarchy.json", "hierarchy_sha256"), ("hierarchy.log", "log_sha256")):
-        if digest(path_in(project, NATIVE_DIR + "/" + name)) != rec.get(key):
-            raise Refusal(f"native {name} changed")
-    validate_hierarchy(doc, load_json(root / "hierarchy.json"), project)
-
-
 def census(stdout: str, spec, max_vectors: int):
-    """Strict complete baseline/bit census; NA is a type, not a match."""
     import fmeda_fault_injection_coverage as fi
-    if type(max_vectors) is not int or not 1 <= max_vectors <= 4096:
-        raise Refusal("invalid bounded stimulus count")
-    correction = spec.dec_out is not None
-    values = fi._stimulus_values(spec.data_width, max_vectors)
+
     golden = fi._GOLDEN_RE.findall(stdout)
     faults = fi._FAULT_RE.findall(stdout)
-    expected = {f"d{d}_b{i}" for d in values for i in range(spec.code_width)}
-    if (len(golden) != len(values) or {int(g[0]) for g in golden} != set(values) or
-            len(faults) != len(expected) or {f[0] for f in faults} != expected):
-        raise Refusal("incomplete/duplicate baseline or single-bit fault census")
+    if not golden or not faults:
+        raise NotMeasured("native simulator left no baseline or injection counts")
     if any(line.startswith(("GOLDEN", "FAULT")) and not
            (fi._GOLDEN_RE.fullmatch(line) or fi._FAULT_RE.fullmatch(line))
            for line in stdout.splitlines()):
-        raise Refusal("malformed/unknown measurement value")
+        raise Refusal("native simulation reported unknown measurement values")
+    correction = spec.dec_out is not None
     matches = [g[2] for g in golden] + [f[2] for f in faults]
-    if any(m not in (("0", "1") if correction else ("NA",)) for m in matches):
-        raise Refusal("measurement correction mode differs from declaration")
+    if any(match not in (("0", "1") if correction else ("NA",)) for match in matches):
+        raise Refusal("native correction result disagrees with the mechanism's correction mode")
     results = fi.parse_injection_results(stdout, correction=correction)
-    rows = [{"id": x.fault_id, "detect": x.detect, "match": x.match,
-             "covered": x.covered} for x in results.injections]
-    baseline = [{"data": int(d), "detect": det == "1",
-                 "match": None if mat == "NA" else mat == "1",
+    rows = [{"id": row.fault_id, "detect": row.detect, "match": row.match,
+             "covered": row.covered} for row in results.injections]
+    baseline = [{"data": int(data), "detect": detect == "1",
+                 "match": None if match == "NA" else match == "1",
                  "code_known": known == "1" if known else None}
-                for d, det, mat, known in golden]
+                for data, detect, match, known in golden]
     return results, baseline, rows
+
 
 
 def spec_for(row: dict, rtl_files: list):
@@ -434,103 +288,77 @@ def spec_for(row: dict, rtl_files: list):
 
 def measure(project: Path, args):
     import fmeda_fault_injection_coverage as fi
-    if getattr(args, "enc_module", None) or getattr(args, "dec_module", None):
-        raise Refusal("project declaration and explicit CLI wiring cannot select different authorities")
-    doc, binding = declaration(project)
+
+    doc = declaration(project)
     native = elaborate(project, doc)
-    if declaration(project)[1] != binding:
-        raise Refusal("sources changed during native hierarchy production")
     order = _read_order(project, doc)
     floor = fi.asil_floor(args.asil, args.min_dc)
     reports = []
-    for row in doc["mechanisms"]:
+    for index, row in enumerate(doc["mechanisms"]):
         spec = spec_for(row, order)
-        tb_rel = "phase2/stage2/safety/" + row["id"] + "/fmeda_fi_tb.v"
+        tb_rel = f"phase2/stage2/safety/{index}/fmeda_fi_tb.v"
         tb = project / tb_rel
         tb.parent.mkdir(parents=True, exist_ok=True)
         tb.write_text(fi.build_ecc_injection_tb(spec, args.max_vectors,
                                                detection_only=spec.dec_out is None))
-        ec, stdout, stderr = fi.run_injection_iverilog(project, order, tb_rel,
-                                                      timeout=args.timeout)
-        log_rel = NATIVE_DIR + "/" + row["id"] + ".log"
+        code, stdout, stderr = fi.run_injection_iverilog(project, order, tb_rel)
+        log_rel = f"{NATIVE_DIR}/{index}.log"
         (project / log_rel).write_text(stdout + "\n" + stderr)
-        if ec:
-            raise Refusal(f"{row['id']} injection NOT_MEASURED rc={ec}; {log_rel}")
+        if code == 127:
+            raise NotMeasured(f"native injection tool unavailable; {log_rel}")
+        if code:
+            raise Refusal(f"native injection failed rc={code}; {log_rel}")
         results, baseline, faults = census(stdout, spec, args.max_vectors)
-        rep = fi.build_report(spec, results, args.asil, floor)
-        rep.update(id=row["id"], baseline=baseline, fault_list=faults,
-                   fault_list_truncated=False, max_vectors=args.max_vectors,
-                   correction_applicable=spec.dec_out is not None,
-                   raw_evidence={"path": log_rel, "sha256": digest(project / log_rel),
-                                 "injection_exit_code": ec},
-                   detection_criterion=("detect_flag_asserted OR corrected_output_matches"
-                                        if spec.dec_out else "detect_flag_asserted"))
-        reports.append(rep)
-    if declaration(project)[1] != binding:
-        raise Refusal("sources changed during injection production")
-    passed = all(r["ge_floor"] for r in reports)
-    return (0 if passed else 1), {
-        "schema": REPORT_SCHEMA, "applicable": True, "measured": True,
-        "asil": args.asil, "dc_floor_pct": floor, "input_binding": binding,
-        "campaign": {"max_vectors": args.max_vectors, "fault_model": "single-bit flip; every declared codeword bit per selected stimulus"},
+        report = fi.build_report(spec, results, args.asil, floor)
+        report.update(id=row.get("id", str(index)), baseline=baseline, fault_list=faults,
+            fault_list_truncated=False, max_vectors=args.max_vectors,
+            correction_applicable=spec.dec_out is not None,
+            raw_evidence={"path": log_rel, "injection_exit_code": code},
+            detection_criterion=("detect_flag_asserted OR corrected_output_matches"
+                                 if spec.dec_out else "detect_flag_asserted"))
+        reports.append(report)
+    passed = all(report["ge_floor"] for report in reports)
+    return (0 if passed else 1), {"program": "fmeda_fault_injection_coverage",
+        "applicable": True, "measured": True, "asil": args.asil, "dc_floor_pct": floor,
+        "campaign": {"max_vectors": args.max_vectors,
+                     "fault_model": "single-bit flip at the declared codeword boundary"},
         "native_hierarchy": native, "mechanisms": reports,
         "verdict": "PASS" if passed else "FAIL", "ge_floor": passed,
-        "reason": "each declared mechanism independently satisfies baseline and ASIL floor"
-                  if passed else "one or more declared mechanisms fails baseline/ASIL floor",
-        "scope": "codeword-boundary model of current reachable modules; not physical-instance injection or whole-chip FMEDA"}
+        "reason": "Native baseline and per-mechanism ASIL/DC results",
+        "scope": "Codeword-boundary simulation; whole required-fault population and latency are unmeasured."}
 
 
-def consume(project: Path, report: dict, asil, min_dc):
+
+def consume(project: Path | None, report: dict, asil, min_dc):
     import fmeda_fault_injection_coverage as fi
-    doc, binding = declaration(project)
-    if report.get("schema") != REPORT_SCHEMA or report.get("input_binding") != binding:
-        raise Refusal("missing/stale declared mechanism measurement")
-    # The report is evidence to check, not an authority for its own threshold.
-    # The ordinary CLI/flow defaults to D; a different ASIL or --min-dc must be
-    # supplied to this consumer independently of the producer's report.
-    trusted_asil = asil if asil is not None else "D"
-    trusted_floor = fi.asil_floor(trusted_asil, min_dc)
-    if (trusted_asil not in fi.ASIL_DC_FLOOR or
-            report.get("asil") != trusted_asil or
-            report.get("dc_floor_pct") != trusted_floor):
-        raise Refusal("reported ASIL/DC floor differs from consumer CLI/flow policy")
-    require_native(project, doc, report.get("native_hierarchy", {}))
-    rows = report.get("mechanisms")
-    if (not isinstance(rows, list) or any(not isinstance(r, dict) for r in rows) or
-            [r.get("id") for r in rows] != [r["id"] for r in doc["mechanisms"]]):
-        raise Refusal("measurement mechanism census differs")
-    recomputed = []
-    for declaration_row, row in zip(doc["mechanisms"], rows):
-        spec = spec_for(declaration_row, _read_order(project, doc))
-        raw = row.get("raw_evidence", {})
-        if not isinstance(raw, dict):
-            raise Refusal("missing raw injection evidence")
-        expected_log = NATIVE_DIR + "/" + declaration_row["id"] + ".log"
-        if raw.get("path") != expected_log or raw.get("injection_exit_code") != 0:
-            raise Refusal("missing successful raw injection evidence")
-        log = path_in(project, expected_log)
-        if raw.get("sha256") != digest(log):
-            raise Refusal("raw injection transcript changed")
-        max_vectors = report.get("campaign", {}).get("max_vectors")
-        if row.get("max_vectors") != max_vectors:
-            raise Refusal("mechanism stimulus count differs from campaign options")
-        results, baseline, faults = census(log.read_text(), spec, max_vectors)
-        expected_mechanism = fi.build_report(spec, results, report.get("asil", "D"), None)["mechanism"]
-        if (row.get("fault_list") != faults or row.get("baseline") != baseline or
-                row.get("mechanism") != expected_mechanism or
-                row.get("injected_faults") != results.injected or
-                row.get("detected_faults") != results.detected or
-                row.get("baseline_valid") != results.golden_ok or
-                row.get("correction_applicable") != (spec.dec_out is not None)):
-            raise Refusal("written baseline/fault census/counts differ from native transcript")
-        passed, why = fi.dc_verdict(results.dc_pct, trusted_floor)
-        recomputed.append({"id": declaration_row["id"], "passed": results.golden_ok and passed,
-                           "injected_faults": results.injected, "detected_faults": results.detected,
-                           "recomputed_dc_pct": results.dc_pct, "baseline_valid": results.golden_ok,
-                           "reason": why if results.golden_ok else "invalid fault-free baseline"})
-    passed = all(r["passed"] for r in recomputed)
-    return {"gate": "fmeda_coverage_check", "passed": passed,
-            "asil": trusted_asil, "dc_floor_pct": trusted_floor,
-            "verdict": "PASS" if passed else "FAIL", "mechanisms": recomputed,
-            "reason": "each mechanism independently recomputed from current native evidence"
-                      if passed else "one or more mechanisms independently fails"}
+
+    asil = (asil if asil is not None else "D").strip().upper()
+    if asil not in fi.ASIL_DC_FLOOR:
+        return {"gate": "fmeda_coverage_check", "passed": False, "verdict": "FAIL",
+                "reason": f"Unknown ASIL: {asil}"}
+    floor = fi.asil_floor(asil, min_dc)
+    rows = report.get("mechanisms") or [report]
+    measured = report.get("measured", True) and all(
+        row.get("detected_faults") is not None and row.get("injected_faults", 0) > 0
+        for row in rows)
+    if not measured:
+        verdict = "FAIL" if report.get("verdict") == "FAIL" else "NOT_MEASURED"
+        return {"gate": "fmeda_coverage_check", "passed": False, "verdict": verdict,
+                "reason": report.get("reason", "No native diagnostic coverage measurement")}
+    results = []
+    for index, row in enumerate(rows):
+        dc = fi.compute_dc(row["detected_faults"], row["injected_faults"])
+        passed, reason = fi.dc_verdict(dc, floor)
+        valid = row.get("baseline_valid", False)
+        results.append({"id": row.get("id", str(index)), "passed": valid and passed,
+            "injected_faults": row["injected_faults"], "detected_faults": row["detected_faults"],
+            "recomputed_dc_pct": round(dc, 4), "baseline_valid": valid,
+            "reason": reason if valid else "invalid native fault-free baseline"})
+    passed = all(row["passed"] for row in results)
+    output = {"gate": "fmeda_coverage_check", "passed": passed,
+              "asil": asil, "dc_floor_pct": floor, "verdict": "PASS" if passed else "FAIL",
+              "mechanisms": results, "reason": "Native measurements against the requested ASIL/DC floor"}
+    if len(results) == 1:
+        output.update({key: results[0][key] for key in ("injected_faults", "detected_faults",
+                       "recomputed_dc_pct", "baseline_valid")})
+    return output

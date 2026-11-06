@@ -51,27 +51,42 @@ def test_failed_step_does_not_block_independent_tool(tmp_path):
 
 
 @pytest.mark.parametrize("errors,status", [(0, "PASS"), (1, "FAIL")])
-def test_manufacturability_reads_final_native_result_before_aggregation(
-        tmp_path, errors, status, physical_step_table):
+def test_manufacturability_runs_its_own_screen_before_aggregation(
+        tmp_path, monkeypatch, errors, status, physical_step_table):
+
+    routed = tmp_path / "captured.def"
+    routed.write_text("""VERSION 5.8 ;
+DESIGN unit ;
+VIAS 1 ;
+- cut + VIARULE vr + CUTSIZE 200 200 + ROWCOL 1 1 ;
+END VIAS
+NETS 1 ;
+- signal ( inst A ) + ROUTED met1 ( 0 0 ) cut ( 1 0 ) ;
+END NETS
+""")
+    initialize = engine.NativeChain.__init__
+    def configured(chain, *args, **kwargs):
+        initialize(chain, *args, **kwargs)
+        chain.state = {"def": str(routed)}
+    monkeypatch.setattr(engine.NativeChain, "__init__", configured)
     names = {"design_for_manufacturability", "final_electrical_analysis", "signoff_aggregation"}
     rows = [deepcopy(row) for row in physical_step_table["steps"] if row["name"] in names]
     measurement = command_row("final_electrical_analysis", errors)
-    measurement["tool"]["command"][2] = (
-        "import pathlib; p=pathlib.Path('calls'); "
-        "p.write_text(str(int(p.read_text())+1) if p.exists() else '1'); "
-        + measurement["tool"]["command"][2])
     for row in rows:
         row["when"] = "always"
         if row["name"] == measurement["name"]:
             row["tool"], row["checks"] = measurement["tool"], measurement["checks"]
+        elif row["name"] == "design_for_manufacturability":
+            row["tool"]["routed_def"] = str(routed)
     report = execute(tmp_path, rows)
     actual = {row["name"]: row for row in report["steps"]}
-    summary = actual["design_for_manufacturability"]
-    assert summary["status"] == status
-    assert summary["native_metrics"]["errors"] == errors
+    screen = actual["design_for_manufacturability"]
+    assert screen["status"] == "PASS"
+    assert screen["native_metrics"]["signal_via_uses"] == 1
+    assert screen["native_metrics"]["single_cut_fraction"] == 1
+    assert actual["final_electrical_analysis"]["status"] == status
     assert actual["signoff_aggregation"]["status"] == status
-    assert actual["signoff_aggregation"]["native_metrics"]["non_passing_steps"] == (0 if errors == 0 else 2)
-    assert (tmp_path / "calls").read_text() == "1"
+    assert actual["signoff_aggregation"]["native_metrics"]["non_passing_steps"] == errors
 
 
 @pytest.mark.parametrize("bounded", [False, True])
@@ -213,6 +228,19 @@ def test_report_only_row_reuses_its_producer_verdict(tmp_path, code, inputs, sta
     assert [row["status"] for row in result["steps"]] == [status, status]
 
 
+@pytest.mark.parametrize("errors", [0, 1])
+def test_later_producer_report_is_read_before_its_aggregate(tmp_path, errors):
+    reader = command_row("reader")
+    reader.update(tool={"kind": "native_report", "from": "producer"}, checks=[])
+    aggregate = command_row("summary")
+    aggregate.update(tool={"kind": "aggregate"}, checks=[
+        {"metric": "non_passing_steps", "operator": "==", "limit": 0}])
+    result = execute(tmp_path, [reader, aggregate, command_row("producer", value=errors)])
+    rows = {row["name"]: row for row in result["steps"]}
+    assert rows["reader"]["status"] == rows["producer"]["status"] == ("FAIL" if errors else "PASS")
+    assert rows["summary"]["native_metrics"]["non_passing_steps"] == errors
+
+
 @pytest.mark.parametrize("declared,status", [(False, "PASS"), (True, "FAIL")])
 def test_intermediate_number_blocks_only_on_a_declared_bound(tmp_path, declared, status):
     row = command_row("intermediate", value=7)
@@ -283,7 +311,7 @@ def test_native_missing_report_is_not_a_chip_failure():
     assert engine.evaluate(outcome, [{"status": "NOT_MEASURED"}]) == "NOT_MEASURED"
 
 
-def test_existing_native_results_survive_an_added_table_entry(tmp_path):
+def test_new_invocation_runs_existing_and_added_entries(tmp_path):
     row = command_row("existing")
     counter = tmp_path / "calls"
     row["tool"]["command"][2] = (
@@ -291,7 +319,7 @@ def test_existing_native_results_survive_an_added_table_entry(tmp_path):
         + row["tool"]["command"][2])
     execute(tmp_path, [row])
     result = execute(tmp_path, [row, command_row("added")])
-    assert counter.read_text() == "1"
+    assert counter.read_text() == "2"
     assert result["pass"] == 2
 
 
@@ -625,3 +653,34 @@ def test_strict_power_ceiling_rejects_decimal_and_float_equality(tmp_path, milli
     measured = engine.measure(checks, {"power__total__corner:nom_tt": watts}, {}, {"always": True})
     assert measured[0]["status"] == "FAIL"
     assert engine.evaluate(engine.ToolResult(True, 0), measured) == "FAIL"
+
+
+@pytest.mark.parametrize('adapter,name', [
+    ('ip_release_docs', 'ip_release_views_and_documentation'),
+    ('design_release', 'design_release')])
+def test_view_snapshot_cannot_replace_the_ip_document_program(tmp_path, monkeypatch, adapter, name):
+    import flow_native_adapters
+
+    directory = tmp_path / 'steps' / name
+    monkeypatch.setattr(engine.NativeChain, 'snapshot', lambda *args:
+                        engine.ToolResult(True, 0, {'design__instance__count': 1}))
+    snapshot = {'name': name, 'title': 'IP release views and documentation',
+                'when': 'always', 'legacy_id': {}, 'checks': [],
+                'tool': {'kind': 'snapshot', 'destination': 'exported', 'formats': {}}}
+    assert execute(tmp_path, [snapshot])['steps'][0]['status'] == 'PASS'
+    calls = []
+
+    def produce(project, step, tool, route, **kwargs):
+        calls.append(tool['adapter'])
+        (step / 'IP_DATASHEET.md').write_text('Current native interface.')
+        return {'ran': True, 'exit_code': 0, 'metrics': {'release_documents': 6},
+                'reports': [str(step / 'IP_DATASHEET.md')]}
+
+    monkeypatch.setattr(flow_native_adapters, 'execute', produce)
+    row = {'name': name, 'title': 'IP release views and documentation',
+           'when': 'always', 'legacy_id': {}, 'checks': [],
+           'tool': {'kind': 'adapter', 'adapter': adapter}}
+    report = execute(tmp_path, [row])
+    assert calls == [adapter]
+    assert (directory / 'IP_DATASHEET.md').is_file()
+    assert report['steps'][0]['native_metrics']['release_documents'] == 6

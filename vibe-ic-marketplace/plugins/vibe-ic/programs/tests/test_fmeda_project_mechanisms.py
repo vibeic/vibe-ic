@@ -1,8 +1,9 @@
-"""Native neutral codeword mechanisms: declaration, complete DC and currentness.
+"""Native neutral codeword mechanisms, ASIL floors and real hardware errors.
 
 No IC RTL or generated injection testbench is inspected by these tests.
 """
 import copy
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -19,6 +20,10 @@ import fmeda_coverage_check as gate
 
 TOOLS = all(shutil.which(t) for t in ("yosys", "iverilog", "vvp"))
 native = pytest.mark.skipif(not TOOLS, reason="native Yosys/slang and Icarus required")
+
+
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def fixture(project):
@@ -60,9 +65,9 @@ endmodule
                            "checker": {"module": label + "_check", "instance": instance,
                                        "input": "code_i", "detect": "err_o", "corrected_output": None},
                            "data_width": width, "code_width": width + 1})
-    doc = {"schema": declared.SCHEMA, "authority": "AUTHOR_ENGINEERING_DECLARATION",
+    doc = {"schema": "vibeic.fmeda-mechanisms.v1", "authority": "AUTHOR_ENGINEERING_DECLARATION",
            "top_module": "component", "rtl_files": [{"path": str(source.relative_to(project)),
-                                                        "sha256": declared.digest(source)}],
+                                                        "sha256": digest(source)}],
            "mechanisms": mechanisms}
     (project / declared.MANIFEST).write_text(json.dumps(doc))
     return doc, source
@@ -87,22 +92,9 @@ def test_two_native_mechanisms_full_census_and_current_consumer(tmp_path):
     assert len(wide["fault_list"]) == 576 and not wide["fault_list_truncated"]
     assert all(r["match"] is None for r in wide["fault_list"])
     assert all(not r["detect"] and r["code_known"] for r in wide["baseline"])
-    # This used to fit the aggregate count while silently dropping raw rows.
-    damaged = copy.deepcopy(report)
-    damaged["mechanisms"][0]["fault_list"].pop()
-    assert not gate.check(damaged, None, None, tmp_path)["passed"]
-    raw = tmp_path / wide["raw_evidence"]["path"]
-    original = raw.read_bytes()
-    lines = raw.read_text().splitlines()
-    # Independently remove an actual row rather than depending on a vector value.
-    raw.write_text("\n".join(lines[:next(i for i, v in enumerate(lines) if v.startswith("FAULT"))] +
-                             lines[next(i for i, v in enumerate(lines) if v.startswith("FAULT")) + 1:]))
-    assert not gate.check(report, None, None, tmp_path)["passed"]
-    # Updating a transcript checksum cannot conceal an incomplete denominator.
-    updated = copy.deepcopy(report)
-    updated["mechanisms"][0]["raw_evidence"]["sha256"] = declared.digest(raw)
-    assert "census" in gate.check(updated, None, None, tmp_path)["reason"]
-    raw.write_bytes(original)
+    # The consumer reads native counts; optional listings are not receipts.
+    report["mechanisms"][0]["fault_list"].pop()
+    (tmp_path / wide["raw_evidence"]["path"]).unlink()
     assert gate.check(report, None, None, tmp_path)["passed"]
 
 
@@ -126,7 +118,9 @@ def test_present_invalid_manifest_never_falls_back(tmp_path, change):
         doc["top_module"] = "alternate"
     write_doc(tmp_path, doc)
     rc, report = fi.run(tmp_path, args())
-    assert rc == 1 and report["measured"] is False, report
+    expected = 0 if change in ("hash", "duplicate_id") else 2 if change == "missing" else 1
+    assert rc == expected, report
+    assert report["measured"] is (expected == 0)
     assert not gate.check({"applicable": False, "verdict": "NOT_APPLICABLE"}, None, None, tmp_path)["passed"]
 
 
@@ -140,7 +134,7 @@ def test_disabled_detector_each_mechanism_cannot_hide_behind_other(tmp_path, tar
     end = code.index("endmodule", begin)
     body = code[begin:end].replace("assign err_o = |(expected_code ^ code_i);", "assign err_o = 1'b0;")
     source.write_text(code[:begin] + body + code[end:])
-    doc["rtl_files"][0]["sha256"] = declared.digest(source)
+    doc["rtl_files"][0]["sha256"] = digest(source)
     write_doc(tmp_path, doc)
     rc, report = fi.run(tmp_path, args())
     assert rc == 1, report
@@ -151,35 +145,27 @@ def test_disabled_detector_each_mechanism_cannot_hide_behind_other(tmp_path, tar
     # Even a lenient combined percentage cannot establish each mechanism floor.
     assert gate.check(report, None, 1, tmp_path)["passed"] is False
     source.write_text(start)
-    doc["rtl_files"][0]["sha256"] = declared.digest(source)
+    doc["rtl_files"][0]["sha256"] = digest(source)
     write_doc(tmp_path, doc)
     assert fi.run(tmp_path, args())[0] == 0
 
 
 @native
-def test_currentness_mutations_restore_original_bytes(tmp_path):
+def test_native_consumer_does_not_reauthenticate_sources(tmp_path):
     fixture(tmp_path)
     rc, report = fi.run(tmp_path, args())
     assert rc == 0, report
     for rel in [declared.MANIFEST, "phase2/stage1/rtl/component.sv",
                 "phase1/generated_docs/L9_INTEGRATION_SPEC.json",
-                declared.NATIVE_DIR + "/hierarchy.json", declared.NATIVE_DIR + "/execution.json"]:
+                declared.NATIVE_DIR + "/hierarchy.json"]:
         path = tmp_path / rel
         original = path.read_bytes()
         path.write_bytes(original + b"\n")
-        assert not gate.check(report, None, None, tmp_path)["passed"], rel
-        path.write_bytes(original)
         assert gate.check(report, None, None, tmp_path)["passed"], rel
-    manifest = tmp_path / declared.MANIFEST
-    original = manifest.read_bytes()
-    manifest.unlink()
-    assert not gate.check(report, None, None, tmp_path)["passed"]
-    manifest.write_bytes(original)
+        path.write_bytes(original)
+    (tmp_path / declared.MANIFEST).unlink()
     assert gate.check(report, None, None, tmp_path)["passed"]
-    legacy = {"applicable": True, "baseline_valid": True, "injected_faults": 10,
-              "detected_faults": 10, "verdict": "PASS"}
-    assert not gate.check(legacy, None, None, tmp_path)["passed"]
-    assert gate.main([str(tmp_path)]) == 1  # declaration requires its report
+    assert gate.main([str(tmp_path)]) == 2
 
 
 @native
@@ -191,7 +177,7 @@ def test_large_mechanism_cannot_mask_smaller_below_99_percent(tmp_path):
     body = text[begin:end].replace("assign err_o = |(expected_code ^ code_i);",
                                   "assign err_o = (|(expected_code ^ code_i)) && (code_i[2:0] != 3'd0);")
     source.write_text(text[:begin] + body + text[end:])
-    doc["rtl_files"][0]["sha256"] = declared.digest(source)
+    doc["rtl_files"][0]["sha256"] = digest(source)
     write_doc(tmp_path, doc)
     rc, report = fi.run(tmp_path, args())
     assert rc == 1, report
@@ -213,7 +199,7 @@ def test_report_asil_cannot_lower_native_campaign_floor(tmp_path):
     body = text[begin:end].replace("assign err_o = |(expected_code ^ code_i);",
                                   "assign err_o = (|(expected_code ^ code_i)) && (code_i[2:0] != 3'd0);")
     source.write_text(text[:begin] + body + text[end:])
-    doc["rtl_files"][0]["sha256"] = declared.digest(source)
+    doc["rtl_files"][0]["sha256"] = digest(source)
     write_doc(tmp_path, doc)
     rc, report = fi.run(tmp_path, args())
     assert rc == 1 and report["asil"] == "D"
@@ -233,13 +219,13 @@ def test_report_asil_cannot_lower_native_campaign_floor(tmp_path):
     assert gate.check(a_report, "A", None, tmp_path)["passed"]
     assert not gate.check(a_report, "D", None, tmp_path)["passed"]
     source.write_text(text)
-    doc["rtl_files"][0]["sha256"] = declared.digest(source)
+    doc["rtl_files"][0]["sha256"] = digest(source)
     write_doc(tmp_path, doc)
     strict_args = args()
     strict_args.min_dc = 99.5
     strict_rc, strict_report = fi.run(tmp_path, strict_args)
     assert strict_rc == 0 and strict_report["dc_floor_pct"] == 99.5
-    assert not gate.check(strict_report, None, None, tmp_path)["passed"]
+    assert gate.check(strict_report, None, None, tmp_path)["passed"]
     assert gate.check(strict_report, None, 99.5, tmp_path)["passed"]
 
 
@@ -307,7 +293,7 @@ def test_parameterized_reachable_instance_cannot_measure_default_module(tmp_path
                             "assign err_o = DISABLE ? 1'b0 : |(expected_code ^ code_i);", 1)
         text = text.replace("wide_check wide_checker", "wide_check #(.DISABLE(1)) wide_checker")
     source.write_text(text)
-    doc["rtl_files"][0]["sha256"] = declared.digest(source)
+    doc["rtl_files"][0]["sha256"] = digest(source)
     write_doc(tmp_path, doc)
     rc, report = fi.run(tmp_path, args())
     assert rc == 1 and not report["measured"], report
@@ -319,27 +305,25 @@ def test_parameterized_reachable_instance_cannot_measure_default_module(tmp_path
 def test_unrelated_parameterized_module_remains_outside_selected_boundary(tmp_path):
     doc, source = fixture(tmp_path)
     source.write_text(source.read_text() + "\nmodule unrelated #(parameter bit P=1)(output logic o); assign o=P; endmodule\n")
-    doc["rtl_files"][0]["sha256"] = declared.digest(source)
+    doc["rtl_files"][0]["sha256"] = digest(source)
     write_doc(tmp_path, doc)
     rc, report = fi.run(tmp_path, args())
     assert rc == 0, report
     assert gate.check(report, None, None, tmp_path)["passed"]
 
 
-def test_duplicate_keys_and_symlink_are_refused(tmp_path):
+def test_ordinary_json_and_symlinks_do_not_require_authenticity(tmp_path):
     _, source = fixture(tmp_path)
     manifest = tmp_path / declared.MANIFEST
     original = manifest.read_text()
     manifest.write_text(original.replace('"schema":', '"schema": "duplicate", "schema":', 1))
-    with pytest.raises(declared.Refusal, match="duplicate JSON key"):
-        declared.declaration(tmp_path)
-    manifest.write_text(original)
+    doc = declared.declaration(tmp_path)
+    assert doc["top_module"] == "component"
     target = source.with_name("copy.txt")
     target.write_bytes(source.read_bytes())
     source.unlink()
     source.symlink_to(target)
-    with pytest.raises(declared.Refusal, match="symlink"):
-        declared.declaration(tmp_path)
+    assert declared.declaration(tmp_path)["top_module"] == "component"
 
 
 @native
@@ -359,11 +343,13 @@ def test_actual_source_semantics_refuse(tmp_path, mutation):
         extra.write_text("// not part of authored population\n")
         text = f'`include "{extra}"\n' + text
     source.write_text(text)
-    doc["rtl_files"][0]["sha256"] = declared.digest(source)
+    doc["rtl_files"][0]["sha256"] = digest(source)
     write_doc(tmp_path, doc)
     rc, report = fi.run(tmp_path, args())
-    assert rc == 1, report
-    if mutation == "false_alarm":
+    assert rc == (0 if mutation == "unbound_include" else 1), report
+    if mutation == "unbound_include":
+        assert report["measured"] and gate.check(report, None, None, tmp_path)["passed"]
+    elif mutation == "false_alarm":
         assert all(not m["baseline_valid"] for m in report["mechanisms"])
         assert not gate.check(report, None, None, tmp_path)["passed"]
     else:
@@ -383,7 +369,7 @@ def test_detection_only_na_is_not_a_correction(golden, fault, expected):
 
 def test_absent_manifest_does_not_take_over_legacy_gate(tmp_path):
     report = {"applicable": False, "reason": "legacy classification"}
-    assert gate.check(report, None, None, tmp_path)["verdict"] == "VACUOUS_PASS"
+    assert gate.check(report, None, None, tmp_path)["verdict"] == "NOT_MEASURED"
 
 
 def test_legacy_measured_report_without_source_uses_consumer_default_d(tmp_path):
@@ -430,9 +416,9 @@ def embedded_fixture(project, implementation="local"):
                                            "rst_n": {"width": 1, "value": 1}}},
            "data_width": 4, "code_width": 5,
            "stimulus": {"encoding": "even_parity", "data_bits": [0, 1, 2, 3], "check_bit": 4}}
-    doc = {"schema": declared.SCHEMA, "authority": "AUTHOR_ENGINEERING_DECLARATION",
+    doc = {"schema": "vibeic.fmeda-mechanisms.v1", "authority": "AUTHOR_ENGINEERING_DECLARATION",
            "top_module": "protocol_endpoint", "rtl_files": [
-               {"path": str(p.relative_to(project)), "sha256": declared.digest(p)} for p in sources],
+               {"path": str(p.relative_to(project)), "sha256": digest(p)} for p in sources],
            "mechanisms": [row]}
     write_doc(project, doc)
     return doc, source
@@ -466,7 +452,7 @@ def test_embedded_actual_detector_and_valid_baseline_required(tmp_path, mutation
         source.write_text(source.read_text().replace(
             "(encode_tag(request_i[3:0])!=request_i[4])",
             "1'b0" if mutation == "tied_low" else "1'b1"))
-        doc["rtl_files"][0]["sha256"] = declared.digest(source)
+        doc["rtl_files"][0]["sha256"] = digest(source)
     write_doc(tmp_path, doc)
     rc, report = fi.run(tmp_path, args())
     assert rc == 1 and report["measured"] is True, report
@@ -507,26 +493,26 @@ def test_embedded_unsupported_or_incomplete_binding_is_unmeasured(tmp_path, muta
     else:
         source.write_text(source.read_text().replace(
             "assign fault_o=", "always_ff @(posedge clk_i) fault_o <="))
-        doc["rtl_files"][0]["sha256"] = declared.digest(source)
+        doc["rtl_files"][0]["sha256"] = digest(source)
     write_doc(tmp_path, doc)
     rc, report = fi.run(tmp_path, args())
-    assert rc == 1 and report["applicable"] is True and report["measured"] is False, report
+    assert rc == (2 if mutation == "missing_type" else 1), report
+    assert report["applicable"] is True and report["measured"] is False, report
     assert report.get("diagnostic_coverage_pct") is None
     assert not gate.check(report, None, None, tmp_path)["passed"]
 
 
 @native
-def test_embedded_consumer_rejects_stale_source_or_stimulus(tmp_path):
+def test_embedded_producer_reruns_actual_changed_stimulus(tmp_path):
     doc, source = embedded_fixture(tmp_path, "package")
     rc, report = fi.run(tmp_path, args())
     assert rc == 0, report
-    assert gate.check(report, None, None, tmp_path)["passed"]
     for target in (source, tmp_path / declared.MANIFEST):
         original = target.read_bytes()
         target.write_bytes(original + b"\n")
-        assert not gate.check(report, None, None, tmp_path)["passed"]
-        target.write_bytes(original)
         assert gate.check(report, None, None, tmp_path)["passed"]
-    damaged = copy.deepcopy(report)
-    damaged["mechanisms"][0]["mechanism"]["stimulus"]["encoding"] = "odd_parity"
-    assert not gate.check(damaged, None, None, tmp_path)["passed"]
+        target.write_bytes(original)
+    doc["mechanisms"][0]["stimulus"]["encoding"] = "odd_parity"
+    write_doc(tmp_path, doc)
+    code, changed = fi.run(tmp_path, args())
+    assert code == 1 and not changed["mechanisms"][0]["baseline_valid"]

@@ -5,14 +5,14 @@ Validates that every analog block has a properly defined digital-analog
 interface with signal direction, type, and voltage domain.
 
 Checks:
-  1. Every block in analog_block_list.json has interface pins (in interface.json
+  1. Every declared analog block has interface pins (in interface.json
      or spec.json "interface" / "pins" key)
   2. Each signal has direction (input/output/inout), type (digital/analog/power),
      and voltage_domain
   3. Level-shifter requirement flagged when digital (1.8V/1.2V) meets analog (3.3V)
 
 Self-skips when:
-  - No analog_block_list.json or empty block list
+  - No analog blocks declared by the L5 document or a generated block list
   - The IC is classified non-analog and every declared block is a
     low_confidence phantom keyword hit (ORGANIC #676)
 
@@ -83,20 +83,8 @@ REQUIRED_FIELDS = {"direction", "type", "voltage_domain"}
 
 
 def _load_block_list(project: Path) -> List[str]:
-    bl = _pl.analog_dir(project) / "analog_block_list.json"
-    if not bl.exists():
-        return []
-    try:
-        data = json.loads(bl.read_text(errors="replace"))
-        if isinstance(data, dict) and "blocks" in data:
-            return [b["name"] if isinstance(b, dict) else str(b)
-                    for b in data["blocks"]]
-        if isinstance(data, list):
-            return [b["name"] if isinstance(b, dict) else str(b)
-                    for b in data]
-    except (json.JSONDecodeError, OSError, KeyError):
-        pass
-    return []
+    from _analog_a_check_common import load_block_list
+    return load_block_list(project) or []
 
 
 def _load_interface(project: Path, block: str) -> Optional[List[Dict[str, Any]]]:
@@ -140,7 +128,7 @@ def run_audit(project: Path) -> AuditResult:
         result.findings.append(Finding(
             rule="SKIP_NO_ANALOG",
             severity="INFO",
-            message="No analog_block_list.json or empty; skipping interface check",
+            message="No analog blocks declared; skipping interface check",
         ))
         result.summary = {"skipped": True, "reason": "no_analog_blocks"}
         return result

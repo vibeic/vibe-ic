@@ -196,7 +196,7 @@ def _load_latched_clock_gates(nl: "Netlist") -> None:
     ports = nl.port_bits
     for cell in nl.cells.values():
         conn = cell.get("connections", {})
-        if (cell["type"] not in {"$and", "$logic_and"} or set(conn) != {"A", "B", "Y"}
+        if (cell["type"] not in {"$and", "$logic_and", "$_AND_"} or set(conn) != {"A", "B", "Y"}
                 or any(len(bits) != 1 for bits in conn.values())):
             continue
         output = conn["Y"][0]
@@ -207,9 +207,11 @@ def _load_latched_clock_gates(nl: "Netlist") -> None:
             driver = nl.drivers.get(enable)
             latch = nl.cells[driver[0]] if driver and driver[1] == "Q" else {}
             pins = latch.get("connections", {})
-            if (latch.get("type") == "$dlatch" and pins.get("EN") == [clock]
-                    and pins.get("Q") == [enable]
-                    and _int(latch.get("parameters", {}).get("EN_POLARITY", 1)) == 0):
+            low_phase = (latch.get("type") == "$_DLATCH_N_"
+                         or (latch.get("type") == "$dlatch"
+                             and _int(latch.get("parameters", {}).get("EN_POLARITY", 1)) == 0))
+            latch_clock = pins.get("E" if latch.get("type") == "$_DLATCH_N_" else "EN")
+            if low_phase and latch_clock == [clock] and pins.get("Q") == [enable]:
                 nl.clock_parents[output] = clock
 
 

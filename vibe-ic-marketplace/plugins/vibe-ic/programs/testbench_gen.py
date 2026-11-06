@@ -940,7 +940,8 @@ def _emit_case_reset_invariant_oracle(project: Path, case: dict,
 def _emit_case_known_answer_vector(project: Path, case: dict, dut_module: str,
                                    ports: "List[Tuple[str, str, str]]",
                                    out_dir: Path,
-                                   report: "dict | None") -> "Path | None":
+                                   report: "dict | None",
+                                   timescale: "str | None" = None) -> "Path | None":
     """G19 — emit a REAL self-checking TB for an L10 `known_answer_vector`.
 
     This is the emitter the capture exists for: the case carries a TYPED
@@ -962,7 +963,7 @@ def _emit_case_known_answer_vector(project: Path, case: dict, dut_module: str,
     kept = authored_oracle_preserved(out_dir, case.get("name", ""), report)
     if kept is not None:
         return kept
-    text, why = _ktb.emit_case_oracle_from_ports(case, dut_module, ports)
+    text, why = _ktb.emit_case_oracle_from_ports(case, dut_module, ports, timescale=timescale)
     if not text:
         # The design may state its transport — opentitan_aes does: "經自建 TB
         # 由 TL-UL register interface 驅動". A peripheral whose interface is a
@@ -1935,7 +1936,8 @@ def emit_unit_tbs(project: Path, top: str = "chip_top",
                   out_dir: "Path | None" = None,
                   scaffold: bool = True,
                   case_stated: bool = False,
-                  case_ids: "list[str] | None" = None) -> int:
+                  case_ids: "list[str] | None" = None,
+                  dut_ports: "List[Tuple[str, str, str]] | None" = None) -> int:
     """ORGANIC #797 — importable producer entry point. Emit one unit TB per L10
     test case under `<project>/sim/tb/`, optionally KIND-SCOPED.
 
@@ -1976,7 +1978,8 @@ def emit_unit_tbs(project: Path, top: str = "chip_top",
     `case_stated` hands each case to the declared-function emitter so its own
     stated population, corners and reset-mid-computation scenario are driven
     (`_emit_case_golden_oracle`). The defaults are the Step-4 behaviour,
-    unchanged."""
+    unchanged. `dut_ports` lets a native consumer supply its actual top's
+    port surface instead of resolving the functional RTL interface."""
     if report is None:
         report = {}
     cases = load_l10_cases(project)
@@ -1996,7 +1999,8 @@ def emit_unit_tbs(project: Path, top: str = "chip_top",
         report["reason"] = "L10 carries no test case"
         return 0
 
-    dut_module, ports, reason = resolve_dut(project, top)
+    dut_module, ports, reason = (resolve_dut(project, top) if dut_ports is None else
+                               (top, dut_ports, "native tool port surface"))
     report["dut_module"] = dut_module
     report["dut_resolution"] = reason
     if dut_module is None:
@@ -2046,7 +2050,7 @@ def emit_unit_tbs(project: Path, top: str = "chip_top",
         wrote = _emit_case_delivered_oracle(project, c, out_dir, report)
         if wrote is None:
             wrote = _emit_case_known_answer_vector(project, c, dut_module,
-                                                   ports, out_dir, report)
+                ports, out_dir, report, timescale="1ns/1ps" if dut_ports is not None else None)
         if wrote is None:
             # R-0915-113(2) — the design may state its transport as a plain
             # memory-mapped register bus and state BOTH halves of the vector

@@ -9079,7 +9079,6 @@ steps:
       - "phase3/stage4/documentation/ip/*/RELEASE_NOTES.md"
       - "phase3/stage4/documentation/ip/*/ERRATA.md"
       - "phase3/stage4/documentation/ip/*/DELIVERABLES_MANIFEST.md"
-      - "phase3/stage4/documentation/ip/*/documentation_manifest.yaml"
     gate:
       all_of:
         - program_exit_zero: "digital_hardmacro_check . --json reports/phase3/digital_hardmacro.json"
