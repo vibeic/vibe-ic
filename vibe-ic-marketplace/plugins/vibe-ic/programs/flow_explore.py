@@ -75,7 +75,11 @@ def run_variant(project, output, variant, cores, flow_args, ppa_level=0):
         command = [sys.executable, "-c", launcher, ",".join(map(str, cores)), str(ENTRY),
                    str(destination), *flow_args]
         with (output / (name + ".log")).open("w") as log:
-            completed = subprocess.run(command, cwd=destination, stdout=log, stderr=subprocess.STDOUT)
+            with subprocess.Popen(command, cwd=destination, stdout=log, stderr=subprocess.STDOUT) as completed:
+                _, status, usage = os.wait4(completed.pid, 0)
+                completed.returncode = os.waitstatus_to_exitcode(status)
+                row["cpu_seconds"] = usage.ru_utime + usage.ru_stime
+                row["cpu_hours"] = row["cpu_seconds"] / 3600
         report = _load(destination / "reports/flow_engine.json")
         rows = report.get("steps", [])
         metrics = {}
@@ -106,7 +110,7 @@ def run_variant(project, output, variant, cores, flow_args, ppa_level=0):
     return row
 
 
-def explore(project, output, *, cpus=8, jobs=2, flow_args=(), ppa_level=None):
+def explore(project, output, *, cpus=8, jobs=2, flow_args=(), ppa_level=None, spool=None):
     project, output = Path(project).resolve(), Path(output).resolve()
     if output.is_relative_to(project):
         raise ValueError("The exploration output must be outside the source project.")
@@ -120,7 +124,35 @@ def explore(project, output, *, cpus=8, jobs=2, flow_args=(), ppa_level=None):
     groups = [cores[index::workers] for index in range(workers)]
     started = time.monotonic()
     baseline = variants(project, level=0)[0]
-    reference = run_variant(project, output, baseline, groups[0], flow_args, level)
+    report_path = output / "results.json"
+    if spool:
+        from flow_ppa_spool import collect, publish
+        from _eda_pin import image_reference
+        outbox, result_directory = (Path(path).resolve() for path in spool)
+        if outbox == result_directory or any(path.is_relative_to(project)
+                                              for path in (outbox, result_directory)):
+            raise ValueError("Spool output and results must be distinct and outside the project")
+        image = os.environ.get("VIBEIC_EDA_IMAGE") or image_reference()
+
+        def submit_spool(candidate):
+            return publish(project, outbox, candidate, cpus=len(cores),
+                           flow_args=flow_args, level=level, image=image)
+
+        reference_job = submit_spool(baseline)
+        report_path.write_text(json.dumps({"state": "REFERENCE_PENDING", "ppa_level": level,
+            "executor": "spool", "spool_job": reference_job}, indent=2) + "\n")
+        reference = None
+        while reference is None:
+            reference = collect(reference_job, result_directory, output / baseline[0])
+            if reference is None:
+                time.sleep(1)
+        if not reference["rows"]:
+            report_path.write_text(json.dumps({"state": "REFERENCE_NOT_MEASURED", "ppa_level": level,
+                "executor": "spool", "variants": [reference]}, indent=2) + "\n")
+            shutil.rmtree(outbox / reference_job)
+            raise ValueError("The reference job produced no native public report; see its returned diagnostics")
+    else:
+        reference = run_variant(project, output, baseline, groups[0], flow_args, level)
     activity = reference.get("native_activity", {})
     candidates = variants(project, level=level, resolved=reference["resolved_settings"], activity=activity)
     rows = [reference, *[{"name": name, "project": str(output / name), "overrides": overrides,
@@ -130,7 +162,7 @@ def explore(project, output, *, cpus=8, jobs=2, flow_args=(), ppa_level=None):
               "ppa_level": level, "ppa_level_source": level_source,
               "planned_trials": len(candidates), "reference": reference["name"],
               "cpu_budget": len(cores), "jobs": workers, "public_args": list(flow_args),
-              "executor": "local", "weights": weights, "variants": rows,
+              "executor": "spool" if spool else "local", "weights": weights, "variants": rows,
               "sampling_seed": SAMPLE_SEED if level == 2 else None,
               "pinned_native_settings": sorted(pinned_settings(project)),
               "knob_families": ["minimum drive exclusion", "recover_power", "resizer max utilization",
@@ -139,29 +171,49 @@ def explore(project, output, *, cpus=8, jobs=2, flow_args=(), ppa_level=None):
     if level == 2:
         axes, skipped = level_two_axes(reference["resolved_settings"], activity)
         report.update(knob_families=report["knob_families"] + sorted(axes), skipped_knobs=skipped)
-    report_path = output / "results.json"
     report_path.write_text(json.dumps(report, indent=2) + "\n")
-    pending = iter(enumerate(candidates[1:], 1))
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        active = {}
+    if spool:
+        pending_jobs = {}
+        report.update(spool_output=str(outbox), spool_results=str(result_directory),
+                      cpu_budget_per_job=len(cores), jobs=None)
+        for index, candidate in enumerate(candidates[1:], 1):
+            job = submit_spool(candidate)
+            pending_jobs[index] = job
+            rows[index].update(state="QUEUED", spool_job=job)
+            report_path.write_text(json.dumps(report, indent=2) + "\n")
+        shutil.rmtree(outbox / reference_job)
+        while pending_jobs:
+            for index, job in list(pending_jobs.items()):
+                completed = collect(job, result_directory, output / rows[index]["name"])
+                if completed is not None:
+                    rows[index] = completed
+                    del pending_jobs[index]
+                    report_path.write_text(json.dumps(report, indent=2) + "\n")
+                    shutil.rmtree(outbox / job)
+            if pending_jobs:
+                time.sleep(1)
+    else:
+        pending = iter(enumerate(candidates[1:], 1))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            active = {}
 
-        def submit(group):
-            item = next(pending, None)
-            if item is not None:
-                index, candidate = item
-                active[pool.submit(run_variant, project, output, candidate,
-                                   group, flow_args, level)] = (index, group)
+            def submit(group):
+                item = next(pending, None)
+                if item is not None:
+                    index, candidate = item
+                    active[pool.submit(run_variant, project, output, candidate,
+                                       group, flow_args, level)] = (index, group)
 
-        for group in groups:
-            submit(group)
-        while active:
-            finished, _ = wait(active, return_when=FIRST_COMPLETED)
-            for future in finished:
-                index, group = active.pop(future)
-                rows[index] = future.result()
-                # One active native process per disjoint affinity group. A fast
-                # worker must not launch into another worker's still-busy group.
+            for group in groups:
                 submit(group)
+            while active:
+                finished, _ = wait(active, return_when=FIRST_COMPLETED)
+                for future in finished:
+                    index, group = active.pop(future)
+                    rows[index] = future.result()
+                    # One active child per disjoint CPU group.
+                    submit(group)
+                report_path.write_text(json.dumps(report, indent=2) + "\n")
             report_path.write_text(json.dumps(report, indent=2) + "\n")
     for row in rows:
         row["objective"] = compare_native(reference, row, weights)
@@ -178,7 +230,7 @@ def explore(project, output, *, cpus=8, jobs=2, flow_args=(), ppa_level=None):
                   public_invocations=sum(row.get("exit_code") is not None for row in rows))
     report_path.write_text(json.dumps(report, indent=2) + "\n")
     lines = [f"PPA level {level} ({level_source}); {len(rows)} planned trials, "
-             f"{report['public_invocations']} public invocations; executor local.", "",
+             f"{report['public_invocations']} public invocations; executor {report['executor']}.", "",
              "Weights: " + json.dumps(weights) + ".", "",
              "| Variant | Passing rows | Score (lower) | " + " | ".join(METRICS) + " |",
              "|---|---|---|" + "---|" * len(METRICS)]
@@ -209,12 +261,14 @@ def main():
     parser.add_argument("--jobs", type=int, choices=range(1, 3), default=2)
     parser.add_argument("--ppa-level", type=int, choices=range(5),
                         help="CLI overrides document PPA_LEVEL; default2. Levels3/4 use the native-tool handoff.")
+    parser.add_argument("--spool", nargs=2, type=Path, metavar=("OUTPUT", "RESULTS"),
+                        help="Publish self-contained native jobs and read their returned results; default is local.")
     args, forwarded = parser.parse_known_args()
     if forwarded[:1] == ["--"]:
         forwarded = forwarded[1:]
     try:
         result = explore(args.project, args.output, cpus=args.cpus, jobs=args.jobs,
-                         flow_args=forwarded, ppa_level=args.ppa_level)
+                         flow_args=forwarded, ppa_level=args.ppa_level, spool=args.spool)
     except (OSError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
