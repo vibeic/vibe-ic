@@ -27,4 +27,3 @@ def test_roles_sharing_one_canonical_step_do_not_collide(tmp_path):
     assert _we.resolve_step_name("drc") == _we.resolve_step_name("lvs"), (
         "premise moved: these role names no longer share a canonical step, so "
         "this test no longer exercises the collision it was written for")
-
