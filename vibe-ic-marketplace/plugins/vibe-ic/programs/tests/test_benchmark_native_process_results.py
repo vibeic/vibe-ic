@@ -175,3 +175,67 @@ def test_owner_fallback_handles_unreadable_or_incomplete_reports(tmp_path, paylo
     assert result["status"] == expected
     if expected == "REPORTS_AVAILABLE":
         assert result["native_verdict"] == "NOT_MEASURED"
+def test_plain_container_selection_needs_no_image_identity(tmp_path, monkeypatch):
+    monkeypatch.setenv("VIBEIC_EDA_CONTAINER", "selected-container")
+    monkeypatch.delenv("VIBEIC_CHALLENGE_BACKEND", raising=False)
+    assert dispatch._challenge_execution_declaration(tmp_path) == {
+        "backend": "native", "selection": "explicit existing container",
+        "container": "selected-container"}
+    assert not list(tmp_path.iterdir())
+    config = tmp_path / ".bench_config.json"
+    config.write_text(json.dumps({"tool_container": "recorded-container"}))
+    monkeypatch.delenv("VIBEIC_EDA_CONTAINER")
+    assert dispatch._recorded_benchmark_container(tmp_path) == "recorded-container"
+
+
+def challenge_fixture(tmp_path, expected):
+    project = tmp_path / "project"
+    rtl = project / "phase2/stage1/rtl/neutral.v"
+    rtl.parent.mkdir(parents=True)
+    body = "module neutral(output wire y); assign y=1'b1; endmodule\n"
+    rtl.write_text(body)
+    candidate = dispatch._archive_candidate("neutral", project,
+        {"ok": True, "completion": body}, tmp_path / "run", "PROGRAM")
+    tb = tmp_path / "challenge.sv"
+    tb.write_text("module vibeic_ai_challenge_tb; wire y; neutral dut(.y(y));\n"
+                  f"initial begin #1; if (y !== 1'b{expected}) begin $display(\"VIBEIC_AI_CHALLENGE=FAIL\"); $fatal(1, \"assertion failed\"); end\n"
+                  "$display(\"VIBEIC_AI_CHALLENGE=PASS\"); $finish; end endmodule\n")
+    return candidate, {"path": str(tb), "sha256": dispatch._sha256_text(tb.read_text())}
+
+
+@pytest.mark.parametrize("expected,status", [(1, "PASS"), (0, "FAIL")])
+def test_real_iverilog_challenge_keeps_native_verdict(tmp_path, expected, status):
+    import shutil
+    if not shutil.which("iverilog") or not shutil.which("vvp"):
+        pytest.skip("Icarus tools are unavailable on this test host")
+    candidate, challenge = challenge_fixture(tmp_path, expected)
+    result = dispatch._run_verification_challenge(candidate, challenge)
+    assert result["status"] == status, result
+    commands = result["execution"]["commands"]
+    assert next(command for command in commands if command["stage"] == "compile")["returncode"] == 0
+    simulation = next(command for command in commands if command["stage"] == "runtime")
+    assert (simulation["returncode"] == 0) is (status == "PASS")
+
+
+def test_native_challenge_executes_without_a_runtime_passport(tmp_path, monkeypatch):
+    import shutil
+    import subprocess
+    if not shutil.which("iverilog") or not shutil.which("vvp"):
+        pytest.skip("Icarus tools are unavailable on this test host")
+    candidate, challenge = challenge_fixture(tmp_path, 1)
+    challenge["execution_backend"] = {"backend": "native", "container": "selected-container"}
+    def inspect_mounts(argv, **_kwargs):
+        assert argv == ["docker", "inspect", "--format", "{{json .Mounts}}", "selected-container"]
+        return subprocess.CompletedProcess(argv, 0, json.dumps([
+            {"Type": "bind", "Source": str(tmp_path), "Destination": str(tmp_path), "RW": True}]), "")
+    def supervised(container, command, **_kwargs):
+        assert container == "selected-container"
+        if " -V" in command:
+            return subprocess.CompletedProcess(["bash", "-lc", command], 1, "version unavailable", "")
+        return subprocess.run(["bash", "-lc", command], capture_output=True, text=True)
+    monkeypatch.setattr(dispatch._progress_run, "run", inspect_mounts)
+    monkeypatch.setattr(dispatch._challenge_exec, "run_in_container_supervised", supervised)
+    result = dispatch._run_verification_challenge(candidate, challenge)
+    assert result["status"] == "PASS", result
+    assert not any(key.startswith("identity_") for key in result["execution"])
+    assert not (tmp_path / "ai_verification_challenges/native_execution.json").exists()

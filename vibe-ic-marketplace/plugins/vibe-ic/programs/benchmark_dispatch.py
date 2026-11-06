@@ -50,7 +50,6 @@ from typing import Any, Callable, Iterable, Mapping, Optional, TypeVar
 from _atomic_artefact import write_json as _atomic_write_json
 from _atomic_artefact import write_text as _atomic_write_text
 from _atomic_artefact import write_bytes as _atomic_write_bytes
-import _eda_pin as _runtime_tools
 import _progress_run
 import _container_exec as _challenge_exec
 from rtl_repair_contract import (SCHEMA_PROMPT_STRUCTURAL, SCHEMA_PROMPT_COMPLETION,
@@ -3567,29 +3566,8 @@ def _interface_omission_reason(candidate: dict, challenge: dict,
             f"port of the instantiated candidate")
 
 
-def _native_challenge_identity_path(run_p: Path) -> Path:
-    return Path(run_p) / "ai_verification_challenges" / "native_execution.json"
-
-
-_NATIVE_CHALLENGE_IDENTITY_FIELDS = (
-    "container", "container_id", "image_id", "image_digest")
-
-
-def _frozen_native_challenge_identity(run_p: Path) -> dict | None:
-    path = _native_challenge_identity_path(run_p)
-    if not path.exists() and not path.is_symlink():
-        return None
-    declaration = _read_json_regular(path)
-    if (not isinstance(declaration, dict) or declaration.get("backend") != "native"
-            or declaration.get("error") or any(
-                not isinstance(declaration.get(k), str) or not declaration[k]
-                for k in _NATIVE_CHALLENGE_IDENTITY_FIELDS)):
-        raise ValueError("frozen native challenge identity is incomplete")
-    return declaration
-
-
-def _challenge_execution_declaration(run_p: Path, *, native: bool = False) -> dict:
-    """Select installed host tools or the explicitly selected existing container."""
+def _challenge_execution_declaration(run_p: Path) -> dict:
+    """Select installed host tools or an explicitly selected existing container."""
     selected = os.environ.get("VIBEIC_CHALLENGE_BACKEND")
     if selected == "host":
         return {"backend": "host", "selection": "VIBEIC_CHALLENGE_BACKEND=host"}
@@ -3598,68 +3576,19 @@ def _challenge_execution_declaration(run_p: Path, *, native: bool = False) -> di
     container = _recorded_benchmark_container(Path(run_p))
     if not container:
         return {"backend": "host", "selection": "installed host tools"}
-    image_id, why_id = _runtime_tools.container_image_id(container)
-    digest, why_digest = _runtime_tools.container_image_digest(container)
-    return {"backend": "native", "selection": "explicit existing container",
-            "container": container,
-            "container_id": _challenge_exec.container_id(container),
-            "image_id": image_id, "image_digest": digest,
-            **({"error": why_id or why_digest} if why_id or why_digest else {})}
+    return {"backend": "native", "selection": "explicit existing container", "container": container}
 
 
 def _challenge_execution_for_task(task: dict) -> dict:
-    project = Path(str(task.get("project") or ""))
-    run_p = project.parent.parent
-    declaration = task.get("verification_execution")
-    try:
-        frozen = _frozen_native_challenge_identity(run_p)
-    except (OSError, ValueError) as exc:
-        return {"backend": "native", "error": str(exc)}
     if "verification_execution" in task:
-        declaration = task["verification_execution"]
-        if frozen is not None:
-            issued_host = frozen.get("issued_host_task_sha256", [])
-            if (isinstance(declaration, dict) and declaration.get("backend") == "host"
-                    and not str(declaration.get("selection", "")).startswith("legacy")
-                    and isinstance(issued_host, list)
-                    and _review_task_digest(task) in issued_host):
-                return declaration
-            if (not isinstance(declaration, dict)
-                    or declaration.get("backend") != "native"
-                    or declaration.get("error")
-                    or any(declaration.get(k) != frozen[k]
-                           for k in _NATIVE_CHALLENGE_IDENTITY_FIELDS)):
-                return {**frozen, "error": "task declaration differs from frozen native identity"}
-            return frozen
-        return declaration
-    # Historical tasks are resumed against their original run declaration,
-    # including malformed declarations; absence is the named legacy case only.
-    return _challenge_execution_declaration(run_p)
-
-
-def _challenge_native_identity(declaration: dict) -> tuple[dict, str]:
-    """Read back the exact selected container; no host or alternate CID fallback."""
-    container = str(declaration.get("container") or "")
-    cid = _challenge_exec.container_id(container)
-    image_id, why_id = _runtime_tools.container_image_id(container)
-    digest, why_digest = _runtime_tools.container_image_digest(container)
-    actual = {"container_id": cid, "image_id": image_id, "image_digest": digest}
-    if declaration.get("error"):
-        return actual, str(declaration["error"])
-    for field, value in actual.items():
-        if not declaration.get(field) or not value:
-            return actual, f"native {field} unavailable: {why_id or why_digest}"
-        if value != declaration[field]:
-            return actual, (f"native {field} drift: declared {declaration[field]}, "
-                            f"found {value}")
-    return actual, ""
+        return task["verification_execution"]
+    return _challenge_execution_declaration(Path(task["project"]).parent.parent)
 
 
 def _run_verification_challenge(candidate: dict, challenge: dict) -> dict:
     """BLOCKING: execute the immutable proof on its declared backend.
 
-    Missing native identity/capability is UNAVAILABLE (acceptance NOT_MEASURED),
-    never a candidate verdict. Legacy direct calls are explicitly labelled host.
+    Missing tools or native execution are UNAVAILABLE (acceptance NOT_MEASURED).
     Raw command/returncode/stdout/stderr records accompany every execution.
     """
     reasons = _validate_candidate_snapshot(candidate, str(candidate.get("id")))
@@ -3677,59 +3606,27 @@ def _run_verification_challenge(candidate: dict, challenge: dict) -> dict:
                 "reasons": ["challenge is not self-contained"]}
     declaration = challenge.get("execution_backend", {
         "backend": "host", "selection": "legacy standalone caller"})
-    receipt = {"declaration": declaration, "commands": [], "tools": {}}
+    execution = {"declaration": declaration, "commands": [], "tools": {}}
 
     def finish(result):
-        return {**result, "execution": receipt}
+        return {**result, "execution": execution}
 
     if not isinstance(declaration, dict) or declaration.get("backend") not in ("host", "native"):
         return finish({"status": "UNAVAILABLE", "reasons": ["challenge backend is undeclared or invalid"]})
     native = declaration["backend"] == "native"
     mounts = []
     if native:
-        actual, why = _challenge_native_identity(declaration)
-        receipt["identity_before"] = actual
-        if why:
-            return finish({"status": "UNAVAILABLE", "reasons": [why]})
-        execution_run = challenge.get("execution_run")
-        if execution_run is not None:
-            # Freeze after readback, before the first tool. Repeated proofs use
-            # the same identity, even after a fresh process or pair overwrite.
-            run_p = Path(execution_run)
-            path = _native_challenge_identity_path(run_p)
-            frozen = {"backend": "native", "selection": str(path.resolve()),
-                      **{k: declaration[k] for k in _NATIVE_CHALLENGE_IDENTITY_FIELDS}}
-            try:
-                existing = _frozen_native_challenge_identity(run_p)
-                if existing is None:
-                    frozen["issued_host_task_sha256"] = sorted({
-                        _review_task_digest(task)
-                        for task in _read_jsonl(run_p / _REVIEW_WORKLIST)
-                        if isinstance(task.get("verification_execution"), dict)
-                        and task["verification_execution"].get("backend") == "host"
-                        and not str(task["verification_execution"].get(
-                            "selection", "")).startswith("legacy")})
-                elif "issued_host_task_sha256" in existing:
-                    # Never backfill an old freeze from the mutable worklist.
-                    frozen["issued_host_task_sha256"] = existing["issued_host_task_sha256"]
-                _write_immutable_json(path, frozen)
-                if _frozen_native_challenge_identity(run_p) != frozen:
-                    raise ValueError("frozen native identity readback differs")
-            except (OSError, ValueError) as exc:
-                return finish({"status": "UNAVAILABLE", "reasons": [str(exc)]})
-            declaration = frozen
-            receipt["declaration"] = frozen
         try:
-            inspect_argv = ["docker", "inspect", "--format", "{{json .Mounts}}", declaration["container_id"]]
+            inspect_argv = ["docker", "inspect", "--format", "{{json .Mounts}}", declaration["container"]]
             cp = _progress_run.run(inspect_argv, capture_output=True, text=True,
                 hard_ceiling_s=30, ceiling_notice=_challenge_exec.default_ceiling_notice('challenge mounts', 30))
-            receipt["commands"].append({"stage": "mounts", "argv": inspect_argv,
+            execution["commands"].append({"stage": "mounts", "argv": inspect_argv,
                 "returncode": cp.returncode, "stdout": cp.stdout, "stderr": cp.stderr})
             mounts = _strict_json_loads(cp.stdout) if cp.returncode == 0 else []
             if not isinstance(mounts, list):
                 raise ValueError("container mounts are not a list")
         except _progress_run.Stalled as exc:
-            receipt['commands'].append({'stage': 'mounts', 'argv': inspect_argv,
+            execution['commands'].append({'stage': 'mounts', 'argv': inspect_argv,
                 'returncode': None, 'stdout': exc.stdout, 'stderr': exc.stderr, 'stalled': True})
             return finish({'status': 'UNAVAILABLE', 'reasons': [str(exc)]})
         except (OSError, ValueError, subprocess.SubprocessError) as exc:
@@ -3753,22 +3650,18 @@ def _run_verification_challenge(candidate: dict, challenge: dict) -> dict:
     def execute(stage, argv, cwd=None):
         actual_argv = argv
         if native:
-            actual, why = _challenge_native_identity(declaration)
-            receipt["identity_before_" + stage] = actual
-            if why:
-                raise ValueError(why)
             command = shlex.join(argv)
             if cwd is not None:
                 command = "cd " + shlex.quote(mapped(cwd)) + " && exec " + command
             actual_argv = _challenge_exec.docker_exec_argv(
-                declaration['container_id'], 'env', 'IIC_OSIC_TOOLS_QUIET=1', 'bash', '-lc', command)
+                declaration['container'], 'env', 'IIC_OSIC_TOOLS_QUIET=1', 'bash', '-lc', command)
         record = {"stage": stage, "tool_argv": argv, "argv": actual_argv, "cwd": cwd,
                   "declared_budgets_s": {"tool": 30, "client": 45 if native else 30}}
-        receipt["commands"].append(record)
+        execution["commands"].append(record)
         try:
             if native:
                 cp = _challenge_exec.run_in_container_supervised(
-                    declaration['container_id'], command, ceiling_s=45,
+                    declaration['container'], command, ceiling_s=45,
                     shell=('env', 'IIC_OSIC_TOOLS_QUIET=1', 'bash', '-lc'))
                 # CompletedProcess.args is the exact supervised/stamped launch.
                 record['argv'] = cp.args
@@ -3784,10 +3677,6 @@ def _run_verification_challenge(candidate: dict, challenge: dict) -> dict:
             record.update(returncode=None, supervisor_returncode=cp.returncode, stalled=True)
             raise ValueError(f'STALLED challenge {stage}: {cp.stderr}')
         if native:
-            actual, why = _challenge_native_identity(declaration)
-            receipt["identity_after_" + stage] = actual
-            if why:
-                raise ValueError(why)
             if cp.returncode in {124, 126, 127}:
                 raise ValueError(f"native {stage} unavailable: rc={cp.returncode}: {cp.stderr}")
             if (cp.returncode != 0
@@ -3807,9 +3696,8 @@ def _run_verification_challenge(candidate: dict, challenge: dict) -> dict:
                 return finish({"status": "UNAVAILABLE", "reasons": [f"{tool} unavailable on declared {declaration['backend']} backend"]})
             tools[tool] = path
             version = execute("version_" + tool, [path, "-V"])
-            if version.returncode != 0:
-                return finish({"status": "UNAVAILABLE", "reasons": [f"{tool} version probe failed"]})
-            receipt["tools"][tool] = {"path": path, "version_stdout": version.stdout, "version_stderr": version.stderr}
+            execution["tools"][tool] = {"path": path, "version_stdout": version.stdout, "version_stderr": version.stderr,
+                                       "version_returncode": version.returncode}
         iverilog, vvp = tools["iverilog"], tools["vvp"]
     except subprocess.TimeoutExpired:
         return finish({"status": "UNAVAILABLE",
@@ -3835,7 +3723,7 @@ def _run_verification_challenge(candidate: dict, challenge: dict) -> dict:
     disagreement = _timescale_disagreement(rtl_paths, declared)
     if disagreement is not None:
         return finish({"status": "INVALID", "reasons": [disagreement]})
-    # Keep the declared CID even when the caller's project is not mounted.
+    # Keep the selected container even when the project is not mounted.
     # Self-contained frozen inputs can be copied into an existing writable
     # bind; source hashes, native commands and verdict rules stay unchanged.
     scratch_root = str(Path(candidate["manifest_path"]).parent) if native else None
@@ -3870,7 +3758,7 @@ def _run_verification_challenge(candidate: dict, challenge: dict) -> dict:
     with scratch as td:
         if stage_inputs:
             staged = []
-            receipt["input_staging"] = {"method": "verified_bind_copy", "files": staged}
+            execution["input_staging"] = {"method": "verified_bind_copy", "files": staged}
             def stage(path):
                 original = Path(path).resolve()
                 target = Path(td) / "inputs" / original.relative_to(original.anchor)
@@ -4042,17 +3930,6 @@ def _run_review_structural_proof(task: dict, candidate: dict,
         except (OSError, ValueError) as exc:
             return {"verdict": "REFUSED", "findings": [{
                 "code": "STRUCTURAL_SOURCE_MISSING", "message": str(exc)}]}
-    else:
-        execution = _challenge_execution_for_task(task)
-        backend = declaration.get("backend")
-        backend = backend if isinstance(backend, dict) else {}
-        if (execution.get("backend") != "native"
-                or backend.get("image_id") != execution.get("image_id")
-                or not str(backend.get("image", "")).endswith("@" + str(execution.get("image_digest")))):
-            return {"verdict": "REFUSED", "findings": [{
-                "code": "STRUCTURAL_TOOL_IDENTITY_MISMATCH",
-                "message": "prompt structural proof must use the task's declared native image"}]}
-
     frozen_paths = [Path(str(p)).resolve() for p in candidate.get("rtl_paths") or []]
     source_paths = [Path(str(p)).resolve() for p in candidate.get("source_rtl_paths") or []]
     rtl_root = (project / "phase2" / "stage1" / "rtl").resolve()
@@ -5850,13 +5727,13 @@ def _solver_argv(runner: Path, proj: Path, entry, exit_step,
     selected_container = os.environ.get("VIBEIC_EDA_CONTAINER", "").strip()
     if selected_container:
         argv += ["--container", selected_container]
-    # Same-bytes re-entry stages below program_regates, rather than projects.
-    for owner in Path(proj).resolve().parents:
-        if _native_challenge_identity_path(owner).exists():
-            container = _recorded_benchmark_container(owner)
-            if container and not selected_container:
-                argv += ["--container", container]
-            break
+    if not selected_container:
+        for owner in Path(proj).resolve().parents:
+            if (owner / ".bench_config.json").is_file():
+                container = _recorded_benchmark_container(owner)
+                if container:
+                    argv += ["--container", container]
+                break
     return argv
 
 
@@ -7256,6 +7133,7 @@ def _prepare_general_solve_run(bench: str, dataset: Path, run_p: Path,
         "clean_room": True,
         "full_dataset": limit == 0,
         "diagnostic_limit": int(limit or 0),
+        "tool_container": os.environ.get("VIBEIC_EDA_CONTAINER", "").strip() or None,
         "inherited_from": None,
         "seed_run": None,
         "reused_samples_from": None,
@@ -7274,10 +7152,14 @@ def _prepare_general_solve_run(bench: str, dataset: Path, run_p: Path,
 
 def _recorded_benchmark_container(run_p: Path) -> str | None:
     """Use the run's challenge container or an explicit environment selection."""
-    frozen = _frozen_native_challenge_identity(run_p)
-    if frozen is not None:
-        return frozen["container"]
-    return os.environ.get("VIBEIC_EDA_CONTAINER", "").strip() or None
+    selected = os.environ.get("VIBEIC_EDA_CONTAINER", "").strip()
+    if selected:
+        return selected
+    try:
+        config = _read_json_regular(Path(run_p) / ".bench_config.json")
+    except (OSError, ValueError):
+        return None
+    return str(config.get("tool_container") or "").strip() or None
 
 
 def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
