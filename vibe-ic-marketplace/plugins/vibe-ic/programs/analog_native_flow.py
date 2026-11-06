@@ -216,7 +216,7 @@ def _views(step, project, block, options, run):
                 evidence = {}
             outputs = list(generated["outputs"]) + [str(project / top.RECORD), str(receipt)]
             native_outputs = evidence.get("outputs", {})
-            outputs += list(native_outputs) if isinstance(native_outputs, dict) else []
+            outputs += list(native_outputs) if isinstance(native_outputs, (dict, list)) else []
             status = evidence.get("component_status", "NOT_MEASURED")
             if status not in STATUSES:
                 status = "NOT_MEASURED"

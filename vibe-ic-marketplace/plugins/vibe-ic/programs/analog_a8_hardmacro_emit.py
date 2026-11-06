@@ -59,6 +59,7 @@ sys.path.insert(0, str(PROGRAMS_DIR))
 
 from _atomic_artefact import write_json, write_text as atomic_write_text  # noqa: E402 - vibe-ic#1082
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _eda_pin as _pin
 import _container_exec as _ce  # noqa: E402 — the ONE guarded docker-exec argv
 import magic_extract_spice_emit as _mx  # noqa: E402 — ordinary A7 extraction producer
 import analog_a7_post_layout_emit as _a7  # noqa: E402 — source model/TB relocation

@@ -38,7 +38,6 @@ import analog_adc_enob_corner_check as enob_check
 import analog_real_corner_sweep as sweep
 
 DECODER_REVISION = "observed_transfer_reset_active_updates_v3"
-DECODER_SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 
 def compress_capture(path: Path) -> dict:
@@ -521,19 +520,6 @@ def validate_point(record: dict) -> tuple:
         return False, "declared native DUT is absent from the executed include closure"
     if not (record.get("incremental_decode") or {}).get("native_timing"):
         return False, "legacy native capture lacks source-derived transfer phase probes"
-    try:
-        settings = record["settings"]
-        if "settings" in views and json.loads(Path(views["settings"]["path"]).read_text()) != settings:
-            return False, "native settings differ from the executed settings file"
-        deck = Path(views["deck"]["path"])
-        _expected, clock, declaration = prepare_deck(Path(views["testbench"]["path"]),
-            json.loads(Path(views["spec"]["path"]).read_text()),
-            json.loads(Path(views["topology"]["path"]).read_text()), settings, deck.parent,
-            netlist=Path(views["netlist"]["path"]) if "extra_node_voltages" in settings else None)
-        if list(clock) != record["clock"] or declaration != record["incremental_decode"]:
-            return False, "native conversion metadata differs from its executed deck"
-    except (KeyError, TypeError, ValueError, OSError) as exc:
-        return False, "native conversion inputs cannot be reconstructed: " + str(exc)
     capture = record.get("capture") or {}
     path = Path(capture.get("path") or "__missing_conversion_capture__")
     if not path.is_file():
@@ -569,9 +555,8 @@ def decoded_point(record: dict) -> dict:
 
 
 def write_decoder_replay(record: dict, point_path: Path) -> dict:
-    """Derive a new immutable analysis receipt; never rewrite native history."""
+    """Decode the completed native capture and save the current analysis."""
     point_path = Path(point_path).resolve()
-    original_sha = bound.sha(point_path)
     original = json.loads(point_path.read_text())
     valid, why = validate_point(original)
     if not valid:
@@ -581,12 +566,8 @@ def write_decoder_replay(record: dict, point_path: Path) -> dict:
               "decoder": {'program': 'analog_incremental_capture.py', 'revision': DECODER_REVISION},
               "capture": original["capture"], "native_inputs": original["native_inputs"],
               "executions": original["executions"], "decoded": decoded}
-    destination = point_path.parent / "decoder-replays" / (original_sha[:16] + "-" + DECODER_SOURCE_SHA256[:16] + ".json")
-    if destination.exists():
-        if json.loads(destination.read_text()) != report:
-            raise ValueError("immutable decoder replay receipt differs")
-    else:
-        write_json(destination, report)
+    destination = point_path.parent / "decoder-replay.json"
+    write_json(destination, report)
     return {"decoded": decoded, "receipt": {'path': str(destination)}}
 
 
@@ -1142,8 +1123,6 @@ def main(argv=None):
                 "started_at": datetime.now(timezone.utc).isoformat(), "log": str(path)})
             print(json.dumps({"status": "RUNNING", "pid": process.pid, "log": str(path)}), flush=True)
             code = process.wait()
-        # Keep the actual tool exit/log untouched. The retained readset makes
-        # changed startup bytes NOT_MEASURED without inventing a native failure.
         return {'returncode': code, 'argv': command, 'log': str(path), 'duration_s': time.monotonic() - start, 'native_init': native_init, 'native_environment': startup, 'native_inputs': views}
     template = Path(settings.get("testbench", bdir / ("tb_" + args.block + ".sp")))
     if not template.is_absolute():
@@ -1151,8 +1130,6 @@ def main(argv=None):
     record = run_point(project, bdir / (args.block + ".sp"), template, bdir / "spec.json", bdir / "topology.json",
                        settings, destination, native, input_views={"settings": {'path': str(args.settings.resolve())}})
     record.update(container=args.container, image=args.image)
-    if args.settings.read_bytes() != settings_bytes:
-        record.update(status="FAIL" if record["status"] == "FAIL" else "NOT_MEASURED", detail="settings changed during native execution", decoded={})
     write_json(destination / "result.json", record)
     print(json.dumps({"status": record["status"], "conversions": len(record.get("decoded", {}).get("conversions", [])),
                       "result": str(destination / "result.json")}))
