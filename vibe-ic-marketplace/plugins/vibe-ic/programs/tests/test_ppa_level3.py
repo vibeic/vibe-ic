@@ -28,7 +28,7 @@ def native_modules(monkeypatch, flow=None, toolbox=None):
     monkeypatch.setitem(sys.modules, "librelane.common", common)
 
 
-def test_supervised_child_receives_argv_cwd_env_and_keeps_failure(tmp_path):
+def test_supervised_child_receives_argv_cwd_env_and_keeps_failure(tmp_path, monkeypatch):
     script = write(tmp_path / "child.py", '''import json,os,sys
 from pathlib import Path
 Path('observed.json').write_text(json.dumps({
@@ -38,17 +38,17 @@ print('native stdout')
 print('native stderr',file=sys.stderr)
 sys.exit(7)
 ''')
-    scratch = tmp_path / "scratch"
+    scratch = tmp_path / "vibe-ic-temp"
+    monkeypatch.setenv("VIBEIC_TMP", str(scratch))
     result = level3._command([sys.executable, str(script), "literal argument", "$unexpanded"],
                              tmp_path, tmp_path / "native.log", {"LEVEL3_FIXTURE": "present",
-                             "FLEET_SCRATCH": str(scratch)})
+                             "FLEET_SCRATCH": str(tmp_path / "queue-scratch")})
     observed = json.loads((tmp_path / "observed.json").read_text())
     assert observed["args"] == ["literal argument", "$unexpanded"]
     assert observed["cwd"] == str(tmp_path)
     assert observed["value"] == "present"
-    assert Path(observed["tmp"]).parent == scratch
+    assert Path(observed["tmp"]).is_relative_to(scratch / "tmp")
     assert not Path(observed["tmp"]).exists()
-    assert not list(scratch.iterdir())
     assert result.rc == 7
     assert "native stdout" in (tmp_path / "native.log").read_text()
     assert "native stderr" in (tmp_path / "native.log").read_text()
@@ -397,7 +397,7 @@ def test_declared_electrical_violation_cannot_pass_when_native_checker_warns(tmp
 
 
 def test_output_boundary_rejects_external_directory_without_creating_it(tmp_path, monkeypatch):
-    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.setenv("VIBEIC_TMP", str(tmp_path / "home/vibe-ic-temp"))
     output = tmp_path / "outside"
     with pytest.raises(ValueError, match="vibe-ic-temp/runs"):
         level3.run(tmp_path, output=output, route="ip", pdk_root=tmp_path)
