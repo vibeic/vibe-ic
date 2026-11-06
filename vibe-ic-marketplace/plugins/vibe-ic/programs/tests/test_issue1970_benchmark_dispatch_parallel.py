@@ -393,7 +393,7 @@ def test_real_refusal_cannot_collect_old_reports_and_resume_retries_only_that_ba
     (1, "ERROR: RTL compiler rejected the candidate", "COMPLETED"),
     (1, "", "COMPLETED"),
     (-9, "", "RUNNER_WORKER_FAILED"),
-    (2, "", "RUNNER_INVOCATION_NOT_MEASURED"),
+    (2, "", "COMPLETED"),
     (3, "CONCURRENT_RUN_REFUSED: occupied project", "RUNNER_INVOCATION_REFUSED"),
 ])
 def test_runner_process_disposition_does_not_confuse_gate_results(

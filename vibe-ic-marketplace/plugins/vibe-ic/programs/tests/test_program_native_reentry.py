@@ -108,10 +108,6 @@ _write_phase2_report(p/'reports/orchestrator/phase2_one_shot.json', {
     request_path.write_text(json.dumps(request))
     # Keep ordinary resume's source-upgrade selector quiet: this control is
     # specifically about the explicit authoring retry, not same-bytes re-gating.
-    snapshot = bd._runner_source_snapshot
-    monkeypatch.setattr(bd, "_runner_source_snapshot", lambda argv, **kw:
-                        process.invocation["source_before"] if len(argv) == 2
-                        else snapshot(argv, **kw))
     new_runner = run / "new-runner" / runner.name
     new_runner.parent.mkdir()
     fixed_rtl = "module dut(input wire a, output wire y);\n assign y = a;\nendmodule\n"

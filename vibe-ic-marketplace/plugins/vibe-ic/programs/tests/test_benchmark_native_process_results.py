@@ -159,3 +159,19 @@ def test_structured_route_reentry_reads_native_phase1(tmp_path, monkeypatch):
     assert state["effective_entry"] == state["exit_step"] == "2"
     assert "activation" not in state
     assert not (project / "reports/orchestrator/receipts").exists()
+
+
+@pytest.mark.parametrize("payload,expected", [
+    ("not-json", "NOT_MEASURED"),
+    (json.dumps({"steps": {}}), "NOT_MEASURED"),
+    (json.dumps({"steps": [{"name": "rtl_validate", "status": "PASS"}]}), "REPORTS_AVAILABLE"),
+])
+def test_owner_fallback_handles_unreadable_or_incomplete_reports(tmp_path, payload, expected):
+    from flow_engine_frontend import native_diagnostics
+    report = tmp_path / "reports/orchestrator/phase2_one_shot.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(payload)
+    result = native_diagnostics(dispatch._ProcessOutcome(0, stdout="", stderr=""), [], tmp_path)
+    assert result["status"] == expected
+    if expected == "REPORTS_AVAILABLE":
+        assert result["native_verdict"] == "NOT_MEASURED"
