@@ -106,9 +106,22 @@ def test_missing_command_does_not_publish_a_run(tmp_path):
     ("python", "skip", "NOT_MEASURED"),
 ])
 def test_functional_simulation_uses_a_frontend_that_elaborates_the_source(
-        tmp_path, language, outcome, status):
+        tmp_path, monkeypatch, language, outcome, status):
     if not all(shutil.which(name) for name in ("iverilog", "verilator", "verilator_coverage", "cocotb-config")):
         pytest.skip("Native functional and coverage simulators are required")
+    completed = []
+    run = Commands.run
+
+    def record_run(self, argv, *args, **kwargs):
+        icarus = Path(argv[0]).name == "iverilog" or (
+            Path(argv[0]).name == "make" and "-f" in argv
+            and "SIM = icarus\n" in Path(argv[argv.index("-f") + 1]).read_text())
+        result = run(self, argv, *args, **kwargs)
+        if result is not None and icarus:
+            completed.append(result)
+        return result
+
+    monkeypatch.setattr(Commands, "run", record_run)
     package = tmp_path / "unit_pkg.sv"
     package.write_text("package unit_pkg; typedef struct packed {logic bit_value;} value_t; "
         "parameter value_t MASK = '{bit_value:1'b1}; endpackage\n")
@@ -141,7 +154,11 @@ def test_functional_simulation_uses_a_frontend_that_elaborates_the_source(
     assert flow_engine.evaluate(flow_engine.ToolResult(**result), measured) == status, result
     logs = "\n".join(Path(path).read_text(errors="replace") for path in result["reports"]
                      if str(path).endswith(".log"))
-    assert "syntax error" in logs
+    assert completed and all(item.returncode != 0 for item in completed)
+    for item in completed:
+        assert str(rtl) in item.stdout + item.stderr
+        assert item.stderr.strip()
+        assert all(line in logs for line in item.stderr.splitlines())
 
 
 @pytest.mark.parametrize("outcome,status", [("pass", "PASS"), ("fail", "FAIL"), ("skip", "NOT_MEASURED")])

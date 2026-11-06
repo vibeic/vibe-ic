@@ -513,7 +513,7 @@ def test_native_program_answer_keeps_its_distinct_provider_status(tmp_path):
 
 def _whole_harness_flow(project, *, regenerate=True, provider="complete",
                         expected_bit=0, reset_sync=None):
-    """#3320: neutral INPUT with no registered output, real owner/proof calls."""
+    """Neutral INPUT with a nonliteral reset, real owner/proof calls."""
     import hashlib
     import shutil
     from _tool_probes import skip_not_verified
@@ -535,7 +535,8 @@ def _whole_harness_flow(project, *, regenerate=True, provider="complete",
     rtl = rd / "event_control.v"
     rtl.write_text("module event_control(input wire clk, input wire reset_n, "
                    "input wire request, output wire status_busy); reg busy; "
-                   "always @(posedge clk) if (!reset_n) busy <= 1'b0; "
+                   "localparam IDLE = 1'b0; "
+                   "always @(posedge clk) if (!reset_n) busy <= IDLE; "
                    "else if (request) busy <= 1'b1; "
                    "assign status_busy = busy ^ 1'b0; endmodule\n")
     first = G.generate(project=project, top="event_control")
