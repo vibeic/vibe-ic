@@ -1,11 +1,11 @@
 # Run native Level 3 PPA tools
 
 Run `programs/ppa_level3.py` inside the EDA environment with LibreLane, the
-selected PDK and, for ORFS, the isolated `autotuner-python` launcher. Set `HOME`
-to the execution user's home when the container supplies a temporary home.
-Every output directory must be under `~/vibe-ic-temp/runs`. Each child gets a
-private temporary folder under `FLEET_SCRATCH`, otherwise `TMPDIR`, otherwise
-`~/vibe-ic-temp/tmp`. The folder is removed when the child exits. Native runs,
+selected PDK and, for ORFS, the isolated `autotuner-python` launcher. Inside a
+container, set `VIBEIC_TMP` to the mounted `~/vibe-ic-temp` path. Output
+directories must be under that root's `runs` folder. Each child gets a private
+folder under that root's `tmp` folder. The default root is `~/vibe-ic-temp`.
+The private folder is removed when the child exits. Native runs,
 adopted views and reports remain available for review.
 
 ```python
