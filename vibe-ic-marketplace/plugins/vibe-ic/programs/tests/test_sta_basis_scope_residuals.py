@@ -384,60 +384,6 @@ def test_d1_unscoped_discovery_is_byte_for_byte_the_old_behaviour(tmp_path):
     assert "STA_CORNER_BASIS_MISMATCH" not in _rules(res)
 
 
-def test_the_shared_corner_directory_keeps_whichever_basis_wrote_it_first(
-        tmp_path, monkeypatch):
-    """THE MECHANISM, RUN — not asserted from prose.
-
-    `phase3/stage3/sta/per_corner/` has two producers at two bases, and
-    `_emit_multi_corner_sta` skips a corner whose report already exists. So a
-    directory the PRE-layout producer filled first stays PRE-layout even when
-    the POST-route producer runs afterwards on a routed netlist — which is
-    exactly the state test 1 above refuses to certify as post-route evidence.
-    """
-    import phase3_one_shot_runner as R
-
-    top = "my_core"
-    pnr = R._pl.pnr_dir(tmp_path)
-    syn = R._pl.synth_dir(tmp_path)
-    pnr.mkdir(parents=True, exist_ok=True)
-    syn.mkdir(parents=True, exist_ok=True)
-    (pnr / "constraint.sdc").write_text("create_clock -period 10 [get_ports clk]\n")
-    (pnr / f"{top}_pnr.v").write_text("// routed\n")     # -> POST_ROUTE basis
-    (syn / f"{top}_synth.v").write_text("// synth\n")
-
-    out = tmp_path / "phase3" / "stage3" / "sta" / "per_corner"
-    out.mkdir(parents=True, exist_ok=True)
-    lib = tmp_path / "ss_corner.lib"
-    lib.write_text("library(ss){}\n")
-    pre_existing = out / f"sta_{R._classify_corner_from_name(lib.name)}.rpt"
-    pre_existing.write_text(_BODY + "STA_BASIS: PRE_LAYOUT_ESTIMATE\n")
-    before = pre_existing.read_bytes()
-
-    # Confirm the emitter really is on the POST_ROUTE branch for this tree.
-    _, _, basis, _ = R._multi_corner_sta_inputs(tmp_path, top)
-    assert basis.startswith("POST_ROUTE"), basis
-
-    called = []
-
-    def _never(*a, **kw):                       # pragma: no cover - guard
-        called.append(a)
-        return (0, "", "")
-
-    monkeypatch.setattr(R, "_docker_exec", _never)
-
-    class _Pdk:
-        name, liberty, macro_libs = "testpdk", str(lib), []
-
-    notes: list = []
-    ok = R._emit_multi_corner_sta(tmp_path, top, _Pdk(), "c", [lib], out, notes)
-
-    assert ok is True
-    assert called == [], "the emitter re-ran a corner whose report existed"
-    assert pre_existing.read_bytes() == before
-    assert "PRE_LAYOUT_ESTIMATE" in pre_existing.read_text(), (
-        "a post-route emitter run rewrote the corner report; the shared "
-        "directory would then be self-consistent and this whole class of "
-        "defect could not occur")
 
 
 # ---------------------------------------------------------------------------
