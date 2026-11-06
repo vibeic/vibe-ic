@@ -353,6 +353,7 @@ WHICH_GATES = (
     ("test_cvdp_gate_selfverify_wiring", "_HAVE_IVERILOG"),
     ("test_cvdp_gate_selfverify_wiring", "_HAVE_YOSYS"),
     ("test_cvdp_gate_toolpath_must_not_disable_synth_smoke", "_HAS_TOOLS"),
+    ("test_dff_primitive_synth", "_HAVE_IVERILOG"),
     ("test_gate_directed_rtl_repair", "_HAS_IVERILOG"),
     ("test_general_synth", "_HAVE_IV"),
     ("test_gf180_family_has_its_own_native_analog_device_template", "_HAVE_NGSPICE"),
@@ -448,6 +449,7 @@ WHICH_GATES = (
 #: decide it. Every entry is asserted to be genuinely which-insensitive below,
 #: so this tuple cannot be used to park a broken tool gate.
 NOT_WHICH_GATES = (
+    ("test_dff_primitive_synth", "_HAVE_DATASET", "corpus dir"),
     ("test_general_synth", "_HAVE_DS", "corpus dir"),
     ("test_gf180_family_has_its_own_native_analog_device_template", "_HAVE_PDK",
      "published PDK model-lib file"),
