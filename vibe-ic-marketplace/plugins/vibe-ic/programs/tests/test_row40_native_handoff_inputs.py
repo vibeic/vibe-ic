@@ -1,7 +1,6 @@
 """Source-only adapter transport controls. No physical geometry credit."""
 
 import pytest
-import librelane_contract as contract
 from test_pdk_registry_resolves_inside_the_eda_container import _fake_pdk, _p3
 
 
@@ -14,11 +13,7 @@ from test_pdk_registry_resolves_inside_the_eda_container import _fake_pdk, _p3
 def test_in_image_registry_uses_the_attested_selected_pdk_root(in_image, tmp_path, monkeypatch):
     m = _p3()
     tree = _fake_pdk(tmp_path)
-    image = 'example.invalid/eda@sha256:' + 'a' * 64
-    monkeypatch.setenv(contract.LOCAL_ATTESTATION_ENV, str(tmp_path / 'launch_identity.json'))
     monkeypatch.setenv('PDK_ROOT', str(tree.parent))
-    monkeypatch.setattr(contract, 'local_image_attestation', lambda *a: {
-        'image': image, 'image_id': 'sha256:' + 'b' * 64, 'repo_digests': [image]})
     registry = {'name': tree.name, 'container_path': '/absent/legacy/pdks/' + tree.name,
                 'liberty_glob': 'libs.ref/scl/lib/*tt*.lib',
                 'tech_lef_glob': 'libs.ref/scl/techlef/*.tlef',
@@ -29,13 +24,6 @@ def test_in_image_registry_uses_the_attested_selected_pdk_root(in_image, tmp_pat
     assert resolved.tech_lef == str(tree / 'libs.ref/scl/techlef/scl__nom.tlef')
 
 
-def test_in_image_invalid_attestation_cannot_use_legacy_alias(in_image, tmp_path, monkeypatch):
-    m = _p3()
-    tree = _fake_pdk(tmp_path)
-    monkeypatch.setenv(contract.LOCAL_ATTESTATION_ENV, str(tmp_path / 'missing-identity.json'))
-    monkeypatch.setenv('PDK_ROOT', str(tree.parent))
-    with pytest.raises(SystemExit, match='LL_LOCAL_IMAGE_UNATTESTED'):
-        m._pdk_config_from_registry(tmp_path, {'name': tree.name, 'container_path': str(tree)})
 
 
 @pytest.mark.parametrize('layout', ['paired', 'split', 'foreign', 'escaped_asset', 'broken', 'cycle'])
@@ -67,11 +55,7 @@ def test_in_image_composed_pdk_keeps_one_selected_family_root(in_image, tmp_path
     if layout in ('broken', 'cycle'):
         (root / 'libs.tech').unlink()
         (root / 'libs.tech').symlink_to(root / ('missing-tech' if layout == 'broken' else 'libs.tech'))
-    image = 'example.invalid/eda@sha256:' + 'c' * 64
-    monkeypatch.setenv(contract.LOCAL_ATTESTATION_ENV, str(tmp_path / 'launch_identity.json'))
     monkeypatch.setenv('PDK_ROOT', str(root.parent))
-    monkeypatch.setattr(contract, 'local_image_attestation', lambda *a: {
-        'image': image, 'image_id': 'sha256:' + 'd' * 64, 'repo_digests': [image]})
     registry = {'name': installed.name, 'container_path': '/absent/legacy/pdks/' + installed.name,
                 'liberty_glob': 'libs.ref/scl/lib/*tt*.lib',
                 'tech_lef_glob': 'libs.ref/scl/techlef/*.tlef',

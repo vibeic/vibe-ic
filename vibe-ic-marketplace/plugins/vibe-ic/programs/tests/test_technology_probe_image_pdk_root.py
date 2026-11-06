@@ -54,19 +54,6 @@ def _scene(tmp_path, monkeypatch, *, entrypoint=None, declared=True, legacy=Fals
     monkeypatch.setenv('PDK_ROOT', str(tmp_path / 'HOST_ROOT_MUST_NOT_BE_USED'))
     monkeypatch.setenv('VIBEIC_DOCKER_MEMORY', '4g')
     calls = []
-    if local:
-        import librelane_contract as contract
-        cid = 'a' * 64
-        config_id = 'sha256:' + 'b' * 64
-        receipt = tmp_path / 'launch_identity.json'
-        receipt.write_text(json.dumps({
-            'cid': cid, 'image': IMAGE,
-            'container_inspect': {'Id': cid, 'Image': config_id,
-                'Config': {'Hostname': cid[:12], 'Image': IMAGE},
-                'State': {'Running': True}, 'HostConfig': {}},
-            'image_inspect': [{'Id': config_id, 'RepoDigests': [IMAGE], 'Config': metadata}]}))
-        monkeypatch.setenv(contract.LOCAL_ATTESTATION_ENV, str(receipt))
-        monkeypatch.setattr(contract.socket, 'gethostname', lambda: cid[:12])
 
     def transport(argv, timeout=600):
         if argv[:3] == ['docker', 'image', 'inspect']:
