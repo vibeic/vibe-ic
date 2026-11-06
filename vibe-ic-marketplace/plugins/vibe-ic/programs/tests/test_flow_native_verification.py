@@ -1084,6 +1084,33 @@ def test_chip_eqy_proves_fsm_behavior_across_native_state_encodings(tmp_path, en
     assert "u_core.state[" not in (tmp_path/"scratch/matched.ids").read_text()
 
 
+@pytest.mark.parametrize("different", [False, True])
+def test_chip_eqy_keeps_gold_constraints_on_internal_cut_inputs(tmp_path, different):
+    if not shutil.which("eqy"):
+        pytest.skip("Native EQY is required")
+    reset_docs(tmp_path)
+    gold, gate, cells, pads = [tmp_path/n for n in ("gold.v", "gate.v", "cells.lib", "pads.v")]
+    wrapper = ("module unit(input clk,rst_n,data,output result);wire ic,ir,id,oq;\n"
+        "INPAD pc(.PAD(clk),.Y(ic));INPAD pr(.PAD(rst_n),.Y(ir));\n"
+        "INPAD pd(.PAD(data),.Y(id));\nOUTPAD po(.A(oq),.PAD(result));\n")
+    gold.write_text(wrapper + "core u_core(ic,ir,id,oq);endmodule\n"
+        "module core(input clk,rst_n,data,output reg q);wire qualifier=rst_n & data;\n"
+        "always @(posedge clk) if(!rst_n) q<=0;else q<=qualifier;endmodule\n")
+    gate.write_text(wrapper + "wire \\u_core.qualifier ;reg \\u_core.q ;\n"
+        "assign \\u_core.qualifier =ir & id;assign oq=\\u_core.q ;\n"
+        f"always @(posedge ic) \\u_core.q <={'~' if different else ''}\\u_core.qualifier ;endmodule\n")
+    cells.write_text("library(neutral) {}\n")
+    pads.write_text("(* blackbox *) module INPAD(inout PAD,output Y);endmodule\n"
+                   "(* blackbox *) module OUTPAD(input A,inout PAD);endmodule\n")
+    config = {"DESIGN_NAME":"unit", "VERILOG_FILES":[str(gold)], "DEFAULT_CORNER":"typical",
+              "LIB":{"typical":[str(cells)]}, "PAD_VERILOG_MODELS":[str(pads)]}
+    result = eqy(tmp_path, tmp_path, {}, Commands(tmp_path), state={"nl":str(gate)}, config=config)
+    rows = {row["name"]:row["status"] for row in result["native_steps"]}
+    assert rows["Yosys.Wrapper"] == "PASS", result
+    assert rows["Yosys.EQY.Core"] == ("FAIL" if different else "PASS"), result
+    assert "u_core.qualifier" in (tmp_path/"scratch/matched.ids").read_text()
+
+
 @pytest.mark.parametrize("direct_output", [False, True])
 def test_pad_boundary_removes_logical_package_outputs_and_keeps_core_outputs(tmp_path, direct_output):
     if not shutil.which("yosys"):
