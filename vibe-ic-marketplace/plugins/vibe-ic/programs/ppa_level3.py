@@ -17,7 +17,7 @@ from pathlib import Path
 import re
 import shutil
 import sys
-import tempfile
+import vibeic_temp as _vtmp
 from typing import Literal, Mapping
 import uuid
 
@@ -76,12 +76,9 @@ def _files(value) -> list[Path]:
 def _command(argv: list[str], cwd: Path, log: Path, env: dict | None = None):
     from _watchdog import run_host_supervised
 
-    child_env = dict(os.environ)
-    child_env.update(env or {})
-    scratch = Path(child_env.get("FLEET_SCRATCH") or child_env.get("TMPDIR")
-                   or Path.home() / "vibe-ic-temp/tmp")
-    scratch.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="level3-", dir=scratch) as temporary:
+    with _vtmp.TemporaryDirectory(prefix="level3-") as temporary:
+        child_env = dict(os.environ)
+        child_env.update(env or {})
         child_env["TMPDIR"] = temporary
         result = run_host_supervised(argv, cwd=str(cwd), env=child_env, log_path=log)
     log.write_text(result.out + result.err)
@@ -690,7 +687,7 @@ def _native(job: Path) -> int:
 def run(project: Path, *, output: Path, route: Literal["ic", "ip"], pdk_root: Path,
         orfs: Orfs | None = None, budget: Budget = Budget()) -> Mapping[Arm, NativeBest | Incomplete]:
     project, output, pdk_root = Path(project).resolve(), Path(output).resolve(), Path(pdk_root).resolve()
-    allowed = (Path.home() / "vibe-ic-temp/runs").resolve()
+    allowed = (_vtmp.root() / "runs").resolve()
     if not output.is_relative_to(allowed):
         raise ValueError(f"Level 3 output must be under {allowed}")
     if route not in {"ic", "ip"} or min(budget.samples, budget.jobs, budget.threads) < 1:
