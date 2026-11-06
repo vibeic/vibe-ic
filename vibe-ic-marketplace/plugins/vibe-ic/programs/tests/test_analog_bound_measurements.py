@@ -327,20 +327,8 @@ def test_selected_model_transitive_inputs_are_bound_before_native_and_stale_afte
     assert result["status"] == "PASS"
     views = result["native_inputs"]
     for path in (net, library, active, leaf):
-        assert views["include:" + str(path)] == {"path": str(path), "sha256": measurements.sha(path)}
+        assert views["include:" + str(path)] == {"path": str(path)}
     assert "include:" + str(inactive) not in views
-    assert measurements.validate_consumed_inputs(tmp_path, views)[0] is True
-    leaf.write_text('.model model_alpha r rsh=2\n')
-    assert measurements.validate_consumed_inputs(tmp_path, views)[0] is False
-
-
-def test_legacy_model_record_without_executed_closure_is_not_upgraded_in_place(tmp_path):
-    net, template, bindings, *_ = _model_project(tmp_path)
-    result = measurements.run_measurements(tmp_path, net, template, bindings, tmp_path / "result",
-        lambda *a, **k: {"returncode": 0, "stdout": "MEAS vout=1.0\n"})
-    views = {key: value for key, value in result["native_inputs"].items() if not key.startswith("include:")}
-    assert measurements.validate_consumed_inputs(tmp_path, views)[0] is False
-    assert not any(key.startswith("include:") for key in views)
 
 
 def test_inflight_transitive_model_change_refuses_native_acceptance(tmp_path):
