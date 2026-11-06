@@ -135,7 +135,7 @@ def test_public_row_keeps_native_gds_result(tmp_path, monkeypatch, native_inputs
         if case == "no_deck":
             assert not any(item["metric"] == "klayout__antenna_error__count" for item in row["metrics"])
             assert engine.read_json(tmp_path / "steps/antenna_checks/klayout_antenna/config.json")["KLAYOUT_ANTENNA_RUNSET"] is None
-            assert engine.read_json(tmp_path / "steps/antenna_checks/checker_klayoutantenna/config.json")["ERROR_ON_MISSING_METRIC"] is False
+            assert engine.read_json(tmp_path / "steps/antenna_checks/checker_klayoutantenna/config.json")["ERROR_ON_MISSING_METRIC"] is True
         else:
             assert "NOT_MEASURED" in steps["Checker.KLayoutAntenna"]["detail"]
             assert next(item for item in row["metrics"] if item["metric"] == "klayout__antenna_error__count")["status"] == "NOT_MEASURED"

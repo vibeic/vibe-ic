@@ -3008,8 +3008,11 @@
             "line": 489
           },
           "unit": "count",
-          "enabled_by": "ERROR_ON_KLAYOUT_ANTENNA",
-          "enabled_default": true,
+          "enabled_by": [
+            "ERROR_ON_KLAYOUT_ANTENNA",
+            "KLAYOUT_ANTENNA_RUNSET"
+          ],
+          "enabled_default": false,
           "when": "analog_physical and not digital_physical"
         },
         {
@@ -3025,8 +3028,11 @@
             "line": 489
           },
           "unit": "count",
-          "enabled_by": "ERROR_ON_KLAYOUT_ANTENNA",
-          "enabled_default": true,
+          "enabled_by": [
+            "ERROR_ON_KLAYOUT_ANTENNA",
+            "KLAYOUT_ANTENNA_RUNSET"
+          ],
+          "enabled_default": false,
           "when": "otherwise"
         },
         {

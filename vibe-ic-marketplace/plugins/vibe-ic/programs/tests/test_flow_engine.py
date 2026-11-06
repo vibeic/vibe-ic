@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import subprocess
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 
@@ -266,6 +267,72 @@ def test_declared_observation_cannot_drop_a_missing_native_number(tmp_path):
     measured = engine.measure(checks, native.metrics, {}, {"always": True}, tmp_path)
     assert [item["status"] for item in measured] == ["PASS", "NOT_MEASURED"]
     assert engine.evaluate(native, measured) == "NOT_MEASURED"
+
+
+@pytest.mark.parametrize("enabled_by,config,options,enabled", [
+    ("CHECK", {}, {}, True),
+    ("CHECK", {}, {"enabled_default": False}, False),
+    ("CHECK", {"CHECK": False}, {}, False),
+    ("CHECK", {"CHECK": True}, {"enabled_default": False}, True),
+    (["CHECK", "DECK"], {"CHECK": True, "DECK": "rules"}, {"enabled_default": False}, True),
+    (["CHECK", "DECK"], {"CHECK": False, "DECK": "rules"}, {}, False),
+    (["CHECK", "DECK"], {"CHECK": True, "DECK": None}, {}, False),
+    (["CHECK", "DECK"], {"CHECK": True}, {}, True),
+    (["CHECK", "DECK"], {"CHECK": True}, {"enabled_default": False}, False),
+    (["CHECK", "DECK"], {"DECK": "rules"}, {}, True),
+    (["CHECK", "DECK"], {"DECK": "rules"}, {"enabled_default": False}, False),
+    ([], {}, {"enabled_default": False}, True),
+])
+@pytest.mark.parametrize("value,status", [(0, "PASS"), (1, "FAIL"), (None, "NOT_MEASURED")])
+def test_check_enablement_preserves_defaults_and_limits(enabled_by, config, options, enabled, value, status):
+    check = {"metric": "errors", "operator": "<=", "limit": 0,
+             "enabled_by": enabled_by, **options}
+    observed = engine.measure([check], {"errors": value}, config, {"always": True})
+    if enabled:
+        assert len(observed) == 1
+        assert (observed[0]["value"], observed[0]["limit"], observed[0]["status"]) == (value, 0, status)
+    else:
+        assert observed == []
+
+
+@pytest.mark.parametrize("metric", ["errors", "klayout__antenna_error__count"])
+def test_missing_native_metric_requires_explicit_disabling_metadata(metric):
+    check = {"metric": metric, "operator": "<=", "limit": 0}
+    observed = engine.measure([check], {}, {}, {"always": True})
+    assert len(observed) == 1
+    assert observed[0]["status"] == "NOT_MEASURED"
+
+
+def test_native_step_resolved_config_updates_measurement_context(tmp_path, monkeypatch):
+    class NativeStep:
+        def __init__(self, config, state):
+            self.config = SimpleNamespace(to_raw_dict=lambda: {"CHECK": True, "DECK": "resolved rules"})
+
+        def run(self):
+            return {}, {"errors": 0}
+
+        def start(self, **kwargs):
+            _, metrics = self.run()
+            state.metrics.update(metrics)
+            return state
+
+    monkeypatch.setitem(sys.modules, "librelane.steps", SimpleNamespace(
+        Step=SimpleNamespace(factory=SimpleNamespace(get=lambda name: NativeStep)),
+        StepError=RuntimeError, StepException=ValueError))
+    chain = engine.NativeChain(tmp_path, {"delivery_target": "rtl"})
+    state = SimpleNamespace(metrics={}, dumps=lambda: "{}")
+    chain.owner = SimpleNamespace(config={"CHECK": False}, gating_config_vars={})
+    chain.config = {"CHECK": False, "UNRELATED": "retained"}
+    chain.state = state
+
+    result = chain.execute(tmp_path, {"steps": ["Unit.ResolveConfig"]})
+
+    assert result.ran and result.exit_code == 0
+    assert chain.config == {"CHECK": True, "DECK": "resolved rules", "UNRELATED": "retained"}
+    check = {"metric": "errors", "operator": "<=", "limit": 0,
+             "enabled_by": ["CHECK", "DECK"], "enabled_default": False}
+    observed = engine.measure([check], result.metrics, chain.config, {"always": True})
+    assert len(observed) == 1 and observed[0]["status"] == "PASS"
 
 
 @pytest.mark.parametrize("category", ["line", "toggle", "branch"])

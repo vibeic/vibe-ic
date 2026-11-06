@@ -415,15 +415,8 @@ class NativeChain:
                     emitted.update(metrics)
                     return views, metrics
 
-            step_config = self.owner.config
-            if (name == "Checker.KLayoutAntenna"
-                    and not self.config.get("KLAYOUT_ANTENNA_RUNSET")
-                    and any(item["name"] == "KLayout.Antenna" and item.get("status") == "PASS"
-                            for item in result.native_steps)):
-                step_config = step_config.copy(ERROR_ON_MISSING_METRIC=False)
-            step = ObservedStep(step_config, self.state)
-            if name == "KLayout.Antenna":
-                self.config["KLAYOUT_ANTENNA_RUNSET"] = step.config["KLAYOUT_ANTENNA_RUNSET"]
+            step = ObservedStep(self.owner.config, self.state)
+            self.config.update(step.config.to_raw_dict())
             metric_name = getattr(step, "metric_name", None)
             if (metric_name and any((not item["ran"] or item.get("exit_code"))
                     and not item.get("native_config_disabled") for item in result.native_steps)
@@ -573,7 +566,8 @@ def measure(checks: list, metrics: dict, config: dict, features: dict,
         if expression != "otherwise" and not predicate(expression, features):
             continue
         enabled = check.get("enabled_by")
-        if enabled and not config.get(enabled, check.get("enabled_default", True)):
+        enabled_keys = enabled if isinstance(enabled, list) else [enabled]
+        if enabled and not all(config.get(key, check.get("enabled_default", True)) for key in enabled_keys):
             continue
         if check.get("limit_from", {}).get("kind") == "declared_analog_specs":
             from flow_native_analog import declared_spec_checks
@@ -593,9 +587,6 @@ def measure(checks: list, metrics: dict, config: dict, features: dict,
             matches = {key: value for key, value in matches.items()
                        if any(fnmatch.fnmatchcase(key.split("__corner:")[-1], corner)
                               for corner in corners)}
-        if (not matches and check["metric"] == "klayout__antenna_error__count"
-                and not config.get("KLAYOUT_ANTENNA_RUNSET")):
-            continue
         if not matches:
             matches = {check["metric"]: None}
         for name, value in matches.items():
