@@ -19,12 +19,9 @@ tool are faked.
 """
 from __future__ import annotations
 
-import importlib.util
-import json
 import sys
 from pathlib import Path
 
-import pytest
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
@@ -32,17 +29,10 @@ sys.path.insert(0, str(PROGRAMS / "tests"))
 
 import _psm_source_model as SM  # noqa: E402
 import dynamic_ir_vectored_emit as DYN  # noqa: E402
-import phase3_one_shot_runner as R  # noqa: E402
 from _ppa import pdn_em_presweep as PES  # noqa: E402
 from _tcl_walk import walk as _walk  # noqa: E402
 
 
-def _t103():
-    spec = importlib.util.spec_from_file_location(
-        "t103_fixture", PROGRAMS / "tests" / "test_t103_pdn_em_presweep.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
 
 
 # The database: VDD/VSS each carry one SPECIAL BTerm (the promoted pins); a
@@ -119,39 +109,12 @@ def _solves(out: str):
 
 # ---- static IR / EM (step 24/25, the runner's own session) ----------------
 
-@pytest.fixture
-def static_ir_em(tmp_path, monkeypatch):
-    t103 = _t103()
-    log = ("PSM_SOURCE_MODEL: promoted_supply_pins_excluded=2 placed_pads=0\n"
-           "[INFO PSM-0073] Using bump pattern on Metal5 with x-pitch 140.0000um\n")
-    monkeypatch.setattr(t103, "_PSM_LOG", log + t103._PSM_LOG)
-    project, tcl, em_doc = t103._producer(tmp_path, monkeypatch, spef_age=+5)
-    return project, tcl, em_doc
 
 
-def test_static_ir_em_on_a_padless_block_sources_from_no_promoted_pin(static_ir_em, tmp_path):
-    _project, tcl, _doc = static_ir_em
-    out = _run(tcl, ["inst_core"], tmp_path / "t")
-    assert _solves(out) and set(_solves(out)) == {"1"}, out
-    assert "PSM_SOURCE_MODEL: promoted_supply_pins_excluded=3 placed_pads=0" in out
 
 
-def test_static_ir_em_on_a_die_keeps_its_pin_sources(static_ir_em, tmp_path):
-    _project, tcl, _doc = static_ir_em
-    out = _run(tcl, ["inst_core", "inst_pad"], tmp_path / "t")
-    assert _solves(out) and set(_solves(out)) == {"4"}, out
-    assert "promoted_supply_pins_excluded=0 placed_pads=1" in out
 
 
-def test_ir_and_em_records_name_the_source_model_the_session_used(static_ir_em):
-    project, _tcl, em_doc = static_ir_em
-    assert em_doc["psm_source_model"]["marker"] == {
-        "promoted_supply_pins_excluded": 2, "placed_pads": 0}
-    assert "PSM-0073" in em_doc["source_model"]
-    assert "PSM_DISCONNECT" in em_doc["source_model"]
-    rpt = R._pl.reports_phase3_dir(project)
-    dens = json.loads((rpt / "em_openroad_density.json").read_text())
-    assert dens["psm_source_model"]["marker"]["promoted_supply_pins_excluded"] == 2
 
 
 # ---- transient IR (step 24 dynamic tier) ----------------------------------

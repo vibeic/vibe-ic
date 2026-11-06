@@ -1760,28 +1760,6 @@ def test_the_switch_selects_step_32_and_refuses_dual(tmp_path):
 
 
 
-def _runner_step(tmp_path, monkeypatch, report):
-    import test_pad_connected_pdn_ring as ring_fixture
-    runner = importlib.import_module('phase3_one_shot_runner')
-    project = tmp_path / 'proj'
-    pnr = project / 'phase3/stage3/pnr'
-    write(pnr / 'routed.def', 'DESIGN top ;\nEND DESIGN\n')
-    write(pnr / 'dut_pnr.v', 'module top(); endmodule\n')
-    write(pnr / 'constraint.sdc', '')
-    write(pnr / 'pnr.tcl', 'add_global_connection -net VDD -pin_pattern {^VDD$} -power\n')
-    put(project / 'phase3/librelane_switch.json', {'steps': {'32': 'librelane'}})
-    pdk = ring_fixture._pdk(tmp_path, ring=None)
-    monkeypatch.setattr(contract, 'resolve_image', lambda p=None: 'img')
-    monkeypatch.setattr(contract, 'pdk_root_resolution',
-                        lambda *a, **k: {'path': str(tmp_path / 'pdkroot')})
-    calls = {}
-
-    def run(project_, **kw):
-        calls.update(kw)
-        return report(project_)
-    monkeypatch.setattr(prr, 'run', run)
-    result = runner.step_postroute_repair_librelane(project, 'dut', pdk, 'unused')
-    return runner, project, pnr, result, calls
 
 
 
