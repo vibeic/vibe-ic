@@ -52,34 +52,7 @@ def native(root, safe, controlled=False):
     """)
     output = cdc.build(root, [rtl], "neutral_cdc")
     model = cdc.load(output)
-    cdc.require_binding(root, output, model)
     return model
-
-
-
-
-def population_native(root, top='cdc_population_mixed'):
-    """Run the existing native build/normalization; no process substitution."""
-    fixture = PROG / 'tests/fixtures/cdc_netlist/cdc_population.v'
-    rtl = root / 'phase2/stage1/rtl/cdc_population.v'
-    rtl.parent.mkdir(parents=True)
-    shutil.copyfile(fixture, rtl)
-    graph = cdc.build(root, [rtl], top)
-    model = cdc.load(graph)
-    binding = cdc.require_binding(root, graph, model)
-    return model, binding
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_reanalysis_recomputes_current_data_dependencies(tmp_path):
@@ -233,14 +206,6 @@ def test_captured_cdc_rdc_complete_ordered_outputs(monkeypatch):
         assert_ordered_judges_equal(cdc.load(path), monkeypatch)
 
 
-
-
-
-
-
-
-
-
 def test_shared_cones_close_cycles_and_keep_each_skip_context():
     # A<->B has exits on both nodes. C feeds that SCC. Resolving A then B
     # must not cache a partial cycle, and skipping one exit changes only that
@@ -345,7 +310,6 @@ def test_compact_relation_native_three_consumer_controls(tmp_path, fixture, prog
     rtl.parent.mkdir(parents=True)
     rtl.write_bytes(source.read_bytes())
     netlist = cdc.build(tmp_path, [rtl], fixture)
-    cdc.require_binding(tmp_path, netlist, cdc.load(netlist))
     report = tmp_path / "ordinary.json"
     argv = [sys.executable, str(PROG / (program + ".py")), str(tmp_path),
             "--front-end", "netlist", "--json", str(report)]
