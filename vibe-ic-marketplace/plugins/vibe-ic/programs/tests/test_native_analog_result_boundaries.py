@@ -113,13 +113,18 @@ def test_measured_ir_overlimit_stays_fail_with_missing_supply_coverage(tmp_path)
     assert result["verdict"] == "FAIL"
 
 
-def test_measured_em_violation_stays_fail_with_another_supply_missing(density):
-    project, reports, _, row = density
+@pytest.mark.parametrize("missing", ["summary_only", "csv_first", "csv_last"])
+def test_measured_em_violation_stays_fail_with_another_supply_missing(density, missing):
+    project, reports, doc, row = density
     row.update(Status="VIOLATED", Ratio=2)
     write_rows(reports / "em_openroad_density_VDD.csv", [row])
     subject_path = reports / "em.json"
     subject = json.loads(subject_path.read_text())
     subject["nets_analysed"].append("VSS")
     subject_path.write_text(json.dumps(subject))
+    if missing != "summary_only":
+        nets = ["VSS", "VDD"] if missing == "csv_first" else ["VDD", "VSS"]
+        doc["nets"] = {net: {} for net in nets}
+        (reports / "em_openroad_density.json").write_text(json.dumps(doc))
     result = em.validate_native_density(project, segment_geometry={})
     assert result["verdict"] == "FAIL"
