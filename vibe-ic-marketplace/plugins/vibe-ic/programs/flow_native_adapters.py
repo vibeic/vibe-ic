@@ -170,25 +170,44 @@ def testbenches(project, tool):
     return list(dict.fromkeys(paths))
 
 
+_INCLUDE_RE = re.compile(r'(?<![\w$])`include\s+"([^"]+)"')
+_ORACLE_DIR_NAMES = frozenset({"golden", "tb", "dv", "verif"})
+
+
+def staged_rtl_sources(project: Path) -> list[Path]:
+    sources = []
+    extensions = (".v", ".sv", ".vh", ".svh")
+    base = project / "input/design_src"
+    if base.is_dir():
+        for extension in extensions:
+            sources.extend(path for path in base.rglob(f"*{extension}")
+                           if "rtl" in {parent.name for parent in path.parents})
+    vendor = project / "input/vendor_rtl"
+    if vendor.is_dir():
+        for extension in extensions:
+            sources.extend(path for path in vendor.rglob(f"*{extension}")
+                           if not _ORACLE_DIR_NAMES & {parent.name for parent in path.parents})
+    return sorted(set(sources))
+
+
 def simulation_sources(project, files, top, benches):
     from catalog_glue_closure_resolver import (
         _gather, _macro_body_module_refs, _strip_comments, build_index, resolve_closure,
     )
-    from design_one_shot_runner import _V662_INCLUDE_RE, _v662_design_src_rtl_files
     from testbench_gen import package_first_order
     from verilator_coverage_measure import _tb_top_module
 
     files = [path.resolve() for path in files]
     hdl_benches = [path.resolve() for path in benches if path.suffix in (".v", ".sv")]
     sources = _gather(project / "phase2/stage1/rtl")
-    for path in [*_v662_design_src_rtl_files(project), *files, *hdl_benches]:
+    for path in [*staged_rtl_sources(project), *files, *hdl_benches]:
         sources[path] = _strip_comments(path.read_text(errors="replace"))
     include_order = {parent: index for index, parent in enumerate(dict.fromkeys(
         path.parent for path in [*benches, *files, *sources]))}
     included_names = {Path(name).name for text in sources.values()
-                      for name in _V662_INCLUDE_RE.findall(text)}
+                      for name in _INCLUDE_RE.findall(text)}
     relative_includes = {Path(name).name for text in sources.values()
-                         for name in _V662_INCLUDE_RE.findall(text) if Path(name).name != name}
+                         for name in _INCLUDE_RE.findall(text) if Path(name).name != name}
     headers = {}
     for path in sources:
         if ((path.suffix in {".vh", ".svh"} or path.name in included_names)

@@ -20,7 +20,6 @@ import sys as _sys
 if _os.path.dirname(_os.path.abspath(__file__)) not in _sys.path:
     _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 import argparse
-import hashlib
 import json
 import re
 import sys
@@ -28,7 +27,6 @@ from pathlib import Path
 
 from _atomic_artefact import write_json
 from l_doc_consumer_contract import load_l_doc, l_doc_fields
-from execution_mixed_subject import project_subject
 
 PROGRAM = "mixed_signal_m3_run"
 SCHEMA = "vibeic.mixed_signal.m3.unmeasured.v1"
@@ -45,12 +43,6 @@ class Refusal(ValueError):
         super().__init__(message)
 
 
-def digest(path):
-    sha = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            sha.update(chunk)
-    return sha.hexdigest()
 
 
 def read(path):
@@ -66,7 +58,7 @@ def read(path):
 def subject(project, top):
     if not isinstance(top, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", top):
         raise Refusal("INVALID_DESIGN", "an explicit top module is required")
-    return {"project": project_subject(project), "top": top}
+    return {"project": str(Path(project).resolve()), "top": top}
 
 
 def inputs(project, top):
@@ -83,21 +75,16 @@ def inputs(project, top):
                     "phase3/analog/**/*.lib", "phase3/analog/**/*.v",
                     "phase3/analog/**/*.sp", "phase3/analog/**/*.gds",
                     "phase3/analog/**/a7_post_layout.json",
-                    "phase3/analog/**/layout_provenance.json",
                     "phase3/analog/**/pre_vs_post.json",
                     "phase3/librelane/analog/**/a7_resim/*.sp"):
         rels.update(str(p.relative_to(project)) for p in project.glob(pattern) if p.is_file())
     if (project / "input/mixed_signal/native.json").is_file():
         from _mixed_signal_native import input_paths
         rels.update(input_paths(project, top))
-    bound = {}
-    for rel in sorted(rels):
-        path = project / rel
-        if not path.resolve().is_relative_to(project.resolve()):
+    for rel in rels:
+        if not (project / rel).resolve().is_relative_to(project.resolve()):
             raise Refusal("FOREIGN_INPUT", rel)
-        bound[rel] = digest(path) if path.is_file() else None
-    # Missing L22 must also be distinguishable from a newly supplied plan.
-    return bound
+    return sorted(rels)
 
 
 def plan(project):
@@ -115,11 +102,11 @@ def produce(project, top, container="host"):
     for rel in (*OUTPUTS.values(), RECEIPT):
         if not (project / rel).resolve().is_relative_to(project.resolve()):
             raise Refusal("FOREIGN_OUTPUT", rel)
-    before = inputs(project, top)
+    paths = inputs(project, top)
     rows = plan(project)
-    missing = [rel for rel, sha in before.items() if sha is None]
+    missing = [rel for rel in paths if not (project / rel).is_file()]
     common = {"producer": PROGRAM, "schema": SCHEMA, **who,
-              "verdict": "NOT_MEASURED", "execution": [], "tool_versions": {},
+              "verdict": "NOT_MEASURED", "execution": [],
               "missing_inputs": missing}
     cosim = {**common, "all_scenarios_passed": False,
              "declared_scenarios": rows, "scenarios": [],
@@ -132,24 +119,18 @@ def produce(project, top, container="host"):
           "blockers": [
               "M3_NATIVE_INTERFACE_SI_UNAVAILABLE: OpenSTA/SPEF advisory screening has "
               "no qualified hardmacro receiver/noise model coverage",
-              *([] if any(r.endswith(".spef") for r in before) else ["M3_POST_ROUTE_SPEF_ABSENT"]),
-              *([] if any(r.startswith("phase3/analog/") and r.endswith(".lib") for r in before)
+              *([] if any(r.endswith(".spef") for r in paths) else ["M3_POST_ROUTE_SPEF_ABSENT"]),
+              *([] if any(r.startswith("phase3/analog/") and r.endswith(".lib") for r in paths)
                 else ["M3_HARDMACRO_LIBERTY_ABSENT"])]}
-    if inputs(project, top) != before:
-        raise Refusal("STALE_INPUT", "inputs changed during production")
-    # Withdraw old evidence, including A9's legacy aggregate, before publishing
-    # the explicitly unmeasured replacement. Receipt appears last.
+    # Replace previous native results with the explicitly unmeasured report.
     for rel in (*OUTPUTS.values(), RECEIPT):
         (project / rel).unlink(missing_ok=True)
     for rel, data in ((COSIM, cosim), (SI, si)):
         write_json(project / rel, data)
     record = {"program": PROGRAM, "schema": SCHEMA, **who,
-              "verdict": "NOT_MEASURED", "inputs": before,
-              "outputs": {rel: digest(project / rel) for rel in OUTPUTS.values()},
-              "execution": [], "tool_versions": {},
+              "verdict": "NOT_MEASURED",
+              "execution": [],
               "blockers": cosim["blockers"] + si["blockers"]}
-    if inputs(project, top) != before:
-        raise Refusal("STALE_INPUT", "inputs changed before receipt publication")
     write_json(project / RECEIPT, record)
     return record
 

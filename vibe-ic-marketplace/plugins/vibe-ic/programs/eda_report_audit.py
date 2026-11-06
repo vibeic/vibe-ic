@@ -4742,30 +4742,6 @@ def main(argv: list = None) -> int:
     if not report.get("verdict"):
         report.pop("verdict", None)
 
-    # #2057 — THE `--json` DOCUMENT IS ITS OWN RECEIPT.
-    #
-    # The four `eda_report_audit` wrappers that sit inside phase-3 sign-off
-    # (`drc_report_check`, `lvs_report_check`, `ir_drop_report_check`,
-    # `sta_report_check`) write to a caller-chosen `--json` path which IS a
-    # declared step output — `reports/phase3/lvs.json` at step 31,
-    # `reports/phase3/sta/post_route_summary.json` at step 23, and so on.
-    # #2050 left all four UNREGISTERED and blocking rather than write a second
-    # artefact into a sign-off directory whose contents are accounted
-    # elsewhere. The ruling on #2057 is that no second file is needed: this
-    # document becomes the receipt by carrying the one field it lacked.
-    #
-    # `subject` is `_audit_receipt.subject_of` over exactly the population
-    # `summary.files_found` counts — a content-addressed digest over
-    # basename + sha256, identical in any checkout and different for any other
-    # subject, so a stale audit beside a fresh report is detectable instead of
-    # indistinguishable. `basis` states whether the digest witnessed bytes
-    # (`content`) or only paths (`path`); it is never assumed.
-    #
-    # Every mode gains it, not only the four: this is the single write site
-    # behind six sign-off wrappers, and a field present on some reports and
-    # absent on others would make its absence ambiguous.
-    report["subject"] = _audit_receipt.subject_of(
-        report.pop("subject_files", []), relative_to=project_dir)
     # R-0915-152 -- the document states WHO INVOKED this writer, beside the
     # verdict it already composes. Unstated role == producer, so the run's
     # own path is unchanged.

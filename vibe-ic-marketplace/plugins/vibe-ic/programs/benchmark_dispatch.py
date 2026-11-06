@@ -6037,13 +6037,12 @@ def _review_collection_supplied_rtl(task: dict, result: dict) -> bool:
     argv = invocation.get("argv") or []
     if len(argv) < 3 or Path(argv[1]).name != "vibe_ic_one_shot_runner.py":
         return False
-    from flow_engine_frontend import selected_engine
     for option in ("--entry-step", "--exit-step"):
         if argv.count(option) != 1 or any(arg.startswith(option + "=") for arg in argv):
             return False
         index = argv.index(option)
         if index + 1 >= len(argv) or (
-                (option == "--entry-step" or selected_engine([]) != "native")
+                option == "--entry-step"
                 and argv[index + 1] not in {"2", "D11"}):
             return False
     if _runner_reentry_reason(task, result) is not None:
@@ -9364,14 +9363,13 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                     and all(name in gate_ledger["in_scope"] for name in pending)
                     and (not gate_ledger.get("failed_required") or native_repair)
                     and isinstance(invocation, dict)):
-                from flow_engine_frontend import selected_engine
                 current_source = _runner_source_snapshot([sys.executable, str(runner)])
                 if any(invocation["source_before"][name]["sha256"]
                        != current_source[name]["sha256"]
                        for name in ("runner", "consumer")):
                     invocation_reason = (
                         "RUNNER_REQUIRED_GATES_REMEASURE: Program source changed")
-                elif (selected_engine([]) == "native" and not result.get("accepted")
+                elif (not result.get("accepted")
                       and not gate_ledger.get("failed_required")):
                     invocation_reason = (
                         "RUNNER_REQUIRED_GATES_REMEASURE: native gates unmeasured")

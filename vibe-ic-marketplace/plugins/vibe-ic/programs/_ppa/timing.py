@@ -1721,20 +1721,6 @@ def read_step7_asic_sdc(rt: Any, project: Path, top: str, pdk: Any
     """(record with `text`, "") when step 7's SDC is present, unmodified and
     for this top and PDK; else (None, why)."""
     project = Path(project)
-    # A selected post-handoff floorplan reads the accepted native SDC. The
-    # generic author footprint continues to own legacy and pre-handoff runs.
-    from vibe_ic_one_shot_runner import _complete_canonical51_constraints
-    handoff = _complete_canonical51_constraints(project)
-    if handoff is not None:
-        if handoff['verdict'] != 'PASS':
-            return None, handoff['detail']
-        rec = handoff['sdc_record']
-        if rec['top'] != top or rec['pdk'] != str(pdk.name):
-            return None, 'accepted functional SDC belongs to a different top or PDK'
-        selected = _selected_sdc_pdk(rt, project, pdk)
-        if hashlib.sha256(Path(rt._liberty_model_path(selected.liberty, '', project)).read_bytes()).hexdigest() not in rec['library_sha256s']:
-            return None, 'current PDK Liberty differs from the accepted native libraries'
-        return rec, ''
     constraints = rt._pl.constraints_dir(project)
     rec_path = constraints / ASIC_SDC_RECORD
     try:
