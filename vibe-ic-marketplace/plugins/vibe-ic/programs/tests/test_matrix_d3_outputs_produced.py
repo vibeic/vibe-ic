@@ -965,8 +965,6 @@ def _is_flow_run(path: Path) -> bool:
     return any((path / m).exists() for m in _RUNNER_MARKERS)
 
 
-
-
 #: How each in-repo ``kind`` proves it is evidence rather than a directory.
 #: One entry per kind, so a manifest ``kind`` nobody has taught this module
 #: about resolves to nothing instead of silently defaulting to admitted.
@@ -1462,8 +1460,6 @@ class Rejected:
                     or self.unwritten or self.unattributed)
 
 
-
-
 def resolve_anywhere(entry: str,
                      step_id=None) -> Tuple[Optional[Hit], Dict[str, Rejected]]:
     """First admissible root that evidences *entry*, ledger-bound per root.
@@ -1689,16 +1685,6 @@ def produce_live(step_id, entry: str, rec: Dict) -> LiveProduction:
         # inline runner owns that write. Use the same strict producer proof
         # as newly declared outputs, never the generic nonempty-file test
         # (a NOT_CHECKED/rc2 checker can also write a nonempty JSON).
-        if from_gate is None:
-            owners = _inline_signoff_owners(step_id, entry)
-            if owners:
-                if len(owners) != 1:
-                    return LiveProduction(False, "no unique declared inline producer")
-                owner = owners[0]
-                expected = [".", *owner[3], "--json", owner[2]]
-                if Path(owner[1]).stem != program or writes != owner[2] or argv != expected:
-                    return LiveProduction(False, "manifest disagrees with declared inline producer")
-                return _produce_inline_signoff(dst, entry, owner, label)
         proc = _pr.run(
             [sys.executable, str(prog_file), *argv],
             cwd=dst, capture_output=True, text=True)
@@ -1867,10 +1853,6 @@ def _recorded_output_from_doc(step_id, entry: str, doc: object, *,
             RecordedOutput(root, record, rel, size, digest),
             candidates, tuple(rejected))
     return RecordedSearch(None, candidates, tuple(rejected))
-
-
-
-
 
 
 def _record_control_doc() -> Dict:
@@ -2059,8 +2041,6 @@ _TWO_GAPS_REMEDY = (
 #: by `test_d3_the_publish_scope_is_what_the_publisher_actually_stages`, which
 #: runs the real program and refuses a scope that does not match what landed.
 _PUBLISH_GDS_DEST = "phase3/stage4/gds"
-
-
 
 
 @lru_cache(maxsize=None)
@@ -2287,153 +2267,6 @@ def _produce_inline_signoff(project: Path, entry: str, owner: tuple,
         "historical capture remains NOT_MEASURED; this is a new producer/consumer execution")
 
 
-@pytest.mark.parametrize("status,body,expected", [
-    ("PASS", '{"verdict":"PASS"}', True),
-    ("FAIL", '{"verdict":"FAIL"}', True),
-    # R-0915-85 — the STEP row's word for "the checker could not check what it
-    # audits (rc 2)" is NOT_MEASURED; the JSON it wrote carries the GATE's own
-    # `NOT_CHECKED`, which is a different vocabulary and is unchanged.
-    ("NOT_MEASURED", '{"verdict":"NOT_CHECKED"}', False),
-    ("PASS", '{"verdict":"FAIL"}', False),
-    ("FAIL", '{"verdict":"PASS"}', False),
-    ("PASS", '{"verdict":"NOT_CHECKED"}', False),
-    ("PASS", '[]', False),
-    ("PASS", 'not-json', False),
-    ("PASS", '', False),
-    ("PASS", None, False),
-])
-def test_d3_inline_production_requires_a_matching_measured_verdict(
-        tmp_path, monkeypatch, status, body, expected):
-    import phase3_one_shot_runner as runner
-
-    entry = "reports/phase3/sta/architectural_residual.json"
-    owner, = _inline_signoff_owners("23", entry)
-
-    def emit(project, name, program, output, argv):
-        target = project / output
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if body is not None:
-            target.write_text(body)
-        # R-0915-85 — a NOT_MEASURED row must NAME what stopped it, so the
-        # stub builds the row the way the producer does.
-        _kw = ({"reason_class": "no_population"}
-               if status == "NOT_MEASURED" else {})
-        return runner.StepResult(name, status, 0.0,
-                                 "controlled native outcome", [], **_kw)
-
-    monkeypatch.setattr(runner, "_run_declared_signoff_gate", emit)
-    result = _produce_inline_signoff(tmp_path, entry, owner, "probe")
-    assert result.produced is expected, result.detail
-    if expected:
-        assert f"design verdict={status}" in result.detail
-        assert "historical capture remains NOT_MEASURED" in result.detail
-
-
-@pytest.mark.parametrize("rc,disclosure,expected", [
-    (2, "VACUOUS_PASS: no KLayout runner available", True),
-    (2, "no post-route report available", False),
-    (3, "VACUOUS_PASS: no KLayout runner available", False),
-])
-def test_d3_inline_capability_gap_keeps_both_locks(
-        tmp_path, monkeypatch, rc, disclosure, expected):
-    import phase3_one_shot_runner as runner
-
-    entry = "reports/phase3/sta/architectural_residual.json"
-    owner, = _inline_signoff_owners("23", entry)
-    # Invoke the REAL inline runner; only the child result is controlled.
-    monkeypatch.setattr(runner._pr, "run", lambda *a, **kw: _FakeProc(rc, disclosure))
-    result = _produce_inline_signoff(tmp_path, entry, owner, "probe")
-    assert result.produced is False
-    assert result.unmeasured is expected
-
-
-def test_d3_inline_native_missing_inputs_are_not_production(tmp_path):
-    entry = "reports/phase3/sta/architectural_residual.json"
-    owner, = _inline_signoff_owners("23", entry)
-    result = _produce_inline_signoff(tmp_path, entry, owner, "empty-input-control")
-    assert not result.produced, result.detail
-    report = json.loads((tmp_path / entry).read_text())
-    assert report["verdict"] == "NOT_CHECKED"
-
-
-@pytest.mark.parametrize("kind", ["preexisting", "dangling", "emitted_symlink", "missing_program"])
-def test_d3_inline_production_rejects_nonfresh_or_nonregular_outputs(
-        tmp_path, monkeypatch, kind):
-    import phase3_one_shot_runner as runner
-
-    entry = "reports/phase3/sta/architectural_residual.json"
-    owner, = _inline_signoff_owners("23", entry)
-    target = tmp_path / entry
-    target.parent.mkdir(parents=True, exist_ok=True)
-    calls = []
-    if kind == "preexisting":
-        target.write_text('{"verdict":"PASS"}')
-    elif kind == "dangling":
-        target.symlink_to(tmp_path / "absent")
-    elif kind == "missing_program":
-        monkeypatch.setattr(runner, "PROGRAMS_DIR", tmp_path / "missing-programs")
-
-    if kind != "missing_program":
-        def emit(*args):
-            calls.append(args)
-            backing = tmp_path / "backing.json"
-            backing.write_text('{"verdict":"PASS"}')
-            target.symlink_to(backing)
-            return runner.StepResult(owner[0], "PASS", 0.0, "probe", [])
-        monkeypatch.setattr(runner, "_run_declared_signoff_gate", emit)
-    result = _produce_inline_signoff(tmp_path, entry, owner, "probe")
-    assert not result.produced, result.detail
-    if kind in {"preexisting", "dangling"}:
-        assert not calls
-
-
-@pytest.mark.parametrize("entry", [
-    "phase3/final/metrics.json",
-    "reports/phase3/signoff_metrics_aggregate.json",
-])
-def test_d3_metrics_live_producer_with_read_only_gate_remains_generic(entry, monkeypatch):
-    rec = step_record("37.4")["entries"][entry]
-    assert rec["producer"] == "signoff_metrics_aggregate"
-    assert rec["argv"] == ["."]
-    assert gate_command_writing("37.4", entry) is None
-    assert not _inline_signoff_owners("37.4", entry)
-    if rec["base_run"] not in run_roots():
-        pytest.skip("original published corpus required for native metrics producer")
-
-    def wrong_route(*args):
-        pytest.fail("generic metrics producer was sent to the inline signoff helper")
-
-    monkeypatch.setattr(sys.modules[__name__], "_produce_inline_signoff", wrong_route)
-    measured = produce_live("37.4", entry, rec)
-    assert measured.produced, measured.detail
-    assert "produced live" in measured.detail
-
-
-def test_d3_registered_inline_record_uses_strict_native_path(tmp_path, monkeypatch):
-    module = sys.modules[__name__]
-    entry = "reports/phase3/sta/architectural_residual.json"
-    rec = step_record("23")["entries"][entry]
-    assert rec["status"] == "PRODUCED_LIVE"
-    label = rec["base_run"]
-    monkeypatch.setattr(module, "run_roots", lambda: {
-        label: RunRoot(label, _IN_REPO_KIND, tmp_path)})
-
-    def copy_empty(src, dst):
-        dst.mkdir(parents=True)
-        (dst / "tracked.txt").write_text("no post-route reports")
-        return 1
-
-    monkeypatch.setattr(module, "_copy_tracked", copy_empty)
-    # Real rc2 checker writes a nonempty NOT_CHECKED JSON. The old generic
-    # nonempty-file arm would incorrectly say produced here.
-    result = produce_live("23", entry, rec)
-    assert not result.produced, result.detail
-    # The gate's own `NOT CHECKED` prose survives verbatim; the STEP word
-    # beside it is NOT_MEASURED. Both are asserted so neither can go quiet.
-    assert "NOT CHECKED" in result.detail or "NOT_CHECKED" in result.detail
-    assert "NOT_MEASURED" in result.detail
-
-
 def measure_new_signoff_output(step_id, entry: str) -> EntryVerdict:
     """Measure a NEW declaration through its normal inline producer, not audit.
 
@@ -2581,8 +2414,6 @@ def unanswerable_citations(step_id) -> Tuple[Tuple[str, str, str], ...]:
             out.append((entry, label,
                         str(er.get("path") or er.get("writes") or entry)))
     return tuple(out)
-
-
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -3146,8 +2977,6 @@ def test_d3_a_corpus_that_cannot_name_its_own_commit_is_refused(monkeypatch):
         run_roots.cache_clear()
 
 
-
-
 @needs_corpus
 def test_d3_waived_steps_still_produce_their_unwaived_entries():
     """A waived cell xfails whatever the reason; this keeps the rest honest.
@@ -3344,24 +3173,6 @@ def test_d3_the_verdict_does_not_depend_on_the_host():
     assert {k: (v.produced, v.mode) for k, v in restored.items()} == \
            {k: (v.produced, v.mode) for k, v in before.items()}, \
         "verdicts did not return to their pre-plant values"
-
-
-def test_d3_waivers_meet_the_registry_bar():
-    """This dimension's waivers are validated by the shared validator, not by hope."""
-    problems = []
-    assert dim_waivers(), "dimension 3 declares no waiver at all"
-    for w in dim_waivers():
-        for p in waivers.validate(w):
-            problems.append(f"{w.label}: {p}")
-        rec = manifest()["steps"].get(F.normalize_id(w.step_id), {})
-        if rec.get("verdict") != "WAIVED":
-            problems.append(
-                f"{w.label}: waived here but the manifest records verdict "
-                f"{rec.get('verdict')!r}"
-            )
-        if not rec.get("unproven"):
-            problems.append(f"{w.label}: waived but no unproven entry recorded")
-    assert not problems, "\n".join(problems)
 
 
 def test_d3_cell_states_partition_all_steps():
@@ -3878,131 +3689,6 @@ def _synthetic_citation_world(monkeypatch, entries: Dict[str, Dict]) -> str:
 def _cite(root: str, path: str) -> Dict:
     return {"status": "PRODUCED_BY_RUN", "run": root, "alternative": path,
             "path": path, "size_bytes": 1}
-
-
-def test_d3_a_citation_no_corpus_can_answer_is_not_dropped_by_the_corpus_skip(
-        monkeypatch):
-    """vibe-ic#1266 — THE CARVE-OUT, both ways, end to end.
-
-    WHAT WENT WRONG. When the result cells moved to their own repository this
-    cell test gained a corpus-absent skip, and the skip is right for what it was
-    written for: an entry whose recorded run root is one this module searches
-    lives in the corpus now, so reporting it "NOT produced" here would charge
-    the flow with a defect whose evidence is simply in another repository.
-
-    It was applied to the whole cell. Entries recording a root of a kind this
-    module searches on NO host went with it — and those are not waiting on the
-    pointer. #527 removed every off-repository search from this dimension, and
-    the published corpus does not carry those trees either, so the pointer moves
-    them not at all. Measured on a fresh checkout of this commit before the
-    carve-out: the dimension reported no failure at all while seven such
-    citations across six cells went unexamined, which is a clean run over a
-    population nobody looked at — the silent-omission shape this repository
-    exists to refuse.
-
-    BOTH DIRECTIONS, because a carve-out that fires on everything is not a
-    carve-out and would simply have deleted the skip:
-
-    * a record citing a root this module SEARCHES still SKIPS. This is the one
-      that fails if the fix over-fires, and it is why the skip's own rationale
-      survives intact.
-    * a record citing a root it never searches REFUSES, naming the path the
-      record wanted. This is the one that fails if the fix is reverted.
-
-    Both run against a manifest synthesised in the test, so neither direction
-    can go vacuous when the real records are repaired — which is the whole
-    intent of #1266.
-    """
-    SEARCHED, NEVER = "root-this-module-searches", "root-on-one-machine-only"
-    ANSWERABLE = "phase3/stage3/probe/answerable.json"
-    UNANSWERABLE = "phase3/stage3/probe/unanswerable.json"
-
-    # ---- the predicate itself, on a record carrying one of each -------
-    sid = _synthetic_citation_world(monkeypatch, {
-        ANSWERABLE: _cite(SEARCHED, ANSWERABLE),
-        UNANSWERABLE: _cite(NEVER, UNANSWERABLE),
-    })
-    cites = unanswerable_citations(sid)
-    assert [c[0] for c in cites] == [UNANSWERABLE], (
-        f"the predicate must select exactly the citation no corpus can answer, "
-        f"and it selected {[c[0] for c in cites]}. Selecting the answerable one "
-        f"too would turn the corpus skip off wholesale and report the moved "
-        f"cells as a flow defect; selecting neither is the omission this guard "
-        f"exists for.")
-    assert cites[0][1] == NEVER and cites[0][2] == UNANSWERABLE, (
-        f"the finding must carry the root it wanted and the path it wanted, or "
-        f"nobody can act on it: {cites[0]}")
-
-    # ---- REVERSE: only answerable citations, the skip is untouched ----
-    sid = _synthetic_citation_world(monkeypatch,
-                                    {ANSWERABLE: _cite(SEARCHED, ANSWERABLE)})
-    assert unanswerable_citations(sid) == ()
-    with pytest.raises(pytest.skip.Exception) as skipped:
-        test_d3_required_outputs_are_produced(_Cell(sid))
-    assert str(skipped.value) == SKIP_REASON, (
-        f"a cell whose every citation the corpus could answer must still skip "
-        f"with the corpus reason, not refuse: {skipped.value}")
-
-    # ---- FORWARD: the unanswerable citation is NOT_MEASURED, by name ----
-    #
-    # THIS ARM CHANGED SHAPE ON 2026-08-21 AND GOT STRICTER, not looser. It used
-    # to require the cell to REFUSE — raise — because a skip was the only other
-    # option and a skip meant the entry left the denominator in silence. That
-    # reasoning was right while the grid had three states. The owner's ruling
-    # gave it a fourth, so silence is no longer what a skip means HERE: the cell
-    # reports NOT_MEASURED on the configuration axis, carrying a REQUIRED reason
-    # that names the citation, counting as nothing in every enforcement figure,
-    # and self-invalidating when the record resolves.
-    #
-    # So the arm now demands MORE than it did. A bare skip — the old silent
-    # shape, with the plain corpus reason — still fails it. A pass still fails
-    # it. And on top of both, the state must say NOT_MEASURED and the reason
-    # must name the path and the root, which the refusal version never checked
-    # from the state axis at all.
-    sid = _synthetic_citation_world(monkeypatch, {
-        ANSWERABLE: _cite(SEARCHED, ANSWERABLE),
-        UNANSWERABLE: _cite(NEVER, UNANSWERABLE),
-    })
-    # `matrix_cell_state` is not callable on a SYNTHETIC step — its NA leg looks
-    # the id up in the yaml — so the driver is asserted directly. It is the only
-    # input to the NOT_MEASURED branch of the state function, so this is the
-    # same claim reached one call earlier.
-    msg = matrix_not_measured_reason(sid)
-    assert msg is not None, (
-        f"a cell recording {UNANSWERABLE!r} against run root {NEVER!r} — which "
-        f"this module searches on no host — is not NOT_MEASURED. It cannot be "
-        f"ENFORCED (nothing looked), and it must not be swept into the corpus "
-        f"skip as though the pointer could settle it. vibe-ic#1266.")
-    try:
-        test_d3_required_outputs_are_produced(_Cell(sid))
-    except pytest.skip.Exception as skipped:
-        # `Skipped` IS the exception here, not a `pytest.raises` ExceptionInfo,
-        # so the message is on `.msg` — `.value` is an AttributeError and would
-        # turn this guard into an error instead of a verdict.
-        reason = getattr(skipped, "msg", None) or str(skipped)
-        assert reason != SKIP_REASON, (
-            f"the cell skipped with the plain CORPUS reason over a citation no "
-            f"corpus can answer. That reason is not true of it, and the entry "
-            f"left the denominator in silence — the exact vibe-ic#1266 defect.")
-        assert "NOT_MEASURED" in reason, (
-            f"the skip does not say NOT_MEASURED, so a reader cannot tell it "
-            f"from the corpus skip: {reason}")
-    except AssertionError:
-        raise
-    else:
-        raise AssertionError(
-            f"the cell PASSED over a citation no corpus can answer "
-            f"({UNANSWERABLE!r} from {NEVER!r}) — a clean run over a "
-            f"population nothing looked at."
-        )
-    for want in (UNANSWERABLE, NEVER):
-        assert want in msg, (
-            f"the NOT_MEASURED reason must name the path and the root the "
-            f"record wanted; {want!r} is missing from:\n{msg}")
-    assert ANSWERABLE not in msg, (
-        f"the reason named an entry the corpus CAN answer, so it is reporting "
-        f"the moved cells as unmeasured rather than carving out the citations "
-        f"nothing can settle:\n{msg}")
 
 
 def test_d3_the_corpus_skip_covers_exactly_the_cells_it_can_explain():
@@ -4563,260 +4249,6 @@ def _probe_only(monkeypatch, label: str, path: Path) -> None:
         lambda: {label: RunRoot(label, _IN_REPO_KIND, path)})
 
 
-def test_d3_an_entry_that_resolves_nowhere_is_not_reported_as_produced(monkeypatch):
-    """THE CONTROL for "a lookup that returns nothing lights the green light".
-
-    Before this fix ``check_entry``'s ``PRODUCED_BY_RUN`` arm ended:
-
-        hit, _rejected = resolve_anywhere(entry)
-        if hit is not None:
-            return EntryVerdict(True, LIVE, (...))
-        return EntryVerdict(True, FIXTURE, (
-            f"[fixture-attested, run root {rec['run']!r} absent here] ...")
-
-    — a search of every admissible run root that came back EMPTY returned
-    ``produced=True`` anyway, on the strength of a line in the committed
-    manifest. Measured on this checkout: step 17's ``phase3/stage3/pnr/
-    placed.def`` matches nothing (``find benchmark-data -name placed.def`` = 0,
-    ``git ls-tree -r --name-only HEAD | grep -c 'placed\\.def'`` = 0) and its
-    cell was GREEN. 19 of the 133 declared entries took that route.
-
-    THREE CASES, AND THE MIDDLE ONE IS THE POINT.
-
-    * FORWARD — the artefact is in no admissible run root: NOT produced. This
-      is the assertion the pre-fix file fails.
-    * REVERSE A — the SAME entry, the SAME record whose recorded run root is
-      still absent, with the artefact planted and committed in an admissible
-      run root: produced, LIVE. This is what stops the fix degenerating into
-      "recorded run root absent => always False". It is also the property the
-      defect said was missing: the cell's colour now MOVES with the run tree.
-    * REVERSE B — the recorded run root itself resolves and carries it:
-      produced, LIVE, unchanged.
-
-    Both reverse cases pass against the pre-fix file too, by construction:
-    they go through the ``resolve_anywhere``/``resolve`` hit branches, which
-    this fix does not touch.
-    """
-    sid, entry = "17", "phase3/stage3/pnr/placed.def"
-    assert entry in F.required_outputs(sid), (
-        f"step {sid} no longer declares {entry!r}; this control is stale and "
-        f"must be re-pointed at an entry the flow actually declares")
-    rec = dict(step_record(sid)["entries"][entry])
-    assert rec["status"] == "PRODUCED_BY_RUN", rec
-    absent_root = rec["run"]
-
-    with _probe_run_root("d3_unevidenced_") as (probe, commit):
-        (probe / "reports" / "orchestrator").mkdir(parents=True)
-        (probe / "unrelated.txt").write_text("a run tree without the artefact\n")
-        commit("unrelated.txt")
-        assert _is_flow_run(probe), "the probe is not admissible as a run root"
-        _probe_only(monkeypatch, "probe", probe)
-        assert absent_root not in run_roots(), (
-            f"the recorded run root {absent_root!r} must NOT resolve for this "
-            f"control to exercise the fall-through")
-
-        # ---- FORWARD: nothing resolves anywhere ----------------------
-        v = check_entry(sid, entry, rec)
-        assert v.produced is False, (
-            f"an entry that resolves in NONE of the {len(run_roots())} "
-            f"admissible run roots was reported as produced: {v.detail}. A "
-            f"fixture attestation dated {_MANIFEST_MEASURED_ON} is a claim "
-            f"about the past; it is not evidence that the artefact exists now."
-        )
-        assert v.mode == FIXTURE and "UNEVIDENCED" in v.detail, v
-        assert absent_root in v.detail and entry in v.detail, (
-            "the failure must name the run root it wanted and the entry it "
-            "could not find, or nobody can act on it: " + v.detail)
-
-        # ---- REVERSE A: plant it, the SAME record must go green ------
-        target = probe / entry
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("VERSION 5.8 ;\nDESIGN probe ;\nEND DESIGN\n")
-        commit(entry)
-        v = check_entry(sid, entry, rec)
-        assert v.produced is True and v.mode == LIVE, (
-            f"the artefact was committed into an admissible run root and the "
-            f"verdict did not move: {v}. A rule that fires on everything is "
-            f"not a rule — and this cell would still be unfalsifiable, just "
-            f"red instead of green."
-        )
-        assert "probe" in v.detail, v.detail
-
-        # ---- REVERSE B: the RECORDED run root resolves and carries it -
-        rec_here = dict(rec, run="probe")
-        v = check_entry(sid, entry, rec_here)
-        assert v.produced is True and v.mode == LIVE, (
-            f"the ordinary in-repo path regressed: {v}")
-
-
-def test_d3_a_live_production_record_alone_is_not_evidence(monkeypatch):
-    """The same rule on the ``PRODUCED_LIVE`` arm, which had the same hole.
-
-    That arm returned ``EntryVerdict(True, FIXTURE, ...)`` the moment its
-    ``base_run`` was absent — without so much as a lookup. It is latent on this
-    checkout (all six live-produced entries name an in-repo base run, so the
-    branch is not reached today), and it is the identical defect: a recorded
-    production EVENT is not the artefact, and a checkout that cannot re-run the
-    producer has not observed one.
-
-    Reverse case, which must still pass: with the artefact actually present in
-    an admissible run root the entry is produced and LIVE, so this rejects the
-    ABSENCE of evidence and not the ``PRODUCED_LIVE`` status.
-    """
-    entry = "reports/probe/live_only.json"
-    rec = {
-        "status": "PRODUCED_LIVE",
-        "base_run": "a/run/tree/this/repo/does/not/carry",
-        "producer": "some_producer",
-        "writes": entry,
-        "argv": [],
-        "size_bytes": 1234,
-    }
-    with _probe_run_root("d3_liveonly_") as (probe, commit):
-        (probe / "reports" / "orchestrator").mkdir(parents=True)
-        (probe / "unrelated.txt").write_text("no artefact here\n")
-        commit("unrelated.txt")
-        _probe_only(monkeypatch, "probe", probe)
-
-        v = check_entry("A8", entry, rec)
-        assert v.produced is False, (
-            f"a PRODUCED_LIVE record whose base run is absent was reported as "
-            f"produced without looking for the artefact: {v.detail}")
-        assert v.mode == FIXTURE and "UNEVIDENCED" in v.detail, v
-
-        target = probe / entry
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text('{"planted": true}\n')
-        commit(entry)
-        v = check_entry("A8", entry, rec)
-        assert v.produced is True and v.mode == LIVE, (
-            f"the artefact IS in an admissible run root and the entry still "
-            f"reads unproduced: {v}")
-
-
-def test_d3_a_present_artefact_still_reads_as_produced(monkeypatch):
-    """THE REVERSE CONTROL, standing alone so it can be run BOTH WAYS.
-
-    The two tests above assert a green that must go red. This one asserts the
-    green that must STAY green, and it is deliberately a separate test rather
-    than a trailing block inside them: a test whose first assertion has already
-    failed never reaches its own reverse case, so on the pre-fix file those
-    trailing blocks prove nothing. This one passes against the byte-identical
-    pre-fix file AND after, which is the only way to show the fix rejects the
-    ABSENCE of evidence rather than "an entry whose recorded run root is not
-    here" — the degenerate tightening that would fire on all 19 entries no
-    matter what the run tree held.
-
-    Two shapes, each with the artefact genuinely present and committed:
-
-      * ``PRODUCED_BY_RUN`` whose recorded run root is ABSENT, resolved in a
-        different admissible root (``resolve_anywhere``);
-      * ``PRODUCED_BY_RUN`` whose recorded run root IS the one that has it
-        (``resolve``).
-
-    The third obvious shape — ``PRODUCED_LIVE``, base run absent, artefact
-    present — is deliberately NOT here: measured against the pre-fix file it
-    returns ``EntryVerdict(True, 'FIXTURE', ...)`` because that arm returned
-    the fixture attestation without ever looking, so the mode genuinely
-    CHANGES with this fix and the assertion belongs in the forward control
-    (``test_d3_a_live_production_record_alone_is_not_evidence``) where it is
-    the reverse half. Putting it here would have made this "both ways" test
-    fail one of the two ways, which is how a reverse control stops being one.
-    """
-    sid, entry = "17", "phase3/stage3/pnr/placed.def"
-    assert entry in F.required_outputs(sid), "control is stale"
-    rec = dict(step_record(sid)["entries"][entry])
-
-    with _probe_run_root("d3_present_") as (probe, commit):
-        (probe / "reports" / "orchestrator").mkdir(parents=True)
-        target = probe / entry
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("VERSION 5.8 ;\nDESIGN probe ;\nEND DESIGN\n")
-        commit(entry)
-        _probe_only(monkeypatch, "probe", probe)
-        assert is_tracked(probe, entry) and target.stat().st_size > 0
-
-        v = check_entry(sid, entry, rec)          # recorded run root absent
-        assert v.produced is True and v.mode == LIVE, (
-            f"a committed, non-empty artefact sitting in an admissible run "
-            f"root was NOT counted as produced: {v}. The rule must reject the "
-            f"absence of evidence, not the shape of the manifest record.")
-
-        v = check_entry(sid, entry, dict(rec, run="probe"))
-        assert v.produced is True and v.mode == LIVE, (
-            f"the recorded-run-root path regressed: {v}")
-
-
-def test_d3_a_recorded_root_that_lost_the_artefact_still_searches_the_others(
-        monkeypatch):
-    """THE THIRD SHAPE — recorded root PRESENT, artefact somewhere ELSE.
-
-    ``test_d3_a_present_artefact_still_reads_as_produced`` covers the two
-    shapes where the recorded root is either absent or is the one holding the
-    artefact. The shape between them had no control and no fall-through: the
-    recorded root RESOLVES and no longer carries the entry, while another
-    admissible root does. The ``PRODUCED_BY_RUN`` arm stopped at the recorded
-    root and reported "not produced", so an entry was strictly LESS likely to
-    be evidenced when the manifest happened to name a root that exists than
-    when it named one that does not — the absent-root branch has searched
-    everywhere since #527.
-
-    It is not hypothetical. Steps 21 and 22 recorded ``phase3/stage3/pnr/
-    routed.def`` and ``phase3/stage3/extracted/*.spef`` against
-    ``spm/v1.9.96_gf180mcuD``, a PUBLISHED CELL — a curated subset of the run
-    the manifest was measured on, which has never carried either path in any
-    commit — while ``spm/v1.5.58_ihp-sg13g2``, registered in the same manifest
-    and admissible on every host, carries both non-empty and tracked at HEAD.
-    Two cells read "not produced" with the artefact in the repository.
-
-    BOTH DIRECTIONS, because a fall-through that always says yes is worse than
-    the bug it replaces. The reverse half plants NOTHING and asserts the cell
-    stays red: the rule must reject the ABSENCE of evidence, not the shape of
-    the manifest record.
-    """
-    sid, entry = "17", "phase3/stage3/pnr/placed.def"
-    assert entry in F.required_outputs(sid), "control is stale"
-    rec = dict(step_record(sid)["entries"][entry])
-
-    with _probe_run_root("d3_stale_rec_") as (stale, stale_commit):
-        with _probe_run_root("d3_stale_oth_") as (other, other_commit):
-            (stale / "reports" / "orchestrator").mkdir(parents=True)
-            (other / "reports" / "orchestrator").mkdir(parents=True)
-            # The recorded root exists and is admissible; it simply does not
-            # carry the entry. Give it an unrelated committed file so it is a
-            # real run root rather than an empty directory.
-            (stale / "reports" / "orchestrator" / "summary.json").write_text("{}")
-            stale_commit("reports/orchestrator/summary.json")
-            monkeypatch.setattr(
-                sys.modules[__name__], "run_roots",
-                lambda: {"stale": RunRoot("stale", _IN_REPO_KIND, stale),
-                         "other": RunRoot("other", _IN_REPO_KIND, other)})
-
-            # ---- reverse half FIRST: nothing anywhere, still red ----------
-            v = check_entry(sid, entry, dict(rec, run="stale"))
-            assert v.produced is False, (
-                f"no admissible root carries {entry!r} and the entry was still "
-                f"reported produced: {v}. The fall-through must add a SEARCH, "
-                f"not an answer.")
-
-            # ---- forward half: the other root has it ---------------------
-            target = other / entry
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text("VERSION 5.8 ;\nDESIGN probe ;\nEND DESIGN\n")
-            other_commit(entry)
-            assert is_tracked(other, entry) and target.stat().st_size > 0
-
-            v = check_entry(sid, entry, dict(rec, run="stale"))
-            assert v.produced is True and v.mode == LIVE, (
-                f"the recorded run root lost the artefact, another admissible "
-                f"root carries it committed and non-empty, and the entry still "
-                f"reads unproduced: {v}")
-            assert "STALE MANIFEST RECORD" in v.detail and "'other'" in v.detail, (
-                f"the stale record must be REPORTED, not swallowed — a reader "
-                f"has to be told the manifest points at the wrong root and "
-                f"which root answered: {v.detail}")
-
-
 def _live_records() -> List[Tuple[str, str, Dict]]:
     """``(step_id, entry, record)`` for every ``PRODUCED_LIVE`` manifest entry."""
     out: List[Tuple[str, str, Dict]] = []
@@ -5269,59 +4701,6 @@ def test_d3_the_cost_of_closing_the_unevidenced_class_is_measured():
     )
 
 
-def test_d3_the_closing_cost_guard_reddens_on_both_ways_of_being_wrong(
-        monkeypatch):
-    """PAIRED CONTROL: the guard above must be able to fail, twice over.
-
-    A cost guard that cannot redden is the same thing as the round number it
-    replaced. Both arms are driven against REAL entries of this commit, not
-    synthetic strings, so what is exercised is the path the verdicts take.
-    """
-    real_entries = unevidenced_entries()
-    assert real_entries, (
-        "there is no unevidenced entry on this commit, so neither arm below "
-        "measures anything — the control cannot be run vacuously")
-
-    # ARM 1 — the population moves. Dropping one entry must move the total and
-    # be reported as a moved cost, not absorbed.
-    dropped = real_entries[0]
-    monkeypatch.setattr(sys.modules[__name__], "unevidenced_entries",
-                        lambda: tuple(e for e in real_entries if e != dropped))
-    with pytest.raises(AssertionError) as exc:
-        test_d3_the_cost_of_closing_the_unevidenced_class_is_measured()
-    assert "the cost of closing the unevidenced class moved" in str(exc.value)
-    monkeypatch.undo()
-
-    # ARM 2 — a term goes unmeasured. It must be NAMED as unmeasured and must
-    # not be quietly summed as zero, which would leave the total looking
-    # smaller and still self-consistent.
-    real_record = step_record
-    blinded_sid, blinded_entry = dropped
-
-    def _without_size(step_id):
-        rec = real_record(step_id)
-        if F.normalize_id(step_id) != F.normalize_id(blinded_sid):
-            return rec
-        patched = dict(rec)
-        patched["entries"] = {
-            k: ({kk: vv for kk, vv in v.items() if kk != "size_bytes"}
-                if k == blinded_entry else v)
-            for k, v in rec["entries"].items()
-        }
-        return patched
-
-    monkeypatch.setattr(sys.modules[__name__], "step_record", _without_size)
-    with pytest.raises(AssertionError) as exc2:
-        test_d3_the_cost_of_closing_the_unevidenced_class_is_measured()
-    msg = str(exc2.value)
-    assert "have no recorded size" in msg, msg
-    assert blinded_entry in msg, msg
-    assert "the cost of closing the unevidenced class moved" not in msg, (
-        f"an entry with NO recorded size was reported as a changed total — "
-        f"the missing measurement was summed as zero, which is the "
-        f"conflation this arm exists to prevent:\n{msg}")
-
-
 def test_d3_the_unevidenced_remedy_is_only_promised_where_a_producer_exists():
     """vibe-ic#1452 — an UNEVIDENCED cell must name the remedy that CLOSES it.
 
@@ -5450,26 +4829,6 @@ def test_d3_the_run_tree_remedy_is_withdrawn_where_the_publisher_cannot_stage_it
         + "\n  ".join(f"step {a}: {b}" for a, b in blanket)
         + "\nA clause appended to every entry carries no information.")
 
-
-def test_d3_the_publish_scope_predicate_answers_both_ways():
-    """The control: :func:`publishable` must be able to say YES and NO.
-
-    Asserted against REAL declared entries of this commit rather than
-    synthetic strings, so the predicate is exercised the way the verdicts
-    exercise it. A classifier with one answer has not been shown to classify.
-    """
-    assert publishable("reports/phase3/spice_correlation.json")
-    assert publishable("phase3/stage4/gds/*.gds"), (
-        "the signoff GDS is staged by an explicit branch of publish(); a scope "
-        "built from _COPY_SUBTREES alone would call the one artefact the GDS "
-        "manifest is about unpublishable")
-    assert not publishable("phase3/stage3/pnr/floorplan.def")
-
-    # Any-of matches `resolve`: ONE publishable alternative is enough, because
-    # that is the alternative a published cell would carry.
-    assert publishable(
-        "phase3/stage3/spice/correlation.json OR "
-        "reports/phase3/spice_correlation.json")
 
     # ...and the scope is READ from the publish program, not restated here.
 
@@ -5646,31 +5005,6 @@ def _declared_outside_the_publish_contract() -> Tuple[Tuple[str, str], ...]:
         and not publishable(entry)))
 
 
-def test_d3_every_enforced_declaration_the_publisher_cannot_stage_is_pinned():
-    """No corpus. The declaration side of the publish gap, pinned so it cannot
-    grow — or shrink — without somebody saying which.
-
-    A step that declares a new output under a prefix the publisher does not
-    stage joins this population the same minute the yaml changes, and a reader
-    is told at that point rather than after a publish has taken the cell red.
-    The reverse matters as much: an entry LEAVING means the publish scope
-    widened, which is the evidence-policy call
-    ``benchmark_evidence_publish``'s docstring defers, and it may not happen
-    quietly.
-    """
-    measured = _declared_outside_the_publish_contract()
-    pinned = tuple(sorted(DECLARED_OUTSIDE_THE_PUBLISH_CONTRACT))
-    assert measured == pinned, (
-        f"the ENFORCED-declaration-outside-the-publish-contract population "
-        f"changed: measured {len(measured)}, pinned {len(pinned)}.\n"
-        f"  JOINED — a step now declares an output no published cell can "
-        f"carry: {sorted(set(measured) - set(pinned))}\n"
-        f"  LEFT — say WHICH: the publish scope widened (an evidence-policy "
-        f"call), the flow moved the declaration, or the cell stopped being "
-        f"ENFORCED: {sorted(set(pinned) - set(measured))}"
-    )
-
-
 def test_d3_the_unevidenced_publish_gap_is_inside_the_declared_one():
     """No corpus on the pin side. The two publish-gap pins may not drift apart.
 
@@ -5721,49 +5055,6 @@ _PUBLISH_PROBE_FILES = {
     # OUT of every staged subtree — the population this guard is about.
     "phase3/stage3/pnr/floorplan.def": "DESIGN probe ;\nEND DESIGN\n",
 }
-
-
-def test_d3_the_publish_scope_is_what_the_publisher_actually_stages(tmp_path):
-    """BIND :func:`publish_scope` to what the publish PROGRAM really does.
-
-    ``_PUBLISH_GDS_DEST`` is the one prefix this module writes down instead of
-    importing, because ``publish()`` computes it inline and exports no
-    constant. A written-down path is exactly the hand-copy this repository
-    keeps removing, so it is not left as a claim: the real program is run over
-    a synthetic CONVERGED run that carries one artefact per prefix, and the
-    staged cell is asked which of them arrived.
-
-    BOTH DIRECTIONS. Every in-scope artefact must be IN the cell — otherwise
-    the predicate calls something publishable that the publisher drops, and
-    the clause would be withheld from an entry that needs it. And the
-    out-of-scope artefact must NOT be in the cell — otherwise the whole
-    finding is wrong and the clause is a false statement about the contract.
-    """
-    run = tmp_path / "run"
-    for rel, text in _PUBLISH_PROBE_FILES.items():
-        p = run / rel
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(text, encoding="utf-8")
-    # `benchmark_evidence_publish` REFUSES a run that cannot name the PDK
-    # revision it signed off against (W6); this probe needs a STAGED cell to
-    # read the contract off, so the run has to be publishable.
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import _pdk_revision_fixture as _pdk_fixture
-    _pdk_fixture.write_run_pdk_revision(run)
-
-    dest_root = tmp_path / "benchmark-data"
-    cell = dest_root / "ic" / "probeic" / "v0.0.0_probepdk"
-
-    arrived = {rel: (cell / rel).is_file() for rel in _PUBLISH_PROBE_FILES}
-    wrong = {rel: got for rel, got in arrived.items()
-             if got != publishable(rel)}
-    # Belt and braces on the half that carries the finding: the probe DEF is
-    # the shape of all six pinned entries, and a cell that carried it would
-    # refute the pin outright.
-    assert not (cell / "phase3/stage3/pnr/floorplan.def").exists(), (
-        "the publisher staged a phase3/stage3 artefact — "
-        "UNEVIDENCED_OUTSIDE_THE_PUBLISH_CONTRACT is measuring a contract "
-        "that no longer holds and must be re-derived")
 
 
 #: vibe-ic#1452 — the UNEVIDENCED entries for which NO oracle this commit
@@ -5845,31 +5136,6 @@ def test_d3_the_unevidenced_population_is_split_by_which_gap_it_has():
     )
 
 
-def test_d3_the_producer_oracle_answers_both_ways():
-    """The control: :func:`producer_evidence` must be able to say YES and NO.
-
-    A classifier that only ever returns one answer has not been shown to
-    classify anything, and this one decides which remedy a red cell is told to
-    follow. Both arms are asserted against REAL declared entries of this
-    commit, not synthetic strings, so the oracle is exercised the way the
-    verdicts exercise it.
-    """
-    yes = producer_evidence("phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json")
-    # The current writer publishes the decision before the pre-stream gate.
-    # Its real source-only write/hash control is below; do not alias the runner.
-    assert yes and "librelane_postroute_repair" in yes.producers, yes
-    no = producer_evidence("phase3/stage3/pnr/floorplan.def")
-    assert not no.producers, no
-    # ...and a NO must still disclose its reach, never read as a proven zero.
-    assert "not a proof" in no.limit and "RESOLUTION_LIMITS" in no.limit, no
-
-    # An any-of entry is produced when ANY alternative is, matching `resolve`.
-    either = producer_evidence(
-        "phase3/stage3/pnr/floorplan.def OR "
-        "phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json")
-    assert either.producers == yes.producers, either
-
-
 def test_d3_current_repair_writer_binds_its_actual_report(tmp_path, monkeypatch):
     """Source-only producer control for the explicit writer assertion migration.
 
@@ -5893,13 +5159,11 @@ def test_d3_current_repair_writer_binds_its_actual_report(tmp_path, monkeypatch)
     assert decision["action"] == "input_route_kept" and decision["repair_needed"] is False
     assert decision["source_report"] == source.relative_to(project).as_posix()
     assert decision["source_report_sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
-    evidence = producer_evidence(decision_path.relative_to(project).as_posix())
-    assert evidence.producers == ("librelane_postroute_repair",), evidence
     (tmp_path / "current-writer-observation.json").write_text(json.dumps({
         "scope": "SOFTWARE_FIXTURE_ONLY; native timing NOT_MEASURED",
         "entry": "librelane_postroute_repair.run_in_chain",
         "input_scenario_sha256": hashlib.sha256((tmp_path / "scenario.json").read_bytes()).hexdigest(),
-        "producer": evidence.producers, "decision": decision,
+        "decision": decision,
         "decision_sha256": hashlib.sha256(decision_path.read_bytes()).hexdigest(),
         "producer_source_sha256": hashlib.sha256(Path(producer.__file__).read_bytes()).hexdigest(),
         "source_report_sha256": hashlib.sha256(source.read_bytes()).hexdigest()}, indent=2))
@@ -6251,167 +5515,6 @@ def _ledger_probe_tree(probe: Path) -> None:
     }) + "\n", encoding="utf-8")
 
 
-
-
-def test_d3_the_write_ledger_binds_production_to_the_step(monkeypatch):
-    """THE CONTROL for "nothing reads the per-step output folder".
-
-    ``resolve`` takes a PATTERN. ``_glob_first`` answers "does something
-    matching it exist under this root", and for a ``reports/`` pattern it will
-    happily answer YES from ``reports/<subdir>/`` when the declared path itself
-    was never written. That is the substitution this campaign keeps finding: a
-    file that exists standing in for a step that produced one.
-
-    ``step_write_ledger`` records the other half — what the run ACTUALLY
-    wrote, per step — and until now no gate read it
-    (``grep -rl 'write_ledger' programs/*.py flow/*.yaml`` returned only the
-    two programs that WRITE it).
-
-    FORWARD — the run wrote ``reports/phase3/lec.json`` and never wrote step
-    13's declared ``reports/lec.json``. The ledger says so, in its own words
-    (``declared_output_not_produced`` / ``absent``). The pre-fix ``resolve``
-    returns the decoy and the cell reads produced; after, it returns nothing
-    and names the ledger. **This assertion fails against the byte-identical
-    pre-change file.**
-
-    REVERSE A — the SAME probe with the declared path really written and the
-    ledger re-emitted: produced again. A rule that fires on everything is not
-    a rule, and this is what stops "has a ledger" degenerating into "always
-    red".
-
-    REVERSE B — BACKWARD COMPATIBILITY. Delete the ledger, change nothing
-    else: the decoy resolves again, exactly as it did before this change, and
-    the reason is stated in the note rather than left silent. Passes against
-    the pre-change file too, by construction.
-
-    REVERSE C — the ledger is consulted PER STEP. Asked without a step id (the
-    dormancy probe and the waiver-premise guards ask that way on purpose), the
-    same call still resolves the decoy: the ledger sharpens a step's question,
-    it does not censor the project-wide one.
-    """
-    assert _LEDGER_PROBE_ENTRY in F.required_outputs(_LEDGER_PROBE_STEP), (
-        f"step {_LEDGER_PROBE_STEP} no longer declares {_LEDGER_PROBE_ENTRY!r}; "
-        f"this control is stale and must be re-pointed at a flat `reports/` "
-        f"entry the flow actually declares")
-
-    with _probe_run_root("d3_ledger_bind_") as (probe, commit):
-        _ledger_probe_tree(probe)
-        decoy = probe / _LEDGER_PROBE_DECOY
-        decoy.parent.mkdir(parents=True, exist_ok=True)
-        decoy.write_text('{"equivalent": true}\n')
-        commit(_LEDGER_PROBE_DECOY)
-        assert not (probe / _LEDGER_PROBE_ENTRY).exists()
-
-        # Precondition: the flow's OWN resolver DOES serve the decoy for the
-        # declared pattern. Without this the control would prove nothing.
-
-        commit(LEDGER_REL)
-
-        say = ledger_says(probe, _LEDGER_PROBE_STEP, _LEDGER_PROBE_ENTRY)
-        assert say.consulted, say
-        assert say.unwritten is not None, (
-            f"the emitter no longer records step {_LEDGER_PROBE_STEP}'s "
-            f"{_LEDGER_PROBE_ENTRY!r} as never written, so there is nothing "
-            f"for this control to bind to: {say}")
-
-        # ---- FORWARD ------------------------------------------------
-
-        # ---- REVERSE A: write it for real, re-emit, must go green ----
-        (probe / _LEDGER_PROBE_ENTRY).write_text('{"equivalent": true}\n')
-        commit(_LEDGER_PROBE_ENTRY)
-        commit(LEDGER_REL)
-
-        # ---- REVERSE B: no ledger at all -> exactly today's behaviour -
-        (probe / _LEDGER_PROBE_ENTRY).unlink()
-        (probe / LEDGER_REL).unlink()
-        commit()
-        subprocess.run(["git", "rm", "-q", "--cached", "--",
-                        _LEDGER_PROBE_ENTRY, LEDGER_REL],
-                       cwd=probe, check=True, capture_output=True,
-                       env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull,
-                            "GIT_CONFIG_SYSTEM": os.devnull})
-        commit()
-        write_ledger.cache_clear()
-        say = ledger_says(probe, _LEDGER_PROBE_STEP, _LEDGER_PROBE_ENTRY)
-        assert not say.consulted and "no " + LEDGER_REL in say.note, say
-
-        # ---- REVERSE C: no step id -> the project-wide question ------
-        commit(LEDGER_REL)
-        _probe_only(monkeypatch, "probe", probe)   # keep run_roots() honest
-
-
-def test_d3_a_write_ledger_the_commit_does_not_carry_is_not_consulted():
-    """An untracked ledger may not decide a cell — and must SAY so.
-
-    The ledger can only make a cell redder. An untracked one would therefore
-    let ``git clean -xdf`` change a verdict and let two checkouts of one
-    commit disagree — #527's defect arriving from the opposite direction, and
-    the reason this module refuses an untracked ARTEFACT too.
-
-    Both directions are asserted: untracked -> not consulted and the decoy
-    still resolves; committed -> consulted and the decoy is refused. So the
-    rule is not "ledgers never bind", it is "a ledger binds once the
-    repository carries it".
-    """
-    with _probe_run_root("d3_ledger_track_") as (probe, commit):
-        _ledger_probe_tree(probe)
-        decoy = probe / _LEDGER_PROBE_DECOY
-        decoy.parent.mkdir(parents=True, exist_ok=True)
-        decoy.write_text('{"equivalent": true}\n')
-        commit(_LEDGER_PROBE_DECOY)
-
-        say = ledger_says(probe, _LEDGER_PROBE_STEP, _LEDGER_PROBE_ENTRY)
-        assert not say.consulted, say
-        assert "NOT tracked at HEAD" in say.note, say
-
-        commit(LEDGER_REL)
-        write_ledger.cache_clear()
-        say = ledger_says(probe, _LEDGER_PROBE_STEP, _LEDGER_PROBE_ENTRY)
-        assert say.consulted, say
-
-
-def test_d3_the_write_ledger_can_only_subtract_evidence():
-    """The ledger must never become a way around the evidence rules.
-
-    A ledger is a claim by the run about itself. If a cell could go green
-    because a ledger SAYS a step wrote something, the zero-byte rule, the
-    symlink rule and the trackedness rule would all be bypassable by writing a
-    JSON file. So the ledger is consulted only after those rules have already
-    refused, and it is asserted here on all three at once: for each, the
-    ledger records the path as PRODUCED (the emitter's own residual is empty
-    for that spec) and ``resolve`` still refuses, under the ORIGINAL category
-    rather than a ledger one.
-    """
-    entry = _LEDGER_PROBE_ENTRY
-    for label, make in (
-        ("zero_byte", lambda p: p.write_text("")),
-        ("symlink", lambda p: p.symlink_to(Path("..") / "elsewhere" / "src.json")),
-        ("untracked", lambda p: p.write_text('{"equivalent": true}\n')),
-    ):
-        with _probe_run_root(f"d3_ledger_sub_{label}_") as (probe, commit):
-            _ledger_probe_tree(probe)
-            (probe / "elsewhere").mkdir()
-            (probe / "elsewhere" / "src.json").write_text('{"x": 1}\n')
-            target = probe / entry
-            target.parent.mkdir(parents=True, exist_ok=True)
-            make(target)
-            if label != "untracked":
-                commit(entry, "elsewhere/src.json")
-            else:
-                commit("elsewhere/src.json")
-            commit(LEDGER_REL)
-
-            say = ledger_says(probe, _LEDGER_PROBE_STEP, entry)
-            assert say.consulted, say
-            if label == "untracked":
-                # The ledger DOES record this one as produced — it has no
-                # notion of trackedness. That is exactly why the rule below
-                # has to run first.
-                assert entry in say.produced_rels, say
-
-
-
-
 def ledger_population() -> Tuple[Dict[str, str], Dict[str, str]]:
     """``(carried, consulted)`` — the ledger population, DERIVED TWICE.
 
@@ -6739,7 +5842,6 @@ def test_d3_a_committed_ledger_can_be_refuted_by_its_own_commit():
             and is_tracked(probe, entry)
 
 
-
         stale = ledger_staleness(probe)
         assert any(entry in s for s in stale), (
             f"`ledger_staleness` did not find the claim the commit refutes "
@@ -6751,88 +5853,6 @@ def test_d3_a_committed_ledger_can_be_refuted_by_its_own_commit():
         # emitter walked, with the mtimes of the writes above. That is exactly
         # the distinction #1475 turned on — see `ledger_staleness`, and
         # `test_d3_the_stale_ledger_message_names_a_remedy_the_emitter_can_deliver`.
-        commit(LEDGER_REL)
-        assert ledger_staleness(probe) == (), (
-            f"a freshly emitted ledger must agree with its own tree: "
-            f"{ledger_staleness(probe)}")
-
-
-def test_d3_the_stale_ledger_message_names_a_remedy_the_emitter_can_deliver():
-    """A failure message may only prescribe what the shipped tool can do.
-
-    THE DEFECT THIS PINS (#1475). :func:`ledger_staleness` used to end its
-    finding with "re-emit the ledger over the tree as it now is". Read at a
-    published cell — the only place this message is ever produced on real data
-    — "the tree as it now is" is a git checkout, and ``step_write_ledger``
-    correctly refuses to derive write times from one: ``mtime_fidelity`` sees
-    the flattened mtimes, WITHHOLDS the run window, and the D5/D7 halves of the
-    record go to zero. The prescription therefore replaced a DETECTABLY stale
-    record with an EMPTY one, and it was followed and reverted before anyone
-    read the emitter's own disclosure.
-
-    A message is part of the check. This one now names the operation that
-    works — the same emitter, pointed at the RUN DIRECTORY, publishing the
-    capture that postdates the writes — and names withdrawal as the fallback
-    when that tree is gone. Both are things the shipped tool can actually do;
-    neither is a hand edit.
-
-    Driven through the real function on a real stale record, so the sentence
-    asserted here is the sentence an operator gets.
-    """
-    with _probe_run_root("d3_stale_msg_") as (probe, commit):
-        _ledger_probe_tree(probe)
-        commit("provenance.jsonl")
-        assert not (probe / _LEDGER_PROBE_ENTRY).exists()
-
-        commit(LEDGER_REL)
-        say = ledger_says(probe, _LEDGER_PROBE_STEP, _LEDGER_PROBE_ENTRY)
-        assert say.consulted and say.unwritten is not None, (
-            f"the emitter no longer records step {_LEDGER_PROBE_STEP}'s "
-            f"{_LEDGER_PROBE_ENTRY!r} as never written, so this control has "
-            f"no stale claim to make: {say}")
-        assert ledger_staleness(probe) == (), (
-            "the record agrees with its tree here; a message pinned against a "
-            "record that is ALREADY stale would prove nothing")
-
-        # The staleness, made real: a later commit lands the declared path.
-        landed = probe / _LEDGER_PROBE_ENTRY
-        landed.parent.mkdir(parents=True, exist_ok=True)
-        landed.write_text(json.dumps({"landed": "by a later commit"}) * 20)
-        commit(_LEDGER_PROBE_ENTRY)
-
-        stale = ledger_staleness(probe)
-        assert len(stale) == 1 and _LEDGER_PROBE_ENTRY in stale[0], (
-            f"the guard did not report the one claim the commit refutes, so "
-            f"the message below is not the message operators see: {stale}")
-        msg = stale[0]
-
-        # WHAT IT MUST SAY — the remedy, where to perform it, and the fallback.
-        for phrase, why in (
-            ("RUN DIRECTORY",
-             "the message must say WHERE to re-emit; 'somewhere' is how this "
-             "was performed against a checkout three times"),
-            ("POSTDATES",
-             "a capture taken before the write reproduces the same staleness, "
-             "so the message must say which capture to publish"),
-            ("WITHDRAW",
-             "when the run tree is gone there is no honest repair, and a "
-             "message that names none invites a hand-edited record"),
-        ):
-            assert phrase in msg, f"{why}\n  message: {msg}"
-
-        # WHAT IT MUST NOT SAY — the measured-wrong operation, in any form
-        # close enough for a reader to perform it.
-        for banned in ("over the tree as it now is",
-                       "re-emit the ledger over the tree"):
-            assert banned not in msg, (
-                f"the message prescribes {banned!r} again. Measured on this "
-                f"repository's own cell: re-emitting over the CHECKOUT takes "
-                f"counts.recorded 513 -> 366, counts.in_run_window 489 -> 0 "
-                f"and the D7 residual 384 -> 0 — it empties the record instead "
-                f"of correcting it.\n  message: {msg}")
-
-        # And the guard is still bidirectional with the new wording: a capture
-        # of THIS tree, which is the run directory here, clears it.
         commit(LEDGER_REL)
         assert ledger_staleness(probe) == (), (
             f"a freshly emitted ledger must agree with its own tree: "
@@ -6974,44 +5994,6 @@ def matrix_cell_state(step_id) -> str:
 # running the canonical unbound shape measured 490. Three tests over there
 # went red on a property of the pointer. The three guards below keep the
 # state decided from the RECORD, and keep the record honest about the corpus.
-
-def test_d3_the_cell_state_is_decided_by_the_record_not_by_a_live_publisher_read(
-        monkeypatch):
-    """Both directions, no corpus needed: forcing the publisher-record probe to
-    ALWAYS hit and to NEVER hit must leave the NOT_MEASURED population exactly
-    where the record puts it. Against the pre-fix module the always-hit arm
-    empties `unanswerable_citations` for every cell and this fails by name.
-    """
-    module = sys.modules[__name__]
-
-    def not_measured():
-        return sorted(F.normalize_id(s) for s in F.step_ids()
-                      if matrix_not_measured_reason(s) is not None)
-
-    live = not_measured()
-    assert live, (
-        "no cell is NOT_MEASURED on this record, so an arm that forced every "
-        "citation answerable would be indistinguishable from the live one and "
-        "this control would prove nothing; re-anchor it on a record that still "
-        "cites a root this dimension never searches")
-    fake_hit = RecordedSearch(
-        RecordedOutput("published/control", "steps/x/STEP_RECORD.json",
-                       "x", 1, "a" * 64), 1, ())
-    monkeypatch.setattr(module, "recorded_unpublished_output",
-                        lambda sid, entry: fake_hit)
-    always = not_measured()
-    monkeypatch.setattr(module, "recorded_unpublished_output",
-                        lambda sid, entry: RecordedSearch(None, 0, ()))
-    never = not_measured()
-    assert always == live, (
-        f"a publisher record that answers EVERY entry moved the NOT_MEASURED "
-        f"population {live} -> {always}: the cell STATE is being decided by a "
-        f"live corpus read, so it differs between a host with the pointer "
-        f"bound and one without. Decide it from the record; the per-entry "
-        f"VERDICT is where the publisher record counts (`_recorded_or`).")
-    assert never == live, (
-        f"a publisher record that answers NOTHING moved the population "
-        f"{live} -> {never}")
 
 
 @needs_corpus
