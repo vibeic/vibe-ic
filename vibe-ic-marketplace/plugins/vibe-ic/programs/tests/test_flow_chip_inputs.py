@@ -515,6 +515,7 @@ def test_floorplan_row_reserves_the_ring_sized_after_initial_preparation(inputs,
 def test_generated_pad_access_profile_applies_native_current_sizing_at_floorplan(inputs, monkeypatch):
     pytest.importorskip("odb")
     pytest.importorskip("librelane")
+    from decimal import Decimal
     from types import SimpleNamespace
     from librelane.config import Config
     from flow_config import _chip_pdn
@@ -551,8 +552,8 @@ def test_generated_pad_access_profile_applies_native_current_sizing_at_floorplan
 
     assert chain.prepare(floorplan=True, directory=project / "floorplan") is None
 
-    assert chain.config["PDN_VWIDTH"] == pytest.approx(5.98)
-    assert chain.config["PDN_CORE_RING_VWIDTH"] == pytest.approx(5.98)
+    assert chain.config["PDN_VWIDTH"] == Decimal("5.98")
+    assert chain.config["PDN_CORE_RING_VWIDTH"] == Decimal("5.98")
     core, die = chain.config["CORE_AREA"], chain.config["DIE_AREA"]
     assert core[0] - die[0] >= 2 + 20 + 1 + 2 * 5.98 + 1.7
 

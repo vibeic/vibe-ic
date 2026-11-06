@@ -127,9 +127,10 @@ def coherent_geometry(config, widths, tech, parallel_length_um=0, explicit=()):
 
 
 def current_settings(project, config, parallel_length_um=0):
-    base = project / "work/flow/pdn_cfg.tcl"
-    script = config.get("PDN_CFG")
-    if script is not None and Path(str(script)).resolve() != base.resolve():
+    from flow_config import _load, _settings
+    declared = {**_load(project / "plugin_output/declaration.json"),
+                **_load(project / "work/flow/native_overrides.json")}
+    if declared.get("PDN_CFG") is not None:
         return {}
     power = project / "steps/pre_layout_timing/result.json"
     if not power.is_file():
@@ -146,10 +147,9 @@ def current_settings(project, config, parallel_length_um=0):
     if not widths:
         return {}
     import odb
-    from flow_config import _load, _settings
     docs = _load(project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json")
     explicit = set(_settings(docs.get("fields", {}), config["PDK"]))
-    explicit.update(_load(project / "plugin_output/declaration.json"))
+    explicit.update(declared)
     database = odb.dbDatabase.create()
     try:
         odb.read_lef(database, str(lefs[0]))
@@ -160,7 +160,8 @@ def current_settings(project, config, parallel_length_um=0):
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps({"estimated_current_a": current, "corners": samples,
         "requested_widths_um": widths, "settings": settings, "parallel_length_um": parallel_length_um,
-        "model": "Full estimated supply current is a conservative conductor bound. "
+        "model": "Every conductor is sized for the full pre-layout estimated supply current. "
+                 "This estimate omits routed loading and physical clock-tree changes. "
                  "Widths and native spacing/pitch/offset geometry are resolved before floorplan; "
                  "native connectivity, DRC and final EM determine adequacy."}, indent=2) + "\n")
     return settings
