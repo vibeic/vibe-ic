@@ -749,7 +749,7 @@ def test_issue3128_async_keeps_clocked_writes_and_all_scoreboard_obligations(
         return text.split(start, 1)[1].split("\n  end\n", 1)[0]
     assert monitor(tb) == monitor(sync["tb_text"]).replace(
         "          rpipe[0] <= mem[raddr];\n", "")
-    for obligation in ("we === 1'bx || we === 1'bz", "ren === 1'bx || ren === 1'bz",
+    for obligation in ("$isunknown({we, ren})",
                        "^raddr === 1'bx || raddr >= MEMSIZE",
                        "^waddr === 1'bx || waddr >= MEMSIZE",
                        "^wdata === 1'bx", "mem[waddr] <= wdata;",
@@ -898,17 +898,21 @@ def test_async_native_datapath_keeps_unknown_read_enable_negative(tmp_path):
     assert "DATAPATH_CHECK write_discipline MISS" in log
 
 
-@pytest.mark.parametrize("control", ["no_ren", "known_ren", "x", "z"])
+@pytest.mark.parametrize("control", ["no_ren", "known_ren", "x", "z", "write_x", "write_z"])
 def test_generated_datapath_monitor_preserves_control_semantics(tmp_path, control):
     if not shutil.which("verilator"):
         pytest.skip("Native Verilator is required")
     import subprocess
     from verilator_coverage_measure import _tb_top_module
 
-    rtl = CPU_V.replace("o_mem_ren <= 1;", f"o_mem_ren <= 1'b{control};") if control in {"x", "z"} else CPU_V
+    rtl = CPU_V
+    if control in {"x", "z"}:
+        rtl = rtl.replace("o_mem_ren <= 1;", f"o_mem_ren <= 1'b{control};")
+    elif control.startswith("write_"):
+        rtl = rtl.replace("o_mem_we <= 1;", f"o_mem_we <= 1'b{control[-1]};")
     proj, dp, _top = _run_native_datapath(tmp_path, with_ren=control != "no_ren", rtl=rtl)
     log = (proj / dp["run_log"]).read_text()
-    if control in {"x", "z"}:
+    if control in {"x", "z", "write_x", "write_z"}:
         assert dp["state"] == "failed", dp
         assert "DATAPATH_CHECK write_discipline MISS" in log, log
         return
