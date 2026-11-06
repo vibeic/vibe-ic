@@ -54,8 +54,10 @@ def eqy_script(top: str, rtl: list[Path], netlist: Path, liberty: str,
         gate_models = [f"read_verilog -formal -sv -overwrite {defines} {includes} "
                        + " ".join(map(str, model_verilog))]
     budget = [f"timeout {timeout}"] if timeout is not None else []
+    gold_reads = ([*libraries, read] if (synthesis or {}).get("USE_SLANG")
+                  else [read, *(libraries if synthesis is not None else [])])
     return "\n".join([
-        "[gold]", read, *(libraries if synthesis is not None else []), *gold_prep, "",
+        "[gold]", *gold_reads, *gold_prep, "",
         "[gate]", *libraries, *gate_models,
         f"read_verilog -formal -sv -icells {netlist}", "",
         "[script]", f"hierarchy -top {top}", "proc", f"prep -top {top} -flatten",
