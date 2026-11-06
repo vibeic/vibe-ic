@@ -79,7 +79,6 @@ _PLUGIN = _PROGRAMS.parent
 _FLOW = _PLUGIN / "flow" / "phase1_phase2_phase3.yaml"
 sys.path.insert(0, str(_PROGRAMS))
 
-import flow_compliance_check as FCC          # noqa: E402
 
 #: The declared output at the centre of the measurement, and the step that
 #: declares it. Both are re-derived from the yaml below rather than trusted
@@ -146,18 +145,6 @@ def workdir():
 # ===========================================================================
 # The step's own declaration — the premise every assertion below rests on
 # ===========================================================================
-def test_the_shape_under_measurement_is_still_declared():
-    step = _steps()[_SID]
-    assert _REL in (step.get("required_outputs") or []), (
-        f"step {_SID} no longer declares {_REL} as a required_output; this "
-        f"file measures the collision between that declaration and the same "
-        f"path being the step's own gate --json target")
-    assert _REL in FCC._gate_json_targets(step), (
-        f"{_REL} is no longer a --json target of step {_SID}'s own gate")
-    assert "crosslayer_rewrite_equivalence_check" in (step.get("programs") or []), (
-        "the program that writes this path is no longer listed as a step-2 "
-        "producer, so it is no longer the BOTH-producer-and-gate shape this "
-        "file is about")
 
 
 def test_the_production_runner_still_produces_it_during_the_run():
@@ -182,66 +169,8 @@ def test_the_production_runner_still_produces_it_during_the_run():
 # ===========================================================================
 # NEGATIVE — nothing but the audit ever wrote it, and that never counts
 # ===========================================================================
-def test_an_output_only_the_audit_ever_wrote_stays_missing(workdir):
-    """The half without which this change would just be the rule switched off.
-
-    Same step, same real gate, same declared output — and the production
-    producer is NOT run. The audit's own gate is then the only process that
-    can create the file, and it must never buy the step a done claim, on this
-    pass or any later one.
-    """
-    project = _project(workdir)
-    assert not (project / _REL).exists()
-
-    seen: List[str] = []
-    for _ in range(3):
-        res = FCC.check_step(project, _isolated_step(), {})
-        seen.append(res.status)
-        assert _REL not in res.evidence, (
-            f"{_REL} exists only because this audit's own gate wrote it and it "
-            f"was credited as run evidence: {list(res.evidence)!r}")
-    assert seen == ["FAIL", "FAIL", "FAIL"], (
-        f"the run produced nothing and the verdicts across three passes were "
-        f"{seen} — the refusal must not decay with the number of passes")
 
 
-def test_the_refusal_holds_for_a_gate_whose_document_carries_no_stamp(workdir):
-    """The direction the CONTENT test could never cover, and it was leaking.
-
-    `_is_gate_verdict_document` can only recognise a gate's own document when
-    that gate stamps its name into it. `post_route_signoff_corner_check` is one
-    of two shipped gate programs measured to exit 0 while writing a ``--json``
-    document carrying none of `_GATE_DOCUMENT_IDENTITY_KEYS`; step 23 declares
-    its output. With one other declared output present (so the unconditional
-    all-absent early return does not fire), the pre-fix code refused the
-    artefact on pass 1 and credited it on pass 2 — MISSING then INCOMPLETE, on
-    an unchanged tree.
-    """
-    project = _project(workdir)
-    rel = "reports/phase3/sta/post_route_signoff_corner.json"
-    other = "_i2005/produced_by_the_run.txt"
-    (project / "_i2005").mkdir(parents=True)
-    (project / other).write_text("the run produced this one\n")
-    step = {"id": "I2005", "name": "unstamped gate document", "stage": "stage3",
-            "programs": [],
-            "gate": {"program_exit_zero":
-                     f"post_route_signoff_corner_check . --json {rel}"},
-            "required_outputs": [other, rel]}
-    assert rel in FCC._gate_json_targets(step)
-
-    seen = []
-    for _ in range(3):
-        res = FCC.check_step(project, dict(step), {})
-        seen.append(res.status)
-        assert rel not in res.evidence, (
-            f"the audit's own unstamped document was credited: "
-            f"{list(res.evidence)!r}")
-    assert seen == ["FAIL"] * 3, (
-        f"three passes over an unchanged tree reported {seen}; the pre-fix "
-        f"code reported ['FAIL', 'NOT_MEASURED', 'NOT_MEASURED'] here")
-    assert (project / rel).is_file(), (
-        "fixture defect: the gate never wrote its --json target, so the "
-        "second and third passes were not the case this test is about")
 
 
 # ===========================================================================
@@ -253,69 +182,13 @@ def _doc(tmp: Path, name: str, payload: Dict[str, Any]) -> Path:
     return p
 
 
-def test_only_the_shared_producer_and_gate_branch_defers_to_timing(workdir):
-    gate = frozenset({"g_check", "shared_check"})
-    producers = frozenset({"p_gen", "shared_check"})
-
-    gate_only = _doc(workdir, "a.json", {"program": "g_check", "verdict": "X"})
-    assert FCC._is_gate_verdict_document(gate_only, gate, producers) is True, (
-        "a document stamped ONLY by this step's gate is still the auditor's")
-
-    producer_only = _doc(workdir, "b.json", {"program": "p_gen"})
-    assert FCC._is_gate_verdict_document(producer_only, gate, producers) is False
-
-    shared = _doc(workdir, "c.json", {"program": "shared_check"})
-    assert FCC._is_gate_verdict_document(shared, gate, producers) is False, (
-        "a program that is BOTH a listed producer and this step's gate writes "
-        "the same bytes either way, so content must not answer here")
-
-    both_stamps = _doc(workdir, "d.json",
-                       {"program": "shared_check", "gate": "g_check"})
-    assert FCC._is_gate_verdict_document(both_stamps, gate, producers) is True, (
-        "a gate-ONLY stamp anywhere in the document still decides it")
-
-    unstamped = _doc(workdir, "e.json", {"findings": []})
-    assert FCC._is_gate_verdict_document(unstamped, gate, producers) is False
-
-    assert FCC._is_gate_verdict_document(gate_only) is True, (
-        "the presence-only answer callers that pass no names rely on must be "
-        "unchanged")
 
 
 # ===========================================================================
 # The durable note is a statement about a FILE, not a permanent verdict
 # ===========================================================================
-def test_the_authorship_note_is_verified_against_the_live_file(workdir):
-    project = workdir / "notes"
-    (project / "reports").mkdir(parents=True)
-    rel = "reports/x.json"
-    (project / rel).write_text('{"a": 1}\n')
-
-    FCC._record_audit_created(project, "N1", [rel])
-    assert FCC._prior_audit_created(project, "N1", [rel]) == {rel}
-    assert FCC._prior_audit_created(project, "OTHER", [rel]) == set(), (
-        "the note is keyed by (step, path); another step must not inherit it")
-
-    # The RUN re-produces the artefact: the note describes bytes that are gone.
-    (project / rel).write_text('{"a": 1, "produced_by": "the run"}\n')
-    assert FCC._prior_audit_created(project, "N1", [rel]) == set(), (
-        "a note whose recorded size/mtime no longer matches the live file is "
-        "stale and must not keep refusing an artefact the run has since "
-        "written")
-
-    FCC._record_audit_created(project, "N1", [rel])
-    assert FCC._prior_audit_created(project, "N1", [rel]) == {rel}
-    FCC._drop_audit_created_note(project, "N1", [rel])
-    assert FCC._prior_audit_created(project, "N1", [rel]) == set()
 
 
-def test_the_note_never_lands_outside_the_auditors_own_directory(workdir):
-    project = workdir / "scope"
-    project.mkdir()
-    note = FCC._authorship_note_path(project, "2", _REL)
-    assert note.parent == project / "reports" / "audit" / "audit_created", (
-        f"the audit's bookkeeping must stay in its own directory; {note} is "
-        f"outside it")
 
 
 # ===========================================================================

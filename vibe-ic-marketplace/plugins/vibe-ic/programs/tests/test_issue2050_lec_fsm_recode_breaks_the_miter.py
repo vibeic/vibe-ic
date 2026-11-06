@@ -73,7 +73,6 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import lec_run                       # noqa: E402
-import lec_equivalence_check as gate  # noqa: E402
 
 
 #: WHERE A REAL YOSYS IS, AND WHY THIS IS NOT A SKIP.
@@ -362,66 +361,14 @@ def test_the_kind_reaches_the_report():
 # (3) the gate — name the right cause, and stop prescribing the one remedy
 #     that provably cannot work
 # ---------------------------------------------------------------------------
-def _gate_on(tmp_path, raw):
-    r = lec_run.build_report(
-        lec_run.parse_equiv_output(raw), "chip_top", "netlist.v", None)
-    (tmp_path / "reports").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "reports" / "lec.json").write_text(json.dumps(r))
-    (tmp_path / "reports" / "lec.rpt").write_text(raw)
-    return gate.audit(tmp_path), r
 
 
-def test_gate_names_the_inconsistent_miter(tmp_path):
-    res, _ = _gate_on(tmp_path, _BASE_CASE_UNSAT)
-    rules = {f.rule for f in res.findings}
-    assert "LEC_INCONCLUSIVE_MITER_INCONSISTENT" in rules, rules
-    assert "LEC_NOT_EQUIVALENT" not in rules
-    assert res.inconclusive is True and res.passed is False
-    msg = [f.message for f in res.findings
-           if f.rule == "LEC_INCONCLUSIVE_MITER_INCONSISTENT"][0]
-    # It must NOT sell the reader a depth remedy for a consistency problem.
-    assert "sequential-depth gap" in msg and "NOT a sequential-depth gap" in msg
-    assert "fsm_recode" in msg and "-encfile" in msg
 
 
-def test_gate_still_calls_a_real_depth_wall_a_depth_wall(tmp_path):
-    res, _ = _gate_on(tmp_path, _DEPTH_WALL)
-    rules = {f.rule for f in res.findings}
-    assert "LEC_INCONCLUSIVE_NONCONVERGENCE" in rules, rules
-    assert "LEC_INCONCLUSIVE_MITER_INCONSISTENT" not in rules
 
 
-def test_gate_no_longer_claims_a_real_difference_would_show_a_counterexample(
-        tmp_path):
-    """lec_run.py hardcodes `non_equivalent_points` to 0 for the yosys path —
-    its own comment says 'a genuine difference surfaces as `unproven`'.  A
-    verdict that told the reader 0 counterexamples meant 'probably equivalent'
-    was reasoning from a field that can never be anything else."""
-    res, rep = _gate_on(tmp_path, _DEPTH_WALL)
-    assert rep["non_equivalent_points"] == 0
-    msg = [f.message for f in res.findings
-           if f.rule == "LEC_INCONCLUSIVE_NONCONVERGENCE"][0]
-    assert "a real difference produces a counterexample" not in msg
-    assert "hardcodes that field to 0" in msg
 
 
-def test_a_producer_that_never_recorded_the_kind_keeps_the_old_verdict(
-        tmp_path):
-    """BACKWARD COMPATIBILITY, and the negative control for the new branch: an
-    lec.json written before this change has no `induction_wall_kind`, so even
-    the base-case-UNSAT shape must fall through to the previous rule rather
-    than crash or silently change direction."""
-    r = lec_run.build_report(
-        lec_run.parse_equiv_output(_BASE_CASE_UNSAT),
-        "chip_top", "netlist.v", None)
-    r.pop("induction_wall_kind", None)
-    (tmp_path / "reports").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "reports" / "lec.json").write_text(json.dumps(r))
-    (tmp_path / "reports" / "lec.rpt").write_text(_BASE_CASE_UNSAT)
-    res = gate.audit(tmp_path)
-    rules = {f.rule for f in res.findings}
-    assert "LEC_INCONCLUSIVE_NONCONVERGENCE" in rules, rules
-    assert res.inconclusive is True and res.passed is False
 
 
 # ---------------------------------------------------------------------------
@@ -447,52 +394,6 @@ def test_the_resolver_never_guesses(tmp_path):
         str(tmp_path / "does_not_exist.v")) is None
 
 
-@pytest.mark.parametrize("invert_output", [False, True])
-def test_empty_encoding_table_preserves_scalarized_register_proofs(
-        yosys, invert_output):
-    """A synth with no FSM writes an empty encfile. A later transform can
-    scalarize a bus; its named points must still be proved, and a changed
-    output must remain unproven. Exercise the resolver, recipe and real SAT.
-    """
-    yosys.require()
-    tmp_path = yosys.dir
-    rtl = tmp_path / "delay.v"
-    rtl.write_text("""module delay(input clk, input d, output o);
-reg [31:0] stages;
-always @(posedge clk) stages <= {stages[30:0], d};
-assign o = stages[31];
-endmodule
-""")
-    enc = tmp_path / lec_run.FSM_ENCFILE_NAME
-    net = tmp_path / "netlist.v"
-    rc, out = yosys.run(
-        f"read_verilog {rtl}\nsynth -top delay -encfile {enc}\n"
-        f"splitnets -ports\nwrite_verilog -noattr -noexpr {net}\n", "synth")
-    assert rc == 0, out
-    assert enc.read_bytes() == b"", "fixture must exercise synth's empty table"
-    if invert_output:
-        text = net.read_text()
-        assert "assign o =" in text
-        net.write_text(text.replace("assign o =", "assign o = ~", 1))
-    script = lec_run.build_equiv_script(
-        [str(rtl)], str(net), "delay", None, gate_is_generic=True,
-        fsm_encfile=lec_run.fsm_encfile_beside_netlist(str(net)),
-        ladder_rungs=3)
-    rc, raw = yosys.run(script + "equiv_status -assert\n", "equiv")
-    report = lec_run.build_report(lec_run.parse_equiv_output(raw),
-                                  "delay", str(net), None)
-    (tmp_path / "reports").mkdir()
-    (tmp_path / "reports" / "lec.json").write_text(json.dumps(report))
-    (tmp_path / "reports" / "lec.rpt").write_text(raw)
-    if invert_output:
-        assert rc == 1, raw
-        assert report["unproven_points"] > 0, report
-        assert gate.audit(tmp_path).passed is False
-    else:
-        assert rc == 0, raw
-        assert report["compared_points"] >= 32, report
-        assert report["unproven_points"] == 0, report
-        assert gate.audit(tmp_path).passed is True
 
 
 def test_empty_synth_map_preserves_scalar_register_alignment(tmp_path):

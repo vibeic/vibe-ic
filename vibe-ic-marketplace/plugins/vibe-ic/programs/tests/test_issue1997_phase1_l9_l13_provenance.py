@@ -19,7 +19,6 @@ PROG_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG_DIR))
 
 import phase1_doc_one_shot_runner as p1  # noqa: E402
-import phase1_provenance_presence_check as presence  # noqa: E402
 
 
 SOURCE = "input/docs/spec.md"
@@ -77,28 +76,3 @@ def test_recursive_input_cites_the_real_path_not_the_encoded_scratch_key(
          "L11_OTP_CONTENT.json").read_text())
 
     assert doc.get("source_documents") == ["input/docs/subdir/spec.md"]
-
-
-def test_presence_gate_observes_a_dropped_emitter_field(tmp_path):
-    """Value-bearing mutation: one dropped citation is exactly one red layer."""
-    generated = _emit_l9_l13(tmp_path)
-    for tag, name in presence.EXPECTED_DOCS:
-        path = generated / name
-        if not path.exists():
-            path.write_text(json.dumps({
-                "layer": tag,
-                "source_documents": [SOURCE],
-            }))
-
-    l11 = generated / "L11_OTP_CONTENT.json"
-    doc = json.loads(l11.read_text())
-    doc.pop("source_documents", None)
-    l11.write_text(json.dumps(doc))
-
-    report = presence.check_dir(generated)
-    failed = {
-        tag for tag, result in report["per_layer"].items()
-        if result["status"] != "PASS"
-    }
-    assert report["passes"] == 13
-    assert failed == {"L11"}

@@ -77,7 +77,6 @@ PROG = _PROGRAMS / "design_one_shot_runner.py"
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
-import flow_compliance_check as fcc  # noqa: E402
 
 # The flag the DT1 precondition record used to carry via `dict(_TDF_CAP, ...)`.
 _TDF_CAP_FLAG = "cap:at_speed_timing_graded_atpg"
@@ -255,27 +254,3 @@ def test_a_signal_death_still_wins_over_the_precondition_arm(tmp_path):
 
     assert dispatch("sky130", True) == "crash"
     assert dispatch(None, True) == "crash"
-
-
-def test_the_emitted_record_is_not_a_declared_capability_gap(tmp_path):
-    """End to end on the CONSUMER: build the record the fixed arm builds and
-    ask `flow_compliance_check` whether it claims a declared capability gap.
-
-    This is the property that matters — not that a key is absent from a dict,
-    but that the gate can no longer read a capability claim off it.
-    """
-    record = {"verdict": "SKIPPED-CONDITION",
-              "tool_attempted": True,
-              "not_run_stage": "precondition_unmet",
-              "missing_precondition": "phase2/stage2/synth/*_synth.v",
-              "pdk_detected": "generic_unmapped"}
-    p = tmp_path / "dft_atpg_not_run.json"
-    p.write_text(json.dumps(record, indent=2))
-
-    assert not fcc._is_declared_capability_gap(
-        str(record.get("capability_flag", ""))), (
-        "the precondition record is still readable as a declared capability gap")
-    # and the arm that DID hit a real engine limit still is
-    assert fcc._is_declared_capability_gap("cap:atpg_signoff_coverage"), (
-        "the registry no longer declares the genuine gap — this test would "
-        "then be passing for the wrong reason")

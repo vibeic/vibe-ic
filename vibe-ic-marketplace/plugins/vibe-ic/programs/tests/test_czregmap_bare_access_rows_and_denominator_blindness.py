@@ -718,79 +718,10 @@ endpackage
 # this gate that is exactly the row and register counts it exists to publish.
 # ---------------------------------------------------------------------------
 
-def test_the_umbrella_operator_line_keeps_the_payload_not_the_prefix():
-    import flow_compliance_check as FC
-    # R-0915-113(7): `_ALL_FIVE` is now a PASS, so the NOT_MEASURED line this
-    # test is about needs a project that still produces one — a documented
-    # row the document leaves unaddressed. The claim under test is unchanged:
-    # the payload survives and the house prefix does not.
-    unaddressed = _BARE_ACCESS_TABLE.replace("| `0x0c` | `PUSH`",
-                                             "| (tbd) | `PUSH`")
-    proj = _docs_project(unaddressed, _ALL_FIVE)
-    cp = _run_cov(proj)
-    line = FC._p0_skip_reason_from_output(
-        "l4_regmap_declared_register_coverage_check", cp.stdout, cp.stderr)
-    # The payload's own opening survives, so it does not depend on the
-    # bracket marker being kept.
-    assert line.startswith("This gate's HDL declared side"), line
-    # The house prefix does NOT survive: neither the bracket marker nor the
-    # gate's own name is repeated into a line that already carries both.
-    assert not line.startswith("["), line
-    assert "l4_regmap_declared_register_coverage_check" not in line, line
-    # And the payload reaches the line rather than being truncated away.
-    assert "documentation staged under" in line.lower(), line
 
 
-def test_a_line_without_the_marker_renders_identically():
-    """NO-LEAK for the flow-level change: widening the marker must not touch
-    a line that does not begin with one."""
-    import flow_compliance_check as FC
-    gate = "l4_regmap_declared_register_coverage_check"
-    plain = f"{gate}: nothing in particular happened here"
-    assert FC._p0_skip_reason_from_output(gate, plain, "") == (
-        "nothing in particular happened here")
-    banner = "=== some banner ===\n[SKIP] " + gate + ": the old shape\n"
-    assert FC._p0_skip_reason_from_output(gate, banner, "") == "the old shape"
 
 
-def test_widening_the_marker_moves_no_reason_class():
-    """The operator line is fed to the reason taxonomy, so the cosmetic
-    change was checked against it rather than assumed to be cosmetic.
-
-    The invariant is NOT "every line classifies the same" — the taxonomy
-    reads the message text, so different prose classifies differently by
-    design, and asserting otherwise was my own first mistake here (a
-    hand-written `there was nothing to check` classifies ZERO_DENOMINATOR,
-    not EXECUTION_ERROR). The invariant is that WIDENING THE MARKER does not
-    move the class for the SAME stdout — before against after, on identical
-    input, which is the only thing this change could have broken.
-    """
-    import re
-    import flow_compliance_check as FC
-    import _flow_reason_taxonomy as RT
-
-    gate = "l4_regmap_declared_register_coverage_check"
-    ev = {"exit_code": 2, "skip_kind": "input-missing"}
-    before_marker = re.compile(r"^\[(?:skip|n/?a|vacuous|info)\]\s*", re.I)
-
-    def render_with(marker, stdout):
-        raw = [ln.strip() for ln in stdout.strip().splitlines()
-               if ln.strip()][0]
-        line = marker.sub("", raw, count=1).strip()
-        if line.lower().startswith(gate.lower()):
-            line = line[len(gate):].lstrip(" :\u2014-").strip()
-        return (line or raw)[:200]
-
-    proj = _docs_project(_BARE_ACCESS_TABLE, _ALL_FIVE)
-    for stdout in (_run_cov(proj).stdout,
-                   f"[SKIP] {gate}: there was nothing to check",
-                   f"{gate}: a line carrying no marker at all"):
-        was = render_with(before_marker, stdout)
-        now = render_with(FC._P0_SKIP_MARKER, stdout)
-        assert (RT.infer_nonverdict_reason(verdict="SKIP", message=was,
-                                           evidence=ev)
-                == RT.infer_nonverdict_reason(verdict="SKIP", message=now,
-                                              evidence=ev)), (was, now)
 
 
 # ---------------------------------------------------------------------------

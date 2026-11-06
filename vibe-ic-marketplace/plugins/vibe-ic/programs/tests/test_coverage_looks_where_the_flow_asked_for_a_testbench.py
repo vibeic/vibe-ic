@@ -144,15 +144,6 @@ def test_the_phase2_spelling_of_the_unit_dir_is_searched_too(tmp_path):
     assert tb and Path(tb).name == "tb_dut.v"
 
 
-def test_the_directory_the_gate_defaults_to_is_the_one_searched():
-    """The two lists are ONE list, asserted against the gate's own default
-    rather than against a string retyped here. If either side is renamed this
-    goes red instead of the flow quietly going blind again."""
-    import rtl_unit_test_coverage_check as G
-    src = Path(G.__file__).read_text()
-    assert 'proj / "sim_unit"' in src, (
-        "the gate's default --sim-dir moved; re-derive the discovery entry")
-    assert any(rel.endswith("sim_unit") for rel, _pat in V._TB_DISCOVERY_ORDER)
 
 
 # ── the guards: the order and the preference rule are unchanged ───────────

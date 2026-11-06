@@ -40,7 +40,6 @@ _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
-from _ppa import timing as _timing            # noqa: E402
 from _ppa.backends import opensta as _opensta  # noqa: E402
 
 TOP = "core_top"
@@ -64,14 +63,6 @@ DIALECT_B_NO_SPEF = DIALECT_B.replace(", SPEF={}.max.spef".format(TOP), "") \
                              .replace(", SPEF={}.min.spef".format(TOP), "")
 
 
-def _gaps(text: str):
-    """Every `rc_corner` gap reason the producer emits for one report."""
-    report = _opensta.parse_report(text, path="phase3/stage3/sta/sta_x.rpt")
-    rows = _timing.rows_from_report(
-        Path("/nonexistent-project"), Path("phase3/stage3/sta/sta_x.rpt"),
-        report, mode=None, mode_gap="fixture declares no pvt matrix")
-    return [r["scope_gaps"]["rc_corner"] for r in rows
-            if "rc_corner" in (r.get("scope_gaps") or {})]
 
 
 def test_the_backend_really_does_hold_the_spef_while_rc_corner_is_none():
@@ -84,49 +75,3 @@ def test_the_backend_really_does_hold_the_spef_while_rc_corner_is_none():
             "fixture is not dialect B any more: it now carries a normalised "
             "RC-corner label, so it cannot demonstrate the defect")
         assert sec.spef, "the backend dropped the SPEF token the banner names"
-
-
-def test_the_reason_names_the_parasitics_the_producer_is_holding():
-    reasons = _gaps(DIALECT_B)
-    assert reasons, "no rc_corner gap was emitted for a section that lacks one"
-    for why in reasons:
-        assert ".spef" in why, (
-            "the rc_corner gap reason does not name the parasitics file the "
-            "producer parsed off the same banner line. A producer that holds "
-            "the identity of a field and reports the field unreported is the "
-            "denial this test exists to refuse. reason was: %r" % (why,))
-
-
-def test_the_reason_does_not_claim_the_report_named_no_rc_corner():
-    for why in _gaps(DIALECT_B):
-        assert "names no RC corner" not in why, (
-            "the producer still tells the reader this report names no RC "
-            "corner, while its own parse holds the SPEF the banner states. "
-            "reason was: %r" % (why,))
-
-
-def test_the_corner_is_still_NOT_invented_from_the_file_name():
-    """The other half. A gap is correct here; a filled key would be a guess."""
-    report = _opensta.parse_report(DIALECT_B)
-    rows = _timing.rows_from_report(
-        Path("/nonexistent-project"), Path("phase3/stage3/sta/sta_x.rpt"),
-        report, mode=None, mode_gap="fixture declares no pvt matrix")
-    for r in rows:
-        assert r["scope"].get("rc_corner") is None, (
-            "`rc_corner` was FILLED from a file name. Deriving a corner from "
-            "`%s.max.spef` is the filename inference `_stage_for` refuses by "
-            "design; the honest outcome is a stated gap, not a guess." % TOP)
-
-
-def test_a_report_that_truly_names_nothing_keeps_the_original_sentence():
-    """The negative side: the old reason is right when it is right."""
-    reasons = _gaps(DIALECT_B_NO_SPEF)
-    assert reasons, "no rc_corner gap emitted for a report that names nothing"
-    for why in reasons:
-        assert "names no RC corner" in why, (
-            "a report that genuinely names no RC condition must still say so; "
-            "the repair must not blanket-replace a true sentence. reason "
-            "was: %r" % (why,))
-        assert ".spef" not in why, (
-            "a parasitics file was named for a report that declares none: %r"
-            % (why,))

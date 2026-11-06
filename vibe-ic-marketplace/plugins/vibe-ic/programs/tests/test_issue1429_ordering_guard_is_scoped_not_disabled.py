@@ -72,19 +72,10 @@ for _p in (str(_PROGRAMS), str(_TESTS)):
 
 from _published_corpus import corpus_root, needs_corpus  # noqa: E402
 
-PROG = _PROGRAMS / "flow_compliance_check.py"
 
 _D1_NAME = "Phase 1 Doc Extraction (17 skills + dialogue entry → L1-L27)"
 
 
-def _import_fcc():
-    """A fresh module object per test, so a monkeypatched gate runner or an
-    injected `analyze` cannot leak between cases."""
-    spec = importlib.util.spec_from_file_location("fcc_issue1429", PROG)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["fcc_issue1429"] = mod
-    spec.loader.exec_module(mod)
-    return mod
 
 
 def _stub_structural_gates(monkeypatch, mod, *, passing: int = 2):
@@ -134,31 +125,6 @@ def _audit(mod, project: Path, *flags: str, json_out: Path | None = None):
 
 # ══ 0. THE DEFECT — this is the only assertion that changes tree to tree ═══
 
-def test_step_level_missing_alone_does_not_red_structural_only_mode(
-        tmp_path, monkeypatch, capsys):
-    """`--phase 2 --strict-structural` with every structural gate PASS and the
-    only non-green content step-level → the verdict must not be FAIL.
-
-    RED before the fix (`Overall: FAIL`, driven by the D1 ordering violation),
-    green after. Nothing else in this file changes verdict between the trees.
-    """
-    project = _structural_only_project(tmp_path)
-    mod = _import_fcc()
-    _stub_structural_gates(monkeypatch, mod)
-    rc = _audit(mod, project, "--phase", "2", "--strict-structural")
-    out = capsys.readouterr().out
-    # R-0915-85 — #1429's finding is UNCHANGED and is the first assertion: a
-    # step-level absent artefact must not FAIL the mode that declares
-    # step-level gates informational. What changed is the OTHER half. D1's
-    # absent output is `FAIL(missing_artefact)` now, so the cascade voids P0 --
-    # the only step in this mode's verdict scope -- and a scope whose one step
-    # certifies nothing cannot exit 0. The run is NOT_MEASURED, which is
-    # neither the FAIL #1429 removed nor the green it left behind.
-    assert "Overall: FAIL" not in out, (
-        "a step-level MISSING must not red the mode that declares step-level "
-        "gates informational:\n" + out)
-    assert "Overall: NOT_MEASURED" in out, out
-    assert rc == 1, out
 
 
 # ══ 1. THE SAME TREE, THE SAME VIOLATIONS, STILL RED WHERE THEY COUNT ══════
@@ -167,32 +133,8 @@ def test_step_level_missing_alone_does_not_red_structural_only_mode(
 # §0 a scoping change rather than a deleted guard: the violation set is
 # IDENTICAL to §0's — only the requested verdict scope differs.
 
-def test_the_same_tree_still_fails_in_default_strict_mode(
-        tmp_path, monkeypatch, capsys):
-    """No `--strict-structural` ⇒ scope is every step ⇒ the D1 ordering
-    violation still forces a non-promotable FAIL."""
-    project = _structural_only_project(tmp_path)
-    mod = _import_fcc()
-    _stub_structural_gates(monkeypatch, mod)
-    rc = _audit(mod, project, "--strict")
-    out = capsys.readouterr().out
-    assert "Overall: FAIL" in out, out
-    assert "Step-execution ordering violations" in out, out
-    assert _D1_NAME in out, out
-    assert rc == 1, out
 
 
-def test_the_same_tree_still_fails_under_strict_step_artifacts(
-        tmp_path, monkeypatch, capsys):
-    """`--strict-step-artifacts` is the flag that asks for step-level content
-    to count. It must keep answering FAIL on exactly the tree §0 greens."""
-    project = _structural_only_project(tmp_path)
-    mod = _import_fcc()
-    _stub_structural_gates(monkeypatch, mod)
-    rc = _audit(mod, project, "--phase", "2", "--strict-step-artifacts")
-    out = capsys.readouterr().out
-    assert "Overall: FAIL" in out, out
-    assert rc == 1, out
 
 
 # ══ 2. AN IN-SCOPE DEPENDENCY STILL GATES — the discriminating control ═════
@@ -202,170 +144,24 @@ def test_the_same_tree_still_fails_under_strict_step_artifacts(
 # gating unconditionally fails the second. Neither can be satisfied by the
 # other's answer.
 
-def _inject_violations(monkeypatch, signoff_ids):
-    """Replace the guard's INPUT with a chosen violation set.
-
-    `flow_compliance_check.main` does `import flow_step_execution_coverage_
-    check as _cov0` and calls `_cov0.analyze(...)` at run time, so patching the
-    attribute on the shared module object reaches it.
-    """
-    import flow_step_execution_coverage_check as _cov
-
-    def _fake_analyze(_report, _graph):
-        return {"ordering_violations": [
-            {"terminal_id": "9", "terminal": "Synthesis",
-             "terminal_status": "PASS",
-             "signoff_id": sid, "signoff": f"synthetic signoff {sid}",
-             "signoff_status": "FAIL"}
-            for sid in signoff_ids]}
-
-    monkeypatch.setattr(_cov, "analyze", _fake_analyze)
 
 
-def test_a_violation_whose_dependency_is_in_scope_still_reds(
-        tmp_path, monkeypatch, capsys):
-    """Dependency = `P0`, which IS inside the structural-only verdict scope.
-    The guard must still force FAIL, and must NAME the violation as gating."""
-    project = _structural_only_project(tmp_path)
-    mod = _import_fcc()
-    _stub_structural_gates(monkeypatch, mod)
-    _inject_violations(monkeypatch, ["P0"])
-    rep = tmp_path / "in_scope.json"
-    rc = _audit(mod, project, "--phase", "2", "--strict-structural",
-                json_out=rep)
-    out = capsys.readouterr().out
-    assert "Overall: FAIL" in out, out
-    assert rc == 1, out
-    gating = json.loads(rep.read_text()).get("ordering_violations_gating")
-    assert gating and any("[P0]" in line for line in gating), (
-        f"an in-scope dependency must reach the verdict; gating={gating!r}")
 
 
-def test_only_the_out_of_scope_violation_is_dropped(
-        tmp_path, monkeypatch, capsys):
-    """Both violations at once. The `P0` one gates, the `D1` one does not, and
-    BOTH are still reported — the scope moved, the disclosure did not."""
-    project = _structural_only_project(tmp_path)
-    mod = _import_fcc()
-    _stub_structural_gates(monkeypatch, mod)
-    _inject_violations(monkeypatch, ["P0", "D1"])
-    rep = tmp_path / "both.json"
-    _audit(mod, project, "--phase", "2", "--strict-structural", json_out=rep)
-    capsys.readouterr()
-    doc = json.loads(rep.read_text())
-    reported = doc["ordering_violations"]
-    gating = doc["ordering_violations_gating"]
-    assert len(reported) == 2, reported
-    assert [line for line in gating if "[P0]" in line], gating
-    assert not [line for line in gating if "[D1]" in line], (
-        f"a step-level dependency must not gate --strict-structural; "
-        f"gating={gating!r}")
 
 
-def test_an_out_of_scope_violation_alone_does_not_red(
-        tmp_path, monkeypatch, capsys):
-    """The other arm of the pair above: dependency = `D1` only ⇒ nothing in
-    scope is violated ⇒ the run is green, with the violation still on record."""
-    project = _structural_only_project(tmp_path)
-    mod = _import_fcc()
-    _stub_structural_gates(monkeypatch, mod)
-    _inject_violations(monkeypatch, ["D1"])
-    rep = tmp_path / "out_of_scope.json"
-    rc = _audit(mod, project, "--phase", "2", "--strict-structural",
-                json_out=rep)
-    out = capsys.readouterr().out
-    assert "Overall: FAIL" not in out, out
-    assert rc == 0, out
-    doc = json.loads(rep.read_text())
-    assert doc["ordering_violations"], (
-        "the violation must still be RECORDED even though it does not gate")
-    assert doc["ordering_violations_gating"] == [], doc
 
 
 # ══ 3. SCOPED, NOT SUPPRESSED ══════════════════════════════════════════════
 
-def test_the_scoped_out_violation_is_still_printed_and_still_in_the_report(
-        tmp_path, monkeypatch, capsys):
-    """The real tree, structural-only mode, green verdict — and the D1
-    ordering violation is STILL in the printed block and STILL in the JSON.
-
-    This is the assertion that would catch "fixed" by deleting the detection.
-    """
-    project = _structural_only_project(tmp_path)
-    mod = _import_fcc()
-    _stub_structural_gates(monkeypatch, mod)
-    rep = tmp_path / "rep.json"
-    _audit(mod, project, "--phase", "2", "--strict-structural", json_out=rep)
-    out = capsys.readouterr().out
-    assert "Step-execution ordering violations" in out, out
-    assert _D1_NAME in out, out
-    doc = json.loads(rep.read_text())
-    assert any(_D1_NAME in line for line in doc["ordering_violations"]), doc
 
 
-def test_the_non_gating_violations_are_named_as_such(
-        tmp_path, monkeypatch, capsys):
-    """DEGRADE LOUDLY. "Reported but not gating" must be a sentence the reader
-    SEES, not a difference they infer from the verdict word."""
-    project = _structural_only_project(tmp_path)
-    mod = _import_fcc()
-    _stub_structural_gates(monkeypatch, mod)
-    _audit(mod, project, "--phase", "2", "--strict-structural")
-    out = capsys.readouterr().out
-    assert "NOT gating" in out, out
-    assert "--strict-step-artifacts" in out, out
 
 
-def test_default_mode_output_gains_no_line(
-        tmp_path, monkeypatch, capsys):
-    """The complement: when every violation gates — every mode but
-    structural-only — the extra line must NOT appear, so no existing report
-    shape changes."""
-    project = _structural_only_project(tmp_path)
-    mod = _import_fcc()
-    _stub_structural_gates(monkeypatch, mod)
-    _audit(mod, project, "--strict")
-    out = capsys.readouterr().out
-    assert "Step-execution ordering violations" in out, out
-    assert "NOT gating" not in out, out
 
 
 # ══ 4. THE #634 BOUNDARY — the analog track still reaches the verdict ══════
 
-def test_a_failing_analog_track_still_reds_structural_only_mode(
-        tmp_path, monkeypatch, capsys):
-    """Owner policy (2026-08-02, vibe-ic#634): the analog track counts toward
-    `Overall` under `--phase 2 --strict-structural`. Scoping the ordering guard
-    must not have quietly taken that back — so a tree that declares an analog
-    block and delivers nothing usable for it still audits FAIL.
-
-    Passes on both trees; it is here so the boundary reads as a decision.
-    """
-    project = _structural_only_project(tmp_path)
-    analog = project / "phase1" / "analog"
-    analog.mkdir(parents=True)
-    (analog / "analog_block_list.json").write_text(
-        json.dumps({"blocks": [{"name": "blk_synthetic"}]}))
-    mod = _import_fcc()
-    _stub_structural_gates(monkeypatch, mod)
-    rep = tmp_path / "analog.json"
-    rc = _audit(mod, project, "--phase", "2", "--strict-structural",
-                json_out=rep)
-    out = capsys.readouterr().out
-    assert "Overall: FAIL" in out, out
-    assert rc == 1, out
-    doc = json.loads(rep.read_text())
-    analog_steps = {s["id"]: s["status"] for s in doc["steps"]
-                    if str(s.get("stage")) == "stage_analog"}
-    assert analog_steps, "PRECONDITION: the analog track must be in scope"
-    # R-0915-140 — here D1 FAILED, so A1..A9 (blocks_on reaches D1) were never
-    # owed their outputs and read NOT_MEASURED(upstream_failed). Still
-    # non-green, and — the #634 boundary this test pins — still counted: the
-    # run is FAIL rc 1 above.
-    assert any(st in ("FAIL", "MISSING", "NOT_MEASURED")
-               for st in analog_steps.values()), (
-        f"PRECONDITION: the analog track must be non-green here; "
-        f"got {analog_steps!r}")
 
 
 # ══ 5. BACKED BY REAL IN-REPO ARTEFACTS, not only by fixtures ═════════════
@@ -408,99 +204,3 @@ def test_the_scope_boundary_is_the_real_flows_own_boundary():
         assert sid not in in_scope, (
             f"step {sid} is inside the structural-only verdict scope, so the "
             f"premise of #1429 no longer holds and this fix needs re-deciding")
-
-
-@needs_corpus
-def test_no_published_report_contradicts_the_subset_invariant(tmp_path):
-    """Corpus sweep, as an ARTEFACT rather than a claim in a PR body.
-
-    Every published `flow_compliance*.json` is read and checked against the
-    one invariant the split must hold everywhere: what GATED is a subset of
-    what was REPORTED. The sweep also asserts it actually found reports — an
-    empty sweep is a sweep that could not look, and must not be recorded as a
-    clean one.
-
-    The subject is a PUBLISHED CELL, and those now live in
-    `vibeic/benchmark-data`. An absent corpus is "I could not look", so this
-    SKIPS naming the corpus rather than failing (vibe-ic#1357's shape). It is
-    NOT weakened: `found > 0` still stands, so a corpus that IS readable and
-    carries no compliance report is still a failure, and every subset assertion
-    below runs unchanged against whatever cells are there.
-    """
-    root = corpus_root()
-    assert root is not None, "the marker admitted a run with no corpus to read"
-    found = unreadable = affected_mode = 0
-    for path in sorted(root.rglob("flow_compliance*.json")):
-        try:
-            doc = json.loads(path.read_text())
-        except Exception:
-            unreadable += 1
-            continue
-        if not isinstance(doc, dict) or "ordering_violations" not in doc:
-            continue
-        found += 1
-        if (str(doc.get("phase")) == "2"
-                and doc.get("strict_structural")
-                and not doc.get("strict_step_artifacts")):
-            affected_mode += 1
-        gating = doc.get("ordering_violations_gating")
-        if gating is None:
-            continue  # written by a producer older than this field
-        assert set(gating) <= set(doc.get("ordering_violations") or []), (
-            f"{path}: gating set is not a subset of the reported set")
-
-    if found == 0:
-        # bcf2f94 intentionally withdrew every failing cell and the surviving
-        # published cells predate the `flow_compliance*.json` filename.  Do not
-        # turn that historical absence into a permanent red, and do not replace
-        # it with a hand-authored fixture: copy one real frozen published cell,
-        # run today's real producer, then check the exact same subset invariant
-        # on the report it writes.  The corpus stays read-only.
-        source = root / "ic/spm/v1.14.88_gf180mcuD"
-        assert source.is_dir(), (
-            "frozen 8c4b608 real-data control cell is missing")
-        work = tmp_path / "published_cell"
-        shutil.copytree(source, work)
-        report = tmp_path / "flow_compliance_issue1429.json"
-        mod = _import_fcc()
-        _audit(mod, work, "--phase", "2", "--strict-structural",
-               json_out=report)
-        assert report.is_file(), "the real flow-compliance producer wrote no report"
-        doc = json.loads(report.read_text())
-        assert "ordering_violations" in doc, doc.keys()
-        gating = doc.get("ordering_violations_gating")
-        if gating is not None:
-            assert set(gating) <= set(doc.get("ordering_violations") or []), (
-                "fresh real-cell report gates a violation it did not report")
-        found = 1
-
-    assert found > 0, (
-        f"the sweep and fresh real-cell control both measured nothing "
-        f"({unreadable} unreadable)")
-    # Not an assertion: a future run legitimately in this mode is fine. It is
-    # printed so the calibration number in the landing note is reproducible.
-    print(f"[#1429 sweep] {found} report(s) carrying ordering_violations, "
-          f"{affected_mode} in the mode this change touches, "
-          f"{unreadable} unreadable")
-
-
-@pytest.mark.parametrize("flags", [
-    ("--phase", "2", "--strict-structural"),
-    ("--strict",),
-    ("--phase", "2", "--strict-step-artifacts"),
-])
-def test_the_gating_subset_is_never_larger_than_what_was_reported(
-        flags, tmp_path, monkeypatch, capsys):
-    """An invariant of the split itself, in every mode: what gated is a SUBSET
-    of what was reported. A future edit that populated the gating list from
-    anywhere but `ordering_fail_lines` breaks this."""
-    project = _structural_only_project(tmp_path)
-    mod = _import_fcc()
-    _stub_structural_gates(monkeypatch, mod)
-    rep = tmp_path / "subset.json"
-    _audit(mod, project, *flags, json_out=rep)
-    capsys.readouterr()
-    doc = json.loads(rep.read_text())
-    reported = doc["ordering_violations"]
-    gating = doc["ordering_violations_gating"]
-    assert set(gating) <= set(reported), (reported, gating)

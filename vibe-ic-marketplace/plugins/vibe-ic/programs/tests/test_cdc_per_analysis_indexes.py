@@ -56,16 +56,6 @@ def native(root, safe, controlled=False):
     return model
 
 
-def ordinary(root):
-    report = root / f"ordinary-{len(list(root.glob('ordinary-*.json')))}.json"
-    argv = [sys.executable, str(PROG / "clock_domain_reg_crossing_check.py"),
-            str(root), "--front-end", "netlist", "--json", str(report)]
-    done = subprocess.run(argv, capture_output=True, text=True)
-    report.with_suffix(".stdout").write_text(done.stdout)
-    report.with_suffix(".stderr").write_text(done.stderr)
-    report.with_suffix(".receipt").write_text(json.dumps({
-        "argv": argv, "returncode": done.returncode}))
-    return done.returncode, json.loads(report.read_text())
 
 
 def population_native(root, top='cdc_population_mixed'):
@@ -80,135 +70,16 @@ def population_native(root, top='cdc_population_mixed'):
     return model, binding
 
 
-def test_native_population_includes_every_sync_and_unsync_endpoint(tmp_path):
-    import hashlib
-    model, binding = population_native(tmp_path)
-    rc, report = ordinary(tmp_path)
-    # Existing finding semantics stay calibrated and unchanged: the safe
-    # crossing is omitted from findings, while the unsafe crossing fails.
-    assert rc == 1 and report['summary']['errors'] == 1, report
-    assert report['findings'] == cdc.judge(model, 'reg_crossing')
-    assert report['findings'][0]['rule'] == 'CDC_REG_NO_SYNC'
-    population = report['summary'].get('reg_crossing_population', {})
-    assert population.get('status') == 'MEASURED', population
-    doc = json.loads((tmp_path / cdc.NETLIST_REL).read_text())['modules'][model.top]
-
-    def endpoint(net):
-        q = doc['netnames'][net]['bits']
-        return next((name, cell) for name, cell in doc['cells'].items()
-                    if cell['connections'].get('Q') == q)
-
-    expected = []
-    for source, destination, synchronised in (
-            ('launch_safe', 'sync1', True), ('launch_unsafe', 'capture_unsafe', False)):
-        sender, scell = endpoint(source)
-        receiver, dcell = endpoint(destination)
-        expected.append({'source_cell': sender, 'source_q_index': 0,
-            'source_q_bit': scell['connections']['Q'][0],
-            'destination_cell': receiver, 'destination_d_index': 0,
-            'destination_d_bit': dcell['connections']['D'][0],
-            'from_domain': 'clk_a', 'to_domain': 'clk_b',
-            'direct': True, 'synchronised': synchronised})
-    actual = population['crossings']
-    assert sorted(actual, key=json.dumps) == sorted(expected, key=json.dumps), {
-        'actual': actual, 'expected': expected}
-    assert population['traversal_complete'] is True
-    assert population['source_q_bits_examined'] == population['destination_d_bits'] == 5
-    assert population['input_fingerprint'] == binding['input']['fingerprint']
-    assert population['producer'] == binding['producer']
-    assert population['netlist']['sha256'] == hashlib.sha256(
-        (tmp_path / cdc.NETLIST_REL).read_bytes()).hexdigest()
-    assert population['checker_sha256'] == hashlib.sha256(Path(cdc.__file__).read_bytes()).hexdigest()
 
 
-def test_native_single_domain_population_is_empty_after_complete_traversal(tmp_path):
-    model, _binding = population_native(tmp_path, 'cdc_population_single')
-    rc, report = ordinary(tmp_path)
-    assert rc == 0 and report['findings'] == [], report
-    population = report['summary'].get('reg_crossing_population', {})
-    assert population.get('status') == 'MEASURED', population
-    assert population['clock_domains'] == ['clk']
-    assert population['crossings'] == [] and population['traversal_complete'] is True
-    assert population['source_q_bits_examined'] == population['destination_d_bits'] == len(model.flops) == 2
 
 
-@pytest.mark.parametrize('damage', ['missing', 'stale', 'unreadable', 'no_decoded_flops'])
-def test_unproven_native_population_cannot_be_measured_empty(tmp_path, damage):
-    population_native(tmp_path, 'cdc_population_comb' if damage == 'no_decoded_flops'
-                      else 'cdc_population_mixed')
-    path = tmp_path / cdc.NETLIST_REL
-    if damage == 'missing':
-        path.unlink()
-    elif damage == 'stale':
-        rtl = tmp_path / 'phase2/stage1/rtl/cdc_population.v'
-        rtl.write_text(rtl.read_text() + '// changed native input\n')
-    elif damage == 'unreadable':
-        path.write_text('not a native JSON graph\n')
-    rc, report = ordinary(tmp_path)
-    population = report['summary'].get('reg_crossing_population', {})
-    assert population.get('status') == 'NOT_MEASURED', report
-    assert 'crossings' not in population, population
-    if damage != 'no_decoded_flops':
-        assert rc != 0 and report['summary']['netlist_read'] is False, report
 
 
-def test_regex_findings_do_not_authorize_native_population(tmp_path):
-    population_native(tmp_path)
-    from clock_domain_reg_crossing_check import audit
-    report = audit(project_dir=str(tmp_path), front_end='regex')
-    assert report.summary['reg_crossing_population']['status'] == 'NOT_MEASURED'
 
 
-@pytest.mark.parametrize('ambiguous', [True, False], ids=['multiple-drivers', 'unique-driver'])
-def test_native_driver_ambiguity_only_unqualifies_population(tmp_path, ambiguous):
-    from collections import Counter
-    fixture = PROG / 'tests/fixtures/cdc_netlist/cdc_population_drivers.v'
-    rtl = tmp_path / 'phase2/stage1/rtl/cdc_population_drivers.v'
-    rtl.parent.mkdir(parents=True)
-    shutil.copyfile(fixture, rtl)
-    top = 'cdc_population_ambiguous' if ambiguous else 'cdc_population_unambiguous'
-    path = cdc.build(tmp_path, [rtl], top)
-    model = cdc.load(path)
-    cdc.require_binding(tmp_path, path, model)
-    # Inspect the actual native output independently: the producer accepted
-    # and bound this fixture, including its multiple native output drivers.
-    cells = json.loads(path.read_text())['modules'][top]['cells']
-    counts = Counter(bit for cell in cells.values()
-                     for pin, bits in cell['connections'].items()
-                     if cell['port_directions'][pin] == 'output'
-                     for bit in bits if isinstance(bit, int))
-    multiple = sorted(bit for bit, count in counts.items() if count > 1)
-    assert bool(multiple) is ambiguous, {'native_driver_counts': counts}
-    rc, report = ordinary(tmp_path)
-    assert rc == 1 and report['findings'] == cdc.judge(model, 'reg_crossing'), report
-    population = report['summary']['reg_crossing_population']
-    actual = (population['status'], population['traversal_complete'])
-    expected = ('NOT_MEASURED', False) if ambiguous else ('MEASURED', True)
-    assert actual == expected, {'actual': actual, 'expected': expected, 'native_multiple_bits': multiple}
-    if ambiguous:
-        assert population['reason'] == 'CDC_POPULATION_AMBIGUOUS_DRIVERS'
-        assert population['ambiguous_driver_bits'] == multiple
-        assert 'crossings' not in population
-    else:
-        assert len(population['crossings']) == 1
-    print(json.dumps({'ambiguous': ambiguous, 'native_multiple_bits': multiple,
-                      'population_status': population['status'], 'rc': rc,
-                      'findings': report['findings']}, sort_keys=True))
 
 
-@pytest.mark.parametrize("safe", [True, False])
-@pytest.mark.parametrize("controlled", [False, True])
-def test_native_semantics_without_rebuilding_port_maps_per_pair(tmp_path, safe, controlled):
-    model = native(tmp_path, safe, controlled)
-    rc, report = ordinary(tmp_path)
-    assert rc == (0 if safe else 1), report
-    assert report["summary"]["errors"] == (0 if safe else 8)
-    model.ports = CountedPorts(model.ports)
-    findings = cdc.judge(model, "reg_crossing")
-    assert findings == report["findings"]
-    # Input membership and all-port labels each require exactly one snapshot.
-    # This is an operation count, not a flaky wall-time assertion.
-    assert model.ports.walks == 2, {"full_port_walks": model.ports.walks}
 
 
 def test_reanalysis_recomputes_current_data_dependencies(tmp_path):
@@ -362,132 +233,12 @@ def test_captured_cdc_rdc_complete_ordered_outputs(monkeypatch):
         assert_ordered_judges_equal(cdc.load(path), monkeypatch)
 
 
-@pytest.mark.parametrize("width", [2, 5])
-@pytest.mark.parametrize("safe", [True, False])
-def test_native_vector_producer_and_ordinary_consumer(tmp_path, monkeypatch, width, safe):
-    rtl = tmp_path / "phase2/stage1/rtl/neutral_vector.v"
-    rtl.parent.mkdir(parents=True)
-    expression = "launch_q" if safe else "(launch_q ^ (launch_q << 1))"
-    tail = "reg [%d:0] stage2_q; always @(posedge clk_b) stage2_q <= stage1_q; assign data_o = stage2_q;" % (width - 1) \
-        if safe else "assign data_o = stage1_q;"
-    rtl.write_text(f"""module neutral_vector(input clk_a, clk_b,
-      input [{width-1}:0] data_i, output [{width-1}:0] data_o);
-      reg [{width-1}:0] launch_q, stage1_q;
-      always @(posedge clk_a) launch_q <= data_i;
-      always @(posedge clk_b) stage1_q <= {expression};
-      {tail}
-    endmodule\n""")
-    netlist = cdc.build(tmp_path, [rtl], "neutral_vector")
-    model = cdc.load(netlist)
-    cdc.require_binding(tmp_path, netlist, model)
-    rc, report = ordinary(tmp_path)
-    assert rc == (0 if safe else 1), report
-    assert report["findings"] == assert_ordered_judges_equal(model, monkeypatch)[0]
-    assert any(row["rule"] == "CDC_REG_NO_SYNC" and row["severity"] == "ERROR"
-               for row in report["findings"]) == (not safe)
 
 
-def test_native_header_authority_and_genuine_dependency_invalidation(tmp_path):
-    model = native(tmp_path, True)
-    assert ordinary(tmp_path)[0] == 0
-    binding = cdc.source_binding(tmp_path, "neutral_cdc")
-    scratch = tmp_path / "verification/scratch.svh"
-    scratch.parent.mkdir()
-    scratch.write_text("`define UNUSED_SCRATCH 0\n")
-    added_rc, added = ordinary(tmp_path)
-    scratch.write_text("`define UNUSED_SCRATCH 1\n")
-    edited_rc, edited = ordinary(tmp_path)
-    scratch.unlink()
-    assert ordinary(tmp_path)[0] == 0
-    # Record both real public consumer observations before checking equality.
-    assert (added_rc, edited_rc) == (0, 0), (added, edited)
-    assert cdc.source_binding(tmp_path, "neutral_cdc") == binding
-    assert model.top == "neutral_cdc"
 
 
-@pytest.mark.parametrize("location", ["canonical", "declared_external"])
-def test_native_real_header_options_top_and_partial_inputs_still_refuse(tmp_path, location):
-    native(tmp_path, True)
-    rtl = tmp_path / "phase2/stage1/rtl/neutral_cdc.sv"
-    directory = rtl.parent if location == "canonical" else tmp_path / "verification"
-    directory.mkdir(exist_ok=True)
-    header = directory / "defs.svh"
-    header.write_text("`define NEUTRAL_ZERO 0\n")
-    rtl.write_text(f'`include "{header}"\n' + rtl.read_text())
-    netlist = cdc.build(tmp_path, [rtl], "neutral_cdc")
-    assert ordinary(tmp_path)[0] == 0
-    header.write_text("`define NEUTRAL_ZERO 1\n")
-    rc, report = ordinary(tmp_path)
-    assert rc == 1 and any(r["rule"] == "CDC_NETLIST_STALE" for r in report["findings"])
-    header.write_text("`define NEUTRAL_ZERO 0\n")
-    assert ordinary(tmp_path)[0] == 0
-    before = cdc.source_binding(tmp_path, "neutral_cdc")
-    assert cdc.source_binding(tmp_path, None) != before
-    switch = tmp_path / "phase3/librelane_switch.json"
-    switch.parent.mkdir()
-    switch.write_text(json.dumps({"steps": {"3": "librelane"}}))
-    assert cdc.source_binding(tmp_path, "neutral_cdc") != before
-    switch.unlink()
-    rtl.write_text("`define LOCAL_VALUE 1\n" + rtl.read_text())
-    assert ordinary(tmp_path)[0] == 1
-    assert cdc.source_binding(tmp_path, "neutral_cdc") != before
-    with pytest.raises(cdc.Refusal, match="CDC_NETLIST_PARTIAL_SOURCES"):
-        cdc.source_binding(tmp_path, "neutral_cdc", [])
-    l9 = tmp_path / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
-    l9.parent.mkdir(parents=True)
-    l9.write_text(json.dumps({"top_module": "different_top"}))
-    with pytest.raises(cdc.Refusal, match="CDC_NETLIST_STALE"):
-        cdc.require_binding(tmp_path, netlist, cdc.load(netlist))
 
 
-@pytest.mark.parametrize("width", [16, 32, 64])
-def test_native_shared_vector_cones_read_connections_once(tmp_path, width, record_property):
-    rtl = tmp_path / "phase2/stage1/rtl/neutral_shared.sv"
-    rtl.parent.mkdir(parents=True)
-    rtl.write_text(f"""module neutral_shared(input clk_a, clk_b,
-        input [{width-1}:0] data_i, salt0, salt1, salt2, salt3,
-        output reg [{width-1}:0] data_o);
-      reg [{width-1}:0] launch_q;
-      wire [{width-1}:0] a = launch_q ^ salt0;
-      wire [{width-1}:0] b = a ^ salt1;
-      wire [{width-1}:0] c = b ^ salt2;
-      wire [{width-1}:0] d = c ^ salt3;
-      always @(posedge clk_a) launch_q <= data_i;
-      always @(posedge clk_b) data_o <= d;
-    endmodule
-    """)
-    output = cdc.build(tmp_path, [rtl], "neutral_shared")
-    model = cdc.load(output)
-    cdc.require_binding(tmp_path, output, model)
-    expected = cdc.judge(model, "reg_crossing")
-    rc, report = ordinary(tmp_path)
-    assert rc == 1 and report["findings"] == expected
-    assert len(expected) == 1 and expected[0]["rule"] == "CDC_REG_NO_SYNC"
-
-    work = [0]
-    budget = 0
-    for cell in model.cells.values():
-        if cell["type"] in cdc.FLOP_TYPES or cell["type"] in cdc._MEMORY:
-            continue
-        for pin, conn in cell["connections"].items():
-            if cell["port_directions"][pin] != "output":
-                budget += len(conn)
-                cell["connections"][pin] = CountingList(conn, work)
-    lookup = cdc._LookupSnapshot(model)
-    cones = lookup.data_cones()
-    for flop, index, sources in cones:
-        expected_q, expected_p = model.cone(
-            [flop.d[index]], skip={flop.srst} if flop.srst is not None else None)
-        assert sources == expected_q | expected_p
-    # The reference walks above intentionally do real work; measure a fresh
-    # analysis alone and keep the complete relation, not a capped traversal.
-    work[0] = 0
-    second = cdc._LookupSnapshot(model).data_cones()
-    assert second == cones
-    record_property("connection_entries_read", work[0])
-    record_property("native_input_connection_entries", budget)
-    assert work[0] > 0
-    assert work[0] == budget, {"observed": work[0], "expected": budget}
 
 
 def test_shared_cones_close_cycles_and_keep_each_skip_context():

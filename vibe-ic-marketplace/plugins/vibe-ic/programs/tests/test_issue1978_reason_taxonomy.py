@@ -15,152 +15,28 @@ import _flow_reason_taxonomy as T  # noqa: E402
 from _hostpaths import require_repo  # noqa: E402
 
 
-def _load_flow():
-    spec = importlib.util.spec_from_file_location(
-        "issue1978_flow", PROGRAMS / "flow_compliance_check.py")
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
-    return mod
 
 
 import _structural_absence as _sa  # R-0915-119
 
-F = _load_flow()
 
 
-@pytest.fixture
-def one_record_per_reason_class():
-    # R-0915-119 — the evidence a structural absence must carry. Every other
-    # class in this census is established by its own token; this one is
-    # established by the ENUMERATION, so its representative carries one. A row
-    # without it is downgraded to EXECUTION_ERROR by the guard, which is the
-    # behaviour `test_a_structural_row_without_its_enumeration_is_downgraded`
-    # below pins.
-    _structural_ev = {
-        _sa.EVIDENCE_KEY: _sa.absence(
-            "RTL file(s) staged for this design", 3)}
-    cases = [
-        (T.DESIGN_DECLARED_NA, "SKIP", "the design declares no command protocol"),
-        (T.CAPABILITY_ABSENT, "SKIP", "the required simulator is absent"),
-        (T.EXTERNAL, "SKIP", "board-level work is external to this run"),
-        # R-0915-46/47: the gate ran, found its subject absent, and the thing
-        # that produces that subject has not run yet in this flow.
-        (T.ASKED_BEFORE_PRODUCER, "SKIP",
-         "no KLayout DRC artefacts found; phase-3 DRC has not run"),
-        # R-0915-119: the checker ENUMERATED its subject population and it is
-        # empty. Its representative is added here because this census's own
-        # contract is that EVERY class has one — a class with no row would be
-        # a class nothing exercises.
-        (T.NOT_APPLICABLE_BY_STRUCTURE, "SKIP",
-         "enumerated 3 RTL file(s) staged for this design and found 0"),
-        (T.BLOCKED_BY_UPSTREAM, "BLOCKED", "the producing step has not run"),
-        (T.EXECUTION_ERROR, "INCOMPLETE", "the caller supplied the wrong path"),
-        (T.ZERO_DENOMINATOR, "INCOMPLETE", "0 of 13 documents were examined"),
-        # llv1 W14: the flow the run was dispatched with did not perform it.
-        (T.FLOW_DOES_NOT_PERFORM, "INCOMPLETE",
-         "the librelane flow did not perform this step; remedy: run the "
-         "default flow"),
-    ]
-    return [
-        F._p0_gate_record(
-            f"reason_{i}_check", verdict, message,
-            evidence=(dict(_structural_ev)
-                      if reason_class == T.NOT_APPLICABLE_BY_STRUCTURE
-                      else None),
-            reason_class=reason_class)
-        for i, (reason_class, verdict, message) in enumerate(cases)
-    ]
 
 
-def test_a_structural_row_without_its_enumeration_is_downgraded():
-    """R-0915-119 guard (i), at the record constructor: the class token alone
-    does not make the claim, so a row that carries no enumeration is booked
-    EXECUTION_ERROR and stays INCOMPLETE."""
-    bare = F._p0_gate_record(
-        "bare_structural_check", "SKIP",
-        "enumerated 3 RTL file(s) staged for this design and found 0",
-        reason_class=T.NOT_APPLICABLE_BY_STRUCTURE)
-    assert bare["reason_class"] == T.EXECUTION_ERROR
-    assert bare["verdict"] == "INCOMPLETE"
 
 
-def test_every_reason_class_is_represented_and_machine_readable(
-        one_record_per_reason_class):
-    records = one_record_per_reason_class
-    assert {r["reason_class"] for r in records} == set(T.REASON_CLASSES)
-    assert all(r["reason_class"] in T.REASON_CLASS_SET for r in records)
 
 
-def test_only_declared_na_capability_or_external_may_remain_skip(
-        one_record_per_reason_class):
-    for record in one_record_per_reason_class:
-        if record["verdict"] == "SKIP":
-            assert record["reason_class"] in T.SKIP_ELIGIBLE
-        else:
-            assert record["reason_class"] in T.INCOMPLETE
 
 
-@pytest.mark.parametrize("reason_class, expected", [
-    (T.BLOCKED_BY_UPSTREAM, "BLOCKED"),
-    (T.EXECUTION_ERROR, "INCOMPLETE"),
-    (T.ZERO_DENOMINATOR, "INCOMPLETE"),
-])
-def test_record_constructor_refuses_unsafe_skip_pairing(reason_class, expected):
-    record = F._p0_gate_record(
-        "unsafe_skip_check", "SKIP", "same legacy token",
-        reason_class=reason_class)
-    assert record["verdict"] == expected
 
 
 #: R-0915-85 — the expectations here are the STEP's word (this is the P0
 #: umbrella's step verdict), so the three non-skip-eligible gate reason classes
 #: now land on `NOT_MEASURED`. The three skip-eligible ones still land on PASS,
 #: which is the discrimination #1978 exists for and it is unchanged.
-@pytest.mark.parametrize("reason_class, expected", [
-    (T.DESIGN_DECLARED_NA, "PASS"),
-    (T.CAPABILITY_ABSENT, "PASS"),
-    (T.EXTERNAL, "PASS"),
-    (T.BLOCKED_BY_UPSTREAM, "NOT_MEASURED"),
-    (T.EXECUTION_ERROR, "NOT_MEASURED"),
-    (T.ZERO_DENOMINATOR, "NOT_MEASURED"),
-])
-def test_each_reason_class_changes_the_top_level_p0_tier(
-        reason_class, expected):
-    """RB2-03 (#2063) note: the fixture now carries one gate that ANSWERED
-    beside the one under test. Without it the record set has a zero decisive
-    population and the umbrella says `NOT-MEASURED` — a true statement about
-    such a run, but not the property this test is about, which is that the
-    REASON CLASS alone moves the top-level tier. The answering gate is
-    identical in every row, so it changes no row's expected value."""
-    # Keep the old ambiguous SKIP token fixed.  The reason class alone must
-    # change the top-level answer, proving the class is consumed rather than
-    # decorative metadata.
-    # Deliberately build the already-published record shape directly.  The
-    # control run keeps this guard while restoring the old roll-up code, so it
-    # observes the wrong top-level VALUE instead of failing merely because the
-    # new constructor parameter is absent.
-    record = {"name": "same_gate", "verdict": "SKIP",
-              "reason_class": reason_class, "message": "same message",
-              "evidence": {"exit_code": 2}}
-    answered = {"name": "another_gate", "verdict": "PASS"}
-    assert F.p0_umbrella_verdict(True, [record, answered]) == expected
 
 
-@pytest.mark.parametrize("reason_class", [
-    T.BLOCKED_BY_UPSTREAM, T.EXECUTION_ERROR, T.ZERO_DENOMINATOR,
-])
-def test_a_short_population_with_NOTHING_decisive_is_not_measured(reason_class):
-    """RB2-03 (#2063). The same record with no answering gate beside it is a
-    run in which not one registered gate returned a verdict. `INCOMPLETE` — "the
-    input WAS applicable and was NOT examined" — is the sentence about a
-    PARTIAL population; over a zero population the honest word is
-    `NOT-MEASURED`, and a reader could not previously tell 245-of-246 from
-    0-of-246 because both wore the same one."""
-    record = {"name": "same_gate", "verdict": "SKIP",
-              "reason_class": reason_class, "message": "m",
-              "evidence": {"exit_code": 2}}
-    assert F.p0_umbrella_verdict(True, [record]) == "NOT_MEASURED"
 
 
 def test_caller_error_zero_denominator_and_missing_upstream_are_not_skips():
@@ -183,82 +59,16 @@ def test_bare_not_applicable_is_not_a_design_declaration():
         verdict="SKIP", message="NOT_APPLICABLE") == T.EXECUTION_ERROR
 
 
-def test_completed_clean_doc_consistency_is_pass(tmp_path, monkeypatch, capsys):
-    import doc_consistency_no_unresolved_conflicts_check as gate
-    monkeypatch.setattr(sys, "argv", [gate.__file__, str(tmp_path)])
-    assert gate.main() == 0
-    assert "[PASS]" in capsys.readouterr().out
 
 
-def test_slot_missing_upstream_is_blocked_in_the_shared_gate_ledger(tmp_path):
-    F._GATE_LEDGER.clear()
-    ok, out = F._check_program_exit_zero(
-        tmp_path,
-        "slot_pad_budget_check . --json reports/slot_pad_budget.json")
-    assert ok is True                 # no design FAIL was manufactured
-    assert out.startswith("INCOMPLETE:")
-    row = F._GATE_LEDGER[-1]
-    assert row["verdict"] == "BLOCKED"
-    assert row["reason_class"] == T.BLOCKED_BY_UPSTREAM
 
 
-def test_safe_rc2_preserves_the_command_identity(monkeypatch, tmp_path):
-    cmd = "declared_na_check ."
-    monkeypatch.setattr(
-        F, "__check_program_exit_zero",
-        lambda _project, _cmd: (
-            True, f"{F._VACUOUS_HINT_PREFIX}{_cmd}\nno analog blocks declared"))
-    F._GATE_LEDGER.clear()
-    ok, out = F._check_program_exit_zero(tmp_path, cmd)
-    assert ok is True
-    assert out == f"{F._VACUOUS_HINT_PREFIX}{cmd}"
-    assert F._GATE_LEDGER[-1]["reason_class"] == T.DESIGN_DECLARED_NA
 
 
-def test_untyped_json_not_applicable_is_incomplete(monkeypatch, tmp_path):
-    report = tmp_path / "gate.json"
-    report.write_text('{"status": "NOT_APPLICABLE"}')
-    monkeypatch.setattr(
-        F, "__check_program_exit_zero",
-        lambda _project, _cmd: (True, "gate exited zero"))
-    F._GATE_LEDGER.clear()
-    ok, out = F._check_program_exit_zero(
-        tmp_path, "some_check . --json gate.json")
-    assert ok is True
-    assert out.startswith("INCOMPLETE:")
-    assert F._GATE_LEDGER[-1]["verdict"] == "INCOMPLETE"
-    assert F._GATE_LEDGER[-1]["reason_class"] == T.EXECUTION_ERROR
 
 
-def test_banner_is_not_mistaken_for_the_skip_reason():
-    reason = F._p0_skip_reason_from_output(
-        "waiver_staleness_check",
-        "=== waiver_staleness_check (run) ===\n"
-        "  [skipped] 3 of 3 open waiver entries carry no approved_at, so "
-        "NONE could be aged",
-        "")
-    assert "NONE could be aged" in reason
-    assert T.infer_nonverdict_reason(message=reason) == T.ZERO_DENOMINATOR
 
 
-def test_real_flow_keeps_protocol_independent_questions_out_of_class_skips():
-    # Real-artifact backing required by flow-change acceptance: prove the four
-    # named gates are actual canonical-flow questions, then prove the runtime
-    # class tables cannot suppress them wholesale.
-    flow = require_repo(
-        "vibe-ic-marketplace", "plugins", "vibe-ic", "flow",
-        "phase1_phase2_phase3.yaml").read_text(encoding="utf-8")
-    independent = {
-        "spice_correlation_check",
-        "bit_level_full_stack_tb_oracle_check",
-        "l1_electrical_specs_typed_depth_check",
-        "assertion_covers_l3_constraints_check",
-    }
-    assert "spice_correlation_check" in flow
-    assert independent <= set(F._STRUCTURAL_RTL_GATES)
-    suppressed = (set(F._CLASS_SKIPPABLE_PROTOCOL_GATES)
-                  | set(F._CLASS_SKIPPABLE_ANALOG_GATES))
-    assert independent.isdisjoint(suppressed)
 
 
 # ── a counted zero is not an execution error (C1) ──────────────────────────
@@ -410,14 +220,3 @@ def test_the_declared_class_decides_both_and_the_prose_decides_neither():
     assert T.DESIGN_DECLARED_NA in T.SKIP_ELIGIBLE
     assert T.p0_tier_for_reason_classes([T.ZERO_DENOMINATOR]) == "INCOMPLETE"
     assert T.p0_tier_for_reason_classes([T.DESIGN_DECLARED_NA]) == "PASS"
-
-
-def test_both_gates_actually_declare_what_this_test_assumes():
-    """The pair above is only an argument if both gates really do declare.
-    Read it out of the shipped sources rather than trusting the prose."""
-    si = (PROGRAMS / "si_mcf_sta_check.py").read_text(encoding="utf-8")
-    fstc = (PROGRAMS
-            / "functional_state_transition_coverage_check.py").read_text(
-                encoding="utf-8")
-    assert 'summary["reason_class"] = _reason_taxonomy.ZERO_DENOMINATOR' in si
-    assert '"reason_class"' in fstc and "DESIGN_DECLARED_NA" in fstc

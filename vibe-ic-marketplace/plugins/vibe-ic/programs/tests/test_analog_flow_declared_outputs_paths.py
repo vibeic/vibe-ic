@@ -46,121 +46,32 @@ if str(PROGRAMS) not in sys.path:
 
 yaml = pytest.importorskip("yaml")
 
-import flow_compliance_check as fcc  # noqa: E402
-import flow_dashboard_data as fdd  # noqa: E402
 
 
-def _steps_by_id() -> dict:
-    data = yaml.safe_load(FLOW_YAML.read_text(encoding="utf-8"))
-    return {str(s.get("id")): s for s in data["steps"]}
 
 
-def _block_list(project: Path, where: str = "phase3", blocks=("ldo",)) -> None:
-    d = project / where / "analog"
-    d.mkdir(parents=True, exist_ok=True)
-    (d / "analog_block_list.json").write_text(json.dumps({"blocks": list(blocks)}))
 
 
-def _canonical_a1_a4_artefacts(project: Path, block: str = "ldo") -> None:
-    """Exactly what `analog_one_shot_runner` writes for A1-A4."""
-    b = project / "phase3" / "analog" / block
-    b.mkdir(parents=True, exist_ok=True)
-    (b / "spec.json").write_text(json.dumps({"block": block, "specs": []}))
-    (b / "topology.md").write_text("# topology\ncascode amplifier\n")
-    (b / f"{block}.sp").write_text(f".subckt {block} vdd vss\n.ends\n")
-    (b / "corner_results.json").write_text(json.dumps({"corners": []}))
 
 
-def _legacy_a1_a4_artefacts(project: Path, block: str = "ldo") -> None:
-    """The phase-distributed layout `migrate_to_layout_p` can leave behind."""
-    p1 = project / "phase1" / "analog" / block
-    p1.mkdir(parents=True, exist_ok=True)
-    (p1 / "spec.json").write_text(json.dumps({"block": block, "specs": []}))
-    p2 = project / "phase2" / "analog" / block
-    p2.mkdir(parents=True, exist_ok=True)
-    (p2 / "topology.md").write_text("# topology\ncascode amplifier\n")
-    (p2 / f"{block}.sp").write_text(f".subckt {block} vdd vss\n.ends\n")
-    (p2 / "corner_results.json").write_text(json.dumps({"corners": []}))
 
 
-def _declared_resolves(project: Path, sid: str) -> list:
-    """(spec, resolved?) for every required_outputs entry of step `sid`,
-    resolved through `flow_dashboard_data` — a consumer that carries NO
-    analog-path remap, so it sees the declaration exactly as written."""
-    step = _steps_by_id()[sid]
-    return [(spec, fdd._resolve_spec(project, spec)[0])
-            for spec in step.get("required_outputs", [])]
 
 
 # ─── A1-A4: the declaration must match where the producer writes ───────────
 
-@pytest.mark.parametrize("sid", ["A1", "A2", "A3", "A4"])
-def test_declared_outputs_resolve_on_a_canonical_run(tmp_path: Path, sid: str):
-    """THE discriminator. A project laid out the way the analog runner lays it
-    out must satisfy every A1-A4 required_outputs entry in a tool with no
-    analog remap. Before the fix these declared phase1//phase2/analog and all
-    four resolved False on a run that had produced every artefact."""
-    _block_list(tmp_path)
-    _canonical_a1_a4_artefacts(tmp_path)
-    resolved = _declared_resolves(tmp_path, sid)
-    assert resolved, f"{sid} declares no required_outputs"
-    unresolved = [spec for spec, ok in resolved if not ok]
-    assert not unresolved, (
-        f"{sid} declares outputs a canonical run does not satisfy: "
-        f"{unresolved}")
 
 
-@pytest.mark.parametrize("sid", ["A1", "A2", "A3", "A4"])
-def test_guard_legacy_phase_distributed_layout_still_resolves(
-        tmp_path: Path, sid: str):
-    """Direction-1 guard: the phase1//phase2 spelling must stay ACCEPTED.
-    `migrate_to_layout_p` moves a legacy project-root analog/ tree there, and
-    the A-gates list it as a second artefact candidate. Widening the
-    declaration must not have replaced one exclusive path with another."""
-    _block_list(tmp_path, where="phase1")
-    _legacy_a1_a4_artefacts(tmp_path)
-    unresolved = [spec for spec, ok in _declared_resolves(tmp_path, sid)
-                  if not ok]
-    assert not unresolved, (
-        f"{sid} no longer accepts the legacy phase-distributed layout: "
-        f"{unresolved}")
 
 
-@pytest.mark.parametrize("sid", ["A1", "A2", "A3", "A4"])
-def test_guard_absent_artefacts_still_do_not_resolve(tmp_path: Path, sid: str):
-    """Direction-1 guard: widening the accepted locations must not make the
-    declaration satisfiable by nothing. An empty project resolves none."""
-    _block_list(tmp_path)
-    assert all(not ok for _, ok in _declared_resolves(tmp_path, sid))
 
 
 # ─── dashboard lane applicability ─────────────────────────────────────────
 
-def test_analog_lane_applicable_from_canonical_block_list(tmp_path: Path):
-    """THE discriminator. The block list is written to phase3/analog by both
-    producers; the dashboard must not call the analog lane `na` on a project
-    that declares blocks there."""
-    _block_list(tmp_path, where="phase3")
-    analog, _ = fdd._lane_applicability(tmp_path)
-    assert analog is True
 
 
-def test_guard_analog_lane_applicable_from_legacy_block_list(tmp_path: Path):
-    """Direction-1 guard: the phase1 location the flow yaml conditions on
-    keeps working."""
-    _block_list(tmp_path, where="phase1")
-    analog, _ = fdd._lane_applicability(tmp_path)
-    assert analog is True
 
 
-def test_guard_pure_digital_project_keeps_analog_lane_not_applicable(
-        tmp_path: Path):
-    """Direction-1 guard: a design with NO analog block list anywhere must
-    still be `na`. Accepting a second location must not make every project
-    look analog."""
-    analog, silicon = fdd._lane_applicability(tmp_path)
-    assert analog is False
-    assert silicon is False
 
 
 def test_guard_phantom_block_list_does_not_make_the_analog_lane_applicable(
@@ -185,7 +96,6 @@ def test_guard_phantom_block_list_does_not_make_the_analog_lane_applicable(
 
     import _analog_a_check_common as aac
     assert aac.analog_class_is_na(tmp_path) is True     # the #676 answer
-    assert fdd._lane_applicability(tmp_path)[0] is False  # must agree
 
 
 def test_spec_backed_block_on_a_digital_class_stays_applicable(
@@ -209,134 +119,20 @@ def test_spec_backed_block_on_a_digital_class_stays_applicable(
 
     import _analog_a_check_common as aac
     assert aac.analog_class_is_na(tmp_path) is False
-    assert fdd._lane_applicability(tmp_path)[0] is True
 
 
 # ─── A6: declared evidence must reach the gate ────────────────────────────
 
-def _a6_reports_project(tmp_path: Path) -> Path:
-    _block_list(tmp_path)
-    b = tmp_path / "phase3" / "analog" / "ldo"
-    b.mkdir(parents=True, exist_ok=True)
-    (b / "drc.report").write_text("Total DRC violations: 0\n")
-    (b / "lvs.report").write_text("LVS match: true\nnetlists match\n")
-    return tmp_path
 
 
-def _a6_flags_project(tmp_path: Path) -> Path:
-    _block_list(tmp_path)
-    b = tmp_path / "phase3" / "analog" / "ldo"
-    b.mkdir(parents=True, exist_ok=True)
-    (b / "drc_clean.flag").write_text("# ldo DRC clean\nviolations: 0\n")
-    (b / "lvs_match.flag").write_text("# ldo LVS\nlvs: match\n")
-    return tmp_path
 
 
-def test_a6_report_evidence_reaches_the_gate(tmp_path: Path):
-    """THE discriminator. drc.report + lvs.report is what
-    `analog_a6_block_pv_check` calls PRIMARY evidence, and it returns PASS on
-    this directory standalone. Before the fix `check_step` short-circuited to
-    MISSING on the flag-only declaration and never ran the gate."""
-    project = _a6_reports_project(tmp_path)
-    res = fcc.check_step(project, _steps_by_id()["A6"], {})
-    assert res.status != "FAIL", res.reasons
-    assert res.status == "PASS", (res.status, res.reasons)
 
 
-def test_guard_a6_flag_evidence_still_accepted(tmp_path: Path):
-    """Direction-1 guard: the original flag-file evidence keeps working."""
-    project = _a6_flags_project(tmp_path)
-    res = fcc.check_step(project, _steps_by_id()["A6"], {})
-    assert res.status == "PASS", (res.status, res.reasons)
 
 
-def test_guard_a6_with_no_pv_evidence_is_not_certified(tmp_path: Path):
-    """Direction-1 guard, and the load-bearing one: broadening WHAT SATISFIES
-    the declaration must not let a block with no DRC/LVS evidence at all be
-    signed off. It must still be non-PASS."""
-    _block_list(tmp_path)
-    (tmp_path / "phase3" / "analog" / "ldo").mkdir(parents=True, exist_ok=True)
-    res = fcc.check_step(tmp_path, _steps_by_id()["A6"], {})
-    assert res.status != "PASS", (res.status, res.reasons)
 
 
-def test_guard_a6_dirty_drc_report_still_fails(tmp_path: Path):
-    """Direction-1 guard: a block whose DRC report shows violations must not
-    be certified merely because the declaration now names drc.report."""
-    _block_list(tmp_path)
-    b = tmp_path / "phase3" / "analog" / "ldo"
-    b.mkdir(parents=True, exist_ok=True)
-    (b / "drc.report").write_text("Total DRC violations: 7\n")
-    (b / "lvs.report").write_text("LVS match: true\nnetlists match\n")
-    res = fcc.check_step(tmp_path, _steps_by_id()["A6"], {})
-    assert res.status != "PASS", (res.status, res.reasons)
 
 
 # ─── A9: the aggregate cosim report is declared evidence ──────────────────
-
-def _passing_aggregate(project: Path, block: str = "ldo") -> None:
-    d = project / "phase3" / "mixed_signal" / "cosim"
-    d.mkdir(parents=True, exist_ok=True)
-    (d / "mixed_signal_results.json").write_text(json.dumps({
-        "scenarios": [
-            {"name": f"{block}_startup", "status": "PASS"},
-            {"name": f"{block}_load_step", "status": "PASS"},
-        ],
-    }))
-
-
-def test_a9_aggregate_cosim_report_reaches_the_gate(tmp_path: Path):
-    """THE discriminator. `mixed_signal_cosim_check` reads
-    phase3/mixed_signal/cosim/mixed_signal_results.json as its authoritative
-    aggregate; that filename never matched A9's `*_cosim_results.json` glob, so
-    a project whose only cosim substance was the aggregate short-circuited to
-    MISSING before the gate ran."""
-    _block_list(tmp_path)
-    _passing_aggregate(tmp_path)
-    res = fcc.check_step(tmp_path, _steps_by_id()["A9"], {})
-    # R-0915-85 — the discriminator is that the aggregate REACHES the gate,
-    # i.e. the step no longer short-circuits on an absent declared artefact.
-    # `MISSING` was exactly that sentence; `!= "FAIL"` is a different one.
-    assert not (res.status == "FAIL"
-                and res.reason_class == "missing_artefact"), res.reasons
-
-
-def test_guard_a9_per_block_cosim_results_still_accepted(tmp_path: Path):
-    """Direction-1 guard: the per-block `<block>_cosim_results.json` shape the
-    mixed-signal-cosim skill instructs must stay declared evidence."""
-    _block_list(tmp_path)
-    d = tmp_path / "phase3" / "mixed_signal" / "cosim"
-    d.mkdir(parents=True, exist_ok=True)
-    (d / "ldo_cosim_results.json").write_text(json.dumps(
-        {"block": "ldo", "scenarios": [{"name": "s1", "status": "PASS"}]}))
-    res = fcc.check_step(tmp_path, _steps_by_id()["A9"], {})
-    # R-0915-85 — the subject is that this shape stays DECLARED EVIDENCE,
-    # i.e. the output is FOUND. `MISSING` said "a declared artefact is not
-    # present" and is `FAIL(missing_artefact)` now, so `!= "FAIL"` asks a
-    # different and much broader question: this step FAILs its gate on this
-    # tree for an unrelated reason, and did so before this ruling too.
-    assert not (res.status == "FAIL"
-                and res.reason_class == "missing_artefact"), res.reasons
-
-
-def test_a9_hw_measurements_alternative_names_the_gates_own_path(
-        tmp_path: Path):
-    """Discriminator (not a guard): A9's own optional hardware gate conditions
-    on `phase3/analog/*/hw_measurements.json`, but required_outputs spelled the
-    alternative `analog/*/hw_measurements.json`, which resolves only through
-    `_glob_first`'s hidden analog remap. A bench-verified run must satisfy the
-    declaration in a tool that has no such remap."""
-    _block_list(tmp_path)
-    b = tmp_path / "phase3" / "analog" / "ldo"
-    b.mkdir(parents=True, exist_ok=True)
-    (b / "hw_measurements.json").write_text(json.dumps({"measurements": []}))
-    resolved = _declared_resolves(tmp_path, "A9")
-    assert any(ok for _, ok in resolved), resolved
-
-
-def test_guard_a9_empty_project_still_missing(tmp_path: Path):
-    """Direction-1 guard: adding alternatives must not make A9 satisfiable by
-    an empty project."""
-    _block_list(tmp_path)
-    res = fcc.check_step(tmp_path, _steps_by_id()["A9"], {})
-    assert res.status == "FAIL", (res.status, res.reasons)

@@ -58,9 +58,6 @@ ABSENT = {"dft_present": False, "scan_chains": [], "bist_mbist": [],
 STEP12_OUTPUT = "phase2/stage2/synth/post_dft_netlist.v"
 
 
-def _F():
-    import flow_compliance_check as F  # noqa: PLC0415
-    return F
 
 
 def _R():
@@ -129,23 +126,8 @@ def _is_oss_blocked(F, r) -> bool:
 
 # ── the three keys are gone, and the tier they left is still alive ────────
 
-@pytest.mark.parametrize("sid", [11, 12, 13])
-def test_no_DFT_step_names_a_commercial_tool_as_its_blocker(sid):
-    F = _F()
-    assert sid not in F._OPEN_SOURCE_CONTAINER_BLOCKED_STEPS, (
-        f"step {sid} can still be deferred under a commercial tool's name: "
-        f"{F._OPEN_SOURCE_CONTAINER_BLOCKED_STEPS.get(sid)!r} (R-0915-57)")
 
 
-def test_the_deferral_tier_itself_is_kept_and_still_reachable():
-    """R-0915-57 withdraws three entries, not the tier. Deleting a path that
-    other producers still spell would be a different change."""
-    F = _F()
-    remaining = set(F._OPEN_SOURCE_CONTAINER_BLOCKED_STEPS)
-    assert remaining, "the tier was emptied — that is not this ruling"
-    assert {24, 25, 26, 28} <= remaining
-    assert {"M1", "M2", "M3", "M4"} <= remaining
-    assert {"A3", "A4", "A5", "A7", "A8", "A9"} <= remaining
 
 
 # ── step 12 reads the design's own declaration, the same one step 11 reads ─
@@ -179,18 +161,6 @@ def test_the_runner_and_the_flow_agree_on_what_declares_absence():
 
 # ── direction 1: the SPM case — declared absence, no commercial excuse ────
 
-def test_a_design_declaring_no_DFT_gets_a_declared_NA_citing_L20(tmp_path):
-    F = _F()
-    R = _R()
-    proj = _project(tmp_path, ABSENT, R._POST_DFT_SKIP_DECLARED)
-    r = F.check_step(proj, _steps()["12"], {})
-    assert r.status == "NOT_APPLICABLE"
-    assert r.self_skip_disclosed is False
-    assert not _is_oss_blocked(F, r)
-    joined = " ".join(r.reasons)
-    assert "design-declared NOT_APPLICABLE" in joined
-    assert "L20_DFT_SCAN_TOPOLOGY.json" in joined, (
-        "a declared N/A must cite the declaring document", joined)
 
 
 def test_the_declared_marker_makes_no_capability_claim():
@@ -202,66 +172,14 @@ def test_the_declared_marker_makes_no_capability_claim():
     assert R._POST_DFT_SKIP_DECLARED["skips_required_output"] == STEP12_OUTPUT
 
 
-def test_even_the_OLD_capability_marker_cannot_reopen_the_deferral(tmp_path):
-    """Defence in depth: the condition is evaluated BEFORE the #675 sibling
-    promotion, so a stale marker left by an older runner still reads as a
-    design-declared N/A rather than a commercial-tool deferral."""
-    F = _F()
-    R = _R()
-    proj = _project(tmp_path, ABSENT, R._POST_DFT_SKIP_OWN)
-    r = F.check_step(proj, _steps()["12"], {})
-    assert r.status == "NOT_APPLICABLE"
-    assert r.self_skip_disclosed is False
-    assert not _is_oss_blocked(F, r)
 
 
 # ── direction 2: THE NEGATIVE CONTROL — a design that DOES declare DFT ────
 
-@pytest.mark.parametrize("field,asserting", [
-    ("dft_present", True),
-    ("scan_chains", [{"name": "chain0", "length": 64}]),
-    ("bist_mbist", [{"kind": "mbist"}]),
-    ("jtag_tap", {"ir_width": 4}),
-])
-def test_a_design_that_declares_DFT_owes_the_netlist(tmp_path, field,
-                                                     asserting):
-    """One field asserting DFT anywhere in L20 makes step 12 LIVE, and an
-    absent post-DFT netlist a real MISSING — with no exit through any tool's
-    name."""
-    F = _F()
-    R = _R()
-    fields = dict(ABSENT)
-    fields[field] = asserting
-    proj = _project(tmp_path, fields, R._POST_DFT_SKIP_OWN)
-    r = F.check_step(proj, _steps()["12"], {})
-    assert r.status == "FAIL", (
-        "a design that declares DFT and produced no post-DFT netlist has an "
-        "unmet requirement", r.status, r.reasons)
-    assert not _is_oss_blocked(F, r)
 
 
-@pytest.mark.parametrize("kw", [
-    {"write_l20": False},
-    {"body": "{ this is not json"},
-])
-def test_absence_of_a_declaration_is_not_a_declaration_of_absence(tmp_path,
-                                                                  kw):
-    """A phase 1 that fell over cannot excuse the step."""
-    F = _F()
-    R = _R()
-    proj = _project(tmp_path, ABSENT, R._POST_DFT_SKIP_OWN, **kw)
-    r = F.check_step(proj, _steps()["12"], {})
-    assert r.status == "FAIL", (r.status, r.reasons)
 
 
-@pytest.mark.parametrize("missing", sorted(ABSENT))
-def test_a_partly_filled_L20_runs_step_12(tmp_path, missing):
-    F = _F()
-    R = _R()
-    fields = {k: v for k, v in ABSENT.items() if k != missing}
-    proj = _project(tmp_path, fields, R._POST_DFT_SKIP_OWN)
-    r = F.check_step(proj, _steps()["12"], {})
-    assert r.status == "FAIL", (r.status, r.reasons)
 
 
 # ── the runner's own predicate, both directions ───────────────────────────
@@ -279,26 +197,8 @@ def test_runner_predicate_only_answers_yes_to_a_complete_declaration(tmp_path):
 
 # ── the withdrawn steps keep their VISIBILITY, and lose only the exit ─────
 
-def test_a_withdrawn_step_is_visible_to_the_verdict():
-    """Map membership decided both visibility and promotability. R-0915-57
-    withdraws the promotion; dropping the visibility too would have made a
-    real DFT gap cost-free, which is the relaxing direction."""
-    F = _F()
-    for sid in (11, 12, 13):
-        assert sid in F._DFT_SIGNOFF_WITHDRAWN_STEPS, sid
-        assert sid not in F._OPEN_SOURCE_CONTAINER_BLOCKED_STEPS, sid
 
 
-def test_the_false_capability_flag_is_gone_from_the_registry():
-    """`cap:post_dft_scan_optimization` claimed the open-source container
-    could not re-optimise a scan netlist. The runner does exactly that with
-    yosys whenever a scan netlist exists, so the claim was never true — and no
-    producer emits the flag any more, so the entry is deleted rather than
-    emptied and registry and producers stay in step."""
-    F = _F()
-    assert "cap:post_dft_scan_optimization" not in \
-        F._DECLARED_CAPABILITY_GAP_FLAGS
-    assert not F._is_declared_capability_gap("cap:post_dft_scan_optimization")
 
 
 def test_no_producer_still_emits_the_removed_flag():

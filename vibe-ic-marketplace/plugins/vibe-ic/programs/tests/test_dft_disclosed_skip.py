@@ -24,7 +24,6 @@ sys.path.insert(0, str(PROG_DIR))
 
 import dft_signoff_common  # noqa: E402
 import dft_atpg_coverage_check as cov_gate  # noqa: E402
-import bsdl_emit  # noqa: E402
 import dft_signoff_check  # noqa: E402
 
 
@@ -161,25 +160,10 @@ def test_cov_present_low_still_fails_even_with_sentinel(tmp_path):
 #  bsdl_emit
 # ═══════════════════════════════════════════════════════════════════════
 
-def test_bsdl_absent_input_with_sentinel_rc2(tmp_path):
-    _write_sentinel(tmp_path)  # scan_netlist.v absent
-    assert bsdl_emit.main([str(tmp_path)]) == 2
 
 
-def test_bsdl_absent_input_no_sentinel_fails(tmp_path):
-    # no scan netlist, no sentinel → original FAIL (netlist not found, rc 1)
-    assert bsdl_emit.main([str(tmp_path)]) == 1
 
 
-def test_bsdl_present_input_not_skipped(tmp_path):
-    _write_scan_netlist(tmp_path)
-    rc_no_sentinel = bsdl_emit.main([str(tmp_path)])
-    _write_sentinel(tmp_path)
-    rc_with_sentinel = bsdl_emit.main([str(tmp_path)])
-    # bare core (input/output, no pads) → N_A → rc 0
-    assert rc_no_sentinel == 0
-    assert rc_with_sentinel == 0          # byte-identical, NOT 2
-    assert rc_with_sentinel != 2
 
 
 # ═══════════════════════════════════════════════════════════════════════

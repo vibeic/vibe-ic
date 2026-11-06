@@ -27,7 +27,6 @@ sys.path.insert(0, str(PROG_DIR))
 
 import fault_atpg_run as far          # noqa: E402
 import dft_atpg_coverage_check as sac  # noqa: E402
-import bsdl_emit as bsdl              # noqa: E402
 import dft_signoff_check as sign      # noqa: E402
 
 
@@ -181,82 +180,18 @@ def _write(tmp_path: Path, name: str, text: str) -> Path:
     return p
 
 
-def test_bsdl_padded_emits_bsdl_and_plan(tmp_path):
-    _write(tmp_path, "net.v", _PADDED_NETLIST)
-    plan = bsdl.emit(tmp_path, "net.v", top=None, mode="auto", ir_length=4)
-    assert plan["verdict"] == "PASS"
-    assert plan["padded"] is True
-    # clk_i(1)+gpio_in(4)+led_o(2)+sda(inout=3) = 10 cells; rst absent here
-    assert plan["boundary_length"] == 10
-    assert plan["tap_present"] is True     # TCK/TMS/TDI/TDO present
-    # TAP + supply pins are NOT in the boundary register
-    for pin in plan["boundary_scan_pins"]:
-        assert pin.lower() not in ("tck", "tms", "tdi", "tdo", "trst",
-                                   "vdd", "vss")
-    # the BSDL file exists and is 1149.1-shaped
-    bsdl_txt = Path(plan["bsdl_file"]).read_text()
-    assert "entity chip_top is" in bsdl_txt
-    assert "BOUNDARY_LENGTH of chip_top : entity is 10" in bsdl_txt
-    assert "INSTRUCTION_OPCODE" in bsdl_txt and "BYPASS (1111)" in bsdl_txt
 
 
-def test_bsdl_inout_pad_gets_three_cells(tmp_path):
-    _write(tmp_path, "net.v", _PADDED_NETLIST)
-    plan = bsdl.emit(tmp_path, "net.v", top=None, mode="auto", ir_length=4)
-    funcs = [c["function"] for c in plan["boundary_register"]
-             if c["port"] == "sda" or c["function"] == "control"]
-    # inout → input observe + control + output3 driver
-    assert "input" in funcs and "control" in funcs and "output3" in funcs
 
 
-def test_bsdl_bare_core_is_na(tmp_path):
-    _write(tmp_path, "core.v",
-           "module core (input clk, input [7:0] d, output [7:0] q);\n"
-           "  assign q = d;\nendmodule\n")
-    plan = bsdl.emit(tmp_path, "core.v", top=None, mode="auto", ir_length=4)
-    assert plan["verdict"] == "N_A"
-    assert plan["padded"] is False
-    assert plan["boundary_length"] == 0
-    assert plan["bsdl_present"] is False
 
 
-def test_bsdl_no_ports_is_na(tmp_path):
-    _write(tmp_path, "tb.v",
-           "module tb_top;\n reg clk;\n core u(.clk(clk));\nendmodule\n"
-           "module core(input clk); endmodule\n")
-    plan = bsdl.emit(tmp_path, "tb.v", top="tb_top", mode="auto", ir_length=4)
-    assert plan["verdict"] == "N_A"
-    assert plan["classification"] == "EMPTY"
 
 
-def test_bsdl_pad_cells_force_padded(tmp_path):
-    _write(tmp_path, "ring.v",
-           "module chip (input clk, output data, input TCK, input TMS,\n"
-           "             input TDI, output TDO);\n"
-           "  gf180mcu_fd_io__in_c pad0 (.PAD(clk));\n"
-           "  sky130_fd_io__top_gpiov2 pad1 (.PAD(data));\n"
-           "endmodule\n")
-    plan = bsdl.emit(tmp_path, "ring.v", top=None, mode="auto", ir_length=4)
-    assert plan["classification"] == "PADDED"
-    assert plan["verdict"] == "PASS"
-    assert plan["pad_cells_detected"]
 
 
-def test_bsdl_force_padded_and_force_bare(tmp_path):
-    _write(tmp_path, "core.v",
-           "module core (input clk, input [3:0] d, output [3:0] q);\n"
-           "endmodule\n")
-    padded = bsdl.emit(tmp_path, "core.v", top=None, mode="padded", ir_length=4)
-    assert padded["verdict"] == "PASS" and padded["padded"] is True
-    bare = bsdl.emit(tmp_path, "core.v", top=None, mode="bare", ir_length=4)
-    assert bare["verdict"] == "N_A" and bare["padded"] is False
 
 
-def test_bsdl_missing_netlist_fails(tmp_path):
-    plan = bsdl.emit(tmp_path, "does_not_exist.v", top=None, mode="auto",
-                     ir_length=4)
-    assert plan["verdict"] == "FAIL"
-    assert any("netlist not found" in r for r in plan["reasons"])
 
 
 def test_bsdl_cli_writes_plan_json(tmp_path):

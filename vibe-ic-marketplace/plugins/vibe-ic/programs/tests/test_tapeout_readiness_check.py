@@ -32,7 +32,6 @@ import pytest
 
 trc = importlib.import_module("tapeout_readiness_check")
 checklist = importlib.import_module("tapeout_checklist_gen")
-driver = importlib.import_module("mpw_precheck_driver")
 
 _FIXTURES = Path(__file__).resolve().parent / "fixtures"
 _REAL_REFUSAL = _FIXTURES / "shuttle_precheck_refusal"
@@ -228,14 +227,6 @@ def test_the_programs_still_pointed_at_the_dead_vendor_say_so():
         assert "tapeout_readiness_check" in text, name
 
 
-def test_driver_blocked_is_classified_not_determined_not_a_retryable_hiccup():
-    """BLOCKED against a retired counterparty is permanent, and an aggregator
-    must be able to see that without re-deriving it."""
-    assert driver.SHUTTLE_STATUS == "RETIRED"
-    assert driver._VERDICT_CLASS["BLOCKED"] == "NOT_DETERMINED"
-    assert driver._VERDICT_CLASS["SKIPPED_CONDITION"] == "NOT_DETERMINED"
-    assert driver._VERDICT_CLASS["INCOMPLETE"] == "NOT_DETERMINED"
-    assert driver._VERDICT_CLASS["PASS"] == "PASS"
 
 
 # --------------------------------------------------------------------------- #

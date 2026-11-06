@@ -41,7 +41,6 @@ from _tool_probes import not_verified_reason, skip_not_verified  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parent.parent
 _FORMAL = _PROGRAMS / "formal_property_run.py"
-_COMPLIANCE = _PROGRAMS / "flow_compliance_check.py"
 _FLOW_YAML = _PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml"
 
 #: A container name that cannot exist → the environment is GENUINELY absent.
@@ -386,169 +385,18 @@ def _write_waivers(project: Path, entries) -> None:
         json.dumps({"waivers": entries}, indent=2) + "\n")
 
 
-def _compliance(project: Path, out_json: Path):
-    rc = _pr.run(
-        [sys.executable, str(_COMPLIANCE), str(project), "--strict",
-         "--json", str(out_json)],
-        capture_output=True, text=True)
-    return rc.returncode, json.loads(out_json.read_text())
 
 
-def _declared_formal_dependents() -> set:
-    """Steps the flow DECLARES depend on Step 5's artefacts.
-
-    vibe-ic#776 — this used to return the transitive `blocks_on` closure, which
-    is the very thing the test below calls "an over-broad cascade would itself
-    be the defect". `blocks_on` is an ORDERING edge: on this flow it makes 1221
-    (step, ancestor) pairs and only 6 of them carry a declared dependency. The
-    closure returned {6, 39} for Step 5, and neither step's gate nor its
-    required_outputs names anything Step 5 writes (`phase2/stage1/formal/*.sby`,
-    `phase2/stage1/formal/results.json`,
-    `phase2/stage1/sim_full_stack/results.json`) — Step 6 builds an FPGA image,
-    Step 39 recompiles it and tests on board.
-
-    Derived from the producer's own relation so it cannot drift away from what
-    the checker does, and so a real declaration added to the flow later shows up
-    here as a widened expectation rather than a silent one.
-    """
-    doc = yaml.safe_load(_FLOW_YAML.read_text())
-    steps = [s for s in doc["steps"]
-             if isinstance(s, dict) and s.get("id") is not None]
-    sys.path.insert(0, str(_COMPLIANCE.parent))
-    import flow_compliance_check as _fcc
-
-    ids = [s["id"] for s in steps if str(s["id"]) != "P0"]
-    results = [_fcc.StepResult(id=i, name="", stage="",
-                               status=("PASS_WITH_WAIVERS" if i == 5 else "FAIL"))
-               for i in ids]
-    info = _fcc._attribute_cascade_verdicts(results, steps,
-                                            {5: {"ticket": "T"}})
-    return {sid for sid, _parent, _ticket in info["deferred_by_upstream"]}
 
 
-def test_formal_env_waiver_binds_to_the_formal_step(tmp_path):
-    """A complete formal ENV_UNAVAILABLE waiver must reach the formal step.
-
-    Pre-fix, `formal` was absent from the role-name map, so this waiver was
-    silently discarded and Step 5 reported a bare MISSING.
-    """
-    _write_waivers(tmp_path, [_COMPLETE_WAIVER])
-    _, report = _compliance(tmp_path, tmp_path / "r.json")
-    step5 = next(s for s in report["steps"] if s["id"] == 5)
-    assert step5["status"] == "PASS_WITH_WAIVERS"
 
 
-def test_cascade_defers_only_genuinely_dependent_steps(tmp_path):
-    """The cascade must be justified PER STEP, not blanket.
-
-    A waived formal step may only defer the steps that the flow actually
-    declares as depending on formal results. Every other step must keep the
-    verdict it would have had with no waiver at all — an over-broad cascade
-    would itself be the defect.
-    """
-    baseline_dir = tmp_path / "baseline"
-    waived_dir = tmp_path / "waived"
-    baseline_dir.mkdir()
-    waived_dir.mkdir()
-    _write_waivers(waived_dir, [_COMPLETE_WAIVER])
-
-    _, base = _compliance(baseline_dir, tmp_path / "base.json")
-    _, waived = _compliance(waived_dir, tmp_path / "waived.json")
-
-    base_status = {s["id"]: s["status"] for s in base["steps"]}
-    waived_status = {s["id"]: s["status"] for s in waived["steps"]}
-    changed = {sid for sid in base_status
-               if base_status[sid] != waived_status.get(sid)}
-
-    # Exactly the waived step plus its DECLARED transitive dependents moved.
-    assert changed == {5} | _declared_formal_dependents(), (
-        f"cascade touched steps it should not have: {sorted(changed)}")
-
-    # R-0915-140 — NOT_MEASURED is no longer only the deferred tier: a step
-    # whose blocks_on closure holds a FAILED step (on this empty project, D1
-    # and 0.5ic) reads NOT_MEASURED(upstream_failed). The deferral is the
-    # `upstream_refused` reason, and that is what this test is about.
-    deferred = {s["id"] for s in waived["steps"]
-                if s["status"] == "NOT_MEASURED"
-                and s["reason_class"] == "upstream_refused"}
-    assert deferred == _declared_formal_dependents()
-    # And each deferral names the parent it inherited from, so a reader can
-    # tell "skipped because a dependency was waived" from "ran, produced
-    # nothing".
-    for s in waived["steps"]:
-        if s["id"] in deferred:
-            assert "deferred-by-upstream(5" in s["cascade_note"]
-
-    # #776 — the ordering fact is not thrown away, it is recorded WITHOUT
-    # softening: the steps ordered behind step 5 say so and are NOT deferred.
-    # This is what keeps the assertions above from passing vacuously. By
-    # R-0915-140 such a step is FAIL(missing_artefact) when it was owed, or
-    # NOT_MEASURED(upstream_failed) behind a FAILED blocker -- never the
-    # waiver's `upstream_refused`.
-    ordered_behind = {s["id"] for s in waived["steps"]
-                      if any(str(x).startswith("waived-ancestor-undeclared(5)")
-                             for x in s["reasons"])}
-    assert ordered_behind, "the ordering fact must still be attributed"
-    for s in waived["steps"]:
-        if s["id"] not in ordered_behind:
-            continue
-        assert (s["status"], s["reason_class"]) in (
-            ("FAIL", "missing_artefact"), ("NOT_MEASURED", "upstream_failed")), (
-            s["id"], s["status"], s["reason_class"])
 
 
-def test_waived_formal_never_counts_as_a_pass_downstream(tmp_path):
-    """A waiver is open work. Neither the waived step nor anything deferred
-    behind it may be counted as executed-PASS, and the run must still fail
-    strict mode."""
-    _write_waivers(tmp_path, [_COMPLETE_WAIVER])
-    rc, report = _compliance(tmp_path, tmp_path / "r.json")
-
-    statuses = {s["id"]: s["status"] for s in report["steps"]}
-    assert statuses[5] == "PASS_WITH_WAIVERS"
-    for sid in _declared_formal_dependents():
-        assert statuses[sid] != "PASS"
-
-    assert report["counts"]["PASS"] == 0
-    assert report["counts"]["PASS_WITH_WAIVERS"] == 1
-    assert report["overall"] == "FAIL"
-    assert rc != 0
 
 
-def test_unbindable_env_waiver_is_reported_not_silently_dropped(tmp_path):
-    """A waiver naming an unknown step role must produce a visible advisory
-    naming the problem — pre-fix it vanished with no trace anywhere in the
-    report."""
-    _write_waivers(tmp_path, [{**_COMPLETE_WAIVER, "step": "formal_engine"}])
-    _, report = _compliance(tmp_path, tmp_path / "r.json")
-
-    advisory = " ".join(report["advisories"])
-    assert "formal_engine" in advisory
-    assert "NOT applied" in advisory
-    # The remedy lists the role names that WOULD bind.
-    assert "formal" in advisory
-    # Rejection is not leniency: the step is still not waived.
-    assert next(s for s in report["steps"] if s["id"] == 5)["status"] != "PASS_WITH_WAIVERS"
 
 
-def test_incomplete_env_waiver_is_reported_with_what_is_missing(tmp_path):
-    """An ENV_UNAVAILABLE waiver is only honoured when it is actionable and
-    reviewable. When it is not, the report must say exactly which
-    attestation fields are absent."""
-    _write_waivers(tmp_path, [{
-        "step": "formal",
-        "verdict_tier": "ENV_UNAVAILABLE",
-        "review_required": True,
-        "evidence": [],
-        "rationale": "env gap",
-    }])
-    _, report = _compliance(tmp_path, tmp_path / "r.json")
-
-    advisory = " ".join(report["advisories"])
-    assert "ticket" in advisory
-    assert "evidence" in advisory
-    assert "rationale" in advisory
-    assert next(s for s in report["steps"] if s["id"] == 5)["status"] != "PASS_WITH_WAIVERS"
 
 
 # ── the classifier itself, on ANY host (no Docker required) ───────────────

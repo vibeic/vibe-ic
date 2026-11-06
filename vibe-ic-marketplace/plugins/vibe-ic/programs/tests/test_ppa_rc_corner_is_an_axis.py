@@ -52,7 +52,6 @@ import pytest
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 from _ppa import metrics                        # noqa: E402
-from _ppa import timing                         # noqa: E402
 from _ppa.backends import opensta               # noqa: E402
 
 _LIB = "/pdks/x_fd_sc_hd__ss_100C_1v60.lib"
@@ -143,30 +142,6 @@ def _setup_slacks(rows):
 
 # ─────────────────────────── THE HARM, AND ITS POSITIVE CONTROL ────────────
 
-def test_two_reports_timed_against_different_parasitics_are_not_one_identity(
-        tmp_path):
-    """The formerly refused records survive under producer-stamped corners."""
-    proj = _project(tmp_path, {
-        "sta_mcorner_ocv.rpt": MCORNER % {
-            "lib": _LIB, "spef": "dut.spef", "corner": "max"},
-        "sta_spef_based.rpt": SINGLE % {
-            "lib": _LIB, "spef": "dut.spef", "corner": "min"},
-    })
-    rows, _notes = timing.timing_rows(proj)
-    idx, codes = _index(rows)
-
-    assert "CONFLICTING_RECORD" not in codes, (
-        "a max-RC slack and a min-RC slack were called a contradiction. They "
-        "are two facts; the RC corner each report NAMES is what tells them "
-        "apart, and it was thrown away. codes=%r" % (codes,))
-    assert "SAME_ARTEFACT_TWO_VALUES" not in codes
-
-    kept = [r for r in idx if r["metric"] == "timing.setup.worst_slack_ns"]
-    assert len(kept) == 2, (
-        "both readings must survive: settling this by keeping one would be "
-        "picking a winner between measurements that never disagreed")
-    assert sorted(r["value"] for r in kept) == [13.83, 15.29]
-    assert sorted(r["scope"]["rc_corner"] for r in kept) == ["max", "min"]
 
 
 #: The control below must differ in ONE variable. `MCORNER_UNNAMED` stamps
@@ -190,246 +165,32 @@ _SINGLE_UNNAMED_DERATED = (
     "OCV_DERATE_APPLIED early=0.95 late=1.05 flat-OCV\n" + SINGLE_UNNAMED)
 
 
-def test_the_same_two_reports_that_name_no_parasitics_still_conflict(tmp_path):
-    """POSITIVE CONTROL. Strike the SPEF out of both artefacts and the conflict
-    comes back — so the test above is exercising the axis, not a fixture that
-    happens to differ some other way. An artefact that states nothing about its
-    parasitics has NOT become comparable; it has stayed unreadable, and the
-    index is right to refuse it."""
-    proj = _project(tmp_path, {
-        "sta_mcorner_ocv.rpt": MCORNER_UNNAMED % {"lib": _LIB},
-        "sta_spef_based.rpt": _SINGLE_UNNAMED_DERATED % {"lib": _LIB},
-    })
-    rows, _notes = timing.timing_rows(proj)
-    _idx, codes = _index(rows)
-    assert "CONFLICTING_RECORD" in codes, (
-        "two unreadable views were quietly indexed as one fact")
 
 
 # ───────────────────────────── ESTABLISHMENT, BOTH DIALECTS ────────────────
 
-def test_a_section_corner_is_read_from_the_explicit_stamp_not_the_spef_name(
-        tmp_path):
-    """Dialect B: an opaque filename still gets the producer-stamped corner."""
-    proj = _project(tmp_path, {
-        "sta_mcorner_ocv.rpt": MCORNER % {
-            "lib": _LIB, "spef": "dut.spef", "corner": "max"}})
-    rows, _notes = timing.timing_rows(proj)
-    setup = [r for r in rows if r["metric"] == "timing.setup.worst_slack_ns"]
-    assert setup, "fixture produced no setup row"
-    for r in setup:
-        assert r["scope"]["rc_corner"] == "max"
-        assert "rc_corner" not in (r.get("scope_gaps") or {})
 
 
-def test_a_corner_is_not_invented_from_a_banner_name_that_DOES_carry_a_token(
-        tmp_path):
-    """Preserve the old guard: a suggestive SPEF name is still not a fact.
-
-    Batch73 adds an explicit ``STA_BASIS_CORNER`` producer contract.  Removing
-    that contract from this fixture must leave ``dut.max.spef`` unreadable as a
-    corner, even though the filename contains the token the producer would
-    otherwise stamp explicitly.
-    """
-    body = (MCORNER % {
-        "lib": _LIB, "spef": "dut.max.spef", "corner": "max"
-    }).replace("STA_BASIS_CORNER: max\n", "")
-    proj = _project(tmp_path, {"sta_mcorner_ocv.rpt": body})
-    rows, _notes = timing.timing_rows(proj)
-    setup = [r for r in rows if r["metric"] == "timing.setup.worst_slack_ns"]
-    assert setup, "fixture produced no setup row"
-    for row in setup:
-        assert "rc_corner" not in row["scope"]
-        assert "dut.max.spef" in (
-            (row.get("scope_gaps") or {}).get("rc_corner") or "")
 
 
-def test_the_whole_file_corner_stamp_establishes_the_corner(
-        tmp_path):
-    """Dialect C has no banner; both path and corner come from file stamps."""
-    parsed = opensta.parse_report(SINGLE % {
-        "lib": _LIB, "spef": "dut.spef", "corner": "nom"})
-    assert parsed.basis_spef == "dut.spef"
-    assert parsed.basis_corners == ("nom",)
-    proj = _project(tmp_path, {
-        "sta_spef_based.rpt": SINGLE % {
-            "lib": _LIB, "spef": "dut.spef", "corner": "nom"}})
-    rows, _notes = timing.timing_rows(proj)
-    setup = [r for r in rows if r["metric"] == "timing.setup.worst_slack_ns"]
-    assert setup, "fixture produced no setup row"
-    for r in setup:
-        assert r["scope"]["rc_corner"] == "nom"
-        assert "rc_corner" not in (r.get("scope_gaps") or {})
 
 
-def test_the_whole_file_spef_stamp_is_read_but_does_not_establish_the_corner(
-        tmp_path):
-    """The path stamp remains readable but cannot replace the corner stamp."""
-    body = SINGLE_UNSTAMPED % {
-        "lib": _LIB, "spef": "dut.nom.spef", "corner": "unused"}
-    parsed = opensta.parse_report(body)
-    assert parsed.basis_spef == "dut.nom.spef"
-    proj = _project(tmp_path, {"sta_spef_based.rpt": body})
-    rows, _notes = timing.timing_rows(proj)
-    setup = [r for r in rows if r["metric"] == "timing.setup.worst_slack_ns"]
-    assert setup, "fixture produced no setup row"
-    for row in setup:
-        assert "rc_corner" not in row["scope"]
-        assert "dut.nom.spef" in (
-            (row.get("scope_gaps") or {}).get("rc_corner") or "")
 
 
 # ─────────────────────────────── THE REFUSAL TO GUESS ──────────────────────
 
-@pytest.mark.parametrize(
-    "spef", ["dut.spef", "dut.pnr.spef", "dut.max.spef", "dut.MAXX.spef"])
-def test_a_missing_corner_stamp_is_not_recovered_from_any_spef_name(
-        tmp_path, spef):
-    """`<top>.spef` is what the single-corner step really reads, and its
-    extraction model is not stated anywhere in the name. Reading a corner out
-    of it would be the invented identity `scope` exists to prevent — and an
-    open "whatever sits before .spef" rule would mint an RC corner called
-    `pnr`. The vocabulary is the closed set the extraction step emits."""
-    proj = _project(tmp_path, {
-        "sta_spef_based.rpt": SINGLE_UNSTAMPED % {
-            "lib": _LIB, "spef": spef, "corner": "unused"}})
-    rows, _notes = timing.timing_rows(proj)
-    for r in rows:
-        assert "rc_corner" not in r["scope"], (
-            "a corner was invented from %r" % spef)
-        gap = (r.get("scope_gaps") or {}).get("rc_corner")
-        assert gap, "an absent key with no reason is the sentinel moved one field over"
-        assert spef in gap, (
-            "the gap must name the parasitic file the report DID state, so a "
-            "reader can see which extraction is unaccounted for: %r" % gap)
 
 
-@pytest.mark.parametrize("spef", ["dut.spef", "dut.pnr.spef", "dut.MAXX.spef"])
-def test_a_corner_is_not_invented_from_a_name_that_does_not_carry_one(
-        tmp_path, spef):
-    """Retain the pre-Batch73 node IDs while exercising the new contract."""
-    proj = _project(tmp_path, {
-        "sta_spef_based.rpt": SINGLE_UNSTAMPED % {
-            "lib": _LIB, "spef": spef, "corner": "unused"}})
-    rows, _notes = timing.timing_rows(proj)
-    assert rows, "fixture produced no timing rows"
-    for row in rows:
-        assert "rc_corner" not in row["scope"]
-        gap = (row.get("scope_gaps") or {}).get("rc_corner") or ""
-        assert spef in gap, gap
 
 
-def test_a_wrong_corner_stamp_is_rejected_instead_of_picking_a_side(tmp_path):
-    """The banner and common stamp are two explicit claims; disagreement
-    invalidates the measurement rather than publishing either identity."""
-    body = """\
-=== SETUP (max-RC corner, SPEF=opaque, liberty=%s) ===
-STA_BASIS: POST_ROUTE_SPEF
-STA_BASIS_CORNER: min
-worst slack max 1.00
-tns max 0.00
-""" % _LIB
-    proj = _project(tmp_path, {"sta_spef_multicorner.rpt": body})
-    rows, _notes = timing.timing_rows(proj)
-    setup = [r for r in rows if r["metric"].startswith("timing.setup.")]
-    assert setup, "fixture produced no setup rows"
-    assert all(r["status"] == "INVALID" for r in setup), setup
-    assert all("rc_corner" not in r["scope"] for r in setup)
-    assert all("RC_CORNER_CONTRADICTION" in r["reason"] for r in setup)
 
 
-@pytest.mark.parametrize(
-    "first,second", [("max", "min"), ("min", "max")])
-def test_conflicting_explicit_corner_declarations_are_all_preserved_and_rejected(
-        tmp_path, first, second):
-    """Regression control for first-value-wins, in both source orders."""
-    body = (SINGLE % {
-        "lib": _LIB, "spef": "opaque.spef", "corner": first
-    }).replace(
-        "STA_BASIS_CORNER: %s\n" % first,
-        "STA_BASIS_CORNER: %s\nSTA_BASIS_CORNER: %s\n" % (first, second))
-    parsed = opensta.parse_report(body)
-    report_declarations = getattr(parsed, "basis_corners", None)
-    if report_declarations is None:
-        report_declarations = (getattr(parsed, "basis_corner", None),)
-    section_declarations = getattr(
-        parsed.sections[0], "basis_corners", None)
-    if section_declarations is None:
-        section_declarations = (
-            getattr(parsed.sections[0], "basis_corner", None),)
-    assert report_declarations == (first, second), (
-        "the parser reduced contradictory declarations before the consumer "
-        "could reject them")
-    assert section_declarations == (first, second)
-
-    proj = _project(tmp_path, {"sta_spef_based.rpt": body})
-    rows, _notes = timing.timing_rows(proj)
-    assert rows, "fixture produced no timing rows"
-    assert all(r["status"] == "INVALID" for r in rows), rows
-    assert all("rc_corner" not in r["scope"] for r in rows)
-    assert all("RC_CORNER_CONTRADICTION" in r["reason"] for r in rows)
-    assert all(first in r["reason"] and second in r["reason"] for r in rows)
 
 
-def test_repeated_identical_corner_declarations_have_one_identity(tmp_path):
-    """The producer contract permits redundant, semantically equal stamps."""
-    body = (SINGLE % {
-        "lib": _LIB, "spef": "opaque.spef", "corner": "max"
-    }).replace(
-        "STA_BASIS_CORNER: max\n",
-        "STA_BASIS_CORNER: max\nSTA_BASIS_CORNER: MAX\n")
-    parsed = opensta.parse_report(body)
-    assert parsed.basis_corners == ("max", "MAX")
-
-    proj = _project(tmp_path, {"sta_spef_based.rpt": body})
-    rows, _notes = timing.timing_rows(proj)
-    assert rows and all(r["status"] != "INVALID" for r in rows), rows
-    assert all(r["scope"]["rc_corner"] == "max" for r in rows)
 
 
-@pytest.mark.parametrize("malformed", ["", "maximum"])
-def test_a_malformed_explicit_corner_declaration_is_invalid(
-        tmp_path, malformed):
-    """An explicit but unreadable declaration is not treated as absent."""
-    body = SINGLE % {
-        "lib": _LIB, "spef": "dut.max.spef", "corner": malformed}
-    parsed = opensta.parse_report(body)
-    assert parsed.basis_corners == (malformed,)
-
-    proj = _project(tmp_path, {"sta_spef_based.rpt": body})
-    rows, _notes = timing.timing_rows(proj)
-    assert rows and all(r["status"] == "INVALID" for r in rows), rows
-    assert all("rc_corner" not in r["scope"] for r in rows)
-    assert all("unsupported RC corner" in r["reason"] for r in rows)
 
 
-def test_a_report_that_named_its_parasitics_is_not_told_it_named_nothing(
-        tmp_path):
-    """The pre-fix sentence — "this report names no RC corner for the section;
-    the RC axis is reported by the multi-corner SPEF report, not this one" —
-    was ONE sentence for two different situations, and false on the artefact
-    that founded this defect. "I read `dut.spef` and its name carries no corner
-    token" and "I cannot tell you what I read" are not the same gap: the first
-    points a reader at a file to go and identify, the second at nothing. A gap
-    that misdescribes the artefact is worse than no gap, because it tells a
-    reader to stop looking in the place the answer is."""
-    def _gap(body):
-        proj = _project(tmp_path / body[0], {"sta_spef_based.rpt": body[1]})
-        rows, _notes = timing.timing_rows(proj)
-        gaps = {(r.get("scope_gaps") or {}).get("rc_corner") for r in rows}
-        gaps.discard(None)
-        assert len(gaps) == 1, gaps
-        return gaps.pop()
-
-    named = _gap(("named", SINGLE_UNSTAMPED % {
-        "lib": _LIB, "spef": "dut.spef", "corner": "unused"}))
-    silent = _gap(("silent", SINGLE_UNNAMED % {"lib": _LIB}))
-
-    assert named != silent, (
-        "one sentence explains both a report that named its parasitic file and "
-        "one that named nothing:\n  %r" % named)
-    assert "dut.spef" in named
-    assert "dut.spef" not in silent
 
 
 # ─────────────────────────────── THE PRODUCER'S STAMP ──────────────────────

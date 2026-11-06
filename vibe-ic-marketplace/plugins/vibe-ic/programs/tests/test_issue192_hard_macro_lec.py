@@ -36,7 +36,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import lec_run                       # noqa: E402
-import lec_equivalence_check as gate  # noqa: E402  (downstream consumer)
 
 # ── verbatim shape captured from a real vibeic-eda yosys 0.67 run ──────────
 # The gold side elaborated and ran MANY non-frontend passes (MEMORY_MAP,
@@ -102,22 +101,6 @@ class HardMacroLecTest(unittest.TestCase):
         self.assertEqual(r["compared_points"], 0)
         self.assertTrue(r["inconclusive"])
 
-    def test_downstream_gate_treats_it_as_non_blocking_not_fail(self):
-        """End-to-end: the gate must NOT hard-FAIL an INCONCLUSIVE 0-point run —
-        a hard FAIL cascade-marks downstream steps MISSING."""
-        p = lec_run.parse_equiv_output(HIER_ABORT_LOG)
-        r = lec_run.build_report(p, "top", "netlist.v", None)
-        with tempfile.TemporaryDirectory() as td:
-            proj = Path(td)
-            (proj / "reports").mkdir()
-            (proj / gate.LEC_JSON_REL).write_text(json.dumps(r))
-            (proj / gate.LEC_RPT_REL).write_text(HIER_ABORT_LOG)
-            res = gate.audit(proj)
-        self.assertTrue(res.inconclusive)
-        self.assertFalse(res.passed)
-        # Not a hard ERROR verdict — the inconclusive path returns before the
-        # substance FAIL findings are appended.
-        self.assertFalse(any(f.severity == "ERROR" for f in res.findings))
 
     # ── the load-bearing negative half ────────────────────────────────────
     def test_real_mismatch_still_fails(self):

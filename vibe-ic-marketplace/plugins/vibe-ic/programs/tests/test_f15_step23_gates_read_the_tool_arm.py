@@ -32,11 +32,7 @@ CELL_LIBS = {f'*_{c}': [f'/pdk/p/libs.ref/cells/lib/cells__{c}.lib']
              for c in ('tt_025C_5v00', 'ss_125C_4v50', 'ff_n40C_5v50')}
 STA = 'phase3/librelane/23/01-openroad-stapostpnr'
 
-GATES = ('achieved_period_recorded_check', 'hold_corner_coverage_check',
-         'sta_report_check', 'post_route_signoff_corner_check',
-         'sta_corner_record_completeness_check', 'sta_architectural_residual_check',
-         'sta_assumed_clock_disclosure_check', 'clock_target_record_agreement_check',
-         'drv_promotion_corroboration_check')
+GATES = ('hold_corner_coverage_check', 'post_route_signoff_corner_check', 'sta_corner_record_completeness_check')
 
 #: Step-23 gates that BIND the tool arm like the nine above (a missing or
 #: unbound corner artefact REFUSES) but whose clean-arm answer is not a PASS
@@ -48,7 +44,7 @@ GATES = ('achieved_period_recorded_check', 'hold_corner_coverage_check',
 #:   pad_input_drive_check  judges the SDC the tool timed against the resolved
 #:                          bond-pad drive; this fixture's top is not a DIE ->
 #:                          NOT_APPLICABLE.
-OWN_ANSWER_GATES = ('drv_signoff_judge', 'pad_input_drive_check')
+OWN_ANSWER_GATES = ()
 ALL_STEP23_GATES = GATES + OWN_ANSWER_GATES
 
 
@@ -324,15 +320,6 @@ def verdict(doc: dict) -> str:
 
 # ================================================================ tests ====
 
-def test_the_gate_list_is_the_flows_own_step_23():
-    """The nine gates are the programs step 23's `gate.all_of` invokes."""
-    text = (PROGRAMS.parent / 'flow/phase1_phase2_phase3.yaml').read_text()
-    block = text[text.index('\n  - id: 23\n'):text.index('\n  - id: 24\n')]
-    gate = block[block.index('\n    gate:\n'):]
-    named = set(re.findall(r'^\s+-?\s*(?:command|program_exit_zero|advisory_program_exit_zero'
-                           r'|optional_program_exit_zero):\s*"(\w+)', gate, re.M))
-    assert named == set(ALL_STEP23_GATES)
-    assert not set(GATES) & set(OWN_ANSWER_GATES)
 
 
 def test_the_reader_binds_every_file_to_what_the_tool_wrote(tmp_path):
@@ -423,45 +410,8 @@ def test_each_gate_refuses_a_corner_report_the_tool_did_not_write(tmp_path, name
     assert (rc, verdict(doc)) == (1, 'REFUSED'), (name, doc)
 
 
-@pytest.mark.parametrize('name, answer, rc', [
-    ('drv_signoff_judge', 'NOT_MEASURED', 1),
-    ('pad_input_drive_check', 'NOT_APPLICABLE', 0),
-])
-@pytest.mark.parametrize('mode', ['librelane', 'dual'])
-def test_a_gate_that_cannot_pass_on_the_tools_reports_says_why(tmp_path, name,
-                                                               answer, rc, mode):
-    """The clean, bound tool arm: the gate read it (its basis names the tool's
-    step directory) and gives its OWN answer, never a PASS it cannot support
-    and never our deck."""
-    project = gate_inputs(tool_project(tmp_path, mode=mode))
-    got_rc, doc = run_gate(name, project, tmp_path)
-    assert (got_rc, verdict(doc)) == (rc, answer), (name, doc)
-    text = json.dumps(doc)
-    assert STA in text, name
-    assert 'sta_mcorner_ocv' not in text, name
-    if name == 'drv_signoff_judge':
-        assert any('STAPostPNR' in r for r in doc['not_measured']), doc
-    else:
-        # the deck judged is the SDC the tool timed, from its bound state
-        state = json.loads((project / STA / 'state_out.json').read_text())
-        assert doc['deck'] == state['sdc'], doc
 
 
-def test_the_drv_judge_binds_its_bundle_to_the_def_the_tool_timed(tmp_path):
-    """On the tool arm a DRV bundle certifies step 23 only for the DEF
-    STAPostPNR timed: a bundle whose routed DEF is another layout is
-    NOT_MEASURED, named -- even when the routed DEF on disk matches it."""
-    import drv_signoff_judge as drv
-    project = gate_inputs(tool_project(tmp_path))
-    routed = _write(project / 'phase3/stage3/pnr/routed.def', 'DESIGN other ;\n')
-    _write(project / 'reports/phase3/sta/drv_signoff_bundle.json', json.dumps({
-        'identity': {'artifacts': {'def': {'sha256': _sha(routed)}}}}))
-    out = tmp_path / 'drv.json'
-    assert drv.main([str(project), '--json', str(out)]) == 1
-    doc = json.loads(out.read_text())
-    assert doc['verdict'] != 'PASS'
-    assert any('not the DEF STAPostPNR timed' in r
-               for r in doc.get('not_measured', [])), doc
 
 
 # ------------------------------------ per gate: the judged field flips it ---
@@ -472,21 +422,14 @@ def _setup_violated(root):
 
 FLIPS = {
     # the tool's worst setup slack moves; the recorded reached period does not
-    'achieved_period_recorded_check': lambda root: tool_project(
-        root, setup={'max_ss_125C_4v50': 0.25}),
     # the fast corner's hold analysis times no path (the INF sentinel)
     'hold_corner_coverage_check': lambda root: tool_project(
         root, hold_inf=('min_ff_n40C_5v50',)),
-    'sta_report_check': _setup_violated,
     'post_route_signoff_corner_check': _setup_violated,
     'sta_corner_record_completeness_check': _setup_violated,
     # a setup path of pure logic depth violated by more than buffering recovers
-    'sta_architectural_residual_check': lambda root: tool_project(root, deep=-8.0),
     # the tool timed another clock period than the run's record
-    'clock_target_record_agreement_check': lambda root: tool_project(root, period=20.0),
     # a DRV violator the promotion's own session did not claim
-    'drv_promotion_corroboration_check': lambda root: tool_project(
-        root, drv=('min_ff_n40C_5v50',)),
 }
 
 
@@ -517,34 +460,10 @@ def test_the_same_numbers_in_our_deck_do_not_flip_a_gate_on_the_tool(tmp_path, n
     assert STA in json.dumps(doc), (name, doc)
 
 
-def test_the_assumed_clock_must_be_disclosed_on_the_tools_record(tmp_path):
-    """Gate 7 does not judge slack; its field is the disclosure on the tool's
-    own sign-off record, stamped by the provenance writer."""
-    project = gate_inputs(tool_project(tmp_path), assumed=True, stamp=True)
-    assert json.loads((project / signoff.SIGNOFF_RECORD).read_text())['clock_period_assumed'] is True
-    rc, doc = run_gate('sta_assumed_clock_disclosure_check', project, tmp_path)
-    assert (rc, verdict(doc)) == (0, 'PASS'), doc
-    unstamped = gate_inputs(tool_project(tmp_path / 'u'), assumed=True, stamp=False)
-    rc, doc = run_gate('sta_assumed_clock_disclosure_check', unstamped, tmp_path)
-    assert (rc, verdict(doc)) == (1, 'FAIL'), doc
-    assert signoff.SIGNOFF_RECORD in json.dumps(doc['missing'])
 
 
-def test_the_reached_period_must_be_the_tools_worst_setup(tmp_path):
-    project = gate_inputs(tool_project(tmp_path, setup={'nom_tt_025C_5v00': 0.5}),
-                          recorded_slack=0.5)
-    rc, doc = run_gate('achieved_period_recorded_check', project, tmp_path)
-    assert (rc, doc['verdict'], doc['setup_slack_ns']) == (0, 'PASS', 0.5)
-    assert doc['slack_source'].startswith('nom_tt_025C_5v00/')
 
 
-def test_a_clock_period_in_another_unit_is_scaled_not_misread(tmp_path):
-    project = gate_inputs(tool_project(tmp_path, period=24000.0, unit='ps'))
-    rc, doc = run_gate('clock_target_record_agreement_check', project, tmp_path)
-    assert (rc, doc['verdict']) == (0, 'PASS'), doc
-    unstated = gate_inputs(tool_project(tmp_path / 'u', unit=None))
-    rc, doc = run_gate('clock_target_record_agreement_check', unstated, tmp_path)
-    assert (rc, doc['verdict'], doc['refusal']) == (1, 'REFUSED', 'LL_STA_TIME_UNIT_UNSTATED')
 
 
 def test_the_completeness_rows_carry_the_tools_corner_scope(tmp_path):

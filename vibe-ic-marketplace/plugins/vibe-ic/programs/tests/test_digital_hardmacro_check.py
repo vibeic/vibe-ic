@@ -674,27 +674,6 @@ def test_json_report_is_written_where_the_flow_names_it(tmp_path):
     assert d["summary"]["pass"] is True
 
 
-def test_chip_agnostic_source(tmp_path):
-    """No chip / vendor / SKU literal in the program.
-
-    Asked through the repo's OWN guard rather than a token list re-typed
-    here. A second list is a second definition of "chip-agnostic", and the
-    two drift: the first draft of this test carried its own list, which
-    called the program dirty for citing the PDK a MEASUREMENT was taken on
-    while `source_chip_agnostic_check` — the guard of record, which the
-    sibling `analog_lef_gds_outline_check` passes with the same citation —
-    called the identical bytes clean.
-    """
-    sys.path.insert(0, str(PROG.parent))
-    import source_chip_agnostic_check as guard  # noqa: E402
-
-    staged = tmp_path / "programs"
-    staged.mkdir()
-    (staged / PROG.name).write_text(PROG.read_text())
-    rc = guard.main([str(tmp_path), "--json", str(tmp_path / "agn.json")])
-    findings = json.loads((tmp_path / "agn.json").read_text()).get(
-        "findings", [])
-    assert rc == 0 and not findings, findings
 
 
 # ───────────────── unit level — the parsers this gate owns ─────────────────

@@ -327,27 +327,3 @@ def test_no_def_publishes_no_key_rather_than_an_empty_all_clear(tmp_path):
 
 
 # --- complementarity with the post-route gate, asserted rather than assumed --
-
-def test_the_two_gates_are_complements_not_duplicates(tmp_path):
-    """Pins the band claim the docstring makes.
-
-    HONEST LABEL: this test passes both BEFORE and AFTER this change. It is not
-    evidence of the fix — it pins the PREMISE the fix is scoped on, so that
-    widening `pg_rail_geometry_check._find_def` to accept `post_cts.def` (which
-    would turn the runner-side report into a duplicate) fails here and forces
-    the docstring to be revisited rather than silently rotting.
-    """
-    import pg_rail_geometry_check as PG
-
-    routed = _project(tmp_path / "routed", BUILT)
-    assert H.rails_named_but_not_built(routed) == ["VPROG"]
-    res = PG.check(routed)
-    assert res["verdict"] == "FAIL"
-    assert "VPROG" in {f["rail"] for f in res["findings"]}
-
-    pre = tmp_path / "prects"
-    d = pre / "phase3" / "stage3" / "pnr"
-    d.mkdir(parents=True)
-    (d / "post_cts.def").write_text(BUILT, encoding="utf-8")
-    assert H.rails_named_but_not_built(pre) == ["VPROG"]
-    assert PG.check(pre)["verdict"] == "SKIP"

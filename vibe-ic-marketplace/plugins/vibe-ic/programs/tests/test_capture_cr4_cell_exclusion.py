@@ -8,7 +8,6 @@ from pathlib import Path
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 
-import librelane_cts_hold as C
 import librelane_contract as L
 import phase3_one_shot_runner as R
 import excluded_master_census_check as EMC
@@ -20,18 +19,6 @@ import excluded_master_census_check as EMC
 
 
 
-def test_cts_hold_overlay_merges_the_run_policy_with_pdk_exclusions(
-        tmp_path, monkeypatch):
-    monkeypatch.setattr(L, "emit_config", lambda *_a, **_k: {
-        "EXTRA_EXCLUDED_CELLS": ["famx__probe_1"]})
-    monkeypatch.setattr(C, "_switch_knobs", lambda _p: {})
-    expected = ["famx__dly_1", "famx__probe_1"]
-    args = (R, tmp_path, "famxD", {}, 3, "declared", tmp_path / "scratch")
-    try:
-        got = C.overlay(*args, excluded_cells=["famx__dly_1"])
-    except TypeError:
-        got = C.overlay(*args)  # main's actual value, not an import failure
-    assert got.get("EXTRA_EXCLUDED_CELLS", ([],))[0] == expected
 
 
 

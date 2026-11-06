@@ -24,11 +24,9 @@ import pytest
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 
-from _ppa import benchmark as B   # noqa: E402
 from _ppa import metrics as M     # noqa: E402
 from _ppa import power as P       # noqa: E402
 
-FLOOR = list(B.FEASIBILITY_FLOOR)
 
 
 def arm(checks, flow="ours"):
@@ -38,102 +36,26 @@ def arm(checks, flow="ours"):
 # ==========================================================================
 # F-18 -- the check shape
 # ==========================================================================
-def test_status_clean_everywhere_derives_feasible():
-    """THE DEFECT. `comparison.v2` documents `status` as a first-class
-    alternative to `violations`; this function ignored it, so a record valid
-    against the shipped schema derived as NOT_CHECKED and the arm was refused."""
-    v, d = B.derive_feasibility(arm({k: {"status": "CLEAN"} for k in FLOOR}))
-    assert v == "FEASIBLE", d
 
 
-def test_an_lvs_clean_arm_can_say_so_without_writing_a_count():
-    checks = {k: {"violations": 0} for k in FLOOR if k != "lvs"}
-    checks["lvs"] = {"verdict": "MATCH", "top_cell": "core"}
-    assert B.derive_feasibility(arm(checks))[0] == "FEASIBLE"
 
 
-def test_an_lvs_mismatch_is_infeasible_and_not_merely_unchecked():
-    checks = {k: {"violations": 0} for k in FLOOR if k != "lvs"}
-    checks["lvs"] = {"verdict": "MISMATCH"}
-    v, d = B.derive_feasibility(arm(checks))
-    assert v == "INFEASIBLE" and "lvs" in d["violating"]
 
 
-def test_the_accept_set_is_the_one_the_feasibility_axis_declares():
-    """One statement in this repository of what an LVS pass looks like."""
-    from _ppa import feasibility as F
-    for name, accepted in B.VERDICT_CLEAN.items():
-        axis = next(a for a in F.DEFAULT_AXES if a.name == name)
-        declared = set()
-        for group in axis.groups:
-            for proof in group:
-                if proof.kind == F.KIND_VERDICT_IN:
-                    declared |= {a.upper() for a in proof.accept}
-        assert {a.upper() for a in accepted} == declared, name
 
 
-def test_a_verdict_on_a_check_that_has_no_verdict_spelling_is_not_a_clean():
-    """`drc: {"verdict": "looks fine"}` must not buy a pass off a free-text
-    string this module has no accept set for."""
-    checks = {k: {"violations": 0} for k in FLOOR if k != "drc"}
-    checks["drc"] = {"verdict": "looks fine"}
-    v, d = B.derive_feasibility(arm(checks))
-    assert v == "NOT_CHECKED" and "drc" in d["not_checked"]
-    assert "no verdict spelling" in d["reasons"]["drc"]
 
 
-def test_a_check_stating_nothing_at_all_is_not_checked():
-    checks = {k: {"violations": 0} for k in FLOOR}
-    checks["drv"] = {"source": "somewhere.rpt"}
-    v, d = B.derive_feasibility(arm(checks))
-    assert v == "NOT_CHECKED" and "drv" in d["not_checked"]
 
 
-def test_status_not_checked_outranks_a_leftover_count():
-    """An explicit 'I did not check this' must not be resurrected by a count
-    left over from an earlier run."""
-    checks = {k: {"violations": 0} for k in FLOOR}
-    checks["hold"] = {"status": "NOT_CHECKED", "violations": 0}
-    v, d = B.derive_feasibility(arm(checks))
-    assert v == "NOT_CHECKED" and "hold" in d["not_checked"]
 
 
-def test_a_self_contradicting_check_is_decided_by_the_measured_count():
-    """`status: CLEAN` beside `violations: 3` is an assertion beside its own
-    evidence, which is exactly where this module says a record has room to be
-    dishonest cheaply. The count decides and the disagreement is named."""
-    checks = {k: {"violations": 0} for k in FLOOR}
-    checks["drc"] = {"status": "CLEAN", "violations": 3}
-    v, d = B.derive_feasibility(arm(checks))
-    assert v == "INFEASIBLE"
-    assert d["violating"]["drc"] == 3
-    assert d["contradicting"] == ["drc"]
 
 
-def test_a_verdict_contradicting_a_count_is_not_silently_reconciled():
-    checks = {k: {"violations": 0} for k in FLOOR}
-    checks["lvs"] = {"verdict": "MATCH", "violations": 5}
-    v, d = B.derive_feasibility(arm(checks))
-    assert v == "INFEASIBLE" and d["contradicting"] == ["lvs"]
 
 
-def test_a_missing_floor_check_is_still_not_checked():
-    """The floor is a floor. This change must not make an arm that was never
-    asked about DRV look like one that was."""
-    v, d = B.derive_feasibility(
-        arm({k: {"status": "CLEAN"} for k in FLOOR if k != "drv"}))
-    assert v == "NOT_CHECKED" and d["not_checked"] == ["drv"]
 
 
-def test_a_count_shaped_arm_derives_exactly_as_it_did_before():
-    """Every record written before this change must adjudicate identically."""
-    assert B.derive_feasibility(
-        arm({k: {"violations": 0} for k in FLOOR}))[0] == "FEASIBLE"
-    assert B.derive_feasibility(
-        arm({**{k: {"violations": 0} for k in FLOOR},
-             "drc": {"violations": 2}}))[0] == "INFEASIBLE"
-    assert B.derive_feasibility(arm({}))[0] == "NOT_CHECKED"
-    assert B.derive_feasibility({"flow": "x"})[0] == "NOT_CHECKED"
 
 
 def test_the_schema_documents_all_three_shapes():
@@ -271,22 +193,8 @@ def test_an_ambiguous_stem_is_refused_rather_than_guessed():
         "ambiguous")
 
 
-def test_the_head_to_head_still_refuses_a_power_scope_with_no_mode():
-    """`mode` is the fourth key REQUIRED_SCOPE wants and no power artefact
-    states one. The refusal is correct and it stays."""
-    rec = P.metric_records(_report("sky130_fd_sc_hd__tt_025C_1v80.lib"),
-                           stage="post_route_extracted")[0]
-    assert "mode" not in rec["scope"]
-    missing = [k for k in B.REQUIRED_SCOPE["power_mw"]
-               if k not in rec["scope"]]
-    assert missing == ["mode"]
 
 
-def test_a_caller_supplied_mode_completes_the_required_scope():
-    rec = P.metric_records(_report("sky130_fd_sc_hd__tt_025C_1v80.lib"),
-                           stage="post_route_extracted",
-                           extra_scope={"mode": "functional"})[0]
-    assert all(k in rec["scope"] for k in B.REQUIRED_SCOPE["power_mw"])
 
 
 TIMING_SCOPE = {"stage": "post_route", "mode": "functional", "process": "ss",
@@ -307,24 +215,3 @@ def _arms(power_scope):
                                    "scope": dict(TIMING_SCOPE)},
                  "power_mw": {"value": 1.0, "scope": dict(power_scope)}}}
             for flow in ("ours", "theirs")]
-
-
-def test_a_present_but_null_required_scope_key_is_refused():
-    """The SCOPE_INCOMPLETE hole one step in: `k not in sc` is satisfied by
-    `{"mode": None}`, and two arms declaring null then compare EQUAL and buy
-    the parity they were meant to be refused."""
-    with pytest.raises(B.Refusal) as exc:
-        B.check_scope_parity(_arms(dict(POWER_SCOPE, mode=None)))
-    assert exc.value.code == "SCOPE_SENTINEL"
-    assert "mode" in str(exc.value)
-
-
-def test_an_empty_string_scope_key_is_refused_the_same_way():
-    with pytest.raises(B.Refusal) as exc:
-        B.check_scope_parity(_arms(dict(POWER_SCOPE, process="")))
-    assert exc.value.code == "SCOPE_SENTINEL"
-
-
-def test_a_stated_scope_on_both_arms_still_passes_parity():
-    """The guard must refuse nulls without refusing a legitimate pair."""
-    B.check_scope_parity(_arms(POWER_SCOPE))

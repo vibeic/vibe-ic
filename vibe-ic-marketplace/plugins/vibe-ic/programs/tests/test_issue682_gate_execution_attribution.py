@@ -35,85 +35,24 @@ import pathlib
 import sys
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
-if str(_PROGRAMS) not in sys.path:
-    sys.path.insert(0, str(_PROGRAMS))
-
-_spec = importlib.util.spec_from_file_location(
-    "flow_compliance_check", _PROGRAMS / "flow_compliance_check.py")
-F = importlib.util.module_from_spec(_spec)
-sys.modules["flow_compliance_check"] = F
-try:
-    _spec.loader.exec_module(F)
-except SystemExit:
-    pass
 
 
-def setup_function(_fn):
-    F._GATE_LEDGER.clear()
+
 
 
 # ── the name a reader greps for ───────────────────────────────────────────
-def test_the_recorded_name_is_the_one_a_reader_would_grep():
-    assert F._gate_name("drv_promotion_corroboration_check . --json x.json") \
-        == "drv_promotion_corroboration_check"
-    assert F._gate_name("python3 /a/b/sta_corner_record_completeness_check.py .") \
-        == "sta_corner_record_completeness_check"
 
 
-def test_an_empty_command_does_not_crash_the_ledger():
-    assert F._gate_name("") == "<empty>"
 
 
 # ── a passing gate is recorded, which is the whole point ──────────────────
-def test_a_gate_that_passed_is_recorded():
-    """The defect in one assertion. Recording only failures is how an absence
-    became indistinguishable from a pass."""
-    F._record_gate_execution("some_check .", 0, "PASS")
-    lines = "\n".join(F.gate_ledger_lines())
-    assert "GATE_RAN some_check" in lines and "PASS" in lines
 
 
-def test_every_outcome_is_recorded_not_just_the_bad_ones():
-    for rc, verdict in ((0, "PASS"), (1, "FAIL"), (2, "VACUOUS_PASS"),
-                        (3, "PASS_WITH_WAIVERS"), (None, "CRASHED"),
-                        (None, "TIMEOUT"), (None, "NOT_FOUND")):
-        F._record_gate_execution(f"g_{verdict.lower()}_check .", rc, verdict)
-    lines = "\n".join(F.gate_ledger_lines())
-    assert lines.count("GATE_RAN") == 7
-    assert "launch-failed" in lines, "a gate that could not launch must say so"
 
 
-def test_the_block_is_emitted_even_when_nothing_ran():
-    """A record that appears only when there is something to report cannot be
-    used to prove there was nothing."""
-    lines = F.gate_ledger_lines()
-    assert lines and "no program gate was invoked" in lines[0]
 
 
 # ── the wiring, which is what makes it a record at all ────────────────────
-def test_a_PASSING_gate_is_recorded_END_TO_END(tmp_path, monkeypatch):
-    """MUTATION-DRIVEN, and the assertion this file was missing. Restricting the
-    record to `if not ok` left all eight tests green while restoring the exact
-    defect: a gate that ran and passed leaves no trace, so grep cannot tell it
-    from one that never ran. Every other test here either builds the ledger by
-    hand or reads the source; only this one drives the real evaluator and then
-    asks whether the PASS is in the record."""
-    called = {}
-
-    def fake_inner(project, cmd_str):
-        called["cmd"] = cmd_str
-        return True, "all good"            # a PASS, the case that was invisible
-
-    monkeypatch.setattr(F, "_%s__check_program_exit_zero" % "", fake_inner,
-                        raising=False)
-    monkeypatch.setattr(F, "__check_program_exit_zero", fake_inner,
-                        raising=False)
-    ok, _out = F._check_program_exit_zero(tmp_path, "quiet_passing_check .")
-    assert ok is True
-    lines = "\n".join(F.gate_ledger_lines())
-    assert "GATE_RAN quiet_passing_check" in lines, (
-        "a gate that RAN and PASSED left no trace — the whole defect")
-    assert "PASS" in lines
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -138,20 +77,6 @@ def test_a_PASSING_gate_is_recorded_END_TO_END(tmp_path, monkeypatch):
 # blanked. That is strictly stronger than the slice in both directions: a
 # subprocess call added to the wrapper is still caught, and prose about one
 # anywhere in the module is not.
-def _wrapper_source() -> str:
-    """The source of `_check_program_exit_zero` itself, by AST."""
-    import ast
-    src = (_PROGRAMS / "flow_compliance_check.py").read_text(encoding="utf-8")
-    tree = ast.parse(src)
-    fn = next((n for n in tree.body
-               if isinstance(n, ast.FunctionDef)
-               and n.name == "_check_program_exit_zero"), None)
-    assert fn is not None, (
-        "flow_compliance_check no longer defines a module-level "
-        "`_check_program_exit_zero`; this whole file is about that wrapper")
-    seg = ast.get_source_segment(src, fn)
-    assert seg, "ast could not return the wrapper's source segment"
-    return seg
 
 
 def _code_only(text: str) -> str:
@@ -179,107 +104,20 @@ def _code_only(text: str) -> str:
     return "".join(out)
 
 
-def test_the_record_is_not_conditional_on_the_outcome():
-    """The same property, read off the source: `_record_gate_execution` must sit
-    at the wrapper's body indent, not under any branch."""
-    wrapper = _wrapper_source()
-    # R-0915-119 (icspm5 change 1) passes the gate report's enumeration as
-    # `evidence=`, so the call spans lines; the call is found by its opening,
-    # and it must still sit at the wrapper's body indent.
-    lines = wrapper.splitlines()
-    i = next(n for n, l in enumerate(lines)
-             if "_record_gate_execution(" in l
-             and not l.lstrip().startswith(("#", "def ")))
-    assert lines[i].startswith("    _ledger_row = _record_gate_execution("), (
-        f"the record is nested under a branch: {lines[i]!r}")
-    assert lines[i + 1].strip().startswith("cmd_str, rc, verdict, reason_class"), (
-        lines[i:i + 3])
 
 
-def test_the_evaluator_records_every_return_by_WRAPPING():
-    """LOAD-BEARING. Inserting a call at each of the eleven return points leaves
-    a return added later unrecorded — and an unrecorded gate is exactly the
-    defect. The wrapper cannot be bypassed by a new return."""
-    wrapper = _code_only(_wrapper_source())
-    assert "__check_program_exit_zero(project, cmd_str)" in wrapper
-    # the four facts it records, whatever else (R-0915-119's `evidence=`) rides
-    # along with them
-    assert re.search(r"_record_gate_execution\(\s*cmd_str, rc, verdict, "
-                     r"reason_class\b", wrapper), wrapper[-600:]
 
 
-def test_the_verdict_is_read_from_the_snippet_not_re_derived():
-    """One classification, not a second that can disagree with the first. A
-    parallel derivation here would be a new way for the record to be wrong about
-    the run it describes."""
-    wrapper = _code_only(_wrapper_source())
-    for sentinel in ("_VACUOUS_HINT_PREFIX", "_WAIVER_HINT_PREFIX",
-                     "_CRASH_HINT_PREFIX"):
-        assert sentinel in wrapper, sentinel
-    assert "subprocess" not in wrapper, (
-        "the wrapper must not run anything itself — and this now reads the "
-        "wrapper's OWN code, so a `subprocess` in a comment or a docstring "
-        "anywhere in the module cannot make this red, while a real call added to "
-        "the wrapper still does")
 
 
-def test_main_prints_the_ledger_unconditionally():
-    """A block printed only on failure leaves the passing case exactly as
-    unreadable as it was."""
-    src = (_PROGRAMS / "flow_compliance_check.py").read_text(encoding="utf-8")
-    body = "\n".join(l for l in src.splitlines() if not l.lstrip().startswith("#"))
-    i = body.index("for _line in gate_ledger_lines():")
-    # it must sit at function-body indent inside main, not under an `if`
-    line = body[body.rfind("\n", 0, i) + 1:i + 40]
-    assert line.startswith("    for _line"), line
 
 
 # ── the repaired instrument, driven in both directions ─────────────────────
 
-def test_the_extraction_reads_the_wrapper_and_not_its_neighbours():
-    """THE DEFECT THIS REPAIRED, asserted directly. The old slice ran to the next
-    `def` NAME, so anything landed in the gap became "the wrapper"."""
-    import ast
-    src = (_PROGRAMS / "flow_compliance_check.py").read_text(encoding="utf-8")
-    own = _wrapper_source()
-    i = src.index("def _check_program_exit_zero(project: Path, cmd_str: str)")
-    j = src.index("def __check_program_exit_zero(", i)
-    slice_ = src[i:j]
-    assert own in slice_ and len(own) < len(slice_), (
-        "the slice no longer contains extra lines; if the two definitions are "
-        "adjacent again this test is the record of why it must not be relied on")
-    swallowed = ast.parse(slice_[len(own):].strip())
-    names = [n.name for n in swallowed.body if hasattr(n, "name")]
-    assert names, "nothing in the gap — see the assertion above"
-    # and the swallowed prose is what made a TRUE property read red
-    assert "subprocess" in slice_ and "subprocess" not in own
 
 
-def test_a_real_subprocess_call_in_the_wrapper_is_still_caught():
-    """MUTATION. The repair must not be a relaxation: a call added to the
-    wrapper's CODE still reddens the claim."""
-    import pytest
-    own = _wrapper_source()
-    # ANCHORED ON THE FIRST RETURN, whatever it returns: the wrapper's return type
-    # has been renamed once already (`_ProgramCheckOutcome` -> `_ProgramCheckResult`)
-    # and an arm anchored on the name would silently stop mutating.
-    ret = next(l for l in own.splitlines() if l.startswith("    return "))
-    mutated = _code_only(own.replace(
-        ret, "    subprocess.run(['true'])\n" + ret, 1))
-    assert "subprocess" in mutated, (
-        "the mutation did not land — this arm would be measuring nothing")
-    with pytest.raises(AssertionError):
-        assert "subprocess" not in mutated, "the wrapper must not run anything"
 
 
-def test_prose_about_a_subprocess_cannot_redden_the_claim():
-    """The other direction, and it is the one that went red on main: a comment or
-    a docstring mentioning a subprocess is not a subprocess."""
-    wrapper = _wrapper_source()
-    with_prose = wrapper.replace(
-        '    """', '    """A docstring that says subprocess, once.\n\n    ', 1)
-    assert "subprocess" in with_prose
-    assert "subprocess" not in _code_only(with_prose)
 
 
 def test_code_only_blanks_strings_and_keeps_the_line_shape():

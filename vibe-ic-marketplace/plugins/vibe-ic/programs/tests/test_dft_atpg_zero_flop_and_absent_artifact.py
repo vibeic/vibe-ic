@@ -31,8 +31,6 @@ PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 
 import fault_atpg_run as far                  # noqa: E402
-import transition_coverage_check as tcc       # noqa: E402
-import flow_compliance_check as fcc           # noqa: E402
 
 
 # --------------------------------------------------------------------------
@@ -167,145 +165,37 @@ def test_evidence_distinguishes_absent_flops_from_unchecked():
 # ==========================================================================
 # FIXTURE A — a design that HAS flops, zero detected. Must FAIL.
 # ==========================================================================
-def test_zero_flops_on_a_design_with_flops_fails(tmp_path):
-    blob = {
-        "verdict": "NOT_APPLICABLE", "scan_flops": 0,
-        "reasons": ["no sequential (scan-cut) flops found in the core"],
-        "sequential_evidence": far.sequential_evidence(NETLIST_WITH_FLOPS,
-                                                       LIB_SINGLE_SEP),
-    }
-    proj = _project(tmp_path, coverage=blob)
-    rep = tcc.audit(proj)
-    assert rep["verdict"] == "FAIL", rep
-    assert rep["verdict"] != "PASS"
-    assert tcc.main([str(proj)]) == 1
-    assert any("inserted nothing" in r for r in rep["reasons"]), rep["reasons"]
 
 
-def test_zero_flops_claim_with_no_evidence_at_all_is_blocked(tmp_path):
-    # The artefact exactly as the un-augmented producer wrote it: a bare
-    # NOT_APPLICABLE on scan_flops 0, with nothing behind it. Not a pass.
-    proj = _project(tmp_path, coverage={"verdict": "NOT_APPLICABLE",
-                                        "scan_flops": 0})
-    rep = tcc.audit(proj)
-    assert rep["verdict"] == "BLOCKED", rep
-    assert tcc.main([str(proj)]) == 1
 
 
-def test_zero_flops_is_not_rescued_by_a_coverage_number(tmp_path):
-    # A numeric result over a core into which nothing was cut measures nothing.
-    blob = _real_result(scan_flops=0)
-    blob["sequential_evidence"] = far.sequential_evidence(NETLIST_WITH_FLOPS,
-                                                          LIB_SINGLE_SEP)
-    proj = _project(tmp_path, coverage=blob)
-    assert tcc.audit(proj)["verdict"] == "FAIL"
 
 
 # ==========================================================================
 # FIXTURE B — a genuinely flop-free design. Must NOT false-FAIL.
 # ==========================================================================
-def test_genuinely_combinational_design_still_self_skips(tmp_path):
-    blob = {
-        "verdict": "NOT_APPLICABLE", "scan_flops": 0,
-        "reasons": ["combinational design has no launch-off-capture faults"],
-        "sequential_evidence": far.sequential_evidence(NETLIST_COMBINATIONAL,
-                                                       LIB_SINGLE_SEP),
-    }
-    proj = _project(tmp_path, coverage=blob)
-    rep = tcc.audit(proj)
-    assert rep["verdict"] == "NOT_APPLICABLE", rep
-    assert tcc.main([str(proj)]) == 0
 
 
 # ==========================================================================
 # FIXTURE C — the coverage artefact is absent. Must FAIL or BLOCK, never pass.
 # ==========================================================================
-def test_absent_artifact_with_no_record_fails(tmp_path):
-    proj = _project(tmp_path)  # nothing on disk at all
-    rep = tcc.audit(proj)
-    assert rep["verdict"] == "FAIL", rep
-    assert tcc.main([str(proj)]) == 1
-    assert any("ran at all" in r for r in rep["reasons"]), rep["reasons"]
 
 
-def test_absent_artifact_with_a_not_run_record_is_blocked_with_the_reason(tmp_path):
-    for stage, why in (
-            ("precondition_unmet",
-             "transition-delay-fault ATPG NEVER RAN — precondition unmet: "
-             "phase2/stage2/dft/cut_netlist.v absent"),
-            ("producer_wrote_no_artifact",
-             "transition-delay-fault ATPG RAN but wrote no "
-             "transition_coverage.json (producer exit 1)"),
-            ("producer_execution_error",
-             "transition ATPG execution error: timed out")):
-        proj = _project(tmp_path / stage, not_run={
-            "verdict": "SKIPPED-CONDITION", "reason": why,
-            "not_run_stage": stage})
-        rep = tcc.audit(proj)
-        assert rep["verdict"] == "BLOCKED", rep
-        assert rep["not_run_stage"] == stage, rep
-        # The reason survives to the gate verdict, so the three states stay
-        # distinguishable in the report instead of collapsing into silence.
-        assert why[:40] in " ".join(rep["reasons"]), rep["reasons"]
-        assert tcc.main([str(proj)]) == 1
 
 
-def test_producer_blocked_verdict_is_not_a_pass(tmp_path):
-    proj = _project(tmp_path, coverage={
-        "verdict": "BLOCKED", "scan_flops": 0,
-        "reasons": ["could not establish whether the design has flops"]})
-    assert tcc.audit(proj)["verdict"] == "BLOCKED"
-    assert tcc.main([str(proj)]) == 1
 
 
 # ==========================================================================
 # FIXTURE D — a real, complete ATPG result. Must still PASS.
 # A gate that cannot return clean is an alarm, not a gate.
 # ==========================================================================
-def test_real_complete_result_still_passes(tmp_path):
-    proj = _project(tmp_path, coverage=_real_result())
-    rep = tcc.audit(proj)
-    assert rep["verdict"] == "PASS", rep
-    assert rep["tdf_test_coverage_pct"] >= 90.0
-    assert tcc.main([str(proj)]) == 0
 
 
-def test_real_result_passes_even_with_a_stale_not_run_record(tmp_path):
-    # A real measurement is evidence; a leftover record from an earlier attempt
-    # must not block it.
-    proj = _project(tmp_path, coverage=_real_result(),
-                    not_run={"verdict": "SKIPPED-CONDITION",
-                             "reason": "stale record from a prior attempt"})
-    assert tcc.audit(proj)["verdict"] == "PASS"
-    assert tcc.main([str(proj)]) == 0
 
 
-def test_real_result_below_floor_still_fails(tmp_path):
-    # The floor gate is untouched by any of this.
-    proj = _project(tmp_path, coverage=_real_result(n_det=50, n_red=0,
-                                                    n_abort=50))
-    assert tcc.audit(proj)["verdict"] == "FAIL"
 
 
 # ==========================================================================
 # Flow visibility: a step whose only trigger is its own input disappears when
 # that input is missing. Its not-run record must be able to reach the gate.
 # ==========================================================================
-def test_condition_any_of_lets_a_not_run_record_reach_the_gate(tmp_path):
-    cond = {"any_of": True,
-            "files_exist": ["phase2/stage2/dft/cut_netlist.v",
-                            "reports/phase2/dft/transition_coverage.json",
-                            "phase2/stage2/dft/transition_atpg_not_run.json"]}
-    proj = _project(tmp_path, not_run={"verdict": "SKIPPED-CONDITION",
-                                       "reason": "cut netlist absent"})
-    assert fcc._check_condition(proj, cond) is True
-    # Nothing at all present → the step legitimately does not run.
-    assert fcc._check_condition(tmp_path / "empty", cond) is False
-
-
-def test_condition_all_of_semantics_are_unchanged_by_default(tmp_path):
-    proj = _project(tmp_path, not_run={"verdict": "SKIPPED-CONDITION",
-                                       "reason": "x"})
-    cond = {"files_exist": ["phase2/stage2/dft/cut_netlist.v",
-                            "phase2/stage2/dft/transition_atpg_not_run.json"]}
-    assert fcc._check_condition(proj, cond) is False

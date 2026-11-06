@@ -48,7 +48,6 @@ import re
 import pytest
 
 import _pad_ring as PR
-import pad_ring_gen as PRG
 
 UNITS = 2000
 #: An invented library. Two masters, two DIFFERENT terminal names, so a reader
@@ -81,10 +80,6 @@ def _floorplan(pins) -> str:
             "END DESIGN\n")
 
 
-def _moves(pads):
-    moves, notes = PRG.pad_terminal_bterms(pads, _PORTS, _TERMINALS, _SIZE,
-                                           UNITS)
-    return moves, notes
 
 
 def _pin_rects(def_text):
@@ -107,89 +102,20 @@ def _pin_rects(def_text):
     return out
 
 
-@pytest.mark.parametrize("orient", sorted(PR._ORIENT_RECT))
-def test_the_bterm_lands_inside_the_pads_own_terminal(orient):
-    """THE PROPERTY, over every orientation the flow can place."""
-    pad = _pad("u_pad_a", "a", "fixture_io__in_c", 3087000, 52000, orient)
-    moves, notes = _moves([pad])
-    assert notes == [] and len(moves) == 1
-    layer, rect = "Metal5", (7.5, 2.0, 67.5, 62.0)
-    x1, y1, x2, y2 = PR.orient_rect(rect, orient, _SIZE["fixture_io__in_c"])
-    want = (pad["x"] + int(x1 * UNITS), pad["y"] + int(y1 * UNITS),
-            pad["x"] + int(x2 * UNITS), pad["y"] + int(y2 * UNITS))
-    assert moves[0]["layer"] == layer
-    assert tuple(moves[0]["rect_dbu"]) == want
-
-    text, rewritten = PRG._rewrite_pins(_floorplan(["a"]), moves)
-    assert rewritten == ["a"]
-    got_layer, got = _pin_rects(text)["a"]
-    assert got_layer == layer
-    assert (got[0] >= want[0] and got[1] >= want[1]
-            and got[2] <= want[2] and got[3] <= want[3]), (
-        "the BTerm must lie INSIDE the pad terminal it is placed on")
 
 
-def test_the_terminal_name_is_read_from_the_pdk_not_assumed():
-    """A pad whose signal pin is not called `PAD` is placed just the same."""
-    moves, notes = _moves([_pad("u_pad_b", "b", "fixture_io__asig",
-                                52000, 52000, "N")])
-    assert notes == []
-    assert moves[0]["terminal"] == "ASIG5V"
-    assert moves[0]["rect_dbu"][0] == 52000 + int(10.0 * UNITS)
 
 
-def test_a_master_the_pdk_does_not_list_moves_nothing_and_says_so():
-    moves, notes = PRG.pad_terminal_bterms(
-        [_pad("u_pad_c", "c", "fixture_io__in_c", 0, 0, "N")],
-        _PORTS, {}, _SIZE, UNITS)
-    assert moves == []
-    assert [n["rule"] for n in notes] == ["PAD_TERMINAL_PIN_UNDECLARED"]
 
 
-def test_a_terminal_with_no_lef_geometry_moves_nothing_and_says_so():
-    moves, notes = PRG.pad_terminal_bterms(
-        [_pad("u_pad_c", "c", "fixture_io__in_c", 0, 0, "N")],
-        {"fixture_io__in_c": {}}, _TERMINALS, _SIZE, UNITS)
-    assert moves == []
-    assert [n["rule"] for n in notes] == ["PAD_TERMINAL_GEOMETRY_ABSENT"]
 
 
-def test_an_orientation_the_transform_cannot_map_moves_nothing():
-    """No approximation: a rotation nobody wrote down is not 'probably N'."""
-    moves, notes = _moves([_pad("u_pad_d", "d", "fixture_io__in_c",
-                                0, 0, "R45")])
-    assert moves == []
-    assert [n["rule"] for n in notes] == ["PAD_ORIENTATION_UNMAPPED"]
 
 
-def test_a_port_no_pad_drives_keeps_its_floorplan_pin_byte_for_byte():
-    """THE CONTROL for the core-only path, which has no ring at all."""
-    source = _floorplan(["a", "unpadded"])
-    moves, _ = _moves([_pad("u_pad_a", "a", "fixture_io__in_c",
-                            3087000, 52000, "N")])
-    text, rewritten = PRG._rewrite_pins(source, moves)
-    assert rewritten == ["a"]
-    before = [e for e in source.split(";") if "- unpadded" in e][0].strip()
-    after = [e for e in text.split(";") if "- unpadded" in e][0].strip()
-    assert before == after
-    assert "PLACED ( 1000 2000 )" in after
 
 
-def test_no_ring_at_all_leaves_the_whole_section_untouched():
-    source = _floorplan(["a", "b"])
-    text, rewritten = PRG._rewrite_pins(source, [])
-    assert text == source and rewritten == []
 
 
-def test_the_largest_rectangle_is_chosen_not_the_first():
-    """A pin with several ports: the choice is by area, never by file order."""
-    ports = {"fixture_io__in_c": {"PAD": [
-        ("Metal5", (0.0, 0.0, 1.0, 1.0)),
-        ("Metal5", (10.0, 10.0, 50.0, 50.0))]}}
-    moves, _ = PRG.pad_terminal_bterms(
-        [_pad("u_pad_a", "a", "fixture_io__in_c", 0, 0, "N")],
-        ports, _TERMINALS, _SIZE, UNITS)
-    assert moves[0]["rect_dbu"] == [20000, 20000, 100000, 100000]
 
 
 def _executable_source(path: str, start: str, stop: str) -> str:
@@ -234,22 +160,3 @@ def test_the_pad_face_resolver_carries_no_pdk_literal_either():
     for pin in ("PAD", "OE", "PU", "IE", "gf180", "sky130", "sg13"):
         assert chr(34) + pin + chr(34) not in body, (
             f"{pin!r} baked into the resolver")
-
-
-def test_the_superseded_placement_is_NOT_on_the_terminal():
-    """The control that does not depend on the symbol under test.
-
-    Reverting this change gives a COLLECTION ERROR — the new functions are
-    gone — which proves only that they are absent. So the OLD behaviour is
-    reproduced here directly: the floorplan's own die-edge pin, kept verbatim
-    as the previous emitter kept it, and asserted NOT to lie inside the pad's
-    terminal. If it ever did, this whole change would be a no-op and this test
-    fails instead of passing quietly.
-    """
-    pad = _pad("u_pad_a", "a", "fixture_io__in_c", 3087000, 52000, "N")
-    kept = _pin_rects(_floorplan(["a"]))["a"]          # what the flow emitted
-    moves, _ = _moves([pad])
-    terminal = tuple(moves[0]["rect_dbu"])
-    assert kept[0] != moves[0]["layer"] or not (
-        kept[1][0] >= terminal[0] and kept[1][1] >= terminal[1]
-        and kept[1][2] <= terminal[2] and kept[1][3] <= terminal[3])

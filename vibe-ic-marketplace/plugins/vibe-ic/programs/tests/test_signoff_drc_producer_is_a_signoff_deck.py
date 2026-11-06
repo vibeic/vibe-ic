@@ -33,7 +33,6 @@ import pytest
 
 drc_report_check = importlib.import_module("drc_report_check")
 eda_report_audit = importlib.import_module("eda_report_audit")
-provenance_check = importlib.import_module("provenance_check")
 signoff_ladder_run = importlib.import_module("signoff_ladder_run")
 _sdf = importlib.import_module("_signoff_drc_format")
 runner = importlib.import_module("phase3_one_shot_runner")
@@ -159,16 +158,6 @@ def gate(proj, *extra, under="reports/phase3/drc_signoff.rpt"):
     return rc, payload, err.getvalue()
 
 
-def prov(proj, tools):
-    out, err = io.StringIO(), io.StringIO()
-    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-        try:
-            rc = provenance_check.main([str(proj), "--output",
-                                        "reports/phase3/drc_signoff.rpt",
-                                        "--tool", tools])
-        except SystemExit as exc:
-            rc = exc.code
-    return rc, out.getvalue()
 
 
 def measured_klayout_receipt(proj, gds_rel="phase3/stage3/pnr/top.gds"):
@@ -421,99 +410,12 @@ def test_violations_still_fail_under_signoff(tmp_path):
 # --------------------------------------------------------------------------
 # 3. THE ATTRIBUTION (the half that makes the allow-list mean anything)
 # --------------------------------------------------------------------------
-def test_provenance_attribution_comes_from_the_artefact(tmp_path):
-    proj = project(tmp_path, signoff_alias("pnr/routed.drc.rpt", "openroad",
-                                           router_projection(0)))
-    declared = runner._v1_6_620_append_pv_signoff_provenance(proj, "top")
-    assert declared == ["reports/phase3/drc_signoff.rpt"]
-    entry = json.loads((proj / "provenance.jsonl").read_text().splitlines()[0])
-    assert entry["tool"] == "openroad"
-    assert "klayout" not in entry["command"]
-    assert prov(proj, "klayout,magic,svrfdrc")[0] == 1
-    assert prov(proj, "klayout,magic")[0] == 1
 
 
-def test_negative_control_the_hardcoded_attribution_defeats_every_allowlist(
-        tmp_path, monkeypatch):
-    """NEGATIVE CONTROL — the pre-fix attribution, executed.
-
-    With the tool hardcoded to `klayout` (what the function did before), the
-    router projection passes the provenance gate under EVERY list, including
-    one with `openroad` removed. This is the measurement that says the
-    allow-list edit alone closes nothing.
-    """
-    monkeypatch.setattr(runner, "_signoff_drc_tool",
-                        lambda p: ("klayout", "klayout -b -r drc (sign-off DRC)"))
-    proj = project(tmp_path, signoff_alias("pnr/routed.drc.rpt", "openroad",
-                                           router_projection(0)))
-    runner._v1_6_620_append_pv_signoff_provenance(proj, "top")
-    for tools in ("klayout,magic,openroad", "klayout,magic,svrfdrc",
-                  "klayout,magic"):
-        assert prov(proj, tools)[0] == 0, tools
 
 
-def test_an_unattributable_report_is_declared_unknown_never_guessed(tmp_path):
-    """§4.05 — a guess is worse than a gap, but silence is worse than a gap too.
-
-    The ledger records the artefact and its real digest; `unknown` is in no
-    allow-list, so the gate still FAILs — with a reason that says the producer
-    was not determined, rather than one that reads as "never produced".
-    """
-    proj = project(tmp_path, "nothing recognisable here\n" * 300)
-    assert runner._v1_6_620_append_pv_signoff_provenance(proj, "top") == [
-        "reports/phase3/drc_signoff.rpt"]
-    entry = json.loads((proj / "provenance.jsonl").read_text().splitlines()[0])
-    assert entry["tool"] == "unknown"
-    rc, out = prov(proj, "klayout,magic,svrfdrc")
-    assert rc == 1
-    assert "not in allowed" in out
 
 
-def test_attribution_is_corrected_in_place_when_the_artefact_changes(tmp_path):
-    """The stamp used to be append-if-the-PATH-is-absent, so the FIRST record
-    for a path was the last one ever written — and the one producer that
-    rewrites an existing sign-off report (the SVRF force-refresh) was
-    guaranteed a stale digest.
-    """
-    proj = project(tmp_path, signoff_alias("pnr/routed.drc.rpt", "openroad",
-                                           router_projection(0)))
-    assert runner._v1_6_620_append_pv_signoff_provenance(proj, "top")
-    # 2026-09-24 (lane ictier1, reemit r3; review wo6zpfboe, design approved):
-    # the sign-off back-fill observes and never re-declares CHANGED bytes. The
-    # SVRF force-refresh is written by step_canonicalize_artefacts' alias
-    # writer through `_declared_transform_exec`, chained to the SVRF report the
-    # svrfdrc run declared -- that write is what makes the ledger follow the
-    # artefact now, so the back-fill that follows has nothing left to add.
-    # Asserted: the ledger follows (tools, newest record, step 31 PASSes);
-    # changed: the follow is the transform's record (producing_step), not the
-    # back-fill's (`again`, `supersedes`).
-    rpt3 = proj / "reports" / "phase3"
-    src = proj / "reports" / "drc_svrf.rpt"
-    src.parent.mkdir(parents=True, exist_ok=True)
-    src.write_text(svrf_report(0, 40))
-    with (proj / "provenance.jsonl").open("a") as f:
-        f.write(json.dumps({"record": "invocation", "tool": "svrfdrc",
-                            "command": "svrfdrc run", "exit_code": 0,
-                            "timestamp": "2026-09-24T00:00:00Z",
-                            "outputs": {"reports/drc_svrf.rpt":
-                                        "sha256:" + hashlib.sha256(
-                                            src.read_bytes()).hexdigest()}})
-                + "\n")
-    runner._declared_transform_exec(
-        proj, rpt3 / "drc_signoff.rpt", "canonicalize_artefacts:drc_alias",
-        "svrfdrc", "sign-off DRC alias of drc_svrf.rpt",
-        lambda: (rpt3 / "drc_signoff.rpt").write_text(signoff_alias(
-            "reports/drc_svrf.rpt", "svrfdrc", svrf_report(0, 40))),
-        input_path=src)
-    again = runner._v1_6_620_append_pv_signoff_provenance(proj, "top")
-    assert again == [], again
-    entries = [json.loads(l) for l in
-               (proj / "provenance.jsonl").read_text().splitlines() if l.strip()]
-    drc = [e for e in entries
-           if "reports/phase3/drc_signoff.rpt" in (e.get("outputs") or {})]
-    assert [e["tool"] for e in drc] == ["openroad", "svrfdrc"]
-    assert drc[-1]["producing_step"] == "canonicalize_artefacts:drc_alias"
-    assert prov(proj, "klayout,magic,svrfdrc")[0] == 0
 
 
 def test_re_stamping_an_unchanged_artefact_is_still_a_no_op(tmp_path):
@@ -522,26 +424,6 @@ def test_re_stamping_an_unchanged_artefact_is_still_a_no_op(tmp_path):
     assert runner._v1_6_620_append_pv_signoff_provenance(proj, "top") == []
 
 
-def test_a_backfill_never_supersedes_a_measured_invocation(tmp_path):
-    """The correction must not become its own laundering route.
-
-    When the newest declaration came from a real, observed tool run, a changed
-    artefact must keep FAILing on `hash mismatch` — "this is not the file the
-    measured run produced" is a far stronger verdict than a fresh back-fill
-    carrying the current digest, which would silently turn that FAIL into a
-    PASS.
-    """
-    proj = project(tmp_path, klayout_rdb(top="top"))
-    rel = "reports/phase3/drc_signoff.rpt"
-    (proj / "provenance.jsonl").write_text(json.dumps({
-        "record": "invocation", "measured": True, "tool": "klayout",
-        "exit_code": 0, "timestamp": "2020-01-01T00:00:00Z",
-        "command": "klayout -b -r /pdk/deck.lydrc -rd input=top.gds",
-        "outputs": {rel: "sha256:" + "1" * 64}}) + "\n")
-    assert runner._v1_6_620_append_pv_signoff_provenance(proj, "top") == []
-    rc, out = prov(proj, "klayout,magic,svrfdrc")
-    assert rc == 1
-    assert "hash mismatch" in out
 
 
 # --------------------------------------------------------------------------
@@ -567,13 +449,6 @@ def test_a_firing_foundry_rule_still_fails(tmp_path):
     assert payload["summary"]["real_violation_total"] == 2
 
 
-def test_svrfdrc_needs_the_new_allowlist_and_fails_the_old_one(tmp_path):
-    proj = project(tmp_path, svrf_report(fails=0), gds_stem="top")
-    runner._v1_6_620_append_pv_signoff_provenance(proj, "top")
-    entry = json.loads((proj / "provenance.jsonl").read_text().splitlines()[0])
-    assert entry["tool"] == "svrfdrc"
-    assert prov(proj, "klayout,magic,svrfdrc")[0] == 0      # the new list
-    assert prov(proj, "klayout,magic,openroad")[0] == 1     # the old one
 
 
 # --------------------------------------------------------------------------

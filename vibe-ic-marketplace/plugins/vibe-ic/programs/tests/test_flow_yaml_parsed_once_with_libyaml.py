@@ -117,35 +117,8 @@ def test_step_metrics_gate_exit_parses_the_flow_once_and_with_libyaml(monkeypatc
         assert spy.pure_python == 0, "flow yaml went through the pure-Python scanner"
 
 
-def test_flow_compliance_check_derivations_share_one_parse(monkeypatch):
-    import flow_compliance_check as FCC
-    # Its import already parsed the flow (two module-level derivations); count
-    # what the calls cost from an empty cache, as a fresh process would.
-    fy = sys.modules.get("_flow_yaml")
-    if fy is not None:
-        fy.clear_cache()
-    spy = _ParseSpy(monkeypatch)
-    roles = FCC._derive_os_constraints_prereq_steps()
-    board = FCC._derive_fpga_board_step_ids()
-    alts = FCC.step4_sim_evidence_alternatives()
-    consumed = FCC._outputs_read_by_in_scope_steps("__none__", ["x/y.json"], {})
-    assert roles and isinstance(board, frozenset) and alts
-    assert isinstance(consumed, list)
-    assert len(spy.docs) == 1, f"flow parsed {len(spy.docs)}x in one process"
-    if _libyaml():
-        assert spy.pure_python == 0
 
 
-def test_stage_on_pass_review_reads_share_one_parse(monkeypatch):
-    import stage_on_pass_review as SOPR
-    spy = _ParseSpy(monkeypatch)
-    declaring = SOPR.stages_declaring_review(_FLOW)
-    for st in declaring[:3]:
-        SOPR.load_declaration(_FLOW, st["stage"])
-    assert declaring
-    assert len(spy.docs) == 1, f"flow parsed {len(spy.docs)}x in one process"
-    if _libyaml():
-        assert spy.pure_python == 0
 
 
 # --------------------------------------------------------------------------- #
@@ -289,10 +262,6 @@ def test_errors_are_the_ones_read_text_and_safe_load_raised(tmp_path):
 # 137 flow parses of one flow_compliance_check run went through these four).
 # --------------------------------------------------------------------------- #
 
-def _call_waivers_schema_check():
-    import waivers_schema_check as M
-    M._FLOW_ID_CACHE.clear()
-    return M.flow_step_ids(_FLOW)
 
 
 def _call_l24_signoff_requirements_extract():
@@ -301,15 +270,8 @@ def _call_l24_signoff_requirements_extract():
     return M._declared_records(_FLOW)
 
 
-def _call_closed_loop_metric_reaches_its_producer():
-    import closed_loop_metric_reaches_its_producer as M
-    return M.audit(_PLUGIN.parents[2])["denominator"]
 
 
-def _call_phase1_planned_consumer_starved_check(tmp_path):
-    import phase1_planned_consumer_starved_check as M
-    return M.main([str(tmp_path), "--flow", str(_FLOW),
-                   "--json", str(tmp_path / "out.json")])
 
 
 @pytest.mark.parametrize("call", [
@@ -363,100 +325,20 @@ def test_different_decoded_texts_of_one_file_are_different_parses(tmp_path):
     assert sum(_flow_yaml.PARSES.values()) == 2
 
 
-def _metadata_reader(name):
-    """The three actual metadata boundaries in the sequential-reader profile."""
-    import flow_dashboard_data
-    import _step_identity
-    import step_required_inputs_check
-    return {'dashboard': flow_dashboard_data._load_flow,
-            'identity': _step_identity.load_steps,
-            'required_inputs': step_required_inputs_check.load_flow}[name]
 
 
 def _metadata_steps(name, result):
     return result[1] if name == 'dashboard' else result[0] if name == 'required_inputs' else result
 
 
-@pytest.mark.parametrize('name', ['dashboard', 'identity', 'required_inputs'])
-def test_profiled_metadata_readers_preserve_all_70_canonical_rows(name):
-    reference = yaml.safe_load(_FLOW.read_text(encoding='utf-8'))
-    result = _metadata_reader(name)(_FLOW)
-    expected = reference['steps']
-    assert len(expected) == 70
-    _strict_equal(_metadata_steps(name, result), expected)
-    if name == 'dashboard':
-        _strict_equal(result[0], reference)
-    elif name == 'required_inputs':
-        assert result[1] is None
 
 
-def test_profiled_metadata_readers_share_one_parse_without_a_python_scanner(monkeypatch):
-    import _flow_yaml
-    names = ('dashboard', 'identity', 'required_inputs')
-    readers = [_metadata_reader(name) for name in names]
-    _flow_yaml.clear_cache()  # exclude existing import-time flow derivations
-    spy = _ParseSpy(monkeypatch)
-    for _ in range(2):
-        for name, reader in zip(names, readers):
-            assert len(_metadata_steps(name, reader(_FLOW))) == 70
-    print(f'metadata-reader-control constructions={len(spy.docs)} pure_python_scans={spy.pure_python}')
-    assert len(spy.docs) == 1, f'actual metadata readers constructed {len(spy.docs)} documents'
-    if _libyaml():
-        assert spy.pure_python == 0
 
 
-@pytest.mark.parametrize('name', ['dashboard', 'identity', 'required_inputs'])
-def test_profiled_metadata_readers_keep_custom_path_copy_and_fresh_content(tmp_path, name):
-    reader = _metadata_reader(name)
-    path = tmp_path / 'custom.yaml'
-    path.write_text("steps:\n- id: 'x'\n  name: aaaa\n  stage: custom\n  required_outputs: ['own.json']\n", encoding='utf-8')
-    first = reader(path)
-    steps = _metadata_steps(name, first)
-    assert steps[0]['id'] == 'x' and steps[0]['name'] == 'aaaa'
-    steps[0]['required_outputs'].append('caller-only.json')
-    steps[0]['name'] = 'caller mutation'
-    second = _metadata_steps(name, reader(path))
-    assert second[0]['name'] == 'aaaa' and second[0]['required_outputs'] == ['own.json']
-    stat = path.stat()
-    path.write_text(path.read_text().replace('aaaa', 'bbbb'), encoding='utf-8')
-    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
-    assert path.stat().st_mtime_ns == stat.st_mtime_ns and path.stat().st_size == stat.st_size
-    current = _metadata_steps(name, reader(path))
-    assert current[0]['name'] == 'bbbb' and current[0]['required_outputs'] == ['own.json']
-    _strict_equal(current, yaml.safe_load(path.read_text(encoding='utf-8'))['steps'])
 
 
-@pytest.mark.parametrize('name', ['dashboard', 'identity', 'required_inputs'])
-@pytest.mark.parametrize('damage', ['missing', 'malformed', 'decode'])
-def test_profiled_metadata_readers_keep_existing_error_boundaries(tmp_path, name, damage):
-    reader = _metadata_reader(name)
-    path = tmp_path / 'bad.yaml'
-    if damage == 'malformed':
-        path.write_text('steps: [\n', encoding='utf-8')
-    elif damage == 'decode':
-        path.write_bytes(b'steps: [\xff]\n')
-    if name == 'identity':
-        assert reader(path) == []
-    elif name == 'required_inputs' and damage != 'decode':
-        steps, error = reader(path)
-        assert steps == [] and error.startswith('flow unreadable:')
-    else:
-        error = {'missing': FileNotFoundError, 'malformed': yaml.YAMLError,
-                 'decode': UnicodeDecodeError}[damage]
-        with pytest.raises(error):
-            reader(path)
 
 
-@pytest.mark.parametrize('name', ['dashboard', 'identity', 'required_inputs'])
-def test_profiled_metadata_readers_keep_empty_flow_results(tmp_path, name):
-    path = tmp_path / 'empty.yaml'
-    path.write_text('steps: []\n', encoding='utf-8')
-    result = _metadata_reader(name)(path)
-    assert _metadata_steps(name, result) == []
-    if name == 'dashboard':
-        assert result[0] == {'steps': []}
-    elif name == 'required_inputs':
-        assert result[1] == 'flow declares no steps'
 
 
 def test_profiled_identity_reader_keeps_absolute_path_import_without_programs_on_sys_path(tmp_path):

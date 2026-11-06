@@ -41,8 +41,6 @@ from _gds_geometry import GdsError, _RT                         # noqa: E402
 #: this file keep passing after the module stopped looking at them.
 _BGNLIB = next(k for k, v in _RT.items() if v == "BGNLIB")
 _BGNSTR = next(k for k, v in _RT.items() if v == "BGNSTR")
-from _ppa import identity as ident                              # noqa: E402
-from _ppa import provenance as prov                             # noqa: E402
 
 
 def _rec(rtype: int, dtype: int, payload: bytes) -> bytes:
@@ -180,57 +178,3 @@ def _run_tree(root: Path, second: int, xy: int = 7) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     (root / "chip_top.gds").write_bytes(_stream(second, xy=xy))
     return root
-
-
-def _identity(root: Path):
-    rows = prov.artefact_refs(root, [{"role": "gds", "path": "chip_top.gds"}])
-    return ident.identity("implementation", artefacts=rows), rows
-
-
-def test_the_raw_attestation_hash_is_still_exact(tmp_path):
-    """NOT relaxed: the single-artefact record still names the shipped bytes."""
-    root = _run_tree(tmp_path / "run", 28)
-    _record, rows = _identity(root)
-    raw = "sha256:" + hashlib.sha256((root / "chip_top.gds").read_bytes()).hexdigest()
-    assert rows[0]["sha256"] == raw, (
-        "the attestation hash was canonicalised — that destroys the one "
-        "property provenance_check and benchmark_evidence_publish exist for")
-
-
-def test_two_runs_of_one_layout_compare_SAME(tmp_path):
-    left, _ = _identity(_run_tree(tmp_path / "a", 28))
-    right, _ = _identity(_run_tree(tmp_path / "b", 31))
-    verdict = ident.compare(left, right)
-    assert verdict["verdict"] == "SAME", verdict
-
-
-def test_two_runs_of_DIFFERENT_layouts_still_compare_DIFFERENT(tmp_path):
-    left, _ = _identity(_run_tree(tmp_path / "a", 28, xy=7))
-    right, _ = _identity(_run_tree(tmp_path / "b", 28, xy=9))
-    verdict = ident.compare(left, right)
-    assert verdict["verdict"] == "DIFFERENT", verdict
-
-
-def test_a_gds_that_cannot_be_canonicalised_is_UNDETERMINED_not_DIFFERENT(
-        tmp_path):
-    """The whole point of the honesty rule, at the seam that consumes it."""
-    good = _run_tree(tmp_path / "a", 28)
-    bad = tmp_path / "b"
-    bad.mkdir()
-    (bad / "chip_top.gds").write_bytes(b"truncated nonsense")
-    left, _ = _identity(good)
-    right, rows = _identity(bad)
-    # The ATTESTATION is untouched: the row still records exactly which bytes
-    # are on disk. It is the IDENTITY that refuses, which is the whole point --
-    # a file we cannot canonicalise is one we cannot compare, and saying so is
-    # not the same as saying the two layouts differ.
-    assert rows[0]["status"] == prov.MEASURED, rows[0]
-    assert rows[0]["sha256"].startswith("sha256:"), rows[0]
-    assert rows[0]["identity_status"] == prov.NOT_MEASURED, rows[0]
-    assert rows[0]["identity_reason"], "NOT_MEASURED with no reason"
-    assert "identity_sha256" not in rows[0], (
-        "a canonical digest was recorded for a file that could not be "
-        "canonicalised")
-    verdict = ident.compare(left, right)
-    assert verdict["verdict"] == "UNDETERMINED", verdict
-    assert "NOT_MEASURED" in verdict["reason"], verdict

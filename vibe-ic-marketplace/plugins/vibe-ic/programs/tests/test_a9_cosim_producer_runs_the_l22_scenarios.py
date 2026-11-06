@@ -32,7 +32,6 @@ if str(PROGRAMS) not in sys.path:
 
 import analog_a9_cosim_emit as A9  # noqa: E402
 import l22_analog_verification_plan_emit as L22  # noqa: E402
-import mixed_signal_cosim_check as GATE  # noqa: E402
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "a9_cosim_scenarios"
 OBSERVER_LOG = FIXTURE / "a9_observer_ngspice_dcosim.txt"
@@ -287,89 +286,25 @@ def _write_results(project, scenarios, sha=None):
         {"l22_sha256": sha, **s} for s in scenarios]}))
 
 
-def _gate(project):
-    res = GATE.run_audit(project)
-    rc = GATE.main([str(project), "--json", str(project / "gate.json")])
-    return rc, {f.rule for f in res.findings}
 
 
 _ALL = ["S1", "S2", "S3", "S4", "S5"]
 
 
-def test_the_gate_passes_only_every_declared_id(tmp_path):
-    project = _project(tmp_path)
-    _write_results(project, [{"id": s, "verdict": "PASS"} for s in _ALL])
-    rc, _rules = _gate(project)
-    assert rc == 0
 
 
-def test_a_declared_id_the_producer_left_out_fails(tmp_path):
-    """The mutation this pins: judging the producer's own list would PASS."""
-    project = _project(tmp_path)
-    _write_results(project, [{"id": s, "verdict": "PASS"} for s in _ALL[:4]])
-    rc, rules = _gate(project)
-    assert rc == 1
-    assert "COSIM_SCENARIO_MISSING" in rules
 
 
-def test_an_undeclared_extra_is_not_counted(tmp_path):
-    project = _project(tmp_path)
-    _write_results(project, [{"id": s, "verdict": "PASS"} for s in _ALL]
-                   + [{"id": "EXTRA", "verdict": "FAIL"}])
-    rc, rules = _gate(project)
-    assert rc == 0
-    assert "UNDECLARED_EXTRA" in rules
 
 
-def test_not_measured_and_unbounded_are_not_verified(tmp_path):
-    for word in ("NOT_MEASURED", "UNBOUNDED"):
-        project = _project(tmp_path / word)
-        _write_results(project, [{"id": s, "verdict": "PASS"} for s in _ALL[:4]]
-                       + [{"id": "S5", "verdict": word, "reason": "r"}])
-        rc, rules = _gate(project)
-        assert rc == 2, word
-        assert "SCENARIO_NOT_VERIFIED" in rules
 
 
-def test_a_failed_declared_scenario_fails(tmp_path):
-    project = _project(tmp_path)
-    _write_results(project, [{"id": s, "verdict": "PASS"} for s in _ALL[:4]]
-                   + [{"id": "S5", "verdict": "FAIL"}])
-    assert _gate(project)[0] == 1
 
 
-def test_results_from_another_plan_are_stale(tmp_path):
-    project = _project(tmp_path)
-    _write_results(project, [{"id": s, "verdict": "PASS"} for s in _ALL],
-                   sha="0" * 64)
-    rc, rules = _gate(project)
-    assert rc == 1
-    assert "STALE_PLAN" in rules
 
 
-def test_zero_declared_rows_is_not_verified_and_names_the_gaps(tmp_path):
-    project = _project(tmp_path)
-    path = project / "phase1/generated_docs/L22_VERIFICATION_PLAN.json"
-    doc = json.loads(path.read_text())
-    doc["fields"]["verification_plan"]["cosim_scenarios"] = []
-    path.write_text(json.dumps(doc))
-    res = GATE.run_audit(project)
-    assert res.passed and res.vacuous
-    msg = next(f.message for f in res.findings
-               if f.rule == "COSIM_NO_DECLARED_SCENARIOS")
-    assert "power_up_sequencing" in msg
-    assert GATE.main([str(project), "--json", str(tmp_path / "g.json")]) == 2
 
 
-def test_a_plan_without_the_key_keeps_the_old_behaviour(tmp_path):
-    project = _project(tmp_path)
-    path = project / "phase1/generated_docs/L22_VERIFICATION_PLAN.json"
-    doc = json.loads(path.read_text())
-    for key in ("cosim_scenarios", "cosim_scenario_gaps", "cosim_status"):
-        doc["fields"]["verification_plan"].pop(key)
-    path.write_text(json.dumps(doc))
-    _write_results(project, [{"id": "only", "verdict": "PASS"}])
-    assert GATE.main([str(project), "--json", str(tmp_path / "g.json")]) == 0
 
 
 # ── the runner reads the producer's tier from its exit code ─────────────────

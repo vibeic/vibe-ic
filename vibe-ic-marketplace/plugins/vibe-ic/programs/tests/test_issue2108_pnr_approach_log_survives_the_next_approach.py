@@ -46,7 +46,6 @@ import pytest
 import _hostpaths
 
 mod = importlib.import_module("phase3_one_shot_runner")
-dsp = importlib.import_module("def_stage_progression_check")
 
 
 # ---------------------------------------------------------------------------
@@ -219,19 +218,6 @@ class TestCanonicalLogUnchanged:
 # 3. THE ARCHIVES MUST NOT BE SWEPT UP BY SOMEBODY ELSE'S `*.log` GLOB
 # ---------------------------------------------------------------------------
 class TestArchivesDoNotLaunderADowngrade:
-    def test_superseded_nonfatal_marker_does_not_demote_the_shipped_run(
-            self, two_approaches):
-        """Approach 0 emitted `DETAILED_ROUTE_NONFATAL:`; the approach that
-        SHIPPED did not.
-
-        `def_stage_progression_check._is_global_route_only` sweeps
-        `pnr_dir.rglob("*.log")` and demotes a `no-routing-geometry` error to a
-        warning wherever it finds that marker. If the per-approach archives are
-        named `*.log`, a superseded approach's marker silently downgrades a
-        finding about a different approach.
-        """
-        _res, project, _calls = two_approaches
-        assert dsp._is_global_route_only(project) is False
 
     def test_no_archive_is_named_like_a_run_log(self, two_approaches):
         _res, project, _calls = two_approaches

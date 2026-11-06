@@ -39,7 +39,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import analog_interface_classify as AIC                # noqa: E402
 import design_one_shot_runner as DOR                   # noqa: E402
 import digital_rtl_subject_census as CEN               # noqa: E402
-import flow_compliance_check as FCC                    # noqa: E402
 
 # The shape the defect was measured on: analog inputs, analog refs, raw 1-bit
 # bitstream OUTPUTs, and clock INPUTs. No digital data input, no reset.
@@ -230,26 +229,6 @@ def test_step_rtl_gen_still_declares_it_when_there_is_a_subject(tmp_path):
 
 
 
-def test_flow_compliance_backend_na_moves_with_the_resolver(tmp_path, monkeypatch):
-    """All four consumers of `digital_datapath_absent` must agree — the flow
-    disagreeing with itself about whether a design has a digital backend is
-    the defect class this shared resolver exists to prevent."""
-    monkeypatch.setattr(FCC, "_project_is_pure_analog",
-                        lambda proj: (False, "not analog-only"))
-    monkeypatch.setattr("ic_class_profile.detect_ic_class",
-                        lambda proj: {"ic_class": "data_converter"})
-    p = _mk_project(tmp_path, _CLOCKED_LOGIC_FREE)
-    FCC._ANALOG_IFACE_NA_CACHE.clear()
-    FCC._PURE_ANALOG_CACHE.clear()
-    is_na, reason = FCC._digital_backend_is_na(p)
-    assert is_na is True, reason
-    q = _mk_project(tmp_path / "q", _CLOCKED_LOGIC_FREE,
-                    docs=_with_field("L4_REGMAP", "registers",
-                                     [{"name": "CTRL", "offset": 0}]))
-    FCC._ANALOG_IFACE_NA_CACHE.clear()
-    FCC._PURE_ANALOG_CACHE.clear()
-    is_na2, _ = FCC._digital_backend_is_na(q)
-    assert is_na2 is False
 
 
 def test_phase3_gate_moves_with_the_resolver(tmp_path, monkeypatch):

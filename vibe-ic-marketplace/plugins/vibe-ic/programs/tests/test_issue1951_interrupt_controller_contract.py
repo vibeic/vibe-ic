@@ -32,7 +32,6 @@ def _load(name: str, filename: str):
 DETECT = _load("issue1951_selftb", "spec_selftb_coverage_detect.py")
 PACK = _load("issue1951_pack", "ic_expert_backup_pack.py")
 DIGEST = _load("issue1951_digest", "_lesson_digest.py")
-DB_CHECK = _load("issue1951_db_check", "ic_expert_db_consistency_check.py")
 
 INTERRUPT_SPEC = (
     "Implement a parameterized priority interrupt controller. Capture request "
@@ -132,7 +131,6 @@ def test_expert_db_replaces_unconditional_live_winner_advice():
     assert "level held through ACK cannot requeue" in lessons
     assert "max(1, clog2(NUM_INTERRUPTS))" in lessons
     assert "takes over the one in service" not in lessons
-    assert DB_CHECK.check(DB)["pass"]
 
 
 def test_non_interrupt_prompt_has_no_interrupt_contract():

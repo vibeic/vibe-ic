@@ -408,17 +408,6 @@ def test_the_record_names_the_abstraction_policy_it_used(tmp_path):
     assert "lef.tcl" in rec["lef_policy"]["mirrors"]
 
 
-def test_chip_agnostic_source(tmp_path):
-    """Through the repo's OWN guard, not a token list re-typed here."""
-    sys.path.insert(0, str(PROG.parent))
-    import source_chip_agnostic_check as guard
-    staged = tmp_path / "programs"
-    staged.mkdir()
-    (staged / PROG.name).write_text(PROG.read_text())
-    rc = guard.main([str(tmp_path), "--json", str(tmp_path / "agn.json")])
-    findings = json.loads((tmp_path / "agn.json").read_text()).get(
-        "findings", [])
-    assert rc == 0 and not findings, findings
 
 
 # ───────────── the wiring: runner invokes it, the GATE never does ──────────

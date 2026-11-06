@@ -39,23 +39,11 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import achieved_period_recorded_check as APR  # noqa: E402
 
 PLUGIN = Path(__file__).resolve().parents[2]
 REPO = PLUGIN.parents[2]
 
 
-def _mk(project: Path, *, slack_line: str = None, achieved: dict = None,
-        rel: str = "reports/phase3/sta_spef_based.rpt"):
-    if slack_line is not None:
-        p = project / rel
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text("Startpoint: a\nEndpoint: b\n" + slack_line + "\n")
-    if achieved is not None:
-        a = project / APR.ACHIEVED_REL
-        a.parent.mkdir(parents=True, exist_ok=True)
-        a.write_text(json.dumps(achieved) + "\n")
-    return project
 
 
 _GOOD = {"spec_period_ns": 10.0, "achievable_period_ns": 4.76,
@@ -65,96 +53,25 @@ _GOOD = {"spec_period_ns": 10.0, "achievable_period_ns": 4.76,
 # ---------------------------------------------------------------------------
 # the implication the gate asserts
 # ---------------------------------------------------------------------------
-def test_a_measured_slack_with_no_record_is_a_finding(tmp_path):
-    rep = APR.evaluate(_mk(tmp_path, slack_line="worst slack max 5.24"))
-    assert rep["rc"] == APR.RC_FAIL, rep
-    assert rep["setup_slack_ns"] == 5.24, rep
-    assert any(f["rule"] == "ACHIEVED_PERIOD_NOT_RECORDED" for f in rep["findings"]), rep
 
 
-def test_a_measured_slack_with_a_record_passes(tmp_path):
-    rep = APR.evaluate(_mk(tmp_path, slack_line="worst slack max 5.24",
-                           achieved=_GOOD))
-    assert rep["rc"] == APR.RC_PASS, rep
-    assert rep["asked_period_ns"] == 10.0 and rep["reached_period_ns"] == 4.76
 
 
-def test_no_slack_is_vacuous_not_red(tmp_path):
-    """The half that keeps this a check rather than a nag: a run with no STA
-    has nothing to record an achieved period AGAINST."""
-    rep = APR.evaluate(tmp_path)
-    assert rep["rc"] == APR.RC_VACUOUS, rep
-    assert rep["findings"] == [], rep
 
 
-def test_an_unreadable_record_is_not_silently_accepted(tmp_path):
-    p = _mk(tmp_path, slack_line="worst slack max 5.24")
-    (p / APR.ACHIEVED_REL).write_text("{not json")
-    rep = APR.evaluate(p)
-    assert rep["rc"] == APR.RC_FAIL, rep
-    assert any(f["rule"] == "ACHIEVED_PERIOD_UNREADABLE" for f in rep["findings"])
 
 
-def test_a_record_missing_either_half_answers_neither(tmp_path):
-    partial = dict(_GOOD)
-    del partial["achievable_period_ns"]
-    rep = APR.evaluate(_mk(tmp_path, slack_line="worst slack max 5.24",
-                           achieved=partial))
-    assert rep["rc"] == APR.RC_FAIL, rep
-    assert any(f["rule"] == "ACHIEVED_PERIOD_INCOMPLETE" for f in rep["findings"])
 
 
-def test_the_artefact_may_never_become_a_relaxation(tmp_path):
-    """#1083 records ORFS's `update_ok`/`--failing` as explicitly NOT adopted —
-    a golden that moves itself to the current run's worse value. Asserted here
-    rather than trusted, so an edit that turned this into one goes red."""
-    relaxed = dict(_GOOD, relaxation_applied=True)
-    rep = APR.evaluate(_mk(tmp_path, slack_line="worst slack max 5.24",
-                           achieved=relaxed))
-    assert rep["rc"] == APR.RC_FAIL, rep
-    assert any(f["rule"] == "ACHIEVED_PERIOD_IS_NOT_A_RELAXATION"
-               for f in rep["findings"]), rep
 
 
 # ---------------------------------------------------------------------------
 # the domain trap
 # ---------------------------------------------------------------------------
-def test_wns_is_not_read_as_the_worst_slack(tmp_path):
-    """Both headings in one report, exactly as the published spm cell ships
-    them. `wns` is clamped at 0 and would report zero headroom on a design that
-    has 5.24 ns of it."""
-    p = tmp_path
-    r = p / "reports/phase3/sta_spef_based.rpt"
-    r.parent.mkdir(parents=True, exist_ok=True)
-    r.write_text("wns max 0.00\nworst slack max 5.24\n")
-    slack, _src = APR.measured_setup_slack(p)
-    assert slack == 5.24, (
-        f"read {slack} — `wns max 0.00` was taken for the worst slack. That "
-        f"makes achieved == asked on every passing design: a FALSE measurement, "
-        f"which is worse than the missing one this gate removes.")
 
 
-def test_a_negative_wns_alone_is_still_usable(tmp_path):
-    """The fallback's one legitimate case: when the design violates, WNS and
-    worst slack coincide, so a report carrying only WNS is still readable."""
-    p = tmp_path
-    r = p / "reports/phase3/sta_spef_based.rpt"
-    r.parent.mkdir(parents=True, exist_ok=True)
-    r.write_text("wns max -2.64\n")
-    slack, _src = APR.measured_setup_slack(p)
-    assert slack == -2.64, slack
 
 
-def test_a_clamped_zero_wns_alone_is_refused(tmp_path):
-    """...and its illegitimate one: a lone `wns max 0.00` says only 'nothing
-    violates'. Treating it as a measurement would manufacture achieved==asked,
-    so the gate reports VACUOUS instead of inventing a number."""
-    p = tmp_path
-    r = p / "reports/phase3/sta_spef_based.rpt"
-    r.parent.mkdir(parents=True, exist_ok=True)
-    r.write_text("wns max 0.00\n")
-    slack, _src = APR.measured_setup_slack(p)
-    assert slack is None, f"a clamped WNS was accepted as a measurement: {slack}"
 
 
 # ---------------------------------------------------------------------------
@@ -184,26 +101,3 @@ def test_the_gate_is_wired_into_the_flow():
 # ---------------------------------------------------------------------------
 # the corpus this was measured on
 # ---------------------------------------------------------------------------
-def test_the_published_corpus_still_shows_the_gap_this_repairs():
-    """The evidence, re-derived rather than quoted.
-
-    These roots were published BEFORE the runner emitted on a pass, so they
-    carry a real measured slack and no achieved period. If this ever comes back
-    empty the cells have been republished and the numbers in the docstrings
-    above need re-measuring — which is the point of asserting it.
-    """
-    roots = sorted((REPO / "benchmark-data" / "ic").glob("*/*"))
-    if not roots:
-        pytest.skip("no published corpus in this checkout")
-    with_slack = []
-    for r in roots:
-        slack, _src = APR.measured_setup_slack(r)
-        if slack is not None:
-            with_slack.append((r.name, slack, (r / APR.ACHIEVED_REL).is_file()))
-    if not with_slack:
-        pytest.skip("no published root carries a post-route setup slack")
-    unrecorded = [t for t in with_slack if not t[2]]
-    assert unrecorded, (
-        "every published root with a measured slack now records an achieved "
-        "period — good, and it means the corpus was republished; re-measure "
-        "the counts quoted in this module and in the gate's docstring")

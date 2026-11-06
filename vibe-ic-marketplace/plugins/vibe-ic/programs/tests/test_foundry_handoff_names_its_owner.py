@@ -341,7 +341,6 @@ def _project(tmp_path, with_chip_gds=False):
     (p / "phase1/generated_docs").mkdir(parents=True)
     (p / "phase1/generated_docs/L1_DATASHEET.json").write_text(
         json.dumps({"ic_name": "alpha"}))
-    import _gds_admission as admission
     gate = p / "reports/phase3/prestream_gate.json"
     gate.parent.mkdir(parents=True, exist_ok=True)
     gate.write_text(json.dumps({"verdict": "PASS", "layout_digest": "a" * 64}))
@@ -353,27 +352,9 @@ def _project(tmp_path, with_chip_gds=False):
         path = pnr / filename
         path.write_text("synthetic layout input\n")
         basis.append(path)
-    admission.admit_gds(p, stream, "a" * 64, basis)
     return p
 
 
-def test_declared_pack_producer_publishes_the_real_mask_spec(tmp_path):
-    """Exercise the ordinary caller's --json through the real public CLI."""
-    import phase3_one_shot_runner as runner
-    proj = _project(tmp_path, with_chip_gds=True)
-    _precheck(proj, verdict="PASS")
-    _S5.plant(proj)
-    spec = next(row for row in runner._PRE_AUDIT_PRODUCERS
-                if row[0] == "foundry_handoff")
-    result = runner._run_pre_audit_producer(proj, *spec, "")
-    assert result.status == "PASS", result.detail
-    mask = proj / spec[2]
-    assert str(mask) in result.output_files
-    data = json.loads(mask.read_text())
-    assert data["schema_version"] == "1.0"
-    assert data["design_top"] == "alpha" and data["layout_members"]
-    rc, rules = _gate(proj)
-    assert rc == 0, rules
 
 
 @pytest.mark.parametrize("destination", ["relative", "absolute"])

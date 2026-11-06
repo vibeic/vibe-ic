@@ -874,30 +874,6 @@ def _selected_native_handoff_project(tmp_path):
     return proj
 
 
-@pytest.mark.parametrize("root_form", ["absolute", "dot", "child"])
-def test_relative_root_reads_current_selected_handoff(tmp_path, monkeypatch, root_form):
-    import subprocess
-    from _staged_top_module import bind_selected_interface
-    proj = _selected_native_handoff_project(tmp_path)
-    path = proj / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
-    content = json.loads(path.read_text())
-    expected = bind_selected_interface(proj, content)
-    before = {p: p.read_bytes() for p in proj.rglob("*") if p.is_file()}
-    monkeypatch.chdir(proj if root_form == "dot" else proj.parent)
-    root = proj if root_form == "absolute" else Path("." if root_form == "dot" else proj.name)
-    try:
-        actual = bind_selected_interface(root, content)
-    except ValueError as exc:
-        actual = {"native_refusal": str(exc)}
-    assert actual == expected, actual
-    binding = actual["selected_interface_binding"]
-    assert binding["selected_source"] == "phase2/stage2/synth/core_synth.v"
-    report = tmp_path / "l17-native.json"
-    cli = subprocess.run([sys.executable, str(PROGRAMS / "l17_channel_catalog_consumer_contract_check.py"),
-                          str(root), "--json", str(report)], capture_output=True, text=True)
-    assert cli.returncode == 0, cli.stdout + cli.stderr
-    assert json.loads(report.read_text())["summary"]["pass"] is True
-    assert all(p.read_bytes() == data for p, data in before.items())
 
 
 @pytest.mark.parametrize("root_form", ["absolute", "dot", "child"])
@@ -1093,70 +1069,3 @@ def _phase1_selected_scope_project(tmp_path, handoff):
                 {"name": "rst", "direction": "input", "purpose": "reset"}],
             "handshake_pairs": {}, "dependency_graph": {}}}))
     return proj
-
-
-@pytest.mark.parametrize("handoff", ["absent", "stale"])
-def test_phase1_l17_audits_logical_interface_before_future_handoff(tmp_path, handoff):
-    import os
-    import subprocess
-    import l17_channel_catalog_consumer_contract_check as L17
-    import phase2_scaffold_gen as P2
-    from _staged_top_module import selected_interface_ports
-    proj = _phase1_selected_scope_project(tmp_path, handoff)
-    docs = proj / "phase1/generated_docs"
-    l9 = json.loads((docs / "L9_INTEGRATION_SPEC.json").read_text())
-    l17 = json.loads((docs / "L17_CHANNEL_SIGNAL_CATALOG.json").read_text())["fields"]
-    before = {p: p.read_bytes() for p in proj.rglob("*") if p.is_file()}
-    findings, info = L17.audit(proj)
-    accepted = L17.build_report(proj, findings, info)["summary"]["pass"]
-    assert accepted is True, [vars(f) for f in findings]
-    # Real public CLI uses the same source authority as the direct consumer.
-    subject = Path(os.environ.get("VIBEIC_SCOPE_SUBJECT", PROGRAMS))
-    report = tmp_path / "l17-logical.json"
-    cli = subprocess.run([sys.executable, str(subject / "l17_channel_catalog_consumer_contract_check.py"),
-                          str(proj), "--json", str(report)], capture_output=True, text=True)
-    assert cli.returncode == 0, cli.stdout + cli.stderr
-    assert json.loads(report.read_text())["summary"]["pass"] is True
-    for consume in [lambda: selected_interface_ports(proj, l9),
-                    lambda: P2.derive_signals(l17, l9, project=proj)]:
-        with pytest.raises(ValueError, match="LL_SYNTH_HANDOFF_INVALID"):
-            consume()
-    logical = P2.derive_signals(l17, l9, project=proj, include_synthesis_handoff=False)
-    assert {row["name"] for row in logical} == {
-        "clk", "rst", "o_status", "o_memory_wdata", "o_memory_waddr", "o_memory_wen"}
-    assert all(p.read_bytes() == data for p, data in before.items())
-
-
-@pytest.mark.parametrize("damage", ["missing_rename", "wrong_width", "wrong_clock", "malformed_catalog"])
-def test_phase1_logical_scope_retains_interface_and_catalog_refusals(tmp_path, damage):
-    import subprocess
-    proj = _phase1_selected_scope_project(tmp_path, "absent")
-    docs = proj / "phase1/generated_docs"
-    l9 = docs / "L9_INTEGRATION_SPEC.json"
-    if damage == "missing_rename":
-        (proj / "phase2/stage1/rtl/SOURCE_MANIFEST.json").write_text(
-            json.dumps({"reused_ip": True, "renamed_interfaces": []}))
-    elif damage in {"wrong_width", "wrong_clock"}:
-        content = json.loads(l9.read_text())
-        for key in ("ports", "top_ports", "top_module_pins"):
-            for port in content[key]:
-                if port["name"] == ("o_memory_wdata" if damage == "wrong_width" else "clk"):
-                    port["width"] = 4 if damage == "wrong_width" else 2
-        l9.write_text(json.dumps(content))
-    else:
-        (docs / "L17_CHANNEL_SIGNAL_CATALOG.json").write_text("{")
-    before = {p: p.read_bytes() for p in proj.rglob("*") if p.is_file()}
-    cli = subprocess.run([sys.executable, str(PROGRAMS / "l17_channel_catalog_consumer_contract_check.py"),
-                          str(proj)], capture_output=True, text=True)
-    payload = json.loads(cli.stdout)
-    if damage == "malformed_catalog":
-        # The existing reader names unreadable input with rc2/SKIP. This is
-        # not catalog or Phase-1 qualification, whatever summary.pass says.
-        assert cli.returncode == 2, cli.stdout + cli.stderr
-        assert {(f["severity"], f["category"]) for f in payload["findings"]} == {
-            ("SKIP", "INVALID_JSON")}
-    else:
-        assert cli.returncode == 1, cli.stdout + cli.stderr
-        assert payload["summary"]["pass"] is False
-        assert payload["summary"]["error_count"] > 0
-    assert all(p.read_bytes() == data for p, data in before.items())

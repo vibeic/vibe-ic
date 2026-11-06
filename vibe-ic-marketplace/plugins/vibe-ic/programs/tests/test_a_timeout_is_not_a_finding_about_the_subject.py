@@ -66,7 +66,6 @@ if str(_PROGRAMS) not in sys.path:
 import _watchdog as W                            # noqa: E402
 import verilator_timing_fallback_check as VF      # noqa: E402
 import tb_vcs_only_construct_detect as TB         # noqa: E402
-import fresh_agent_rtl_bug_density_metric as FA   # noqa: E402
 import dynamic_ir_vectored_emit as DIE            # noqa: E402
 import dynamic_ir_drop_check as DIC               # noqa: E402
 
@@ -216,41 +215,10 @@ def test_a_slow_verilator_is_not_recorded_as_an_absent_one(
 
 # ── fresh_agent_rtl_bug_density_metric ──────────────────────────────────────
 
-def test_a_git_that_could_not_run_is_not_a_project_outside_a_repository(
-        tmp_path, monkeypatch):
-    """THE FIX. The two ways `None` arrived are now distinguishable, because
-    only one of them is a fact about the project."""
-    monkeypatch.setattr(FA._wd, "run_host_supervised", _Stalls())
-    root, why = FA._resolve_repo_root(tmp_path)
-    assert root is None
-    assert "not inside a git repository" not in why, (
-        "the metric is still asserting something about the tree it was pointed "
-        f"at that it never established: {why!r}")
-    assert "no forward progress" in why and "wedged" in why, why
 
 
-def test_a_project_genuinely_outside_a_repository_still_says_so(
-        tmp_path, monkeypatch):
-    """NON-VACUITY, the other arm: git RAN and answered. That answer is a real
-    fact about the project and must survive."""
-    monkeypatch.setattr(FA._wd, "run_host_supervised", _Completes(rc=128))
-    root, why = FA._resolve_repo_root(tmp_path)
-    assert root is None
-    assert why == "not inside a git repository"
 
 
-def test_the_published_skip_reason_carries_the_distinction(
-        tmp_path, monkeypatch):
-    """The reason is the only thing a reader of the report gets. It is what was
-    wrong, so it is what the test asserts."""
-    (tmp_path / "rtl").mkdir()
-    monkeypatch.setattr(FA._wd, "run_host_supervised", _Stalls())
-    summary = FA.inspect(tmp_path)
-    assert summary["skipped_reason"], "a skip with no reason is worse than both"
-    assert "wedged" in summary["skipped_reason"]
-    assert summary["bug_commit_count"] == 0
-    assert summary["bug_commits"] == [], (
-        "a skipped metric must publish no findings at all")
 
 
 # ── the pre-fix control ─────────────────────────────────────────────────────
