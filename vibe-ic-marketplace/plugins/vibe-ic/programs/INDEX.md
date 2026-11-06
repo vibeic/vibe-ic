@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 668
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 1 (of 668)
+- **Total programs (excluding helpers / shims):** 669
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 1 (of 669)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 0 |
-| `any` | 667 |
+| `any` | 668 |
 
 ## Alphabetical listing
 
@@ -281,6 +281,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow_safety` | any | — | Invoke the existing diagnostic injection producer and read its measurements. |
 | `flow_security` | any | — | Run supplied security property decks through the existing native formal adapter. |
 | `flow_spare_cells` | any | — | flow_spare_cells |
+| `flow_steps_generate` | any | — | One-time migration of the old registry into the editable native step table. |
 | `flow_system_scenarios` | any | — | Run produced full-stack HDL scenarios through the existing Icarus helper. |
 | `fmeda_coverage_check` | any | — | Read native FMEDA injection counts against the requested ASIL/DC floor. |
 | `fmeda_fault_injection_coverage` | any | — | REAL ISO-26262 FMEDA diagnostic-coverage (DC) measurement by single-stuck-at FAULT INJECTION against a declared safety mechanism (ECC / p... |
@@ -401,7 +402,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `librelane_eqy` | any | — | EQY native script generation and partition report reader. |
 | `librelane_fill_dfm` | any | — | Default Step-34 tool fill and its existing Step-35 DFM consumer. |
 | `librelane_fill_stream` | any | — | Lossless DEF FILLS -> native LibreLane/KLayout stream bridge. |
-| `librelane_fill_stream_native` | any | — | Run reviewed LibreLane stream producer with only its fill-clear bug patched. |
+| `librelane_fill_stream_native` | any | — | Run the installed LibreLane stream producer with native fill retention. |
 | `librelane_postmap` | any | — | Optional post-map native product, owned by the synthesis handoff. |
 | `librelane_postroute` | any | — | Steps 28, 29 and 33 read the post-route state the tool already produced. |
 | `librelane_postroute_repair` | any | — | step 32 (post-route repair) on LibreLane (T102). |
@@ -720,7 +721,7 @@ _(no programs in this group)_
 
 _(no programs in this group)_
 
-### `any` (667 programs)
+### `any` (668 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `accumulate_synth` — deterministic SOLVER for the CVDP sequential ACCUMULATOR / running-op family:
@@ -977,6 +978,7 @@ _(no programs in this group)_
 - `flow_safety` — Invoke the existing diagnostic injection producer and read its measurements.
 - `flow_security` — Run supplied security property decks through the existing native formal adapter.
 - `flow_spare_cells` — flow_spare_cells
+- `flow_steps_generate` — One-time migration of the old registry into the editable native step table.
 - `flow_system_scenarios` — Run produced full-stack HDL scenarios through the existing Icarus helper.
 - `fmeda_coverage_check` — Read native FMEDA injection counts against the requested ASIL/DC floor.
 - `fmeda_fault_injection_coverage` — REAL ISO-26262 FMEDA diagnostic-coverage (DC) measurement by single-stuck-at FAULT INJECTION against a declared safety mechanism (ECC / p...
@@ -1097,7 +1099,7 @@ _(no programs in this group)_
 - `librelane_eqy` — EQY native script generation and partition report reader.
 - `librelane_fill_dfm` — Default Step-34 tool fill and its existing Step-35 DFM consumer.
 - `librelane_fill_stream` — Lossless DEF FILLS -> native LibreLane/KLayout stream bridge.
-- `librelane_fill_stream_native` — Run reviewed LibreLane stream producer with only its fill-clear bug patched.
+- `librelane_fill_stream_native` — Run the installed LibreLane stream producer with native fill retention.
 - `librelane_postmap` — Optional post-map native product, owned by the synthesis handoff.
 - `librelane_postroute` — Steps 28, 29 and 33 read the post-route state the tool already produced.
 - `librelane_postroute_repair` — step 32 (post-route repair) on LibreLane (T102).
