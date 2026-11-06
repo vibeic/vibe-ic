@@ -512,6 +512,52 @@ def test_floorplan_row_reserves_the_ring_sized_after_initial_preparation(inputs,
     assert "cannot fit" in str(error)
 
 
+def test_generated_pad_access_profile_applies_native_current_sizing_at_floorplan(inputs, monkeypatch):
+    pytest.importorskip("odb")
+    pytest.importorskip("librelane")
+    from decimal import Decimal
+    from types import SimpleNamespace
+    from librelane.config import Config
+    from flow_config import _chip_pdn
+    from flow_engine import NativeChain
+
+    project, config, native, _, _ = inputs
+    config.update(_chip_pdn(project, config["PDK"]))
+    native.update(config, DEFAULT_CORNER="nominal", PDN_VERTICAL_LAYER="upper_vertical",
+        PDN_HORIZONTAL_LAYER="upper_horizontal", PDN_VWIDTH=1.6, PDN_HWIDTH=1.6,
+        PDN_CORE_RING_VWIDTH=1.6, PDN_CORE_RING_HWIDTH=1.6,
+        PDN_CORE_RING_VOFFSET=1, PDN_CORE_RING_HOFFSET=1,
+        PDN_CORE_RING_VSPACING=1.7, PDN_CORE_RING_HSPACING=1.7,
+        PDN_VSPACING=1.7, PDN_HSPACING=1.7, PDN_VPITCH=20, PDN_HPITCH=20)
+    tech = Path(native["TECH_LEFS"]["*"])
+    text = "VERSION 5.8 ;\n" + tech.read_text()
+    for layer, direction in (("upper_vertical", "VERTICAL"), ("upper_horizontal", "HORIZONTAL")):
+        text += f"LAYER {layer}\n TYPE ROUTING ;\n DIRECTION {direction} ;\n PITCH 1 ;\n" \
+            " WIDTH 0.28 ;\n SPACING 0.28 ;\n THICKNESS 0.54 ;\n" \
+            f" DCCURRENTDENSITY AVERAGE 0.67 ;\nEND {layer}\n"
+    tech.write_text(text + "END LIBRARY\n")
+    lib = Path(native["LIB"]["*"][0])
+    lib.write_text(lib.read_text().replace("library (fixture) {", "library (fixture) {\n nom_voltage : 5;"))
+    lef = Path(native["PAD_LEFS"][0])
+    lef.write_text(lef.read_text().replace("  USE GROUND ;", "  USE GROUND ;\n"
+        "  PORT\n   LAYER pad_access ;\n   RECT 0 0 10 1 ;\n  END"))
+    generated = chip.prepare(project, config)
+    assert "pad_access upper_vertical" in Path(generated["PDN_CFG"]).read_text()
+    _write(project / "steps/pre_layout_timing/result.json", json.dumps({
+        "native_metrics": {"power__total__corner:nominal": .02}}))
+    monkeypatch.setattr(chip, "netlist_area", lambda *args: 40)
+    chain = NativeChain(project, {"delivery_target": "gds"})
+    chain.owner = SimpleNamespace(config=Config({**native, **generated}))
+    chain.config = chain.owner.config.to_raw_dict()
+
+    assert chain.prepare(floorplan=True, directory=project / "floorplan") is None
+
+    assert chain.config["PDN_VWIDTH"] == Decimal("5.98")
+    assert chain.config["PDN_CORE_RING_VWIDTH"] == Decimal("5.98")
+    core, die = chain.config["CORE_AREA"], chain.config["DIE_AREA"]
+    assert core[0] - die[0] >= 2 + 20 + 1 + 2 * 5.98 + 1.7
+
+
 @pytest.mark.parametrize("route", ["ic", "ip"])
 def test_current_scan_netlist_fits_despite_undercounted_yosys_area(inputs, native_inputs, route, monkeypatch):
     from librelane.common import Path as NativePath, Toolbox
