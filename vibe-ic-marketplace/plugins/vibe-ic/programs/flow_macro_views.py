@@ -50,7 +50,7 @@ def paths(value):
         return [p for item in value.values() for p in paths(item)]
     if isinstance(value, list):
         return [p for item in value for p in paths(item)]
-    return [Path(value)] if isinstance(value, str) else []
+    return [Path(value)] if isinstance(value, (str, os.PathLike)) else []
 
 
 def view_files(macro):
@@ -85,6 +85,7 @@ def handover(state, definition):
 
 
 def _child(project, name, config, raw, pdk, commands, library=None):
+    from librelane.flows import Flow
     from flow_native_adapters import testbenches
     from sim_activity_dump import dut_instance
 
@@ -96,15 +97,18 @@ def _child(project, name, config, raw, pdk, commands, library=None):
     if docs.is_dir():
         shutil.copytree(docs, child / "input/docs")
     resolved = resolve_config(config, raw, pdk, library)
-    supplied_sdc = set()
-    for key in ("FALLBACK_SDC", "PNR_SDC_FILE", "SIGNOFF_SDC_FILE"):
-        for index, source in enumerate(paths(resolved.get(key))):
-            if source in supplied_sdc or not source.is_file():
+    native = Flow.factory.get("Classic")(resolved, design_dir=str(config.parent),
+        pdk_root=os.environ.get("PDK_ROOT")).config
+    supplied_sdc = {p for p in paths(resolved) if p.suffix.lower() == ".sdc"}
+    staged_sdc = set()
+    for key, value in native.items():
+        for index, source in enumerate(paths(value)):
+            if source not in supplied_sdc or source in staged_sdc or not source.is_file():
                 continue
             target = child / "input/docs/supplied_constraints" / f"{key.lower()}_{index}.sdc"
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, target)
-            supplied_sdc.add(source)
+            staged_sdc.add(source)
     # Stage only supplied design sources; physical views stay in native outputs.
     for source in paths(resolved.get("VERILOG_FILES")):
         rtl = child / "input/rtl" / source.name
