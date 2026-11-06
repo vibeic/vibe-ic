@@ -274,8 +274,9 @@ def _resolve_rtl_inputs(project: Path, sources: dict) -> tuple[list[Path], str]:
     docs = project / "phase1/generated_docs"
     l9 = _load(docs / "L9_INTEGRATION_SPEC.json")
     l1 = _load(docs / "L1_DATASHEET.json")
+    tapeout_metadata = l1.get("tapeout_metadata") or {}
     top = (_load(project / "plugin_output/declaration.json").get("top_module")
-           or l9.get("top_module") or l1.get("tapeout_metadata", {}).get("top_cell"))
+           or l9.get("top_module") or tapeout_metadata.get("top_cell"))
     modules = set().union(*(module_names_in_text(path.read_text(errors="replace"))
                             for path in rtl))
     if top not in modules:

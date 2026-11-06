@@ -643,6 +643,19 @@ def test_root_module_precedes_nested_copy_and_needed_nested_module_survives(proj
     assert build_config(project)["VERILOG_FILES"] == [str(path) for path in files]
 
 
+def test_resolve_rtl_inputs_treats_null_optional_ldoc_fields_as_absent(project):
+    docs = project / "phase1/generated_docs"
+    (docs / "L1_DATASHEET.json").write_text('{"tapeout_metadata": null}')
+    (docs / "L9_INTEGRATION_SPEC.json").write_text('{"top_module": null}')
+    (project / "input").mkdir()
+    (project / "input/phase1_prompt.md").write_text("- Top module: `unit`.\n")
+
+    files, top = resolve_rtl_inputs(project)
+
+    assert files == [project / "phase2/stage1/rtl/unit.v"]
+    assert top == "unit"
+
+
 def test_nested_file_with_overlapping_and_unique_modules_is_not_silently_dropped(project):
     rtl = project / "phase2/stage1/rtl"
     nested = rtl / "syn"
