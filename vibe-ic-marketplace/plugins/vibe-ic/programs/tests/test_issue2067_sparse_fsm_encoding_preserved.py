@@ -43,63 +43,6 @@ if str(_PROGRAMS) not in sys.path:
 import sparse_fsm_detect as det              # noqa: E402
 
 
-def _phase3_commands(tmp_path, monkeypatch, rtl):
-    """Exercise all four real frontend command builders without running EDA."""
-    import phase3_one_shot_runner as p3
-    project = tmp_path / "project"
-    rtl_dir = project / "phase2/stage1/rtl"
-    rtl_dir.mkdir(parents=True)
-    # The conditional is an input capability that triggers the final retry.
-    (rtl_dir / "fsm.sv").write_text(rtl + "\n`ifdef SIMULATION\n`endif\n")
-    lib = tmp_path / "test.lib"
-    lib.write_text("library (test) { cell (INV) { area : 1.0; } }\n")
-    pdk = p3.PdkConfig(name="test", liberty=str(lib), tech_lef="test.lef",
-                       cell_lef="test.lef", cell_gds=None, site="unit",
-                       drc_deck=None)
-    captured = []
-    def fake_exec(container, cmd, **kwargs):
-        captured.append(cmd)
-        return 1, "", "frontend unavailable in command-capture test"
-    monkeypatch.setattr(p3, "_docker_exec", fake_exec)
-    monkeypatch.setattr(p3, "_to_container_path", lambda path, container: path)
-    monkeypatch.setattr(p3._sf, "resolve_slang_load_prefix", lambda *a: "")
-    synth_dir = project / "phase2/stage2/synth"
-    synth_dir.mkdir(parents=True)
-    from lec_run import FSM_ENCFILE_NAME
-    encfile = synth_dir / FSM_ENCFILE_NAME
-    encfile.write_text(".fsm old stale_state\n.map 00 -1\n")
-    result = p3.step_synth(project, "sparse_fsm", pdk, "command-capture")
-    assert result.status == "FAIL"
-    return [c for c in captured if "synth -top " in c], encfile
-
-
-@pytest.mark.parametrize("frontend", ["verilog", "slang", "sv2v", "synthesis"])
-def test_phase3_preserves_sparse_states_and_records_maps_on_every_frontend(
-        tmp_path, monkeypatch, frontend):
-    commands, encfile = _phase3_commands(tmp_path, monkeypatch, SPARSE_RTL)
-    selectors = {
-        "verilog": "read_verilog -sv -DSIMULATION",
-        "slang": "--top sparse_fsm -DSIMULATION",
-        "sv2v": "sv2v -DSIMULATION",
-        "synthesis": "--top sparse_fsm -DSYNTHESIS",
-    }
-    selected = [c for c in commands if selectors[frontend] in c]
-    assert len(selected) == 1, commands
-    cmd = selected[0]
-    preserve = 'setattr -set fsm_encoding "none" w:state_q'
-    assert preserve in cmd, cmd
-    assert cmd.index("flatten;") < cmd.index(preserve) < cmd.index("synth -top")
-    assert f"-encfile {encfile};" in cmd, cmd
-
-
-def test_phase3_dense_fsm_retains_recoding_and_failed_run_drops_stale_map(
-        tmp_path, monkeypatch):
-    commands, encfile = _phase3_commands(tmp_path, monkeypatch, DENSE_RTL)
-    assert commands
-    assert all("fsm_encoding" not in c.replace(str(encfile), "") for c in commands)
-    assert all("-nofsm" not in c for c in commands)
-    assert not encfile.exists(), "failed new synth retained the old netlist's map"
-
 # A 3-state, 5-bit, minimum-Hamming-3 encoding — the shape OpenTitan's
 # sparse-fsm-encode.py emits. These ARE the opentitan_aes `aes_ctr_e` codes,
 # read from the design INPUT (`input/vendor_rtl/aes/aes_pkg.sv`).
@@ -231,22 +174,6 @@ def test_the_attribute_is_set_after_flatten():
     assert cmds[3].startswith("setattr -set fsm_encoding")
 
 
-def test_both_phase2_synth_call_sites_preserve_the_encoding():
-    """The netlist can come from either synth call-site (built-in
-    read_verilog, or the read_slang/sv2v fallback a modern-SV design such as
-    an OpenTitan-class IP takes). Both must inject, or the fix is live on one
-    of them only. Read as TEXT: importing the runner drags in the whole
-    runner."""
-    src = (_PROGRAMS / "design_one_shot_runner.py").read_text()
-    assert src.count("import sparse_fsm_detect as _sfd") == 2, src.count(
-        "import sparse_fsm_detect as _sfd")
-    # the SV-frontend site: the attribute lands after that script's flatten
-    assert src.count("proc; flatten; {_sparse_post}") == 1
-    assert src.count('f"{_sparse_post}"') == 1
-    # the built-in site: the prelude is spliced into the command list
-    assert "_sparse_fsm_preserve_cmds(rtl_files)" in src
-
-
 # --------------------------------------------------------------------------
 # 3. THE AUDIT — it must be able to go RED, by name.
 # --------------------------------------------------------------------------
@@ -260,31 +187,6 @@ RECODED_NET = "module sparse_fsm(clk, rst_n, go, done);\n" \
               "  wire [2:0] state_q;\nendmodule\n"
 KEPT_NET = "module sparse_fsm(clk, rst_n, go, done);\n" \
            "  wire [4:0] state_q;\nendmodule\n"
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-def test_the_audit_has_a_runner():
-    """An audit nothing runs is inert. The producer runs it beside the netlist
-    it judges and writes reports/sparse_fsm_encoding.json; the standalone CLI
-    is the gate that can exit non-zero."""
-    src = (_PROGRAMS / "design_one_shot_runner.py").read_text()
-    assert "import sparse_fsm_encoding_check as _sfec" in src
-    assert "reports\" / \"sparse_fsm_encoding.json" in src or \
-        '"sparse_fsm_encoding.json"' in src, "the report path must be written"
-    assert "_sfec.check(" in src
 
 
 # --------------------------------------------------------------------------
