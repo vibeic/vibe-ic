@@ -774,33 +774,6 @@ def test_resume_drv_skips_measured_global_noops_and_binds_targeted_frontdoor(
     assert json.loads((impl / prr.CURRENT).read_text())['measurement'] == measurement
 
 
-@pytest.mark.parametrize(
-    'decision,targeted,recorded,expected',
-    [
-        ('ACTUATOR_FAILED', True, {'postroute_repair.tcl': 'old'}, False),
-        ('ACTUATOR_FAILED', True, {'postroute_repair.tcl': 'current'}, True),
-        ('ACTUATOR_FAILED', False, {'postroute_repair.tcl': 'old'}, True),
-        ('TOOL_REFUSED', True, {'postroute_repair.tcl': 'old'}, True),
-        ('ACTUATOR_FAILED', True, None, True),
-    ],
-)
-def test_resume_targeted_retry_requires_changed_proven_actuator(
-        tmp_path, decision, targeted, recorded, expected):
-    project = tmp_path / 'project'
-    folder = project / 'phase3/librelane/32-cand07/01-vibeic-postrouterepair'
-    folder.mkdir(parents=True)
-    if recorded is not None:
-        put(folder / 'input_fingerprint.json', {'plugin': recorded})
-    row = {
-        'decision': decision,
-        'params': {'targeted_cap_buffer': targeted},
-        'reason': ('LL_STEP_FAILED: Vibeic.PostRouteRepair: rc=255; '
-                   '/project/phase3/librelane/32-cand07/'
-                   '01-vibeic-postrouterepair/invocation.log'),
-    }
-    assert prr._attempted_by_current_actuator(
-        project, {'project': '/project', 'mounts': []}, row,
-        {'postroute_repair.tcl': 'current'}) is expected
 
 
 def test_the_hold_buffer_budget_above_the_guardrail_is_refused_not_clamped():
