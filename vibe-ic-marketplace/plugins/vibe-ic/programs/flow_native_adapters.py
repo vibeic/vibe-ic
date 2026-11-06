@@ -91,8 +91,10 @@ def cdc(project, directory, tool, commands, *, state=None, config=None):
     script = directory / "elaborate.ys"
     if implemented:
         import fnmatch
-        from lec_post_layout_check import _LIB_CELL_RE
+        from lec_post_layout_check import _LIB_CELL_RE, _NETLIST_MODULE_RE
         from sdf_gate_sim import missing_empty_cell_stubs, netlist_used_cells
+        from flow_chip_inputs import _paths
+        from _pad_ring import parse_lef_macro_classes, parse_lef_pin_roles
         netlist = state.get("nl") if state is not None else None
         if not netlist or not Path(netlist).is_file():
             return commands.result(detail="Implemented CDC needs the native State netlist and Liberty models.")
@@ -117,11 +119,47 @@ def cdc(project, directory, tool, commands, *, state=None, config=None):
             return commands.result(detail="Implemented CDC needs the native State netlist and Liberty models.")
         defined = {name for path in liberty if path.is_file()
                    for name in _LIB_CELL_RE.findall(path.read_text())}
+        defined.update(match["name"] for match in _NETLIST_MODULE_RE.finditer(text))
+        pad_stubs = {}
+        for key in ("PAD_LEFS", "CELL_LEFS", "EXTRA_LEFS"):
+            for path in _paths(config.get(key)):
+                path = path if path.is_absolute() else project / path
+                if not path.is_file():
+                    continue
+                lef = path.read_text()
+                classes = parse_lef_macro_classes(lef)
+                delimiters = re.search(r'BUSBITCHARS\s+"(.)(.)"\s*;', lef)
+                left, right = delimiters.groups() if delimiters else ("[", "]")
+                bit_pin = re.compile(r"(.+)" + re.escape(left) + r"([0-9]+)" + re.escape(right) + r"$")
+                for master, pins in parse_lef_pin_roles(lef).items():
+                    if master not in used - defined or (key != "PAD_LEFS"
+                            and not classes.get(master, "").startswith("PAD")):
+                        continue
+                    if any(direction not in {"INPUT", "OUTPUT", "INOUT"} for direction, _ in pins.values()):
+                        continue
+                    ports, buses = [], {}
+                    for pin, (direction, _) in pins.items():
+                        match = bit_pin.fullmatch(pin)
+                        if match:
+                            buses.setdefault(match[1], []).append((int(match[2]), direction))
+                        else:
+                            ports.append(f"{direction.lower()} \\{pin} ")
+                    if any(len({direction for _, direction in bits}) != 1
+                           or {index for index, _ in bits} != set(range(min(index for index, _ in bits),
+                                                                       max(index for index, _ in bits) + 1))
+                           for bits in buses.values()):
+                        continue
+                    for name, bits in buses.items():
+                        lo, hi = min(index for index, _ in bits), max(index for index, _ in bits)
+                        ports.append(f"{bits[0][1].lower()} [{hi}:{lo}] \\{name} ")
+                    pad_stubs[master] = f"(* blackbox *) module \\{master} (" + ", ".join(ports) + "); endmodule"
+                    defined.add(master)
         stubs = missing_empty_cell_stubs(text, used - defined, "")
         models = []
-        if stubs:
+        if stubs or pad_stubs:
             physical = directory / "physical_cells.v"
-            physical.write_text("\n".join(f"module {name} (); endmodule" for name in stubs) + "\n")
+            physical.write_text("\n".join([*pad_stubs.values(),
+                *(f"module {name} (); endmodule" for name in stubs)]) + "\n")
             models.append("read_verilog -lib " + _word(physical))
         script.write_text("\n".join([
             *["read_liberty" + (" -lib" if path in pad_liberty else "")

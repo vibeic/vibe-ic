@@ -106,7 +106,7 @@ def execute(project, directory, tool, route, *, state=None, config=None):
                           "Liberty libraries, SDC and declared functional cell models.")
         scenarios = [bench for bench in testbenches(project, tool) if bench.is_file()]
         candidates = [bench for bench in scenarios if bench.suffix in {".v", ".sv"}]
-        simulation_top, simulation_netlist, core_scope = top, netlist, ""
+        simulation_top, simulation_netlist, simulation_sdc, core_scope = top, netlist, sdc, ""
         benches = [bench for bench in candidates if sim_activity_dump.dut_instance(bench.read_text(), top)]
         sizing = project / "work/flow/chip/sizing.json"
         if not benches and sizing.is_file():
@@ -114,7 +114,13 @@ def execute(project, directory, tool, route, *, state=None, config=None):
             wrapped = sim_activity_dump.dut_instance((sizing.parent / "wrapper.v").read_text(), core["top"])
             if wrapped and wrapped[0] == top:
                 simulation_top, core_scope = core["top"], wrapped[1]
-                simulation_netlist = _paths(json.loads(Path(core["state_out"]).read_text()).get("nl"), project, corner)
+                core_state_path = Path(core["state_out"])
+                core_state = json.loads(core_state_path.read_text())
+                core_config_path = core_state_path.with_name("config.json")
+                core_config = json.loads(core_config_path.read_text()) if core_config_path.is_file() else {}
+                simulation_netlist = _paths(core_state.get("nl"), project, corner)
+                simulation_sdc = _paths(core_config.get("SIGNOFF_SDC_FILE") or core_config.get("PNR_SDC_FILE")
+                    or core_state.get("sdc") or core_config.get("FALLBACK_SDC"), project, corner)
                 benches = [bench for bench in candidates
                            if sim_activity_dump.dut_instance(bench.read_text(), simulation_top)]
         if not benches:
@@ -123,6 +129,8 @@ def execute(project, directory, tool, route, *, state=None, config=None):
             return result("NOT_MEASURED", f"No functional HDL scenario instantiates {simulation_top}.")
         if len(simulation_netlist) != 1 or not simulation_netlist[0].is_file():
             return result("NOT_MEASURED", "No native netlist for the functional scenario.")
+        if core_scope and (len(simulation_sdc) != 1 or not simulation_sdc[0].is_file()):
+            return result("NOT_MEASURED", "Core activity needs its native core SDC from the captured State/config.")
         python_scenario = benches[0].suffix == ".py"
         required = ("cocotb-config", "make", "sta") if python_scenario else ("iverilog", "vvp", "sta")
         absent = [name for name in required if not shutil.which(name)]
@@ -154,7 +162,7 @@ def execute(project, directory, tool, route, *, state=None, config=None):
         lines = [*("read_liberty " + _word(path) for path in libraries)]
         if core_scope:
             lines += ["read_verilog " + _word(simulation_netlist[0]), "link_design " + _word(simulation_top),
-                "read_sdc " + _word(sdc[0]),
+                "read_sdc " + _word(simulation_sdc[0]),
                 "read_vcd -scope " + _word(activity["scope"]) + " " + _word(activity["vcd"]),
                 "set core_activity {}",
                 "foreach pin [get_pins -hierarchical *] {",

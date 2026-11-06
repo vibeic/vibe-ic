@@ -105,6 +105,38 @@ def test_implemented_cdc_reads_pad_bus_interfaces_as_native_library(tmp_path, cr
     assert cdc["crossings"]["decoded_flops"]==2
 
 
+@pytest.mark.parametrize("lef_key", ["PAD_LEFS", "EXTRA_LEFS"])
+@pytest.mark.parametrize("crossing", [False, True])
+def test_implemented_cdc_keeps_unmodeled_pad_lef_pins(tmp_path, lef_key, crossing):
+    if not shutil.which("yosys"):
+        pytest.skip("Native Yosys is required")
+    lef, liberty, netlist = [tmp_path/n for n in ("pads.lef", "cells.lib", "mapped.v")]
+    lef.write_text('VERSION 5.8 ;\nBUSBITCHARS "[]" ;\nMACRO BUS_SLICE\n CLASS PAD SPACER ;\n'
+        + ''.join(f' PIN {pin}\n  DIRECTION {direction} ;\n  USE SIGNAL ;\n END {pin}\n'
+                  for pin, direction in [("AMUX_A", "INOUT"), ("AMUX_B", "INOUT"),
+                                         ("MODE[0]", "INPUT"), ("MODE[1]", "INPUT"), ("MON", "OUTPUT")])
+        + 'END BUS_SLICE\n')
+    liberty.write_text('library(neutral) {cell(STORAGE) {ff(IQ,IQN) {clocked_on:"C";next_state:"D";} '
+        'pin(C) {direction:input;clock:true;} pin(D) {direction:input;} '
+        'pin(Q) {direction:output;function:"IQ";} }}\n')
+    netlist.write_text('module unit(input clk,other_clk,d,input [1:0] mode,'
+        'inout amux_a,amux_b,output monitor,q);wire stored;\n'
+        'BUS_SLICE slice(.AMUX_A(amux_a),.AMUX_B(amux_b),.MODE(mode),.MON(monitor));\n'
+        'STORAGE first(.C(clk),.D(d),.Q(stored));\n'
+        f'STORAGE second(.C({"other_clk" if crossing else "clk"}),.D(stored),.Q(q));endmodule\n')
+    result = execute(tmp_path, tmp_path/"native", {"adapter":"implemented_cdc"}, {},
+        state={"nl":str(netlist)}, config={"DESIGN_NAME":"unit", "DEFAULT_CORNER":"typical",
+        "LIB":{"typical":[str(liberty)]}, lef_key:[lef.name]})
+    assert result["metrics"].get("new_unexplained_crossings") == int(crossing), result
+    graph = json.loads(next(Path(p).read_text() for p in result["reports"]
+                           if p.endswith("/graph.json")))["modules"]["unit"]
+    pad = graph["cells"]["slice"]
+    assert pad["type"] == "BUS_SLICE"
+    assert pad["port_directions"] == {"AMUX_A":"inout", "AMUX_B":"inout", "MODE":"input", "MON":"output"}
+    for pin, port in [("AMUX_A", "amux_a"), ("AMUX_B", "amux_b"), ("MODE", "mode"), ("MON", "monitor")]:
+        assert pad["connections"][pin] == graph["ports"][port]["bits"]
+
+
 @pytest.mark.parametrize("source,physical,pad_role", [
     ("core_rtl", False, None), ("netlist_only", False, None),
     ("explicit", True, None), ("core_rtl", True, "PAD_LIBS"),
@@ -158,17 +190,24 @@ def test_implemented_cdc_uses_native_top_and_empty_physical_cells(tmp_path, sour
     assert json.loads(report.read_text())["crossings"]["decoded_flops"] == 1
 
 
-def test_implemented_cdc_does_not_stub_connected_unknown_storage(tmp_path):
+@pytest.mark.parametrize("with_lef", [False, True])
+def test_implemented_cdc_does_not_stub_connected_unknown_storage(tmp_path, with_lef):
     if not shutil.which("yosys"):
         pytest.skip("Native Yosys is required")
     netlist, liberty = tmp_path / "native.v", tmp_path / "cells.lib"
     netlist.write_text("module chip_unit(input clk,d,output q);\n"
                       "unknown_storage first(.CLK(clk),.D(d),.Q(q));\nendmodule\n")
     liberty.write_text("library(neutral) {}\n")
+    config = {"DESIGN_NAME":"chip_unit", "DEFAULT_CORNER":"typical", "LIB":{"typical":[str(liberty)]}}
+    if with_lef:
+        lef = tmp_path / "storage.lef"
+        lef.write_text("MACRO unknown_storage\n CLASS CORE ;\n PIN CLK\n DIRECTION INPUT ;\n END CLK\n"
+                       " PIN D\n DIRECTION INPUT ;\n END D\n PIN Q\n DIRECTION OUTPUT ;\n END Q\n"
+                       "END unknown_storage\n")
+        config["EXTRA_LEFS"] = [str(lef)]
     result = execute(tmp_path, tmp_path / "output",
         {"adapter": "implemented_cdc", "rtl": [str(netlist)], "top": "chip_unit"}, {},
-        state={"nl": str(netlist)}, config={"DESIGN_NAME": "chip_unit", "DEFAULT_CORNER": "typical",
-                                           "LIB": {"typical": [str(liberty)]}})
+        state={"nl": str(netlist)}, config=config)
     assert result["exit_code"] != 0, result
     assert result["metrics"] == {}, result
     logs = "\n".join(Path(p).read_text() for p in result["reports"] if p.endswith(".log"))

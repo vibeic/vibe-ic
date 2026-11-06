@@ -81,6 +81,7 @@ def _native_cvc_category(project: Path, top: str, pdk: Any,
     out.mkdir(parents=True, exist_ok=True)
     report = out / "report.rpt"
     receipt_path = out / "result.json"
+    programs = Path(__file__).resolve().parent
     shell = f"""set -eu
 cvc={shlex.quote(cvc_dir)}
 out={shlex.quote(str(out))}
@@ -88,9 +89,11 @@ test -r "$cvc/cvcrc" -a -r "$cvc/models" -a -r "$cvc/power.awk" -a -r "$cvc/cdl.
 test -r {shlex.quote(cell_cdl)}
 awk -f "$cvc/cdl.awk" {shlex.quote(str(extracted))} > "$out/extracted-clean.cdl"
 awk '1' "$out/extracted-clean.cdl" {shlex.quote(cell_cdl)} > "$out/design.cdl"
+python3 {shlex.quote(str(programs / '_cvc_pdk.py'))} --pdk {shlex.quote(pdk_dir)} \\
+  --cdl "$out/design.cdl" --models "$cvc/models"
 awk -v vdd={shlex.quote(next(iter(power_nets)))} -v gnd={shlex.quote(next(iter(ground_nets)))} \\
   -f "$cvc/power.awk" {shlex.quote(str(adopted))} > "$out/top.power"
-sed -e "s|\\$CVC_SCRIPTS_DIR/models|$cvc/models|" \\
+sed -e "s|\\$CVC_SCRIPTS_DIR/models|$out/models|" \\
     -e "s|\\$DESIGN_NAME|{shlex.quote(top)}|g" \\
     -e "s|\\$signoff_tmpfiles/{shlex.quote(top)}.cdl|$out/design.cdl|" \\
     -e "s|\\$signoff_tmpfiles/\\$CVC_TOP.power|$out/top.power|" \\
@@ -105,6 +108,7 @@ cvc_rv cvcrc > cvc.stdout 2> cvc.stderr
     argv = ["docker", "run", *_vtmp.docker_mounts(), *_dmem.docker_memory_flags(
             {"VIBEIC_DOCKER_MEMORY": "16g"}), "--rm", "--network", network,
             "--cpus", "4",
+            "-v", f"{programs}:{programs}:ro",
             "-v", f"{Path(project).resolve()}:{Path(project).resolve()}",
             "-v", f"{Path(pdk_dir).resolve()}:{Path(pdk_dir).resolve()}:ro",
             image, "--skip", *command]

@@ -566,7 +566,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `scope_periodic_pulse_check` | any | v0.64 | Layer-3 hardware attestation gate. |
 | `sd_cmd_extractor` | any | — | for #36 Bug 8: SD-spec CMD table picker. |
 | `sdc_constraints` | any | v0.1.49 | ORGANIC #554 (a) — shared staged-SDC ground-truth helpers. |
-| `sdc_environment` | any | — | R8 SDC environment derivation from design, pinned PDK, and Liberty. |
+| `sdc_environment` | any | — | Design-declared input transitions and Liberty group helpers. |
 | `sdc_gen` | any | Wave 72 | auto-generate Synopsys Design Constraints (SDC). |
 | `sdc_syntax_check` | any | — | Deterministic compliance check for constraint-gen. |
 | `sdd_atpg_run` | any | — | REAL Small-Delay-Defect (SDD) ATPG grade. FUSES OpenSTA per-path SLACK (the timing margin) with the DT2 per-path LOC SAT sensitisation so... |
@@ -1266,7 +1266,7 @@ _(no programs in this group)_
 - `scope_periodic_pulse_check` — Layer-3 hardware attestation gate.  _[v0.64]_
 - `sd_cmd_extractor` — for #36 Bug 8: SD-spec CMD table picker.
 - `sdc_constraints` — ORGANIC #554 (a) — shared staged-SDC ground-truth helpers.  _[v0.1.49]_
-- `sdc_environment` — R8 SDC environment derivation from design, pinned PDK, and Liberty.
+- `sdc_environment` — Design-declared input transitions and Liberty group helpers.
 - `sdc_gen` — auto-generate Synopsys Design Constraints (SDC).  _[Wave 72]_
 - `sdc_syntax_check` — Deterministic compliance check for constraint-gen.
 - `sdd_atpg_run` — REAL Small-Delay-Defect (SDD) ATPG grade. FUSES OpenSTA per-path SLACK (the timing margin) with the DT2 per-path LOC SAT sensitisation so...

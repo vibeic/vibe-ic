@@ -3,6 +3,9 @@
 LibreLane hardens each child; this adapter only orders the existing public runs
 and connects their final State to the supplied MACROS configuration. A child's
 native failure is returned unchanged; missing inputs or outputs are NOT_MEASURED.
+Authored child RTL and hooks use the normal project layout under
+work/flow/children/<name>/; each run_* receives fresh copies of those inputs.
+A supplied expert_reference_tb.py may also sit beside the child's config.
 """
 from __future__ import annotations
 
@@ -50,7 +53,7 @@ def paths(value):
         return [p for item in value.values() for p in paths(item)]
     if isinstance(value, list):
         return [p for item in value for p in paths(item)]
-    return [Path(value)] if isinstance(value, str) else []
+    return [Path(value)] if isinstance(value, (str, os.PathLike)) else []
 
 
 def view_files(macro):
@@ -85,7 +88,10 @@ def handover(state, definition):
 
 
 def _child(project, name, config, raw, pdk, commands, library=None):
+    from librelane.flows import Flow
     from flow_native_adapters import testbenches
+    from flow_config import resolve_rtl_inputs
+    from formal_property_run import resolve_include_headers
     from sim_activity_dump import dut_instance
 
     root = project / "work/flow/children" / name
@@ -96,18 +102,53 @@ def _child(project, name, config, raw, pdk, commands, library=None):
     if docs.is_dir():
         shutil.copytree(docs, child / "input/docs")
     resolved = resolve_config(config, raw, pdk, library)
-    # Stage only supplied design sources; physical views stay in native outputs.
-    for source in paths(resolved.get("VERILOG_FILES")):
+    native = Flow.factory.get("Classic")(resolved, design_dir=str(config.parent),
+        pdk_root=os.environ.get("PDK_ROOT")).config
+    supplied_sdc = {p for p in paths(resolved) if p.suffix.lower() == ".sdc"}
+    staged_sdc = set()
+    for key, value in native.items():
+        for index, source in enumerate(paths(value)):
+            if source not in supplied_sdc or source in staged_sdc or not source.is_file():
+                continue
+            target = child / "input/docs/supplied_constraints" / f"{key.lower()}_{index}.sdc"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+            staged_sdc.add(source)
+    # The child workspace owns authored inputs; every public run stays fresh.
+    supplied = paths(resolved.get("VERILOG_FILES"))
+    sources = (resolve_rtl_inputs(root)[0] if (root / "phase2/stage1/rtl").is_dir()
+               else supplied)
+    include_dirs = list(dict.fromkeys([*(path.parent for path in [*sources, *supplied]),
+                                      *paths(resolved.get("VERILOG_INCLUDE_DIRS"))]))
+    headers = resolve_include_headers(sources, include_dirs)
+    for source in sources:
         rtl = child / "input/rtl" / source.name
         rtl.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, rtl)
-        for header in [*source.parent.glob("*.vh"), *source.parent.glob("*.svh")]:
-            shutil.copyfile(header, rtl.parent / header.name)
-    for bench in testbenches(project, {}):
-        if bench.suffix in {".v", ".sv"} and dut_instance(bench.read_text(), name):
-            target = child / "phase2/stage1/sim" / bench.name
+    for header in headers:
+        relative = next((header.relative_to(directory) for directory in include_dirs
+                         if header.is_relative_to(directory)), Path(header.name))
+        target = child / "input/rtl" / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(header, target)
+    # Native config must follow the fresh run's normal Phase 2 source selection.
+    resolved.pop("VERILOG_FILES", None)
+    resolved.pop("VERILOG_INCLUDE_DIRS", None)
+    for workspace in (project, root):
+        for bench in testbenches(workspace, {}):
+            if bench.suffix in {".v", ".sv"} and dut_instance(bench.read_text(), name):
+                target = child / "phase2/stage1/sim" / bench.name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(bench, target)
+    hooks = [workspace / "phase2/stage1/sim_professional" / name / "expert_reference_tb.py"
+             for workspace in (root, project)]
+    hooks.append(config.parent / "expert_reference_tb.py")
+    for hook in hooks:
+        if hook.is_file():
+            target = child / "phase2/stage1/sim_professional" / name / hook.name
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(bench, target)
+            shutil.copyfile(hook, target)
+            break
     declaration = child / "plugin_output/declaration.json"
     declaration.parent.mkdir(parents=True, exist_ok=True)
     declaration.write_text(json.dumps({"top_module": name}) + "\n")

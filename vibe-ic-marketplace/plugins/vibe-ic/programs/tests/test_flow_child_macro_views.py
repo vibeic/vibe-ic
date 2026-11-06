@@ -14,7 +14,7 @@ def project(root, child_config=True, hardening=True):
     docs.mkdir(parents=True)
     (docs / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({"top_module": "neutral_wrapper",
         "hard_macros": [{"name": "compute_tile", "hardening_required": hardening}]}))
-    (docs / "L19_CONSTRAINTS_PDK.json").write_text(json.dumps({"pdk_target": "neutral_pdk"}))
+    (docs / "L19_CONSTRAINTS_PDK.json").write_text(json.dumps({"pdk_target": "sky130A"}))
     source = root / "input/design_src"
     source.mkdir(parents=True)
     (source / "tile.v").write_text("module compute_tile(input a, output z); assign z=a; endmodule\n")
@@ -144,3 +144,54 @@ def test_non_hardened_macros_still_consume_supplied_views(tmp_path):
                               {"delivery_target": "ip_hardmacro"})
     assert engine.evaluate(engine.ToolResult(**result), []) == "PASS"
     assert not (tmp_path / "work/flow/children").exists()
+
+
+@pytest.mark.parametrize("sdc_keys", [
+    ("FALLBACK_SDC", "PNR_SDC_FILE", "SIGNOFF_SDC_FILE"),
+    ("FALLBACK_SDC_FILE",),
+    ("RCX_SDC_FILE",),
+])
+def test_child_phase1_reads_its_supplied_sdc_without_rewriting_it(tmp_path, sdc_keys):
+    from types import SimpleNamespace
+    import flow_macro_views as macros
+    from phase1_port_extract import annotate_timing_ports
+
+    source = project(tmp_path)
+    sdc = source / "child.sdc"
+    text = ("# IO ports are assumed to be asynchronous. If synchronous, update IO_SYNC to 1.\n"
+            "set ::env(IO_SYNC) 0\n"
+            "if { $::env(IO_SYNC) } {\n"
+            "set_input_delay 2 -clock clk [get_ports {a}]\n"
+            "set_output_delay 2 -clock clk [get_ports {z}]\n}\n"
+            "set_output_delay 2 -clock clk [get_ports {parent_only}]\n")
+    sdc.write_text(text)
+    raw = json.loads((source / "child.json").read_text())
+    raw.update({key: [str(sdc)] if key == "FALLBACK_SDC_FILE" else str(sdc)
+                for key in sdc_keys})
+    found = {}
+
+    def observe(argv):
+        child = Path(argv[2])
+        document = {"top_module": "compute_tile", "top_ports": [
+            {"name": "a", "direction": "input"}, {"name": "z", "direction": "output"},
+            {"name": "required", "direction": "input"}]}
+        annotate_timing_ports(child, document)
+        found.update(document)
+        # This unit observes staging; it does not manufacture a child tool result.
+        return subprocess.CompletedProcess(argv, 9, "", "staging observed")
+
+    child, summary, code = macros._child(tmp_path, "compute_tile", source / "child.json",
+                                         raw, "sky130A", SimpleNamespace(run=observe))
+    assert summary == {} and code == 9
+    ports = {p["name"]: p for p in found["top_ports"]}
+    assert ports["a"].get("timing_class") == ports["z"].get("timing_class") == "asynchronous"
+    assert "timing_class" not in ports["required"]
+    copies = list((child / "input").rglob("*.sdc"))
+    assert len(copies) == 1 and copies[0].read_text() == text
+    assert sdc.read_text() == text
+    overrides = json.loads((child / "work/flow/native_overrides.json").read_text())
+    for key in sdc_keys:
+        assert overrides[key] == ([str(sdc)] if key == "FALLBACK_SDC_FILE" else str(sdc))
+    assert "parent_only" in copies[0].read_text()
+    assert all((child / s["file"]).is_file() and s["line"] in {1, 2, 4, 5}
+               for name in ("a", "z") for s in ports[name]["timing_class_sources"])
