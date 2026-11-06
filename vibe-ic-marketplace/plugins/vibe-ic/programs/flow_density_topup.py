@@ -9,7 +9,7 @@ import vibeic_temp as tempfile
 
 from librelane.common import Path as NativePath, get_script_dir
 from librelane.state import DesignFormat, State
-from librelane.steps import Step, StepException
+from librelane.steps import Step, StepError, StepException
 from librelane.steps.klayout import Density
 from librelane.steps.magic import MagicStep
 
@@ -75,17 +75,26 @@ class DensityTopUp(Density):
                    next(item for item in MagicStep.config_vars if item.name == "MAGICRC")]
 
     def run(self, state_in, **kwargs):
-        if not self.config.get("KLAYOUT_DENSITY_RUNSET"):
-            return self.run_magic(state_in, **kwargs)
         count = state_in.metrics.get(METRIC)
         if count is None:
+            if not self.config.get("KLAYOUT_DENSITY_RUNSET"):
+                return {}, {}
             raise StepException("NOT_MEASURED: KLayout density has not produced its native count")
         if count <= 0:
             return {}, {}
+        if not self.config.get("KLAYOUT_DENSITY_RUNSET"):
+            try:
+                views, metrics = self.run_magic(state_in, **kwargs)
+            except StepException as exc:
+                detail = str(exc).removeprefix("NOT_MEASURED: ")
+                raise StepError(f"Native density violations remain ({count} > 0): {detail}") from exc
+            if metrics["magic__density_error__count"] > 0:
+                raise StepError(f"Native Magic density violations: {metrics['magic__density_error__count']} > 0")
+            return views, metrics
         root = Path(self.step_dir)
         engine = Path(os.environ.get("VIBEIC_KLAYOUT_TOOLS", "")) / "metal-fill/metal_fill.py"
         if not engine.is_file():
-            raise StepException("NOT_MEASURED: the native KLayout metal-fill engine is absent")
+            return {}, {}
         try:
             config = fill_config(self.config, state_in[DesignFormat.ODB])
         except (OSError, ValueError) as exc:
