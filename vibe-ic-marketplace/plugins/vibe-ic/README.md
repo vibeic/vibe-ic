@@ -1,14 +1,14 @@
-# vibe-ic — AI-Native IC Design plugin (**v1.39.90**)
+# vibe-ic — AI-Native IC Design plugin (**v1.40.2**)
 
 **Design rules: [CHARTER.md](CHARTER.md).** Fixed by the owner: use the tools, judge on their native results, add no self-imposed gates.
 
 **A deterministic program layer with AI-backup skills, driving spec → RTL → GDS.**
 
-The plugin is no longer "compliance regexes over agent prose". It is **781 top-level Python
+The plugin is no longer "compliance regexes over agent prose". It is **782 top-level Python
 programs** (672 of them catalogued in [`programs/INDEX.md`](programs/INDEX.md); the other
-109 are helper modules and shims) that run the flow, **70 skills** that back the programs up
+110 are helper modules and shims) that run the flow, **70 skills** that back the programs up
 where judgment is genuinely required, **7 slash commands**, **9 agents**, and
-**2911 test files**. Programs decide; skills only fill the holes the programs
+**2914 test files**. Programs decide; skills only fill the holes the programs
 deliberately leave.
 
 ## ► The one front door
@@ -183,13 +183,13 @@ the native physical-design adapters), so setting only `VIBEIC_EDA_THREADS` will 
 1. The Router selects the task's delivery endpoint and bounded work.
 2. The engine evaluates the step table's applicability predicates and runs the
    corresponding native command or adapter.
-3. **781 top-level deterministic programs** verify actual engineering results
+3. **782 top-level deterministic programs** verify actual engineering results
    and provide the design work that the tools do not supply.
 4. AI reads every result, fixes problems and resumes the affected work.
 
 ## Layout
 
-At 781 top-level programs, a hand-maintained per-bucket listing is not meaningful — the catalog is
+At 782 top-level programs, a hand-maintained per-bucket listing is not meaningful — the catalog is
 generated instead. `programs/INDEX.md` is produced by `tools/gen_programs_index.py`, and a
 CI freshness test diffs the regenerated index against the committed one and FAILs on drift.
 
@@ -206,7 +206,7 @@ plugins/vibe-ic/
 │   ├── bootstrap_compliance.py    — regenerates all compliance.yaml
 │   ├── gen_compliance_tests.py    — regenerates all test_compliance.py
 │   └── add_compliance_gate.py     — adds gate section to SKILL.md files
-├── programs/                      — 781 top-level *.py (672 catalogued)
+├── programs/                      — 782 top-level *.py (672 catalogued)
 │   ├── INDEX.md                   — AUTO-GENERATED catalog; CI-checked for drift
 │   ├── vibe_ic_one_shot_runner.py — THE front door
 │   ├── flow_engine_frontend.py    — shared public CLI and Router selection
@@ -217,7 +217,7 @@ plugins/vibe-ic/
 │   ├── l_doc_taxonomy.py          — L1..L27 layer definitions
 │   ├── _commercial_pdk.py         — config-driven commercial-PDK resolution
 │   ├── gds_antenna/, metal_fill/  — sub-packages
-│   └── tests/                     — 2911 test files
+│   └── tests/                     — 2914 test files
 ├── skills/                        — 70 skills, each with SKILL.md + compliance.yaml
 │   └── <skill>/tests/             — 81 per-skill compliance regression files
 ├── commands/                      — 7 slash commands + _anti_fabrication_rules.md
@@ -231,7 +231,7 @@ plugins/vibe-ic/
 
 ## Test suite
 
-**2911 test files** under `programs/tests/`, plus **81** per-skill compliance regressions
+**2914 test files** under `programs/tests/`, plus **81** per-skill compliance regressions
 under `skills/*/tests/`.
 
 Run tests from the plugin root:
@@ -307,7 +307,7 @@ architecture (v0.40).
 Everything since has come from the same loop, run continuously: drive real ICs and open
 benchmarks through the flow, find where an AI judgment call rescued a run, and absorb
 that judgment back into a deterministic program with a regression test. That is why the
-program count moved from 41 at v0.40 to 781 top-level programs today — and how
+program count moved from 41 at v0.40 to 782 top-level programs today — and how
 real runs have shaped the implementation. Current execution follows the owner's
 design charter and uses native tool results against original limits.
 

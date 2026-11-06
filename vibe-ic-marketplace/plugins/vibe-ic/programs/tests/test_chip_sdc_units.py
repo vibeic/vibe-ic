@@ -48,17 +48,19 @@ def test_generated_sdc_preserves_physical_clock_io_and_environment(tmp_path, tim
     (docs / "L8_TIMING_WAVEFORM.json").write_text(json.dumps({"clock_domains": [
         {"domain_kind": "primary", "source_pin": "clk[1]", "period_ns": 24},
         {"domain_kind": "primary", "source_pin": "aux_clk", "period_ns": 40}]}))
+    (docs / "L9_PHYSICAL_DESIGN.md").write_text("| set_input_transition | 0.23 |\n")
     config = {"PDK": "neutral", "CLOCK_PORT": ["clk[1]", "aux_clk"], "CLOCK_PERIOD": 24, "IO_DELAY_CONSTRAINT": 20,
               "CLOCK_UNCERTAINTY_CONSTRAINT": .25, "CLOCK_TRANSITION_CONSTRAINT": .15,
               "MAX_TRANSITION_CONSTRAINT": 3, "MAX_FANOUT_CONSTRAINT": 4,
               "TIME_DERATING_CONSTRAINT": 5, "OUTPUT_CAP_LOAD": 3530,
+              "SYNTH_DRIVING_CELL": "receiver/Z",
               "PAD_LIBS": {"*": [str(library), str(unlinked)]}}
     ports = [{"name": "clk", "direction": "input", "indexed": True, "msb": 1, "lsb": 1},
              {"name": "aux_clk", "direction": "input", "indexed": False},
              {"name": "data", "direction": "input", "indexed": True, "msb": 5, "lsb": 4},
              {"name": "result", "direction": "output", "indexed": True, "msb": 8, "lsb": 7}]
     generated = tmp_path / "generated.sdc"
-    generated.write_text(chip._sdc(tmp_path, config, ports, {"receiver"}))
+    generated.write_text(chip._sdc(tmp_path, config, ports))
     effective = tmp_path / "effective.sdc"
     script = tmp_path / "check.tcl"
     script.write_text(f'''read_liberty {{{library}}}
@@ -99,11 +101,10 @@ exit
     assert len(loads) == 2, text
     assert {port: float(value) * cap_scale for value, port in loads} == pytest.approx(
         {"result[7]": 3530e-15, "result[8]": 3530e-15}, rel=1e-6, abs=1e-21), text
-    edges = re.findall(r"^set_input_transition -(min|max) ([\d.eE+-]+) \[get_ports \{([^}]+)\}\]", text, re.M)
-    assert len(edges) == 8, text
-    assert {(limit, port): float(value) * time_scale for limit, value, port in edges} == pytest.approx(
-        {(limit, port): edge for limit, edge in (("min", .1e-9), ("max", 1.3e-9))
-         for port in ("clk[1]", "aux_clk", "data[5]", "data[4]")}, rel=1e-6, abs=1e-18), text
+    edges = re.findall(r"^set_input_transition ([\d.eE+-]+) \[get_ports \{([^}]+)\}\]", text, re.M)
+    assert len(edges) == 4, text
+    assert {port: float(value) * time_scale for value, port in edges} == pytest.approx(
+        {port: .23e-9 for port in ("clk[1]", "aux_clk", "data[5]", "data[4]")}, rel=1e-6, abs=1e-18), text
     assert float(re.search(r"set_max_transition (\S+) \[current_design\]", text)[1]) * time_scale == pytest.approx(3e-9, rel=1e-6, abs=1e-18)
     assert float(re.search(r"set_max_fanout (\S+) \[current_design\]", text)[1]) == 4
     for limit, expected in (("early", .95), ("late", 1.05)):
@@ -112,5 +113,5 @@ exit
     original.write_text(text + "set_clock_groups -asynchronous -group core_clock_0 -group core_clock_1\n")
     before = original.read_bytes()
     config["PNR_SDC_FILE"] = str(original)
-    assert chip._sdc(tmp_path, config, ports, {"receiver"}) == before.decode()
+    assert chip._sdc(tmp_path, config, ports) == before.decode()
     assert original.read_bytes() == before
