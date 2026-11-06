@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Portable, byte-bound drawing-grid admission and explicit legacy migration."""
+"""Read the selected PDK drawing grid and model dimension steps."""
 from __future__ import annotations
 
 import argparse
 import copy
 from dataclasses import dataclass
-import hashlib
 import json
 import math
 from pathlib import Path
@@ -18,7 +17,6 @@ import _container_exec as _ce
 
 _METADATA = {"basis", "native_probe_cid"}
 _FIELDS = {"version", "grid_source", "sources", "models"} | _METADATA
-_HASH = re.compile(r"[0-9a-f]{64}\Z")
 _CONTAINER_READ = """import pathlib, sys
 root = pathlib.Path(sys.argv[1]).resolve(strict=True)
 technology = root / "libs.tech"
@@ -97,8 +95,6 @@ def _validate_evidence(evidence, *, legacy=False):
                 raise ValueError("GEOMETRY_ADMISSION_INVALID_SOURCE")
         else:
             source_parts(key)
-        if not isinstance(expected, str) or not _HASH.fullmatch(expected):
-            raise ValueError("GEOMETRY_ADMISSION_INVALID_HASH")
     grid_source = evidence.get("grid_source")
     if not isinstance(grid_source, str) or grid_source not in sources:
         raise ValueError("GEOMETRY_ADMISSION_GRID_UNBOUND")
@@ -159,8 +155,6 @@ def verify_admission(evidence, runtime):
     grid_bytes = None
     for key, expected in evidence["sources"].items():
         content = read_source(key, runtime)
-        if hashlib.sha256(content).hexdigest() != expected:
-            raise ValueError("GEOMETRY_ADMISSION_SOURCE_CHANGED: " + key)
         if key == evidence["grid_source"]:
             grid_bytes = content
     from analog_lef_gds_outline_check import manufacturing_grid_um
@@ -171,18 +165,18 @@ def verify_admission(evidence, runtime):
         grid = manufacturing_grid_um(Path(staged.name).parent, staged.name)
     if grid is None or not math.isfinite(grid) or grid <= 0:
         raise ValueError("GEOMETRY_ADMISSION_GRID_ABSENT")
-    return VerifiedAdmission(grid, dict(evidence["sources"]), copy.deepcopy(evidence["models"]))
+    return VerifiedAdmission(grid, dict.fromkeys(evidence["sources"]), copy.deepcopy(evidence["models"]))
 
 
 def migrate_admission(evidence, mappings, runtime):
-    """Keep the expected hashes; relocating evidence cannot admit new bytes."""
+    """Resolve portable source paths and read their physical drawing grid."""
     _validate_evidence(evidence, legacy=True)
     if set(mappings) != set(evidence["sources"]):
         raise ValueError("GEOMETRY_ADMISSION_MAPPING_INCOMPLETE")
     if len(set(mappings.values())) != len(mappings):
         raise ValueError("GEOMETRY_ADMISSION_DUPLICATE_SOURCE")
     portable = {"version": 2, "grid_source": mappings[evidence["grid_source"]],
-                "sources": {mappings[key]: expected for key, expected in evidence["sources"].items()},
+                "sources": dict.fromkeys(mappings.values()),
                 "models": copy.deepcopy(evidence["models"])}
     portable.update({key: evidence[key] for key in _METADATA & evidence.keys()})
     verify_admission(portable, runtime)

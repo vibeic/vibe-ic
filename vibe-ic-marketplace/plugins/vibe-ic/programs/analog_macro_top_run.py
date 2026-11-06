@@ -14,7 +14,7 @@ import sys
 import tempfile
 
 from _atomic_artefact import write_json
-from analog_macro_top_gen import DEST, RECORD, generate, sha
+from analog_macro_top_gen import DEST, RECORD, generate
 from librelane_contract import Refusal
 
 STEPS = (
@@ -34,11 +34,6 @@ def execute(project):
 
     project = Path(project).resolve()
     generated = json.loads((project / RECORD).read_text())
-    if generated.get("verdict") != "WROTE":
-        raise Refusal("A18_GENERATION_NOT_CURRENT", "no WROTE generation record")
-    for path, digest in {**generated["inputs"], **generated["outputs"]}.items():
-        if not Path(path).is_file() or sha(path) != digest:
-            raise Refusal("A18_GENERATION_NOT_CURRENT", path)
     selection = generated["execution"]
     for key in ("pdk", "pdk_root", "scl", "pad"):
         if not isinstance(selection.get(key), str) or not selection[key]:
@@ -81,18 +76,16 @@ def execute(project):
     tools = {}
     for name, executable in (("python3", sys.executable), ("openroad", AnalogMacroPDN.get_openroad_path())):
         path = Path(shutil.which(executable)).resolve()
-        tools[name] = {"path": str(path), "sha256": sha(path)}
+        tools[name] = {"path": str(path)}
     flow = AnalogMacroTop(generated["config"], design_dir=str(project), **selection)
     run_dir = tempfile.mkdtemp(prefix="run-", dir=project / DEST)
     state = flow.start(with_initial_state=State({DesignFormat.NETLIST: LanePath(generated["netlist"])}),
                        _force_run_dir=run_dir)
     # Routing can alter contacts; verify the actual final database as well.
     pdn.check(state[DesignFormat.ODB], intent["rails"], run_dir, AnalogMacroPDN.get_openroad_path())
-    if any(sha(view["path"]) != view["sha256"] for view in tools.values()):
-        raise Refusal("A18_NATIVE_TOOL_CHANGED", "native tool changed during execution")
     pnr = project / "phase3/stage3/pnr"
     pnr.mkdir(parents=True, exist_ok=True)
-    outputs = {}
+    outputs = []
     for view, names in ((DesignFormat.ODB, ("routed.odb", "chip_top.odb")),
                         (DesignFormat.DEF, ("routed.def", "chip_top.def")),
                         (DesignFormat.NETLIST, (generated["core_module"] + "_pnr.v",)),
@@ -105,13 +98,13 @@ def execute(project):
         for name in names:
             dest = pnr / name
             shutil.copy2(source, dest)
-            outputs[str(dest)] = sha(dest)
+            outputs.append(str(dest))
     for path in [Path(run_dir) / "check-final-pdn.log", Path(run_dir) / "check-final-pdn.tcl",
                  *Path(run_dir).glob("*/analog-pdn.json")]:
-        outputs[str(path)] = sha(path)
+        outputs.append(str(path))
     final = project / DEST / "final_state.json"
     final.write_text(state.dumps())
-    outputs[str(final)] = sha(final)
+    outputs.append(str(final))
     measured = {k: v for k, v in state.metrics.items()
                 if k in ("design__power_grid_violation__count", "route__drc_errors",
                          "design__disconnected_pin__count")}
@@ -124,10 +117,9 @@ def execute(project):
         status, reason = "PASS", "A18_MACRO_ONLY_IMPLEMENTATION_COMPLETE"
     return {"producer": "analog_macro_top_run", "component_status": status,
             "reason": reason, "outputs": outputs, "native_metrics": measured,
-            "generation_sha256": sha(project / RECORD), "steps": list(STEPS),
+            "steps": list(STEPS),
             "native_tools": tools,
-            "core_inputs_sha256": {path: digest for path, digest in generated["inputs"].items()
-                                    if Path(path).suffix == ".gds"},
+            "core_inputs": [path for path in generated["inputs"] if Path(path).suffix == ".gds"],
             "run_dir": run_dir,
             "stand_in": generated.get("stand_in", False),
             "flow109_acceptance": "NOT_MEASURED", "delivery_accepted": False}

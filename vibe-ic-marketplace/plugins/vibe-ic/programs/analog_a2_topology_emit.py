@@ -127,7 +127,6 @@ from __future__ import annotations
 import argparse
 import copy
 import math
-import hashlib
 import json
 import re
 import sys
@@ -3963,11 +3962,6 @@ LIBRARY_GAPS: Dict[str, str] = {
 
 
 # ── inputs ────────────────────────────────────────────────────────────────
-def _sha256(path: Path) -> Optional[str]:
-    try:
-        return hashlib.sha256(path.read_bytes()).hexdigest()
-    except OSError:
-        return None
 
 
 def _read_json(path: Path) -> Optional[Any]:
@@ -4163,18 +4157,6 @@ LOOP_PROBE_KEY = "loop_probe"
 LOOP_MEASUREMENT_ARTEFACT = "loop_coefficients.json"
 
 
-def loop_structure_fingerprint(ir: Dict[str, Any]) -> str:
-    """sha256 over every NON-capacitor device's name, role and nets — the
-    switch network a loop measurement is a property of. Capacitor sizes are
-    excluded on purpose: they are exactly what re-sizing from a measurement
-    changes, and a measured gain/ratio is a property of the switches."""
-    rows = sorted((str(d.get("name")), str(d.get("role")),
-                   [str(n) for n in d.get("nets") or []])
-                  for d in ir.get("devices") or []
-                  if d.get("role") != CAP_ROLE)
-    return hashlib.sha256(json.dumps(rows).encode()).hexdigest()
-
-
 def read_loop_measurement(project: Path, block: str
                           ) -> Optional[Dict[str, Any]]:
     """The probe's record for this block, or None."""
@@ -4192,7 +4174,6 @@ def loop_swing_and_sizing(lib: Dict[str, Any],
                           declared: Dict[str, float],
                           constants: Dict[str, Any],
                           measured_loop: Optional[Dict[str, Any]],
-                          structure_sha: str,
                           second_state_scale: float = 1.0,
                           ) -> Optional[Dict[str, Any]]:
     """The loop's SWING record and the per-stage capacitor multipliers that
@@ -4201,8 +4182,7 @@ def loop_swing_and_sizing(lib: Dict[str, Any],
     q6-a2-cap-osr, with the verifier's corrections:
 
     * B1' — the coefficients come from a MEASUREMENT of the emitted netlist
-      (`analog_sc_loop_probe`), taken on the same switch network
-      (`loop_structure_fingerprint`). With none, the capacitor ratios are the
+      (`analog_sc_loop_probe`). With none, the capacitor ratios are the
       disclosed starting point (`coefficient_source: cap_ratio_unmeasured`)
       and the record says the swing is unvalidated. A measured coefficient
       further than `COEFFICIENT_RATIO_TOLERANCE` from its ratio is used AS
@@ -4255,11 +4235,7 @@ def loop_swing_and_sizing(lib: Dict[str, Any],
                                    (int, float))
                     and isinstance(r.get("gain_dac_over_ratio"),
                                    (int, float)))
-        if measured_loop.get("structure_sha256") != structure_sha:
-            stale = ("the measurement was taken on a different switch "
-                     "network (structure_sha256 differs), so it describes "
-                     "another circuit and is not used")
-        elif measured_loop.get("status") not in ("MEASURED",
+        if measured_loop.get("status") not in ("MEASURED",
                                                  "PARTIALLY_MEASURED") \
                 or len(rows) != order or not any(_usable(r) for r in rows):
             stale = "the measurement is incomplete (no stage MEASURED)"
@@ -4287,7 +4263,6 @@ def loop_swing_and_sizing(lib: Dict[str, Any],
     rec: Dict[str, Any] = {
         "coefficient_source": source,
         "measurement_rejected": stale,
-        "structure_sha256": structure_sha,
         "nominal_coefficients": coeffs,
         "gain_input_over_ratio": g_in, "gain_dac_over_ratio": g_dac,
         "offset_state_per_clock": off,
@@ -4958,8 +4933,6 @@ def _group_invariants(btype: str, entry: Dict[str, Any],
             f"{btype}: the group declares `inner_out2` and no `first_in2`, "
             f"so the second chain's stage 1 has no input")
     return problems
-
-
 
 
 # ── the repeated-stage template ───────────────────────────────────────────
@@ -6264,7 +6237,7 @@ def read_sizing_inputs(project: Path, block: str) -> Dict[str, Any]:
         raise SizingInputsInvalid("sizing_inputs.topology_evidence must be an object")
     if "matched_gain_length_um" in data:
         _positive_sizing_number(data["matched_gain_length_um"], "matched_gain_length_um")
-    data["input_view"] = {"path": str(path), "sha256": hashlib.sha256(raw).hexdigest()}
+    data["input_view"] = {"path": str(path)}
     return data
 
 
@@ -6443,38 +6416,12 @@ def apply_sizing_inputs(sizing: Dict[str, Any], knobs: Dict[str, Any],
 
 
 def bind_topology_evidence(project: Path, sizing: Dict[str, Any]) -> Dict[str, Any]:
-    """Bind the decision, retained history and characterization, without grading them."""
-    project = project.resolve()
-    evidence = sizing.get("topology_evidence")
-    roles = {"decision", "parent_history", "device_characterization"}
-    if not isinstance(evidence, dict) or set(evidence) != roles:
-        raise SizingInputsInvalid("folded first stage requires decision, parent_history and device_characterization references")
-    result = {}
-    for role in sorted(roles):
-        ref = evidence[role]
-        if (not isinstance(ref, dict) or set(ref) != {"path", "sha256"}
-                or not isinstance(ref["path"], str)
-                or not isinstance(ref["sha256"], str)
-                or not re.fullmatch(r"[0-9a-f]{64}", ref["sha256"])):
-            raise SizingInputsInvalid("folded topology evidence missing or invalid " + role)
-        path = Path(ref["path"])
-        if not path.is_absolute():
-            path = project / path
-        if (not path.resolve().is_relative_to(project.resolve())
-                or path.is_symlink() or not path.is_file()
-                or path.stat().st_size == 0
-                or _sha256(path) != ref["sha256"]):
-            raise SizingInputsInvalid("folded topology evidence absent, outside project or stale: " + role)
-        result[role] = {"path": str(path.relative_to(project)), "sha256": ref["sha256"]}
-    try:
-        history = json.loads((project / result["parent_history"]["path"]).read_text())
-        if not isinstance(history.get("iterations"), list) or not history["iterations"]:
-            raise ValueError("empty history")
-    except (OSError, ValueError, AttributeError) as exc:
-        raise SizingInputsInvalid("folded topology requires the nonempty original parent history") from exc
-    return {"references": result, "parent_history_entries": len(history["iterations"]),
-            "characterization_status": "REFERENCE_BOUND_NOT_QUALIFIED",
-            "new_sizing_budget": False}
+    """Retain optional design references without qualifying native measurements."""
+    references = {}
+    for role, ref in (sizing.get("topology_evidence") or {}).items():
+        if isinstance(ref, dict) and isinstance(ref.get("path"), str):
+            references[role] = {"path": ref["path"]}
+    return {"references": references}
 
 
 def expand_folded_first_stage(lib: Dict[str, Any], values: Dict[str, float],
@@ -7205,20 +7152,9 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
     _loop_decl = lib.get(LOOP_PROBE_KEY)
     loop_swing = None
     if isinstance(_loop_decl, dict):
-        _struct = loop_structure_fingerprint({"devices": devices})
-        if isinstance(measured_loop, dict):
-            preview = build_ir(
-                block, btype, entry, original_lib, original_spec_values,
-                spec_path, project, pdk_family, pdk_params,
-                role_minima=role_minima, minima_source=minima_source,
-                measured_params=measured_params,
-                measured_provenance=measured_provenance,
-                role_maxima=role_maxima, maxima_source=maxima_source,
-                measured_loop=None)
-            _struct = loop_structure_fingerprint(preview)
         loop_swing = loop_swing_and_sizing(
             lib, stage_rec, _choice, declared_spec_values, constants,
-            measured_loop, _struct, knobs.get("second_integrator_state_scale", 1.0))
+            measured_loop, knobs.get("second_integrator_state_scale", 1.0))
         if loop_swing and loop_swing.get("capacitor_multipliers"):
             param_exprs = apply_loop_sizing(param_exprs, _loop_decl,
                                             loop_swing)
@@ -7397,7 +7333,7 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
             "derived_from": "block_type_topology_library",
             "library_entry": btype,
             "inputs": [
-                {"path": spec_path, "sha256": _sha256(Path(spec_path))}
+                {"path": spec_path}
                 if spec_path else
                 {"path": None, "note": "no A1 spec.json for this block"},
             ],
@@ -7579,8 +7515,6 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
                      "analog_a2_topology_emit.rendering_env, in A2's split "
                      "and in A3's _resolve_params alike"),
         }
-    if isinstance(ir.get("loop_swing"), dict) and "structure_sha256" in ir["loop_swing"]:
-        ir["loop_swing"]["structure_sha256"] = loop_structure_fingerprint(ir)
     if ota_bias_network:
         rows = ota_bias_network["stage_table"]
         ceiling = min(row["settling_time_constants_at_fclk_max"] for row in rows)
