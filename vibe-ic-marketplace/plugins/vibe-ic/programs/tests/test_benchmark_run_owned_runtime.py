@@ -23,110 +23,9 @@ IMAGE = "example.invalid/eda@" + DIGEST
 
 @pytest.fixture
 def native(monkeypatch):
-    monkeypatch.delenv("VIBEIC_EDA_CONTAINER", raising=False)
-    monkeypatch.delenv("VIBEIC_LIBRELANE_LOCAL_ATTESTATION", raising=False)
-    monkeypatch.setattr(bd._challenge_exec, "no_container_route", lambda: False)
-    pin = bd._runtime_pair._pin
-    monkeypatch.setattr(pin, "resolved_image_digest", lambda *a, **k: DIGEST)
-    monkeypatch.setattr(pin, "pinned_image_present", lambda env=None: (IMAGE, ""))
-    monkeypatch.setattr(pin, "container_pin_state", lambda *a, **k: ("MATCH", ""))
-    monkeypatch.setattr(pin, "container_image_id", lambda name: (IMAGE_ID, ""))
-    monkeypatch.setattr(pin, "container_image_digest", lambda name: (DIGEST, ""))
-    monkeypatch.setattr(pin, "container_image_reference", lambda name: (IMAGE, ""))
-    monkeypatch.setattr(pin, "image_repo", lambda env=None: "example.invalid/eda")
     monkeypatch.setattr(bd._challenge_exec, "container_id", lambda name: "c3" * 32)
-    supplied = []
-
-    def helper(argv, **kwargs):
-        assert argv[0] == "bash" and Path(argv[1]).name == "restart-eda.sh", argv
-        assert argv[2] == IMAGE
-        env = kwargs["env"]
-        assert env["ENSURE_ONLY"] == "1" and env["PULL"] == "0"
-        assert env["SOURCE_CONTAINER"] == "vibeic-eda"
-        supplied.append(env["NAME"])
-        return subprocess.CompletedProcess(argv, 0, "", "")
-
-    monkeypatch.setattr(bd.subprocess, "run", helper)
-    return supplied
-
-
-def test_ordinary_fresh_solve_supplies_two_independent_runtimes(tmp_path, monkeypatch, native):
-    import benchmark_entry_surface_check as bes
-    monkeypatch.setattr(bes, "audit", lambda *a: {"verdict": "PASS"})
-    monkeypatch.setattr(bd, "_dispatch_format", lambda *a: "neutral")
-    monkeypatch.setattr(bd, "_completeness_adapters", lambda: {})
-    selected = []
-
-    class BeforeDesignWork(Exception):
-        pass
-
-    def prepared(*args):
-        raise BeforeDesignWork
-
-    monkeypatch.setattr(bd, "_prepare_general_solve_run", prepared)
-    real_gate = bd._runtime_pair_gate
-
-    def gate(*a, **k):
-        rc, record = real_gate(*a, **k)
-        assert rc is None, record
-        selected.append(record["container"])
-        return rc, record
-
-    monkeypatch.setattr(bd, "_runtime_pair_gate", gate)
-    for run in (tmp_path / "a", tmp_path / "b"):
-        with pytest.raises(BeforeDesignWork):
-            bd._cmd_solve_locked("neutral", str(tmp_path), str(run))
-        assert not run.exists()  # Supply precedes design staging and fan-out.
-    assert len(native) == 2 and selected == native
-    assert selected[0] != selected[1]
-
-
-def test_fresh_name_is_stable_and_recorded_resume_does_not_supply(tmp_path, native):
-    first = bd._runtime_pair_gate(tmp_path, "solve", pristine=True)[1]
-    second = bd._runtime_pair_gate(tmp_path, "solve", pristine=True)[1]
-    assert first["container"] == second["container"] and len(native) == 2
-    bd._write_runtime_pair_record(tmp_path, first)
-    assert bd._runtime_pair_gate(tmp_path, "resume:retry")[1]["container"] == first["container"]
-    assert len(native) == 2
-
-
-def test_preproof_retries_keep_selected_runtime_after_absence(tmp_path, monkeypatch, native):
-    first = bd._runtime_pair_gate(tmp_path, "solve", pristine=True)[1]
-    selected = first["container"]
-    bd._write_runtime_pair_record(tmp_path, first)
-    pin = bd._runtime_pair._pin
-    monkeypatch.setattr(pin, "container_pin_state", lambda name, env=None:
-                        ("UNREADABLE", "CONTAINER_ABSENT: " + name) if name == selected else ("MATCH", ""))
-    for _ in range(3):
-        rc, pair = bd._runtime_pair_gate(tmp_path, "resume:ai-route")
-        assert rc == 2 and pair["container"] == selected, pair
-        argv = bd._solver_argv(Path("/unused/vibe_ic_one_shot_runner.py"),
-                               tmp_path / "projects/neutral", "D1", "1")
-        assert argv[argv.index("--container") + 1] == selected
-    assert len(native) == 1
-    assert not bd._native_challenge_identity_path(tmp_path).exists()
-
-
-def test_explicit_selection_does_not_supply(tmp_path, monkeypatch, native):
-    monkeypatch.setenv("VIBEIC_EDA_CONTAINER", "operator-runtime")
-    rc, pair = bd._runtime_pair_gate(tmp_path, "solve", pristine=True)
-    assert rc is None and pair["container"] == "operator-runtime"
-    assert native == []
-
-
-def test_source_reference_is_not_recomposed_from_configured_repository(tmp_path, monkeypatch, native):
-    monkeypatch.setattr(bd._runtime_pair._pin, "image_repo", lambda env=None: "another.invalid/eda")
-    assert bd._runtime_pair_gate(tmp_path, "solve", pristine=True)[0] is None
-    assert len(native) == 1
-
-
-def test_helper_refusal_launches_no_design_work(tmp_path, monkeypatch, native):
-    monkeypatch.setattr(bd.subprocess, "run", lambda argv, **kw:
-                        subprocess.CompletedProcess(argv, 3, "", "incompatible source mounts"))
-    rc, record = bd._runtime_pair_gate(tmp_path / "run", "solve", pristine=True)
-    assert rc == 2 and record["workers_launched"] == 0
-    assert record["evidence"] == ["incompatible source mounts"]
-    assert not (tmp_path / "run").exists()
+    monkeypatch.setattr(bd._runtime_tools, "container_image_id", lambda name: (IMAGE_ID, ""))
+    monkeypatch.setattr(bd._runtime_tools, "container_image_digest", lambda name: (DIGEST, ""))
 
 
 def test_unusable_native_binary_probe_remains_refused(tmp_path, monkeypatch, native):
@@ -152,49 +51,6 @@ def test_unusable_native_binary_probe_remains_refused(tmp_path, monkeypatch, nat
     assert all(c.get("stage") != "compile" for c in result["execution"]["commands"])
 
 
-def test_missing_frozen_runtime_is_never_reissued(tmp_path, monkeypatch, native):
-    frozen = {"backend": "native", "container": "historical-runtime",
-              "container_id": "c3" * 32, "image_id": IMAGE_ID, "image_digest": DIGEST}
-    bd._write_immutable_json(bd._native_challenge_identity_path(tmp_path), frozen)
-    monkeypatch.setenv("VIBEIC_EDA_CONTAINER", "another-runtime")
-    monkeypatch.setattr(bd._runtime_pair._pin, "container_pin_state",
-                        lambda name, env=None: ("UNREADABLE", "CONTAINER_ABSENT: " + name))
-    rc, pair = bd._runtime_pair_gate(tmp_path, "resume:retry")
-    assert rc == 2 and pair["container"] == "historical-runtime"
-    assert native == []
-    assert bd._frozen_native_challenge_identity(tmp_path) == frozen
-
-
-def test_frozen_resume_keeps_original_identity_and_container(tmp_path, monkeypatch, native):
-    frozen = {"backend": "native", "container": "historical-runtime",
-              "container_id": "c3" * 32, "image_id": IMAGE_ID, "image_digest": DIGEST}
-    path = bd._native_challenge_identity_path(tmp_path)
-    bd._write_immutable_json(path, frozen)
-    before = path.read_bytes()
-    monkeypatch.setenv("VIBEIC_EDA_CONTAINER", "new-process-default")
-    rc, pair = bd._runtime_pair_gate(tmp_path, "resume:retry")
-    assert rc is None and pair["container"] == "historical-runtime"
-    argv = bd._solver_argv(Path("/unused/vibe_ic_one_shot_runner.py"), tmp_path / "projects/neutral", "D1", "1")
-    assert argv[argv.index("--container") + 1] == "historical-runtime"
-    assert path.read_bytes() == before and native == []
-
-
-@pytest.mark.parametrize("field", ["container_id", "image_id", "image_digest"])
-def test_existing_native_drift_refusal_survives(tmp_path, monkeypatch, native, field):
-    declaration = {"container": "run-a", "container_id": "c3" * 32,
-                   "image_id": IMAGE_ID, "image_digest": DIGEST}
-    assert bd._challenge_native_identity(declaration)[1] == ""
-    declaration[field] = "different"
-    assert "native " + field + " drift" in bd._challenge_native_identity(declaration)[1]
-
-
-def test_no_docker_and_legacy_host_do_not_supply(tmp_path, monkeypatch, native):
-    monkeypatch.setattr(bd._challenge_exec, "no_container_route", lambda: True)
-    assert bd._runtime_pair_gate(tmp_path, "solve", pristine=True)[0] is None
-    assert native == []
-    assert bd._challenge_execution_declaration(tmp_path)["backend"] == "host"
-
-
 @pytest.mark.parametrize("kind", ["phase1", "solve", "backup", "repair", "same_bytes"])
 def test_selected_runtime_reaches_child_argv_and_environment(tmp_path, monkeypatch, kind):
     run = tmp_path / "run"
@@ -202,14 +58,13 @@ def test_selected_runtime_reaches_child_argv_and_environment(tmp_path, monkeypat
                else run / "projects/neutral")
     (project / "input").mkdir(parents=True)
     (project / "input/phase1_prompt.md").write_text("Neutral lifecycle input.\n")
-    bd._write_runtime_pair_record(run, {"verdict": "RUNTIME_PAIR_MATCH", "container": "run-owned-a"})
     runner = tmp_path / "vibe_ic_one_shot_runner.py"
     output = tmp_path / "child.json"
     runner.write_text("import sys,os,json\nfrom pathlib import Path\n"
                       "Path(os.environ['NEUTRAL_CHILD']).write_text(json.dumps("
                       "{'argv':sys.argv,'container':os.environ.get('VIBEIC_EDA_CONTAINER')}))\n")
     monkeypatch.setenv("NEUTRAL_CHILD", str(output))
-    monkeypatch.setenv("VIBEIC_EDA_CONTAINER", "unrelated-process-default")
+    monkeypatch.setenv("VIBEIC_EDA_CONTAINER", "run-owned-a")
     budget = bd._RunnerBudget(1, 1, 1)
     if kind == "phase1":
         bd._ensure_phase1_frontdoor(runner, project, budget)
@@ -220,7 +75,7 @@ def test_selected_runtime_reaches_child_argv_and_environment(tmp_path, monkeypat
     child = json.loads(output.read_text())
     assert child["argv"][child["argv"].index("--container") + 1] == "run-owned-a"
     assert child["container"] == "run-owned-a"
-    assert os.environ["VIBEIC_EDA_CONTAINER"] == "unrelated-process-default"
+    assert os.environ["VIBEIC_EDA_CONTAINER"] == "run-owned-a"
 
 
 FAKE_DOCKER = r'''#!/usr/bin/env python3

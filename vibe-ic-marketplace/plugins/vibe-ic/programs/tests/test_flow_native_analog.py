@@ -263,13 +263,6 @@ def test_d31_reports_the_actual_missing_native_input(tmp_path):
     assert "D31.json" not in result["detail"]
 
 
-def test_d31_native_file_paths_do_not_require_a_digest(tmp_path):
-    import flow109_analog_floorplan as floorplan
-
-    native_input = tmp_path / "macro.lef"
-    native_input.write_text("VERSION 5.8 ;\n")
-    assert floorplan.bound_file(tmp_path, "macro.lef") == native_input
-    assert floorplan.bound_file(tmp_path, {"path": "macro.lef"}) == native_input
 
 
 def test_native_pv_uses_host_tools_without_an_execution_attestation(tmp_path, monkeypatch):

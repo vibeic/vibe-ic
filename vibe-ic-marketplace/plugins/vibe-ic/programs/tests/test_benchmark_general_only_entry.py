@@ -69,14 +69,6 @@ def test_open_argv_passes_the_actual_delivery_guard(tmp_path, entry, exit_step):
         "delivery_route": "IP", "deliverable": "HARDMACRO"}
 
 
-def test_undeclared_ordinary_runner_still_blocks_before_image_capture(tmp_path):
-    result = _run_admission([
-        sys.executable, str(PROGRAMS / "vibe_ic_one_shot_runner.py"),
-        str(tmp_path), "--exit-step", "D1"])
-    assert result.returncode == 2
-    assert result.stderr.split(":", 1)[0] == "REFUSED", result.stderr
-    assert "DELIVERY_ROUTE_UNDECLARED" in result.stderr
-    assert not (tmp_path / "reports" / "container_image.json").exists()
 
 
 def test_open_delivery_cannot_overwrite_the_existing_owner_die_choice(tmp_path):

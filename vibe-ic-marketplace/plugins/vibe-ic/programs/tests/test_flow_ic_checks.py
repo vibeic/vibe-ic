@@ -127,10 +127,8 @@ def test_cvc_uses_native_report_not_process_success(tmp_path, monkeypatch, total
 
 def test_ic_profile_keeps_published_engineering_tools_and_original_limits(tmp_path):
     from flow_engine import choose_tool, design_features, predicate
-    from flow_steps_generate import ROOT, classify_checks, generate
-    native = json.loads((ROOT / "flow/native_limits.json").read_text())
-    table, _, _ = generate(json.loads((ROOT / "flow/flow109.json").read_text()), native)
-    classify_checks(table, native)
+    from flow_engine import TABLE, read_json
+    table = read_json(TABLE)
     ic = design_features(tmp_path, {"delivery_target": "shippable_gds"}, table)
     ip = design_features(tmp_path, {"delivery_target": "ip_hardmacro"}, table)
     for feature in ("requires_si", "requires_spice", "requires_perc"):

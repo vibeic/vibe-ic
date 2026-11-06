@@ -55,3 +55,51 @@ def test_explicit_existing_container_is_forwarded_to_public_runner(tmp_path, mon
     monkeypatch.setenv('VIBEIC_EDA_CONTAINER', 'selected-existing-container')
     argv = dispatch._solver_argv(tmp_path / 'runner.py', tmp_path, '2', '2')
     assert argv[argv.index('--container') + 1] == 'selected-existing-container'
+
+
+def test_native_only_authoring_report_collects_its_exact_rtl(tmp_path):
+    import benchmark_io_adapter as adapter
+    source = "module unit(input a, output y); assign y=a; endmodule\n"
+    rtl = tmp_path / "phase2/stage1/rtl/unit.v"
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text(source)
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    (reports / "flow_engine.json").write_text(json.dumps({"route": {"entry_step": "1"},
+        "steps": [{"name": "rtl_authoring", "status": "PASS"}]}))
+    result = adapter.collect("rtllm", "neutral", tmp_path)
+    assert result["ok"], result
+    assert result["completion"] == source
+    assert not (reports / "orchestrator/phase2_one_shot.json").exists()
+
+
+def test_failed_native_authoring_does_not_reuse_a_stale_owner_pass(tmp_path):
+    import benchmark_io_adapter as adapter
+    rtl = tmp_path / "phase2/stage1/rtl/unit.v"
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text("module unit; endmodule\n")
+    reports = tmp_path / "reports"
+    (reports / "orchestrator").mkdir(parents=True)
+    (reports / "flow_engine.json").write_text(json.dumps({
+        "steps": [{"name": "rtl_authoring", "status": "FAIL"}]}))
+    (reports / "orchestrator/phase2_one_shot.json").write_text(json.dumps({
+        "steps": [{"name": "rtl_gen", "status": "PASS"}]}))
+    result = adapter.collect("rtllm", "neutral", tmp_path)
+    assert result["ok"] is False
+    assert result["rtl_gen"] == "FAIL"
+
+
+def test_native_validation_window_requires_supplied_rtl_opt_in(tmp_path):
+    import benchmark_io_adapter as adapter
+    rtl = tmp_path / "phase2/stage1/rtl/unit.v"
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text("module unit; endmodule\n")
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    (reports / "flow_engine.json").write_text(json.dumps({
+        "route": {"entry_step": "2"},
+        "steps": [{"name": "rtl_validation_and_lint", "status": "PASS"}]}))
+    assert adapter.collect("rtllm", "neutral", tmp_path)["ok"] is False
+    supplied = adapter.collect("rtllm", "neutral", tmp_path, supplied_rtl=True)
+    assert supplied["ok"], supplied
+    assert supplied["rtl_gen"] == "NOT_APPLICABLE"
