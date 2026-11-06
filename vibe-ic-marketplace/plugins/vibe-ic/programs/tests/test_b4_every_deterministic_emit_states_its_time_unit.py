@@ -39,6 +39,12 @@ import design_one_shot_runner as R  # noqa: E402
 
 DECLARED = "`timescale 1ns / 1ps\nmodule tb; endmodule\n"
 
+CANONICAL_PULSE = (
+    "Module name:\n    pulse_detect\n"
+    "Pulse detection: when data_in changes from 0 to 1 to 0 this is a pulse.\n"
+    "Input ports:\n clk: Clock.\n rst_n: Reset.\n data_in: One-bit input.\n"
+    "Output ports:\n data_out: pulse indicator.\n")
+
 def _declare(project: Path, body: str = DECLARED) -> None:
     tb = project / "phase2" / "stage1" / "tb"
     tb.mkdir(parents=True, exist_ok=True)
@@ -92,3 +98,7 @@ def test_the_alias_wrapper_writer_is_an_examined_exclusion_not_an_oversight():
     # `#` in a comment is not a delay control. This asks about the CODE.
     code = _lta._strip_comments(wrapper)
     assert not re.search(r"#\s*[\d(]", code), code
+
+BEHAVIORAL_PROSE = (
+    _PROGRAMS / "tests" / "fixtures" / "real_benchmark" /
+    "directional_bump_fall_moore_prompt.md").read_text()
