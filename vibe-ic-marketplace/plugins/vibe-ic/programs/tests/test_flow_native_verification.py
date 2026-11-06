@@ -13,7 +13,8 @@ from flow_native_verification import eqy, eqy_partitions, gls, reset_boundary, x
 
 
 @pytest.mark.parametrize("event", ["posedge clk", "negedge clk", "posedge clk or posedge reset"])
-def test_native_formal_preserves_global_clock_state_checks(tmp_path, event):
+@pytest.mark.parametrize("legacy", [False, True])
+def test_native_formal_preserves_global_clock_state_checks(tmp_path, event, legacy):
     if not all(shutil.which(name) for name in ("sby", "yosys", "yices-smt2")):
         pytest.skip("Native formal tools are required")
     from formal_property_run import emit_invariant_sby
@@ -33,7 +34,9 @@ def test_native_formal_preserves_global_clock_state_checks(tmp_path, event):
         "  state_sync: assert(q==$past(q));\nendmodule\n")
     deck = harness.with_suffix(".sby")
     deck.write_text(emit_invariant_sby([str(rtl)], str(harness), "formal_unit", [], []))
-    originals = {p: p.read_bytes() for p in (rtl, harness)}
+    if legacy:
+        deck.write_text(deck.read_text().replace("multiclock on\n", ""))
+    originals = {p: p.read_bytes() for p in (rtl, harness, deck)}
     directory = tmp_path / "run"
     directory.mkdir()
     result = formal(tmp_path, directory, {"top": "unit", "properties": [str(deck)]}, Commands(directory))
