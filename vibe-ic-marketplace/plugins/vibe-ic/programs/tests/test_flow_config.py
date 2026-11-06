@@ -146,6 +146,23 @@ def test_native_platform_defaults_exclude_weak_cells_only_for_gf180(tmp_path, pd
         assert f'cell ("{cell}")' in result
 
 
+def test_plain_native_overrides_apply_to_all_steps_after_platform_defaults(tmp_path):
+    pytest.importorskip("librelane")
+    from librelane.config import Config
+    from flow_config import native_defaults
+
+    (tmp_path / "input").mkdir()
+    override = {"EXTRA_EXCLUDED_CELLS": ["custom*", "*dly*", "*delay*"]}
+    (tmp_path / "input/native_overrides.json").write_text(json.dumps(override))
+    config = Config({"PDK": "gf180mcuD", "DESIGN_DIR": str(tmp_path)})
+
+    resolved = native_defaults(config)
+
+    assert resolved["EXTRA_EXCLUDED_CELLS"] == override["EXTRA_EXCLUDED_CELLS"]
+    assert "*_1" not in resolved["EXTRA_EXCLUDED_CELLS"]
+    assert native_defaults(resolved)["EXTRA_EXCLUDED_CELLS"] == resolved["EXTRA_EXCLUDED_CELLS"]
+
+
 @pytest.fixture
 def project(tmp_path):
     docs = tmp_path / "phase1/generated_docs"
@@ -168,6 +185,14 @@ def declarations(project, rows):
     data = json.loads(path.read_text())
     data["fields"]["constraint_declarations"] = rows
     path.write_text(json.dumps(data))
+
+
+def test_plain_native_overrides_reach_native_configuration(project):
+    path = project / "input/native_overrides.json"
+    path.parent.mkdir()
+    value = {"EXTRA_EXCLUDED_CELLS": ["custom*"]}
+    path.write_text(json.dumps(value))
+    assert build_config(project)["EXTRA_EXCLUDED_CELLS"] == value["EXTRA_EXCLUDED_CELLS"]
 
 
 def power_document(project, text):
