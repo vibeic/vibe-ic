@@ -33,6 +33,7 @@ Every case therefore:
     is a producer that will be switched off.
 """
 
+import sys
 from pathlib import Path
 
 
