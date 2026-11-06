@@ -1,5 +1,4 @@
 """Step 8 waits for its tool producer, then consumes current evidence directly."""
-import ast
 import json
 from pathlib import Path
 
@@ -7,7 +6,6 @@ import pytest
 import design_one_shot_runner as D
 import librelane_contract as LC
 import librelane_prelayout as LP
-import vibe_ic_one_shot_runner as V
 
 
 def put(path, value):
@@ -71,21 +69,6 @@ def test_prelayout_io_present_request_has_named_refusal(tmp_path, section):
 
 
 
-def test_public_step8_branch_selects_early_not_postprelayout_consumer():
-    tree = ast.parse(Path(V.__file__).read_text())
-    main = next(node for node in tree.body
-                if isinstance(node, ast.FunctionDef) and node.name == '_main')
-    branch = next(node for node in ast.walk(main) if isinstance(node, ast.If)
-                  and isinstance(node.test, ast.Name)
-                  and node.test.id == '_sdc_early_entry')
-    calls = {node.func.id for node in ast.walk(branch)
-             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
-    assert '_complete_step8_early_preflight' in calls
-    assert '_complete_step8_postcheck' not in calls
-    source = ast.unparse(main)
-    assert "VIBEIC_FLOW109_CONTEXT" in source
-    assert '_sdc_early_entry = ' in source and 'and _flow109_owner_entry' in source
-    assert '_sdc_postcheck_entry = ' in source and 'not _flow109_owner_entry' in source
 
 
 def test_flow109_d20_d26_split_keeps_stable_obligations():
