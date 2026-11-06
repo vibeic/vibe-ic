@@ -75,13 +75,6 @@ def _supplied(module: str) -> str:
             f"endmodule\n")
 
 
-@pytest.fixture(autouse=True)
-def _isolated_runner_session(monkeypatch):
-    """Each case models one runner process and leaves no atexit target."""
-    monkeypatch.setattr(R, "_RTL_SESSION_OWNED", False)
-    monkeypatch.setattr(R, "_RTL_SESSION_PROJECT", None)
-
-
 def _spm_project(tmp_path: Path) -> Path:
     return _mk_project(
         tmp_path, ports=_SPM_PORTS,
@@ -196,19 +189,6 @@ def test_no_generator_replaces_the_supplied_rtl(
 
 
 # ── each generator on its own: the direct call declines ─────────────────────
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # ── what is NOT a supplied design source ────────────────────────────────────
