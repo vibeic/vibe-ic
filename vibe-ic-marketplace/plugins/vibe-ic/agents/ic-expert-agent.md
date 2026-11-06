@@ -133,6 +133,7 @@ summary or deferred obligation cannot establish PASS. The readable summary:
 | **P2** native-result review | Per-row native reports in `reports/flow_engine.json`, against original limits | `phase2-rtl-verify`, `rtl-review` |
 | **P3** synth→PnR→CTS | `phase3_one_shot_runner.py` | `synth-doctor`, `sta-review`, `hold-fix` |
 | **P3** DRC / LVS / STA / IR | `phase3_one_shot_runner.py` | `drc-fix`, `lvs-triage`, `sta-review`, `ir-drop-triage` |
+| **PPA request**, in any wording or an explicit PPA option | Level 3: native ORFS AutoTuner and LibreLane SynthesisExploration/Optimizing; retain their best all-PASS result | Level 4 craft below: program enhancement, then `ppa-diagnose` → `ppa-optimize`; `ppa-recover` on a stalled round, `ppa-distill` on a measured win |
 | **Analog A2-A9** | `analog_a{2..9}_*_check.py` | `analog-topology-select`, `ams-sim`, `analog-layout`, … |
 | **Tapeout** | signoff-waiver + release-ladder programs | `tapeout-checklist` |
 
@@ -2664,6 +2665,55 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 **What to do**: Build with the SAME (strict) simulator/version the harness uses; declare every module-scope signal before its first use and avoid version-sensitive constructs; under `-Wall`, give a legitimately-unused interface port a scoped `/* verilator lint_off UNUSEDSIGNAL */ ... /* verilator lint_on UNUSEDSIGNAL */` waiver rather than leaving it bare or deleting the port.
 
 **Why this is GENERAL**: matching the scoring toolchain and waiving (not hiding) unused interface ports are standard portability/lint hygiene. *`why_not_bucket_a`*: the build/lint gate itself is deterministic (a program), but deciding WHICH unused port is legitimate-to-waive versus a real wiring bug is a reading judgment. (Complements "declare every port the interface lists".)
+
+### Skill: PPA requests run native tool search, then bounded cross-layer enhancement and AI proposals
+
+**When to apply**: A user asks for PPA or optimization of power, performance or
+area, in any language, or explicitly selects PPA. Ordinary runs use Level 2;
+this request selects Level 3 followed by Level 4. AI judgment runs in Level 4.
+
+**Stage A, Level 3**: Run ORFS AutoTuner and LibreLane's native
+SynthesisExploration/Optimizing flows through their available adapters. Preserve
+each tool's own search behavior and keep document-fixed settings fixed. Record
+native settings, trial budget, failures, wall time and CPU-hours. Retain the best
+all-PASS result's settings, layout, netlist, constraints, libraries and RC inputs.
+Missing native results leave the baseline unmeasured and the comparison pending.
+
+**Stage B, Level 4**: Start from Stage A's best settings and layout. First measure
+our program enhancements: cross-layer synthesis/PnR settings, pad-driven die
+geometry where the documents leave geometry free, routed `recover_power`, reuse
+of unaffected stage results and warm starts from applicable prior distilled
+moves. Reused artifacts must actually feed the native downstream tools; rerun
+every stage affected by a changed input. Each candidate completes our public
+flow and every applicable signoff check.
+
+Then apply the existing `ppa-diagnose` skill to the best native reports and use
+`ppa-optimize` to propose targeted moves. Read timing paths, power groups and net
+types, congestion, cell/buffer use and CTS statistics before proposing a change.
+The structural transform catalog immediately below supplies RTL candidates when
+native evidence points to that cost. An RTL change reruns full functional,
+equivalence and physical verification.
+
+Use a fixed AI budget of three rounds with at most two proposals per round.
+Record this policy budget before the first proposal, along with each proposal's
+reason, changed native settings or RTL, native results, wall time and CPU-hours.
+Charge failed and unmeasured trials to the budget. Use `ppa-recover` when a round
+stalls or regresses; recovery consumes the same remaining proposal slots. Stop
+when the budget is spent or no permitted, evidence-backed move remains.
+
+**Adoption**: Compare with the same percent-improvement objective, document
+weights or explicitly inherited weights, and identical measurement conditions.
+Adopt a candidate only when every applicable public row passes and it strictly
+beats the best all-PASS Stage A baseline. An equal score is a loss. Original
+limits, required views, pads, ECO resources and document-fixed settings remain
+binding. Native failures and missing measurements remain visible; AI assigns no
+PASS verdict. Preserve the best accepted result when a proposal regresses.
+
+Report Stage A, program enhancement and with-AI results as separate rows,
+including wins and losses per field against both tool arms. Apply `ppa-distill`
+to an accepted win; record its evidence and applicable design conditions. A
+general move becomes a bounded Level 1/2 setting only after deterministic native
+execution and full-flow verification establish that it works in that scope.
 
 ### Skill: area/PPA-optimization tasks need STRUCTURAL transforms that survive synthesis — a reusable transform catalog
 
