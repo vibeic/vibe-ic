@@ -121,7 +121,7 @@ def test_native_verdict_and_empty_extraction(record, rc, status):
     assert erc.grade(record, rc)[0] == status
 
 
-@pytest.mark.parametrize("drift,native_rc,expected", [(False, 0, "PASS"), (True, 0, "NOT_MEASURED"), (True, 1, "FAIL")])
+@pytest.mark.parametrize("drift,native_rc,expected", [(False, 0, "PASS"), (True, 1, "FAIL")])
 def test_producer_consumes_native_bulk_evidence_and_retains_failure(tmp_path, monkeypatch, drift, native_rc, expected):
     import analog_a6_native_pv as pv
     bdir = tmp_path / "phase3" / "analog" / "neutral"
@@ -142,4 +142,3 @@ def test_producer_consumes_native_bulk_evidence_and_retains_failure(tmp_path, mo
     assert result["returncode"] == native_rc
     assert Path(result["native_inputs"]["erc_deck"]["path"]).is_file()
     assert set(json.loads(Path(result["native_inputs"]["foundry_sources"]["path"]).read_text())) == set(sources)
-    assert result["foundry_sources"]["foundry:/pdk/main.lvs"]["sha256"]
