@@ -18,6 +18,7 @@ import sys
 import time
 
 from flow_config import _load
+from flow_ppa_comparison import compare_fields, trial_fields
 from flow_ppa_objective import compare_native, final_violation_metrics, objective_weights
 from flow_ppa_variants import (L2_SETTINGS, MAX_UTIL, RECOVERY, SAMPLE_SEED, SIZING,
                                level_two_axes, native_candidates, pinned_settings, selected_level)
@@ -28,6 +29,7 @@ OVERRIDES = Path("work/flow/native_overrides.json")
 METRICS = {
     "Cells": "design__instance__count", "Area (um2)": "design__instance__area",
     "Core (um2)": "design__core__area", "Power (W)": "power__total",
+    "Wirelength (um)": "route__wirelength",
     "Setup slack (ns)": "timing__setup__ws", "Hold slack (ns)": "timing__hold__ws",
     "Slew violations": "design__max_slew_violation__count",
     "Cap violations": "design__max_cap_violation__count",
@@ -217,6 +219,7 @@ def explore(project, output, *, cpus=8, jobs=2, flow_args=(), ppa_level=None, sp
             report_path.write_text(json.dumps(report, indent=2) + "\n")
     for row in rows:
         row["objective"] = compare_native(reference, row, weights)
+        row["comparison_to_reference"] = compare_fields(trial_fields(row), trial_fields(reference))
     eligible = [row for row in rows if row["all_pass"] and
                 (level == 0 or row["objective"]["eligible"] and row["objective"]["score"] is not None)]
     winner = (next(iter(eligible), None) if level == 0 else
@@ -241,6 +244,15 @@ def explore(project, output, *, cpus=8, jobs=2, flow_args=(), ppa_level=None, sp
         score = row["objective"]["score"]
         lines.append(f"| {row['name']} | {passing}/{len(row['rows'])} | "
                      + (str(score) if score is not None else "NOT_MEASURED") + " | " + " | ".join(values) + " |")
+    lines += ["", "Per-field comparisons against the reference (raw native trial scope):", "",
+              "| Variant | Field | Subject | Reference | Delta | Result |",
+              "|---|---|---:|---:|---:|---|"]
+    for row in rows[1:]:
+        for field, comparison in row["comparison_to_reference"].items():
+            values = [str(comparison[key]) if comparison[key] is not None else "NOT_MEASURED"
+                      for key in ("subject", "baseline", "delta")]
+            lines.append(f"| {row['name']} | {field} | " + " | ".join(values)
+                         + f" | {comparison['verdict']} |")
     lines += ["", "Selected: " + (winner["name"] if winner else "none; no comparable all-PASS native PPA result."),
               "", "Area is native design__instance__area (including physical fill when present); "
               "power is native power__total. Only the winning native overrides are adopted into the source project. "
