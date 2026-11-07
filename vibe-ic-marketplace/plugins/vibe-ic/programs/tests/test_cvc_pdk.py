@@ -60,6 +60,16 @@ def test_real_hierarchical_cells_are_not_lowered_as_primitive_calls(tmp_path):
     assert "X0 d g s b hv w=8 l=.5" in result
 
 
+def test_calibre_model_tags_use_the_native_profile_without_changing_properties(tmp_path):
+    text = ".subckt top p n\nr0 p n $SUB=bulk $[POLY] $W=8e-7 $L=3.57e-5\nc0 p n $[moscap]\nr1 p n $[unknown]\n.ends\n"
+    models = "R poly R=l/w*350\nC moscap Vds=6\n"
+    result, actual_models = normalize_cdl(text, tmp_path, models)
+    assert "R0 p n poly $W=8e-7 $L=3.57e-5 $SUB=bulk" in result
+    assert "C0 p n moscap" in result
+    assert "R1 p n $[unknown]" in result
+    assert actual_models == models
+
+
 def test_power_uses_active_liberty_voltages_for_all_declared_rails(tmp_path):
     library = tmp_path / "cells.lib"
     library.write_text('library(cells) {\nnom_voltage : 1.8;\nvoltage_map(VDDIO, 3.3);\nvoltage_map(VSSIO, 0);\n}\n')
@@ -112,7 +122,9 @@ def test_uncharacterized_label_does_not_invent_an_unresolved_supply(tmp_path):
 
 
 @pytest.mark.parametrize("conducting", [False, True])
-def test_native_pdk_io_cell_and_default_resistor_complete_cvc_without_losing_a_leak(tmp_path, conducting):
+@pytest.mark.parametrize("missing_cell", [False, True])
+def test_native_pdk_io_cell_and_default_resistor_complete_cvc_without_losing_a_leak(
+        tmp_path, conducting, missing_cell):
     pytest.importorskip("librelane")
     from librelane.state import DesignFormat
     from _pad_ring import parse_spice_subckts
@@ -125,13 +137,20 @@ def test_native_pdk_io_cell_and_default_resistor_complete_cvc_without_losing_a_l
         pytest.skip("native SKY130 PDK and CVC are required")
     cell = "sky130_fd_io__amx_inv1"
     ports, body = parse_spice_subckts(io.read_text(), preserve_parameters=True)[cell]
+    pad_cdl = pdk / "libs.ref/sky130_fd_io/cdl/sky130_ef_io.cdl"
+    filler = "sky130_ef_io__com_bus_slice_5um"
+    filler_ports, filler_body = parse_spice_subckts(pad_cdl.read_text())[filler]
+    assert filler_body == []  # The native PDK describes a passive bus slice.
     gate = "VPWR" if conducting else "VGND"
     source = tmp_path / "source.spice"
     source.write_text(".subckt neutral VPWR VGND A Z\n"
                       f"Xi A Z VPWR VGND {cell}\n"
                       "Rdefault VPWR passive sky130_fd_pr__res_generic_po\n"
                       f"Xsram passive {gate} VGND VGND sky130_fd_pr__special_nfet_01v8 w=.36 l=.15\n"
-                      ".ends\n.subckt " + cell + " " + " ".join(ports) + "\n" +
+                      + "Xfill " + " ".join("VGND" for _ in filler_ports) + f" {filler}\n"
+                      + "Xduplicate " + " ".join("VGND" for _ in filler_ports) + f" {filler}\n"
+                      + ("Xmissing VPWR VGND neutral_absent_cell\n" if missing_cell else "")
+                      + ".ends\n.subckt " + cell + " " + " ".join(ports) + "\n" +
                       "\n".join(" ".join(row) for row in body) + "\n.ends\n")
     netlist = tmp_path / "source.v"
     netlist.write_text("module neutral (VPWR, VGND, A, Z);\ninput VPWR;\ninput VGND;\ninput A;\noutput Z;\nendmodule\n")
@@ -143,13 +162,63 @@ def test_native_pdk_io_cell_and_default_resistor_complete_cvc_without_losing_a_l
     io_libs = pdk / "libs.ref/sky130_fd_io/lib"
     step.config["PAD_LIBS"] = {"*": [str(next(io_libs.glob("sky130_ef_io__vccd_lvc_clamped_pad_tt_025C_1v80*.lib"))),
                                    str(io_libs / "slices_stubs.lib")]}
+    step.config["PAD_CDLS"] = [str(pad_cdl)]
     _, metrics = ElectricalRules.run(step, {DesignFormat.SPICE: str(source), DesignFormat.NETLIST: str(netlist)})
     result = json.loads((tmp_path / "cvc.json").read_text())
+    if missing_cell:
+        assert not result["completed"] and result["result"] == "INCOMPLETE"
+        assert "cvc_electrical_errors" not in metrics
+        assert "neutral_absent_cell" in (tmp_path / "command_3.log").read_text()
+        return
     assert result["completed"] and result["devices"] == 4
     assert result["counts"]["Model errors"] == 0
+    assembled = (tmp_path / "design.cdl").read_text().casefold()
+    assert assembled.count(".subckt " + filler) == 1
     assert (tmp_path / "models").read_text().startswith((pdk / "libs.tech/librelane/cvc/models").read_text())
     if conducting:
         assert result["result"] == "FAIL" and result["counts"]["Leaks"] == 1
         assert metrics["cvc_electrical_errors"] >= 1
     else:
         assert result["result"] == "PASS" and metrics["cvc_electrical_errors"] == 0
+
+
+@pytest.mark.parametrize("distinct_unused", [False, True])
+def test_native_cvc_resolves_transitive_companion_spice_from_selected_cdl(tmp_path, distinct_unused):
+    pytest.importorskip("librelane")
+    from librelane.state import DesignFormat
+    from flow_ic_checks import ElectricalRules
+
+    pdk_root = Path(os.environ.get("PDK_ROOT", "/nonexistent"))
+    if not (pdk_root / "sky130A").is_dir() or not shutil.which("cvc_rv"):
+        pytest.skip("native PDK and CVC required")
+    cdl = tmp_path / "library/cdl/interface.cdl"
+    cdl.parent.mkdir(parents=True)
+    cdl.write_text(".subckt interface N P\nxinner P N physical_link\n.ends\n")
+    spice = tmp_path / "library/spice/implementation.spice"
+    spice.parent.mkdir()
+    spice.write_text(".subckt physical_link P N\nR0 P P sky130_fd_pr__res_generic_po l=1 w=1\n.ends\n")
+    source = tmp_path / "source.spice"
+    unused = "unmodeled" if distinct_unused else "VPWR"
+    source.write_text("* Black-box entry subcircuit for interface abstract view\n"
+                      ".subckt interface P PAD_ONLY N\n.ends\n"
+                      ".subckt neutral VPWR VGND\n"
+                      f"X0 VPWR {unused} VGND interface\nX1 VPWR {unused} VGND interface\n.ends\n"
+                      )
+    netlist = tmp_path / "source.v"
+    netlist.write_text("module neutral(input VPWR, input VGND); endmodule\n")
+    step = SimpleNamespace(step_dir=str(tmp_path), config={"PDK_ROOT": str(pdk_root), "PDK": "sky130A",
+        "STD_CELL_LIBRARY": "sky130_fd_sc_hd", "VDD_NETS": ["VPWR"], "GND_NETS": ["VGND"],
+        "DESIGN_NAME": "neutral", "EXTRA_CDLS": [str(cdl)]})
+    _, metrics = ElectricalRules.run(step, {DesignFormat.SPICE: str(source), DesignFormat.NETLIST: str(netlist)})
+    result = json.loads((tmp_path / "cvc.json").read_text())
+    if distinct_unused:
+        assert not result["completed"] and "cvc_electrical_errors" not in metrics
+        assert "port count mismatch" in (tmp_path / "command_3.log").read_text()
+        return
+    assert result["completed"] and result["devices"] == 2
+    assert result["counts"]["Model errors"] == 0
+    assert metrics["cvc_electrical_errors"] == result["counts"]["Total"]
+    assembled = (tmp_path / "design.cdl").read_text().casefold()
+    assert assembled.count(".subckt interface ") == 1
+    assert assembled.count(".subckt physical_link ") == 1
+    assert "x0 vgnd vpwr interface" in assembled
