@@ -110,7 +110,7 @@ class ElectricalRules(Step):
     def run(self, state_in, **kwargs):
         from flow_native_adapters import Commands
         from flow109_final_perc import _parse_native_cvc_report
-        from _cvc_pdk import normalize_cdl, power_setup
+        from _cvc_pdk import assemble_cdl, normalize_cdl, power_setup
 
         root = Path(self.step_dir).resolve()
         pdk = Path(str(self.config["PDK_ROOT"])) / self.config["PDK"]
@@ -125,7 +125,8 @@ class ElectricalRules(Step):
         commands = Commands(root)
         cleaned = completed(commands.run(["awk", "-f", recipe / "cdl.awk", state_in[DesignFormat.SPICE]]), "CDL conversion")
         models = (recipe / "models").read_text()
-        netlist, models = normalize_cdl(cleaned.stdout + "\n" + cdl.read_text(), pdk, models)
+        netlist = assemble_cdl(cleaned.stdout, self.config, pdk, models, state_in[DesignFormat.SPICE])
+        netlist, models = normalize_cdl(netlist, pdk, models)
         (root / "design.cdl").write_text(netlist)
         (root / "models").write_text(models)
         supplies = completed(commands.run(["awk", "-v", f"vdd={power[0]}", "-v", f"gnd={ground[0]}",

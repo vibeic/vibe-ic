@@ -103,6 +103,8 @@ def test_cvc_uses_native_report_not_process_success(tmp_path, monkeypatch, total
     cdl = tmp_path / "technology/libs.ref/cells/cdl/cells.cdl"
     cdl.parent.mkdir(parents=True)
     cdl.write_text("native cells")
+    source = tmp_path / "actual.spice"
+    source.write_text(".subckt design supply ground\n.ends\n")
     report = f"CVC: 2(2) instances, 4(4) nets, 2(2) devices.\nCVC: Total: {total}\n"
     if complete:
         report += "CVC: End: now\n"
@@ -118,10 +120,10 @@ def test_cvc_uses_native_report_not_process_success(tmp_path, monkeypatch, total
     step = SimpleNamespace(step_dir=str(tmp_path), config={"PDK_ROOT": str(tmp_path),
         "PDK": "technology", "STD_CELL_LIBRARY": "cells", "VDD_NETS": ["supply"],
         "GND_NETS": ["ground"], "DESIGN_NAME": "design"})
-    metrics = checks.ElectricalRules.run(step, {DesignFormat.SPICE: "actual.spice",
+    metrics = checks.ElectricalRules.run(step, {DesignFormat.SPICE: str(source),
                                                DesignFormat.NETLIST: "actual.v"})[1]
     assert metrics.get("cvc_electrical_errors") == expected
-    assert calls[0][-1] == "actual.spice"
+    assert calls[0][-1] == str(source)
     assert calls[1][-1] == "actual.v"
     assert calls[2][0] == "cvc_rv"
     assert "$signoff_" not in (tmp_path / "cvcrc").read_text()

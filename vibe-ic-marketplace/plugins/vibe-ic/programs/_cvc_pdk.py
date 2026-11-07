@@ -15,6 +15,91 @@ KINDS = {"MN": "M", "MP": "M", "LDDN": "M", "LDDP": "M",
          "M": "M", "R": "R", "D": "D", "C": "C", "Q": "Q"}
 
 
+def assemble_cdl(text, config, pdk, models, source):
+    """Resolve referenced cells from the same native views as WriteCDL and LVS."""
+    cdls = config.get("CELL_CDLS") or [Path(pdk) / (
+        f"libs.ref/{config['STD_CELL_LIBRARY']}/cdl/{config['STD_CELL_LIBRARY']}.cdl")]
+    # Netgen.LVS lets SPICE_MODELS replace CELL_SPICE_MODELS, then adds extras/pads.
+    spices = config.get("SPICE_MODELS") or config.get("CELL_SPICE_MODELS") or []
+    paths = [*cdls, *(config.get("EXTRA_CDLS") or []), *(config.get("PAD_CDLS") or []),
+             *spices, *(config.get("EXTRA_SPICE_MODELS") or []),
+             *(config.get("PAD_SPICE_MODELS") or [])]
+    # PDK CDL wrappers may call cells in their library's companion SPICE view.
+    for cdl in [*cdls, *(config.get("EXTRA_CDLS") or []), *(config.get("PAD_CDLS") or [])]:
+        paths.extend(sorted((Path(cdl).parent.parent / "spice").glob("*.spice")))
+    headers = {}
+    active = None
+    # cdl.awk removes Magic's blackboxes. Keep their named terminal order for
+    # binding to the PDK view, which can omit electrically aliased terminals.
+    with Path(source).open() as stream:
+        for line in stream:
+            words = line.split()
+            if not words or words[0].startswith("*"):
+                continue
+            if words[0] == "+" and active is not None:
+                headers[active].extend(words[1:])
+                continue
+            active = words[1].casefold() if words[0].casefold() == ".subckt" else None
+            if active is not None:
+                headers[active] = words[2:]
+    circuits, bindings = {}, {}
+    block_pattern = r"(?ims)^[ \t]*\.subckt[ \t]+(\S+)[^\n]*\n.*?^[ \t]*\.ends\b[^\n]*"
+    for path in dict.fromkeys(map(str, paths)):
+        if path.endswith(".gz"):
+            with gzip.open(path, "rt") as stream:
+                library = stream.read()
+        else:
+            library = Path(path).read_text()
+        for block in re.finditer(block_pattern, library):
+            circuits.setdefault(block[1].casefold(), (block[0], path))
+
+    def references(source):
+        result = set()
+        for line in logical_lines(source):
+            if not line[:1].casefold() == "x":
+                continue
+            head = ASSIGN.search(line)
+            result.add((line[:head.start()] if head else line).split()[-1].casefold())
+        return result
+
+    defined = {name.casefold() for name in re.findall(r"(?im)^\s*\.subckt\s+(\S+)", text)}
+    defined.update(model_definitions(models))
+    pending = references(text) - defined
+    while pending:
+        name = min(pending)
+        pending.remove(name)
+        if name in defined or name not in circuits:
+            continue  # CVC reports a genuinely unresolved cell; never invent a model.
+        block, path = circuits[name]
+        text += f"\n* PDK subcircuit from {path}\n{block}\n"
+        defined.add(name)
+        target = logical_lines(block)[0].split()[2:]
+        if name in headers:
+            bindings[name] = (headers[name], target)
+        pending.update(references(block) - defined)
+    output = []
+    for line in logical_lines(text):
+        if line[:1].casefold() == "x":
+            head = ASSIGN.search(line)
+            words = (line[:head.start()] if head else line).split()
+            master = words[-1].casefold()
+            if master in bindings:
+                original, target = bindings[master]
+                nodes = [node for node in words[1:-1] if node != "/"]
+                named = dict(zip(original, nodes))
+                if (len(nodes) == len(original) == len(named)
+                        and all(pin in named for pin in target)):
+                    mapped = [named[pin] for pin in target]
+                    # A missing physical terminal may be omitted only when its
+                    # node already occurs on the native model's retained ports.
+                    if set(nodes) <= set(mapped):
+                        line = " ".join([words[0], *mapped, words[-1]])
+                        if head:
+                            line += " " + head.string[head.start():]
+        output.append(line)
+    return "\n".join(output) + "\n"
+
+
 def assignments(text):
     return {name.casefold(): value for name, value in ASSIGN.findall(text)}
 
