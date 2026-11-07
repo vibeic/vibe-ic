@@ -399,3 +399,54 @@ def test_original_failure_survives_failed_publication(
     assert caught.value.__cause__ is publication
     assert (paths[0] / "native.log").read_text() == "original tool diagnostic\n"
     temp._remove(paths[0])
+
+
+@pytest.mark.parametrize("status", ["PASS", "FAIL", None])
+def test_eqy_publication_keeps_native_reports_and_witnesses_without_build_products(root, tmp_path, status):
+    from flow_native_verification import eqy_partitions
+
+    destination = tmp_path / "project/native"
+    with temp.execution("neutral", "eqy-publication") as work:
+        eqy = work.run / "netlist_equivalence/native/scratch"
+        native = {"gold.ys", "gate.ys", "partition.ys", "logfile.txt", "partition.log",
+                  "matched.ids", "partition.ids", "strategies.mk"}
+        if status is not None:
+            native |= {"partition.list", status, "strategies/p/sat/status"}
+        for name in native:
+            file = eqy / name
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_text("p:\n" if name == "partition.list" else
+                            status if name == "strategies/p/sat/status" else "native tool report\n")
+        sby = "strategies/p/pdr/p/"
+        native |= {sby + "config.sby", sby + "logfile.txt", sby + "status",
+                   sby + "engine_0/logfile.txt", sby + "engine_0/trace.vcd",
+                   sby + "engine_0/trace.yw", sby + "engine_0/trace_tb.v",
+                   sby + "engine_0/trace.smtc"}
+        for name in native:
+            file = eqy / name
+            if not file.exists():
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_text("native witness or solver diagnostic\n")
+        generated = {"modules/top.il", "fragments/fragment.json", "partitions/p.il", "partitions/p.json",
+                     "gold.il", "gate.il", "gate_recoded.il", "combined.il",
+                     sby + "model/design_smt2.smt2", sby + "src/p.il"}
+        for name in generated:
+            file = eqy / name
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_text("regenerable model\n" * 1024)
+        other = work.run / "unrelated/partitions/user.json"
+        other.parent.mkdir(parents=True)
+        other.write_text('{"user_output": true}\n')
+        view = work.run / "native_step/design.odb"
+        view.parent.mkdir()
+        view.write_bytes(b"native State output")
+        reports = {name: (eqy / name).read_bytes() for name in native}
+        before = eqy_partitions(eqy)[:3]
+        work.publish(destination)
+        published = destination / eqy.relative_to(work.run)
+        assert eqy_partitions(published)[:3] == before
+        assert {name: (published / name).read_bytes() for name in native} == reports
+        assert not any((published / name).exists() for name in generated)
+        assert (destination / other.relative_to(work.run)).read_bytes() == other.read_bytes()
+        assert (destination / view.relative_to(work.run)).read_bytes() == view.read_bytes()
+        assert all((eqy / name).is_file() for name in generated)
