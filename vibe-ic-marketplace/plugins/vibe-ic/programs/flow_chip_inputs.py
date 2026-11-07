@@ -759,6 +759,7 @@ def prepare(project: Path, core_config: dict[str, Any], on_tool_run=None) -> dic
                 + "source " + _tcl_word(native["MAGICRC"]) + "\n" + r'''
 if {[info exists ::env(STEP_ID)] && $::env(STEP_ID) eq "Magic.SpiceExtraction"
     && [info exists ::env(PAD_LEFS)]} {
+    ext2spice port makeall off
     foreach lef $::env(PAD_LEFS) {lef read $lef}
 ''' + "".join("    cellname delete " + _tcl_word(master) + "\n"
               for master in sorted({entry["master"] for entry in chosen.values()
