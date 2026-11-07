@@ -355,6 +355,29 @@ class NativeChain:
             return exc
         return None
 
+    def _filler_config(self):
+        config = self.owner.config
+        if (self.route["delivery_target"] not in {"gds", "shippable_gds", "foundry_handoff"}
+                or config.get("FILL_INSERTION_AREA") is not None
+                or config.get("KLAYOUT_DENSITY_RUNSET")):
+            return config
+        path = self.project / "work/flow/chip/preparation.json"
+        if not path.is_file():
+            return config
+        geometry = read_json(path)["geometry"]
+        core = [float(value) for value in self.config["CORE_AREA"]]
+        aspect = float(self.config["FP_ASPECT_RATIO"])
+        area = float(geometry["mapped_cell_area_um2"])
+        utilization = float(geometry["core_utilization_percent"]) / 100
+        width = math.sqrt(area / utilization / aspect)
+        height = width * aspect
+        if width > core[2] - core[0] or height > core[3] - core[1]:
+            return config
+        x, y = (core[0] + core[2]) / 2, (core[1] + core[3]) / 2
+        # The native planner keeps the row/tap fill needed outside this bulk-fill area.
+        return config.copy(FILL_INSERTION_AREA=[x - width / 2, y - height / 2,
+                                                x + width / 2, y + height / 2])
+
     def preparation_result(self) -> ToolResult:
         runs = self.preparation_runs[self.preparation_accounted:]
         self.preparation_accounted = len(self.preparation_runs)
@@ -418,7 +441,8 @@ class NativeChain:
                     emitted.update(metrics)
                     return views, metrics
 
-            step = ObservedStep(self.owner.config, self.state)
+            config = self._filler_config() if name == "OpenROAD.FillInsertion" else self.owner.config
+            step = ObservedStep(config, self.state)
             metric_name = getattr(step, "metric_name", None)
             if (metric_name and any((not item["ran"] or item.get("exit_code"))
                     and not (item.get("native_config_disabled") or item.get("native_no_change"))
