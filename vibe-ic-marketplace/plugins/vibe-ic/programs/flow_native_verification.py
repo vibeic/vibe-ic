@@ -244,6 +244,7 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
 
 def eqy(project, directory, tool, commands, *, state, config):
     from librelane_eqy import eqy_script
+    from flow_config import design_parameters
     from sdf_gate_sim import netlist_used_cells, verilog_model_closure
     from lec_post_layout_check import _LIB_CELL_RE
     from flow_chip_inputs import _paths
@@ -320,7 +321,7 @@ def eqy(project, directory, tool, commands, *, state, config):
     script = directory / "equivalence.eqy"
     source = eqy_script(top, rtl, Path(netlist), liberty[0], synthesis=config,
         views=directory, liberty_files=list(map(Path, liberty)), model_verilog=models,
-        group_all=not pad_types)
+        group_all=not pad_types, parameters=design_parameters(project, config))
     if physical:
         removal = "\n".join("delete */t:" + master for master in sorted(physical)) + "\n"
         source = source.replace("[gate]", removal + "[gate]", 1).replace("[script]", removal + "[script]", 1)

@@ -123,19 +123,23 @@ def _read_order(files: List[Path], sv: bool = True) -> List[Path]:
 
 
 def yosys_script(files: List[Path], top: Optional[str], out: Path,
-                 sv: bool = True) -> str:
+                 sv: bool = True, *, parameters=None) -> str:
+    from flow_config import parameter_args
+    parameters = parameters or {}
     if _uses_slang(files, sv):
         files = _read_order(files, sv)
         if any(any(c.isspace() or c in ';"\\' for c in str(f)) for f in files):
             raise Refusal("CDC_NETLIST_UNSUPPORTED_PATH",
                           "read_slang cannot represent the selected source path token")
         reads = ["read_slang --single-unit " + (f"--top {top} " if top else "")
-                 + " ".join(map(str, files))]
+                 + " ".join([*parameter_args(parameters, "slang"), *map(str, files)])]
     else:
         reads = [f"read_verilog {'-sv ' if sv else ''}-defer {f}" for f in files]
     passes = list(JSON_HEADER_PASSES)
     if top:
         passes = [p.format(top=top) for p in passes]
+        if not _uses_slang(files, sv):
+            passes[0] += " " + " ".join(parameter_args(parameters, "yosys"))
     else:
         passes = ["hierarchy -check -auto-top -nokeep_prints -nokeep_asserts"
                   ] + passes[2:]
@@ -322,7 +326,8 @@ def build(project: Path, rtl_files: List[Path], top: Optional[str],
     raw_tmp = raw.with_suffix(".json.tmp")
     raw_tmp.unlink(missing_ok=True)
     files = _read_order([Path(f).resolve() for f in rtl_files])
-    script = yosys_script(files, top, raw_tmp)
+    from flow_config import design_parameters
+    script = yosys_script(files, top, raw_tmp, parameters=design_parameters(project))
     local_yosys = shutil.which("yosys")
     if local_yosys:
         import synth_frontend as _sf

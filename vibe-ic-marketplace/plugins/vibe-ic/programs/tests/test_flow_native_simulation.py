@@ -408,11 +408,11 @@ def test_testbench_helper_closure_does_not_change_silicon_sources(tmp_path, diff
                   "initial begin a=0; #1; if(z===expected) passed=passed+1; "
                   "a=1; #1; if(z===expected) passed=passed+1; "
                   "$display(\"ORACLE_TB_DONE pass=%0d/2\",passed); $finish; end endmodule\n")
-    original, top = resolve_rtl_inputs(tmp_path)
+    original, top, parameters = resolve_rtl_inputs(tmp_path)
     assert original == [dut]
     result = execute(tmp_path, tmp_path / "output", {
         "adapter": "simulation", "testbenches": [str(tb)]}, {})
-    assert resolve_rtl_inputs(tmp_path) == (original, top)
+    assert resolve_rtl_inputs(tmp_path) == (original, top, parameters)
     functional = [row for row in result["native_steps"] if row["name"] == "Icarus.Functional"]
     assert [row["status"] for row in functional] == ["FAIL" if different else "PASS"], result
     assert result["metrics"]["assertion_failures"] == (2 if different else 0)

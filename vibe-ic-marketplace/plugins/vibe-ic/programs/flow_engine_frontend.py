@@ -113,9 +113,9 @@ def native_lint(project, top_name=None):
     top = None
     if files:
         detail = "Native lint cannot resolve the selected RTL top."
-        from flow_config import resolve_rtl_inputs
+        from flow_config import resolve_rtl_inputs, parameter_args
         try:
-            files, top = resolve_rtl_inputs(project)
+            files, top, parameters = resolve_rtl_inputs(project)
         except FileNotFoundError as exc:
             detail = str(exc)
     if files and top:
@@ -124,6 +124,7 @@ def native_lint(project, top_name=None):
         commands = [
             ("verilator", ["verilator", "--lint-only", "--timing", "--Wall", "-Wno-fatal",
                            "--top-module", top,
+                           *parameter_args(parameters, "verilator"),
                            *["-I" + str(p) for p in sorted({p.parent for p in support})],
                            *map(str, files)], output / "native-verilator.log"),
             ("rtl_hygiene", [sys.executable, str(Path(__file__).with_name("rtl_hygiene_lint.py")),

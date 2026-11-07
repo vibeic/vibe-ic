@@ -384,7 +384,7 @@ def test_adapter_accepts_explicit_rtl_and_top_without_document_defaults(tmp_path
     from flow_native_adapters import inputs
     rtl = tmp_path / "provided.v"
     rtl.write_text("module provided; endmodule\n")
-    assert inputs(tmp_path, {"rtl": ["provided.v"], "top": "provided"}) == ([rtl], "provided")
+    assert inputs(tmp_path, {"rtl": ["provided.v"], "top": "provided"}) == ([rtl], "provided", {})
 
 
 def test_document_owner_runs_before_feature_selection(tmp_path, monkeypatch):
