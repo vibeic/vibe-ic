@@ -7,7 +7,6 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-import flow_config
 import flow_engine
 
 
@@ -42,7 +41,6 @@ def test_ordinary_synthesis_keeps_native_strategy_without_search(tmp_path, monke
     steps.StepException = type("StepException", (Exception,), {})
     monkeypatch.setitem(sys.modules, "librelane.steps", steps)
     monkeypatch.setattr(chain, "initialize", lambda: None)
-    monkeypatch.setattr(flow_config, "explore_synthesis", lambda *args: "DELAY 4")
     table = flow_engine.read_json(flow_engine.TABLE)
     row = next(row for row in table["steps"] if row["name"] == "synthesis")
     assert "Yosys.Synthesis" in row["tool"]["steps"]
