@@ -18,7 +18,8 @@ def test_corner_includes_are_resolved_from_each_including_file(tmp_path):
     tech = tmp_path / 'libs.tech/ngspice'
     library = put(tech / 'process.lib.spice',
                   '.lib tt\n.include "corners/tt.spice"\n.endl tt\n'
-                  '.lib ss\n.include "corners/ss.spice"\n.endl ss\n')
+                  '.lib ss\n.include "corners/ss.spice"\n.endl ss\n'
+                  '.lib ss_mm\n.include "corners/ss.spice"\n.endl ss_mm\n')
     for corner in ('tt', 'ss'):
         put(tech / f'corners/{corner}.spice',
             f'.include "../../../libs.ref/devices/{corner}.spice"\n')

@@ -236,54 +236,64 @@ def device_names(subckt_text: str) -> set:
 
 _LIB_OPEN_RE = re.compile(r"^\s*\.lib\s+([A-Za-z0-9_]+)\s*$", re.I)
 _LIB_REF_RE = re.compile(r"^\s*\.lib\s+['\"]?([^'\"\s]+)['\"]?\s+([A-Za-z0-9_]+)\s*$", re.I)
+_INCLUDE_RE = re.compile(r"^\s*\.inc(?:lude)?\s+['\"]?([^'\"\s]+)['\"]?\s*$", re.I)
 _DEF_RE = re.compile(r"^\s*\.(?:subckt|model)\s+(\S+)", re.I)
 
 
 def model_sections(tech_dir: Path, simulator: str) -> Dict[Tuple[str, str], set]:
     """{(file, section): every device name the section defines, following its
-    `.lib <file> <section>` references}. Files carrying the simulator's own
+    `.include` and `.lib <file> <section>` references}. Files carrying the simulator's own
     suffix are read when there are any (a PDK ships one tree per dialect)."""
     files = sorted(p for p in Path(tech_dir).glob('*') if p.is_file())
     own = [p for p in files if p.suffix.lstrip('.').lower() == simulator.lower()]
     files = own or files
-    direct: Dict[Tuple[str, str], set] = {}
-    refs: Dict[Tuple[str, str], List[Tuple[str, str]]] = {}
-    for path in files:
-        current = None
+    direct: Dict[Tuple[str, Optional[str]], set] = {}
+    refs: Dict[Tuple[str, Optional[str]], list] = {}
+    pending = list(files)
+    parsed = set()
+    while pending:
+        path = pending.pop()
+        if path in parsed:
+            continue
+        parsed.add(path)
+        current = (str(path), None)
+        direct.setdefault(current, set())
+        refs.setdefault(current, [])
         for line in path.read_text(errors='replace').splitlines():
             if line.lstrip().lower().startswith('.endl'):
-                current = None
+                current = (str(path), None)
                 continue
             opened = _LIB_OPEN_RE.match(line)
-            if opened and current is None:
+            if opened:
                 current = (str(path), opened.group(1))
                 direct.setdefault(current, set())
                 refs.setdefault(current, [])
                 continue
-            if current is None:
-                continue
             ref = _LIB_REF_RE.match(line)
-            if ref:
-                target = Path(tech_dir) / Path(ref.group(1)).name
-                target = target if target in files else path
-                refs[current].append((str(target), ref.group(2)))
+            include = _INCLUDE_RE.match(line)
+            if ref or include:
+                match = ref or include
+                target = Path(os.path.abspath(path.parent / match.group(1)))
+                refs[current].append((str(target), ref.group(2) if ref else None))
+                pending.append(target)
                 continue
             defined = _DEF_RE.match(line)
             if defined:
                 direct[current].add(defined.group(1).lower())
     closure: Dict[Tuple[str, str], set] = {}
 
-    def resolve(key: Tuple[str, str], seen: set) -> set:
-        if key in closure:
-            return closure[key]
-        out = set(direct.get(key, set()))
-        for ref in refs.get(key, []):
-            if ref not in seen:
-                out |= resolve(ref, seen | {ref})
-        closure[key] = out
-        return out
     for key in direct:
-        resolve(key, {key})
+        if key[1] is None or Path(key[0]) not in files:
+            continue
+        seen, pending_keys, defined = set(), [key], set()
+        while pending_keys:
+            referenced = pending_keys.pop()
+            if referenced in seen:
+                continue
+            seen.add(referenced)
+            defined |= direct.get(referenced, set())
+            pending_keys.extend(refs.get(referenced, []))
+        closure[key] = defined
     return closure
 
 

@@ -1553,6 +1553,7 @@ def select_model_section(entries: List[Tuple[str, str]],
             score += 20
         if wants_central and section_tokens & central:
             score += 10
+        score -= len(section_tokens - lib_tokens)
         score -= len(path) / 10000.0
         scored.append((score, path, section))
     _score, path, section = max(scored)
