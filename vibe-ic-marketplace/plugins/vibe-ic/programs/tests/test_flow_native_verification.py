@@ -1085,7 +1085,8 @@ def test_chip_eqy_proves_fsm_behavior_across_native_state_encodings(tmp_path, en
 
 
 @pytest.mark.parametrize("different", [False, True])
-def test_chip_eqy_keeps_gold_constraints_on_internal_cut_inputs(tmp_path, different):
+@pytest.mark.parametrize("gated_clock", [False, True])
+def test_chip_eqy_keeps_gold_constraints_on_internal_cut_inputs(tmp_path, different, gated_clock):
     if not shutil.which("eqy"):
         pytest.skip("Native EQY is required")
     reset_docs(tmp_path)
@@ -1095,12 +1096,15 @@ def test_chip_eqy_keeps_gold_constraints_on_internal_cut_inputs(tmp_path, differ
         "INPAD pd(.PAD(data),.Y(id));\nOUTPAD po(.A(oq),.PAD(result));\n")
     gold.write_text(wrapper + "core u_core(ic,ir,id,oq);endmodule\n"
         "module core(input clk,rst_n,data,output reg tail);reg q;wire qualifier=rst_n & data;\n"
-        "always @(posedge clk) if(!rst_n) q<=0;else q<=qualifier;\n"
-        "always @(posedge clk) tail<=q;endmodule\n")
+        + ("wire gclk=clk & (rst_n | data);\n" if gated_clock else "")
+        + f"always @(posedge {'gclk' if gated_clock else 'clk'}) if(!rst_n) q<=0;else q<=qualifier;\n"
+        + f"always @(posedge {'gclk' if gated_clock else 'clk'}) tail<=q;endmodule\n")
+    clock = "\\u_core.gclk " if gated_clock else "ic"
     gate.write_text(wrapper + "wire \\u_core.qualifier ;reg \\u_core.q ,\\u_core.tail ;\n"
         "assign \\u_core.qualifier =ir & id;assign oq=\\u_core.tail ;\n"
-        f"always @(posedge ic) \\u_core.q <={'~' if different else ''}\\u_core.qualifier ;\n"
-        "always @(posedge ic) \\u_core.tail <=\\u_core.q ;endmodule\n")
+        + ("wire \\u_core.gclk ;assign \\u_core.gclk =ic & (ir | id);\n" if gated_clock else "")
+        + f"always @(posedge {clock}) \\u_core.q <={'~' if different else ''}\\u_core.qualifier ;\n"
+        + f"always @(posedge {clock}) \\u_core.tail <=\\u_core.q ;endmodule\n")
     cells.write_text("library(neutral) {}\n")
     pads.write_text("(* blackbox *) module INPAD(inout PAD,output Y);endmodule\n"
                    "(* blackbox *) module OUTPAD(input A,inout PAD);endmodule\n")
@@ -1116,6 +1120,9 @@ def test_chip_eqy_keeps_gold_constraints_on_internal_cut_inputs(tmp_path, differ
     tail = next(part for part in partitions if "u_core.tail" in part["outbits"])
     assert "u_core.q" in tail["inbits"], tail
     assert "u_core.q" not in tail["crossbits"], tail
+    if gated_clock:
+        assert "u_core.gclk" in tail["inbits"], tail
+        assert "u_core.gclk" not in tail["crossbits"], tail
 
 
 @pytest.mark.parametrize("direct_output", [False, True])

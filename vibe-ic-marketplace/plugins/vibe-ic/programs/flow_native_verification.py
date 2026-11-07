@@ -149,6 +149,10 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
                          for master in sorted(pads["types"])) + "\n"
             + f"select -set pad_terminals {top}/i:* {top}/o:* %i @terminals %d\n"
             + "delete -output @terminals\ndelete -input @pad_terminals\n"
+            + "setattr -set eqy_cut 1 t:$*ff* t:$*FF* %u t:$*latch* %u t:$*LATCH* %u %x:+[Q,QN,CLK,C] %a i:* %a %u w:* %i\n"
+            + ("select -set eqy_boolean t:$and t:$or t:$xor t:$xnor t:$not t:$logic_* t:$reduce_* t:$eq t:$ne\n"
+               "setattr -set eqy_context 1 @eqy_boolean r:Y_WIDTH=1 %i %co %a w:* %i\n"
+               if side == "gold" else "")
             + f"write_json {_word(core / (side + '.json'))}\n"
             + f"write_verilog -noattr {_word(core / (side + '.v'))}\n")
         completed = commands.run(["yosys", "-s", path])
@@ -261,7 +265,7 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
     prepared = (f"[gold]\nread_verilog -formal -sv -icells {_word(core / 'gold.v')}\n"
                 f"[gate]\nread_verilog -formal -sv -icells {_word(core / 'gate.v')}\n"
                 "[script]" + preparation.replace(str(directory) + "/", str(core) + "/"))
-    aliases = []
+    aliases, cuts, context = [], set(), set()
     for side in ("gold", "gate"):
         bits = {}
         module = json.loads((core / (side + '.json')).read_text())["modules"][top]
@@ -275,7 +279,16 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
                 index = wire.get("offset", 0) + (width - 1 - index if wire.get("upto") else index)
                 point = f"{name}[{index}]" if width > 1 else name
                 bits.setdefault(bit, set()).add(point)
+                if wire.get("attributes", {}).get("eqy_cut"):
+                    cuts.add(point)
+                if side == "gold" and wire.get("attributes", {}).get("eqy_context"):
+                    context.add(point)
         aliases.append(list(bits.values()))
+    # Restore Boolean qualifier relationships without importing state or datapaths.
+    rules = ["noamend /^(?:" + "|".join(map(re.escape, sorted(cuts))) + ")$/"] if cuts else []
+    if context - cuts:
+        rules.append("amend /^(?:" + "|".join(map(re.escape, sorted(context - cuts))) + ")$/")
+    prepared = prepared.replace("[partition *]\namend *", "[partition *]\n" + "\n".join(rules), 1)
     shared = set.union(*aliases[0]) & set.union(*aliases[1]) if all(aliases) else set()
     groups = {tuple(sorted(names & shared)) for side in aliases for names in side
               if len(names & shared) > 1}
