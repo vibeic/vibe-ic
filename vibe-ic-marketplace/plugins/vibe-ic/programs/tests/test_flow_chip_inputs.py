@@ -1547,3 +1547,38 @@ quit -noprompt
     equivalent = bool(re.search(r'^equiv "(?:R|L)" "(?:L|R)"$', text, re.M))
     assert equivalent is connected, text
     assert "\nabstract\n" not in text, text
+
+
+@pytest.mark.parametrize("correct_connection", [True, False])
+def test_native_lvs_uses_declared_passive_pad_cdl(inputs, tmp_path, correct_connection):
+    import shutil
+    from librelane.common import Path as NativePath, Toolbox
+    from librelane.flows import Flow
+    from librelane.state import DesignFormat, State
+    from librelane.steps import Step
+
+    root = os.environ.get("PDK_ROOT")
+    if not shutil.which("netgen") or not root:
+        pytest.skip("native Netgen and installed PDK required")
+    project, config, native, _, _ = inputs
+    cdl = _write(tmp_path / "pads.cdl", ".SUBCKT neutral_bridge L R\n"
+                 "* Passive conductor has no active circuitry.\n.ENDS\n")
+    native["PAD_CDLS"] = [str(cdl)]
+    prepared = chip.prepare(project, config)
+    netlist = _write(tmp_path / "powered.v", """module neutral_chip(input A, output Y, inout VPWR, VGND);
+  sky130_fd_sc_hd__inv_1 u_core (.A(A), .Y(Y), .VPWR(VPWR), .VPB(VPWR), .VGND(VGND), .VNB(VGND));
+  neutral_bridge u_bridge (.L(VPWR), .R(VPWR));
+endmodule
+""")
+    output = "Y" if correct_connection else "A"
+    extracted = _write(tmp_path / "layout.spice", ".subckt neutral_chip A Y VPWR VGND\n"
+        f"Xcore A VGND VGND VPWR VPWR {output} sky130_fd_sc_hd__inv_1\n.ends\n")
+    owner = Flow.factory.get("Classic")({"DESIGN_NAME": "neutral_chip", "PDK": "sky130A",
+        "VERILOG_FILES": [str(netlist)], "CLOCK_PORT": None, "CLOCK_PERIOD": 10,
+        "PAD_SPICE_MODELS": prepared.get("PAD_SPICE_MODELS")}, design_dir=str(tmp_path), pdk_root=root)
+    state = State({DesignFormat.SPICE: NativePath(str(extracted)),
+                   DesignFormat.POWERED_NETLIST: NativePath(str(netlist))})
+    result = Step.factory.get("Netgen.LVS")(owner.config, state_in=state).start(
+        toolbox=Toolbox(str(tmp_path / "tools")), step_dir=str(tmp_path / "lvs"))
+    count = result.metrics["design__lvs_error__count"]
+    assert (count == 0) is correct_connection, count
