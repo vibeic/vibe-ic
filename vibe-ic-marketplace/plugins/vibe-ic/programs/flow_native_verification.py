@@ -151,7 +151,7 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
             + "delete -output @terminals\ndelete -input @pad_terminals\n"
             + "setattr -set eqy_cut 1 t:$*ff* t:$*FF* %u t:$*latch* %u t:$*LATCH* %u %x:+[Q,QN,CLK,C] %a i:* %a %u w:* %i\n"
             + ("select -set eqy_boolean t:$and t:$or t:$xor t:$xnor t:$not t:$logic_* t:$reduce_* t:$eq t:$ne\n"
-               "setattr -set eqy_context 1 @eqy_boolean r:Y_WIDTH=1 %i %co %a w:* %i\n"
+               "setattr -set eqy_context 1 @eqy_boolean r:Y_WIDTH=1 %i t:$mux r:WIDTH=1 %i %u %co %a w:* %i\n"
                if side == "gold" else "")
             + f"write_json {_word(core / (side + '.json'))}\n"
             + f"write_verilog -noattr {_word(core / (side + '.v'))}\n")
