@@ -1582,3 +1582,84 @@ endmodule
         toolbox=Toolbox(str(tmp_path / "tools")), step_dir=str(tmp_path / "lvs"))
     count = result.metrics["design__lvs_error__count"]
     assert (count == 0) is correct_connection, count
+
+
+@pytest.mark.parametrize("step_id", ["Magic.SpiceExtraction", "Magic.DRC"])
+def test_native_chip_extraction_keeps_internal_rails_out_of_top_ports(inputs, tmp_path, step_id):
+    import re
+    import shutil
+    import subprocess
+
+    root = os.environ.get("PDK_ROOT")
+    rc = Path(root or "/missing") / "sky130A/libs.tech/magic/sky130A.magicrc"
+    if not shutil.which("magic") or not rc.is_file():
+        pytest.skip("native Magic and installed PDK required")
+    project, config, native, _, _ = inputs
+    native["MAGICRC"] = str(rc)
+    prepared = chip.prepare(project, config)
+    lef = _write(tmp_path / "load.lef", """VERSION 5.8 ;
+MACRO neutral_cell
+ CLASS CORE ;
+ SIZE 5 BY 1 ;
+ PIN PWR
+  DIRECTION INOUT ;
+  USE POWER ;
+  PORT
+   LAYER met1 ;
+   RECT 0 0 1 1 ;
+  END
+ END PWR
+ PIN A
+  DIRECTION INPUT ;
+  USE SIGNAL ;
+  PORT
+   LAYER met1 ;
+   RECT 2 0 3 1 ;
+  END
+ END A
+ PIN Y
+  DIRECTION OUTPUT ;
+  USE SIGNAL ;
+  PORT
+   LAYER met1 ;
+   RECT 4 0 5 1 ;
+  END
+ END Y
+END neutral_cell
+END LIBRARY
+""")
+    environment = _write(tmp_path / "environment.tcl",
+        "set ::env(STEP_ID) {" + step_id + "}\nset ::env(PAD_LEFS) {}\n")
+    script = _write(tmp_path / "extract.tcl", "lef read {" + str(lef) + "}\n" + """drc off
+load neutral_chip -silent
+box 0 0 0 0
+getcell neutral_cell
+box 0 0 1um 1um
+paint metal1
+label CORE_POWER center metal1
+box 2um 0 3um 1um
+paint metal1
+label A center metal1
+port make 1
+box 4um 0 5um 1um
+paint metal1
+label Y center metal1
+port make 2
+extract no capacitance
+extract no coupling
+extract no resistance
+extract all
+ext2spice lvs
+ext2spice -o chip.spice neutral_chip.ext
+quit -noprompt
+""")
+    run = subprocess.run(["magic", "-dnull", "-noconsole", "-rcfile", prepared["MAGICRC"], str(script)],
+        cwd=tmp_path, env={**os.environ, "_TCL_ENV_IN": str(environment)}, capture_output=True, text=True)
+    assert run.returncode == 0, run.stdout + run.stderr
+    spice = (tmp_path / "chip.spice").read_text()
+    top = re.search(r'(?m)^\.subckt neutral_chip (.*(?:\n\+.*)*)', spice)
+    assert top, spice
+    ports = set(top[1].replace("\n+", " ").split())
+    assert {"A", "Y"} <= ports, spice
+    assert ("CORE_POWER" in ports) is (step_id != "Magic.SpiceExtraction"), spice
+    assert any(line.startswith("X") and "CORE_POWER" in line for line in spice.splitlines()), spice
