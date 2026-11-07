@@ -1094,11 +1094,13 @@ def test_chip_eqy_keeps_gold_constraints_on_internal_cut_inputs(tmp_path, differ
         "INPAD pc(.PAD(clk),.Y(ic));INPAD pr(.PAD(rst_n),.Y(ir));\n"
         "INPAD pd(.PAD(data),.Y(id));\nOUTPAD po(.A(oq),.PAD(result));\n")
     gold.write_text(wrapper + "core u_core(ic,ir,id,oq);endmodule\n"
-        "module core(input clk,rst_n,data,output reg q);wire qualifier=rst_n & data;\n"
-        "always @(posedge clk) if(!rst_n) q<=0;else q<=qualifier;endmodule\n")
-    gate.write_text(wrapper + "wire \\u_core.qualifier ;reg \\u_core.q ;\n"
-        "assign \\u_core.qualifier =ir & id;assign oq=\\u_core.q ;\n"
-        f"always @(posedge ic) \\u_core.q <={'~' if different else ''}\\u_core.qualifier ;endmodule\n")
+        "module core(input clk,rst_n,data,output reg tail);reg q;wire qualifier=rst_n & data;\n"
+        "always @(posedge clk) if(!rst_n) q<=0;else q<=qualifier;\n"
+        "always @(posedge clk) tail<=q;endmodule\n")
+    gate.write_text(wrapper + "wire \\u_core.qualifier ;reg \\u_core.q ,\\u_core.tail ;\n"
+        "assign \\u_core.qualifier =ir & id;assign oq=\\u_core.tail ;\n"
+        f"always @(posedge ic) \\u_core.q <={'~' if different else ''}\\u_core.qualifier ;\n"
+        "always @(posedge ic) \\u_core.tail <=\\u_core.q ;endmodule\n")
     cells.write_text("library(neutral) {}\n")
     pads.write_text("(* blackbox *) module INPAD(inout PAD,output Y);endmodule\n"
                    "(* blackbox *) module OUTPAD(input A,inout PAD);endmodule\n")
@@ -1109,6 +1111,11 @@ def test_chip_eqy_keeps_gold_constraints_on_internal_cut_inputs(tmp_path, differ
     assert rows["Yosys.Wrapper"] == "PASS", result
     assert rows["Yosys.EQY.Core"] == ("FAIL" if different else "PASS"), result
     assert "u_core.qualifier" in (tmp_path/"scratch/matched.ids").read_text()
+    partitions = [json.loads(path.read_text())["partition"]
+                  for path in (tmp_path/"scratch/partitions").glob("*.json")]
+    tail = next(part for part in partitions if "u_core.tail" in part["outbits"])
+    assert "u_core.q" in tail["inbits"], tail
+    assert "u_core.q" not in tail["crossbits"], tail
 
 
 @pytest.mark.parametrize("direct_output", [False, True])
