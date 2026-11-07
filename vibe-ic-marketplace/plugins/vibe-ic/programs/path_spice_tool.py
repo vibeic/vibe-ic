@@ -264,7 +264,8 @@ _INCLUDE_RE = re.compile(r"^\s*\.inc(?:lude)?\s+['\"]?([^'\"\s]+)['\"]?\s*$", re
 _DEF_RE = re.compile(r"^\s*\.(?:subckt|model)\s+(\S+)", re.I)
 
 
-def model_sections(tech_dir: Path, simulator: str) -> Dict[Tuple[str, str], set]:
+def model_sections(tech_dir: Path, simulator: str, *,
+                   dependencies: Optional[dict] = None) -> Dict[Tuple[str, str], set]:
     """{(file, section): every device name the section defines, following its
     `.include` and `.lib <file> <section>` references}. Files carrying the simulator's own
     suffix are read when there are any (a PDK ships one tree per dialect)."""
@@ -318,6 +319,8 @@ def model_sections(tech_dir: Path, simulator: str) -> Dict[Tuple[str, str], set]
             defined |= direct.get(referenced, set())
             pending_keys.extend(refs.get(referenced, []))
         closure[key] = defined
+        if dependencies is not None:
+            dependencies[key] = {Path(path) for path, _section in seen}
     return closure
 
 
@@ -326,7 +329,8 @@ def model_file(tech_dir: Path, guest_dir: str, simulator: str, liberty: str,
     """The `-model_file` for one corner: the PDK's parameter preludes, then, for
     every device the cells call, the library section `select_model_section`
     picks for the corner's liberty among the sections that define it."""
-    sections = model_sections(tech_dir, simulator)
+    dependencies = {}
+    sections = model_sections(tech_dir, simulator, dependencies=dependencies)
     chosen: List[Tuple[str, str]] = []
     covered: set = set()
     for device in sorted(devices):
@@ -344,9 +348,15 @@ def model_file(tech_dir: Path, guest_dir: str, simulator: str, liberty: str,
                       f'{simulator}: no section under {tech_dir} defines {missing}')
     files = sorted(p for p in Path(tech_dir).glob('*') if p.is_file())
     own = [p for p in files if p.suffix.lstrip('.').lower() == simulator.lower()] or files
-    preludes = [p for p in own
-                if re.search(r'^\s*\.param\s', p.read_text(errors='replace'), re.M | re.I)
-                and not re.search(r'^\s*\.lib\s', p.read_text(errors='replace'), re.M | re.I)]
+    included = set().union(*(dependencies[section] for section in chosen))
+    preludes = []
+    for path in own:
+        if path in included:
+            continue
+        text = path.read_text(errors='replace')
+        if (re.search(r'^\s*\.param\s', text, re.M | re.I)
+                and not re.search(r'^\s*\.(?:lib|subckt|model)\s', text, re.M | re.I)):
+            preludes.append(path)
     guest = lambda p: f'{guest_dir}/{Path(p).name}'  # noqa: E731
     lines = [f'* vibe-ic step 30: device models for {liberty} ({simulator})']
     lines += [f'.include {guest(p)}' for p in preludes]
