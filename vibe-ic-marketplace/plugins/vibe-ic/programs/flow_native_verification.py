@@ -77,6 +77,46 @@ def reset_script(script, boundary):
     return script
 
 
+def pad_interfaces(directory, reads, pins, commands):
+    """Complete imported native library interfaces with their physical LEF pins."""
+    from flow_native_adapters import _word
+
+    ports = {}
+    for master, directions in pins.items():
+        ports[master], buses = [], {}
+        for pin, direction in directions.items():
+            match = re.fullmatch(r"(.+)\[([0-9]+)\]", pin)
+            if match:
+                buses.setdefault(match[1], []).append((int(match[2]), direction))
+            else:
+                ports[master].append((pin, 0, 1, direction))
+        for name, bits in buses.items():
+            low, high = min(i for i, _ in bits), max(i for i, _ in bits)
+            if (len({direction for _, direction in bits}) != 1
+                    or {i for i, _ in bits} != set(range(low, high + 1))):
+                raise ValueError(f"Native LEF bus {master}.{name} has incomplete or mixed pin directions")
+            ports[master].append((name, low, high - low + 1, bits[0][1]))
+    model, script = directory / "pad_interfaces.json", directory / "pad_interfaces.py"
+    script.write_text("from pyosys import libyosys as ys\n"
+        "design = ys.Design()\n"
+        f"for command in {reads!r}:\n    ys.run_pass(command, design)\n"
+        f"for master, ports in {ports!r}.items():\n"
+        "    module = design.module('\\\\' + master)\n"
+        "    if module is None:\n"
+        "        module = design.addModule('\\\\' + master)\n"
+        "        module.attributes['\\\\blackbox'] = ys.Const(1)\n"
+        "    for name, offset, width, direction in ports:\n"
+        "        if module.wire('\\\\' + name) is not None:\n            continue\n"
+        "        wire = module.addWire('\\\\' + name, width)\n"
+        "        wire.start_offset = offset\n"
+        "        wire.port_input = direction in ('input', 'inout')\n"
+        "        wire.port_output = direction in ('output', 'inout')\n"
+        "    module.fixup_ports()\n"
+        f"ys.run_pass({'write_json ' + _word(model)!r}, design)\n")
+    completed = commands.run(["python3", script])
+    return model if completed is not None and not completed.returncode and model.is_file() else None, [script, model]
+
+
 def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
     from flow_native_adapters import _word
 
@@ -90,10 +130,15 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
     reads += ["read_liberty -lib -nooverwrite -ignore_miss_func -ignore_miss_dir " + _word(path)
               for path in pads["liberty"]]
     pg_pins = pads.get("pg_pins", {})
-    # Liberty omits the supply terminals that the native power netlist names.
     power_ports = "\n".join(f"add -{direction} \\{pin} 1 ={master}"
-        for master, pins in sorted(pg_pins.items()) for pin, direction in sorted(pins.items()))
+        for master, pins in sorted(pg_pins.items()) if master not in pads["types"]
+        for pin, direction in sorted(pins.items()))
     views, reports, outputs, disconnected_ports = {}, [], {}, {}
+    if pins := pads.get("pins", {master: pins for master, pins in pg_pins.items() if master in pads["types"]}):
+        model, reports = pad_interfaces(directory, reads, pins, commands)
+        if model is None:
+            return None, None, reports, "Native pad interface preparation did not complete."
+        reads = ["read_json " + _word(model)]
     for side, source in (("gold", gold.replace("[gold]", "")), ("gate", gate)):
         path = directory / f"{side}_pads.ys"
         path.write_text("\n".join(reads) + "\n" + source + "\n" + power_ports + "\n"
@@ -244,6 +289,7 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
 
 def eqy(project, directory, tool, commands, *, state, config):
     from librelane_eqy import eqy_script
+    from flow_config import design_parameters
     from sdf_gate_sim import netlist_used_cells, verilog_model_closure
     from lec_post_layout_check import _LIB_CELL_RE
     from flow_chip_inputs import _paths
@@ -255,14 +301,22 @@ def eqy(project, directory, tool, commands, *, state, config):
     if not top or not netlist or not Path(netlist).is_file() or not rtl or any(not path.is_file() for path in rtl):
         return commands.result(detail="EQY needs produced RTL, State netlist and the configured corner's Liberty models.")
     used = set().union(*(netlist_used_cells(path.read_text()) for path in [*rtl, Path(netlist)]))
-    classes, pg_pins = {}, {}
+    classes, pg_pins, pad_pins = {}, {}, {}
     for key in ("CELL_LEFS", "PAD_LEFS", "EXTRA_LEFS"):
         for path in _paths(config.get(key)):
             path = path if path.is_absolute() else project / path
             if path.is_file():
                 text = path.read_text()
                 classes.update(parse_lef_macro_classes(text))
+                delimiters = re.search(r'BUSBITCHARS\s+"(.)(.)"\s*;', text)
+                left, right = delimiters.groups() if delimiters else ("[", "]")
+                bus_pin = re.compile(r"(.+)" + re.escape(left) + r"([0-9]+)" + re.escape(right) + r"$")
                 for master, pins in parse_lef_pin_roles(text).items():
+                    normalized = {f"{match[1]}[{match[2]}]" if (match := bus_pin.fullmatch(pin)) else pin:
+                                  direction.lower()
+                        for pin, (direction, _use) in pins.items()
+                        if direction in {"INPUT", "OUTPUT", "INOUT"}}
+                    pad_pins.setdefault(master, {}).update(normalized)
                     pg_pins.setdefault(master, {}).update({pin: direction.lower()
                         for pin, (direction, use) in pins.items()
                         if use in {"POWER", "GROUND"} and direction in {"INPUT", "OUTPUT", "INOUT"}})
@@ -313,6 +367,7 @@ def eqy(project, directory, tool, commands, *, state, config):
     from lec_post_layout_check import _NETLIST_MODULE_RE
     pad_types.update(match["name"] for path in pad_models
                      for match in _NETLIST_MODULE_RE.finditer(path.read_text()))
+    pad_types.update(master for master, kind in classes.items() if kind.startswith("PAD") and master in pad_pins)
     pad_types &= used
     pad_types -= physical
     if pad_types and state.get("pnl"):
@@ -320,7 +375,7 @@ def eqy(project, directory, tool, commands, *, state, config):
     script = directory / "equivalence.eqy"
     source = eqy_script(top, rtl, Path(netlist), liberty[0], synthesis=config,
         views=directory, liberty_files=list(map(Path, liberty)), model_verilog=models,
-        group_all=not pad_types)
+        group_all=not pad_types, parameters=design_parameters(project, config))
     if physical:
         removal = "\n".join("delete */t:" + master for master in sorted(physical)) + "\n"
         source = source.replace("[gate]", removal + "[gate]", 1).replace("[script]", removal + "[script]", 1)
@@ -335,6 +390,7 @@ def eqy(project, directory, tool, commands, *, state, config):
         source, wrapper_count, wrapper_reports, wrapper_detail = eqy_pad_views(directory, top, source,
             {"liberty": pad_liberty, "types": pad_types, "defines": config.get("VERILOG_DEFINES") or [],
              "pg_pins": {master: pins for master, pins in pg_pins.items() if pins and master in used - physical},
+             "pins": {master: pins for master, pins in pad_pins.items() if pins and master in pad_types},
              "include_dirs": sorted({path.parent for path in pad_models})},
             prepared_models, commands, reset_boundary(project))
         if source is None:

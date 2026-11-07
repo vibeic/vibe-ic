@@ -12,7 +12,43 @@ import subprocess
 import vibeic_temp as tempfile
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
+
+
+class RTLInputs(NamedTuple):
+    files: list[Path]
+    top: str
+    parameters: dict[str, str]
+
+
+def native_parameters(config: dict) -> dict[str, str]:
+    """Native parameter constants, without evaluating or changing their literals."""
+    return dict(value.split("=", 1) for value in config.get("SYNTH_PARAMETERS") or [])
+
+
+def design_parameters(project: Path | str, config=None) -> dict[str, str]:
+    """The selected design binding shared by every RTL elaboration consumer."""
+    return native_parameters({**(config or {}),
+        **_load(Path(project) / "work/flow/native_overrides.json")})
+
+
+def parameter_args(parameters, tool, top=None):
+    """Render one resolved design binding in the native frontend's syntax."""
+    if tool == "yosys":
+        return [word for name, value in parameters.items() for word in ("-chparam", name, value)]
+    prefix = {"iverilog": f"-P{top}.", "verilator": "-G", "slang": "-G",
+              "xezim": f"-G/{top}/"}[tool]
+    return [prefix + name + "=" + value
+            for name, value in parameters.items()]
+
+
+def parameterized_command(argv, parameters):
+    """Attach the resolved binding to a native simulator command."""
+    tool = Path(argv[0]).name
+    if not parameters or tool not in {"iverilog", "verilator"}:
+        return argv
+    top = str(argv[argv.index("-s") + 1]) if tool == "iverilog" else None
+    return [argv[0], *parameter_args(parameters, tool, top), *argv[1:]]
 
 
 PROGRAMS = Path(__file__).resolve().parent
@@ -307,7 +343,7 @@ def declared_power_checks(project: Path, *, config: dict | None = None, metrics:
     return checks
 
 
-def _resolve_rtl_inputs(project: Path, sources: dict) -> tuple[list[Path], str]:
+def _resolve_rtl_inputs(project: Path, sources: dict) -> RTLInputs:
     from _rtl_include_hub import silicon_rtl_selection
     from _design_module_set import module_names_in_text
 
@@ -334,16 +370,17 @@ def _resolve_rtl_inputs(project: Path, sources: dict) -> tuple[list[Path], str]:
            or l9.get("top_module") or tapeout_metadata.get("top_cell"))
     modules = set().union(*(module_names_in_text(path.read_text(errors="replace"))
                             for path in rtl))
+    parameters = design_parameters(project)
     if not top:
         top = _authored_rtl_top(rtl)
         _record_authored_top(l9_path, l9, top)
         sources["DESIGN_NAME"] = "phase2/stage1/rtl (RTL authoring step)"
     if not top or top not in modules:
         raise FileNotFoundError(f"Declared top module {top} is absent from produced RTL")
-    return rtl, top
+    return RTLInputs(rtl, top, parameters)
 
 
-def resolve_rtl_inputs(project: Path | str) -> tuple[list[Path], str]:
+def resolve_rtl_inputs(project: Path | str) -> RTLInputs:
     """Select produced RTL and resolve the top shared by native tool callers."""
     return _resolve_rtl_inputs(Path(project).resolve(), {})
 
@@ -379,7 +416,7 @@ def build_config(project: Path | str, *, route: str | None = None, pdk: str | No
     rtl_root = project / "phase2/stage1/rtl"
     inputs = _input_docs(project)
     sources: dict[str, Any] = {}
-    rtl, top = _resolve_rtl_inputs(project, sources)
+    rtl, top, parameters = _resolve_rtl_inputs(project, sources)
     assumptions = []
     if not pdk:
         from parametric_spec_extractor import extract_pdk_target
@@ -395,6 +432,8 @@ def build_config(project: Path | str, *, route: str | None = None, pdk: str | No
     pdk = _pdk_name(pdk)
     config: dict[str, Any] = {"DESIGN_NAME": top, "PDK": pdk,
                               "VERILOG_FILES": [str(path) for path in rtl]}
+    if parameters:
+        config["SYNTH_PARAMETERS"] = [f"{name}={value}" for name, value in parameters.items()]
     config["VERILOG_INCLUDE_DIRS"] = sorted({str(path.parent) for path in
                                            rtl_root.rglob("*") if path.is_file()})
     if any(re.search(r"\bpackage\s+\w+|\bimport\s+\w+::", path.read_text())

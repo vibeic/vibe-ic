@@ -73,7 +73,7 @@ def test_power_simulation_reads_native_assertions(tmp_path, monkeypatch, code, o
     docs = tmp_path / "phase1/generated_docs"
     docs.mkdir(parents=True)
     (docs / "L21_POWER_INTENT.json").write_text(json.dumps({"upf_path": "power.upf"}))
-    monkeypatch.setattr(adapters, "inputs", lambda *args: ([rtl], "core"))
+    monkeypatch.setattr(adapters, "inputs", lambda *args: ([rtl], "core", {}))
     monkeypatch.setattr(adapters, "simulation_sources", lambda *args: ([rtl], []))
     calls = []
 

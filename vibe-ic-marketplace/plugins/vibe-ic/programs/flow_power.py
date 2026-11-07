@@ -12,7 +12,7 @@ def intent(project, directory, tool):
     if not top and (project / "phase2/stage1/rtl").is_dir():
         from flow_config import resolve_rtl_inputs
         try:
-            _, top = resolve_rtl_inputs(project)
+            _, top, _ = resolve_rtl_inputs(project)
         except FileNotFoundError as exc:
             return {"ran": False, "exit_code": None, "detail": str(exc)}
     top = top or l_doc_fields(document).get("top_module")
@@ -38,7 +38,7 @@ def simulation(project, directory, tool):
 
     commands = Commands(directory)
     try:
-        files, top = inputs(project, tool)
+        files, top, parameters = inputs(project, tool)
     except FileNotFoundError as exc:
         return commands.result(detail=str(exc))
     _, document = load_l_doc(project, "L21")
@@ -49,7 +49,9 @@ def simulation(project, directory, tool):
     files, includes = simulation_sources(project, files, top, benches)
     failures, steps = [], []
     for bench in benches:
+        from flow_config import parameter_args
         process = commands.run(["xezim", "--simulate", "--no-cache", "--error-exit",
+            *parameter_args(parameters, "xezim", top),
             "-s", _tb_top_module(bench), "--upf", upf,
             *[arg for path in includes for arg in ("-I", path)], *files, bench], cwd=bench.parent)
         parsed = parse_l10_case_stdout(process.stdout + process.stderr) if process else {}

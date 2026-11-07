@@ -35,7 +35,7 @@ def _top(project, tool, config):
         if top:
             return top
     try:
-        _, top = resolve_rtl_inputs(project)
+        _, top, _ = resolve_rtl_inputs(project)
         if top:
             return top
     except FileNotFoundError:

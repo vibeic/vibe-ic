@@ -1113,6 +1113,26 @@ def parse_harness_pragmas(text: str) -> dict:
             "is_invariant": is_inv}
 
 
+def bind_sby_parameters(body: str, parameters: dict[str, str]) -> str:
+    """Apply the selected design constants through the SBY native frontend."""
+    if not parameters:
+        return body
+    from flow_config import parameter_args
+    before, marker, rest = body.partition("[script]")
+    script, separator, after = rest.partition("[files]")
+    root = re.search(r"(?m)^(?:[\w -]+:[ \t]*)?(?:prep|hierarchy)\b[^\n]*-top[ \t]+(\S+)", script)
+    if not marker or root is None:
+        raise FileNotFoundError("Selected parameters require a native SBY script with an explicit top.")
+    if re.search(r"(?m)^(?:[\w -]+:[ \t]*)?read_slang\b", script):
+        script = re.sub(r"(?m)^(?P<prefix>(?:[\w -]+:[ \t]*)?read_slang)\b",
+            lambda m: m.group("prefix") + " " + " ".join(parameter_args(parameters, "slang")), script)
+    else:
+        commands = "".join(f"chparam -set {name} {value} {root.group(1)}\n"
+                           for name, value in parameters.items())
+        script = script[:root.start()] + commands + script[root.start():]
+    return before + marker + script + separator + after
+
+
 def emit_invariant_sby(rtl_files: List[str], harness_file: str, top: str,
                        connects: List, chparams: List,
                        tasks: Optional[List[dict]] = None,
