@@ -59,6 +59,17 @@ SETTING_ALIASES = {
     "FP_PDN_HOFFSET": "PDN_HOFFSET",
     "FP_PDN_SKIPTRIM": "PDN_SKIPTRIM",
 }
+PPA_SETTINGS = {
+    "EXTRA_EXCLUDED_CELLS", "PL_RESIZER_SETUP_MAX_UTIL_PCT",
+    "PL_RESIZER_HOLD_MAX_UTIL_PCT", "PL_RESIZER_SETUP_REPAIR_TNS_PCT",
+    "GRT_RESIZER_SETUP_MAX_UTIL_PCT", "GRT_RESIZER_HOLD_MAX_UTIL_PCT",
+    "GRT_RESIZER_SETUP_REPAIR_TNS_PCT", "VIBEIC_PRR_RECOVER_POWER_PCT",
+    "VIBEIC_PRR_MAX_UTIL_PCT", "VIBEIC_PRR_LIMIT_SIZING_AREA",
+    "VIBEIC_PRR_LIMIT_SIZING_LEAKAGE",
+    "GPL_CELL_PADDING", "DPL_CELL_PADDING", "PL_TIMING_DRIVEN",
+    "PL_ROUTABILITY_DRIVEN", "GRT_ADJUSTMENT", "GRT_LAYER_ADJUSTMENTS",
+    "CTS_SINK_CLUSTERING_SIZE", "CTS_SINK_CLUSTERING_MAX_DIAMETER",
+}
 SETTINGS = {
     "SYNTH_STRATEGY",
     "MAX_FANOUT_CONSTRAINT", "MAX_TRANSITION_CONSTRAINT",
@@ -66,6 +77,7 @@ SETTINGS = {
     "PDN_VOFFSET", "PDN_HOFFSET", "PDN_SKIPTRIM", "PDN_CORE_RING",
     "PDN_CORE_RING_CONNECT_TO_PADS", "PDN_VWIDTH", "PDN_HWIDTH",
     "PDN_VPITCH", "PDN_HPITCH", "PDN_VSPACING", "PDN_HSPACING",
+    *PPA_SETTINGS,
 }
 IMPLEMENTATION_SETTINGS = {"RUN_POST_GRT_RESIZER_TIMING", "RUN_POST_GRT_DESIGN_REPAIR",
                            "CLOCK_PORT", "FP_DEF_TEMPLATE", "FALLBACK_SDC", "PNR_SDC_FILE", "SIGNOFF_SDC_FILE",
@@ -73,7 +85,8 @@ IMPLEMENTATION_SETTINGS = {"RUN_POST_GRT_RESIZER_TIMING", "RUN_POST_GRT_DESIGN_R
 
 
 def implementation_setting(key: str) -> bool:
-    return key in IMPLEMENTATION_SETTINGS or key.startswith(("CTS_", "PDN_", "GRT_DESIGN_REPAIR_"))
+    return key in IMPLEMENTATION_SETTINGS or key in PPA_SETTINGS or key.startswith(
+        ("CTS_", "PDN_", "GRT_DESIGN_REPAIR_"))
 
 
 def native_excluded_cells(config):
@@ -82,6 +95,19 @@ def native_excluded_cells(config):
         # OpenROAD-flow-scripts flow/platforms/gf180/config.mk sets DONT_USE_CELLS = *_1.
         excluded.append("*_1")
     return list(dict.fromkeys(excluded))
+
+
+def create_native_flow(kind, config, **kwargs):
+    """Compile the stock flow with the variables of our routed sizing step."""
+    from librelane.flows import Flow
+    from librelane_plugins.librelane_plugin_vibeic.postroute_sizing import PostRouteSizing
+
+    base = Flow.factory.get(kind)
+
+    class NativeFlow(base):
+        config_vars = base.config_vars + PostRouteSizing.config_vars
+
+    return NativeFlow(config, **kwargs)
 
 
 def native_defaults(config):
@@ -98,7 +124,13 @@ def native_defaults(config):
         changes.update(CTS_MAX_CAP=min(caps), CTS_MAX_SLEW=min(slews))
     changes.update(cts_settings(config))
     if config.get("DESIGN_DIR"):
-        changes.update(_load(Path(config["DESIGN_DIR"]) / "work/flow/native_overrides.json"))
+        project = Path(config["DESIGN_DIR"])
+        changes.update(_load(project / "work/flow/native_overrides.json"))
+        # Chip/Classic do not declare custom downstream-step variables. Keep
+        # document settings available when that step compiles its own config.
+        fields = _load(project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json").get("fields", {})
+        changes.update({key: value for key, value in _settings(fields, config.get("PDK")).items()
+                        if key in PPA_SETTINGS})
     return config.copy(**changes)
 
 
@@ -182,7 +214,14 @@ def _settings(fields: dict, pdk: str) -> dict:
                           or pdk.lower().startswith(str(scope).lower().rstrip("*_"))):
             continue
         value = row.get("value")
-        value = (str(value).strip() if value is not None else None) if key == "SYNTH_STRATEGY" else _value(value)
+        if value is None:
+            continue
+        if key == "EXTRA_EXCLUDED_CELLS":
+            if not isinstance(value, list):
+                text = str(value).strip()
+                value = json.loads(text) if text.startswith("[") else [text]
+        else:
+            value = (str(value).strip() if value is not None else None) if key == "SYNTH_STRATEGY" else _value(value)
         if value is None:
             continue
         if token == "PL_TARGET_DENSITY":

@@ -35,8 +35,21 @@ def phase_main(argv=None, *, scope="all"):
     parser.add_argument("--container")
     parser.add_argument("--from", dest="from_name")
     parser.add_argument("--to", dest="to_name")
+    parser.add_argument("--ppa-level", type=int, choices=range(5))
+    parser.add_argument("--ppa", action="store_true", help="Request native tool PPA followed by Level 4")
+    parser.add_argument("--spool", nargs=2, type=Path, metavar=("OUTPUT", "RESULTS"))
     args = parser.parse_args(argv)
     args.scope = scope
+    args.public_arguments = []
+    for action in parser._actions:
+        if action.dest in {"project", "help", "ppa_level", "ppa", "spool"}:
+            continue
+        value = getattr(args, action.dest)
+        if isinstance(value, bool):
+            if value:
+                args.public_arguments.append(action.option_strings[0])
+        elif value is not None:
+            args.public_arguments.extend((action.option_strings[0], str(value)))
     try:
         return run_public(args)
     except (OSError, ValueError) as exc:
@@ -429,7 +442,12 @@ def native_diagnostics(process, argv, project, require_phase2=True):
 def run_public(args):
     """Forward the public entry's selected Router window to the native engine."""
     import flow_engine
+    from flow_ppa_variants import selected_level
     project = args.project.resolve()
+    requested = getattr(args, "ppa_level", None)
+    if requested is None and getattr(args, "ppa", False):
+        requested = 3
+    level, level_source = selected_level(project, requested)
     if args.entry_step is not None or args.exit_step is not None:
         if args.entry_step is None or args.exit_step is None:
             raise ValueError("The native entry requires both Router window bounds.")
@@ -465,6 +483,22 @@ def run_public(args):
             route[name] = getattr(args, name)
     engine_options = {"pdk": args.pdk} if getattr(args, "pdk", "auto") != "auto" else {}
     scope = getattr(args, "scope", "all")
+    complete = scope == "all" and not any(getattr(args, flag, False) for flag in (
+        "skip_phase1", "skip_phase2", "skip_phase3", "entry_step", "exit_step", "from_name", "to_name"))
+    physical = route["delivery_target"] in {"ip_hardmacro", "gds", "shippable_gds", "foundry_handoff"}
+    if complete and physical and level:
+        from flow_explore import explore_public
+        return explore_public(project, level=level, level_source=level_source,
+                              flow_args=getattr(args, "public_arguments", ()),
+                              spool=getattr(args, "spool", None))
+
+    def finish(summary):
+        summary.update(ppa_level=level, ppa_level_source=level_source)
+        output = project / "reports/flow_engine.json"
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(summary, indent=2, default=str) + "\n")
+        return 1 if summary.get("fail") else 2 if summary.get("not_measured") else 0
+
     if (scope == "all" and not any(getattr(args, flag, False)
             for flag in ("skip_phase1", "skip_phase2", "skip_phase3"))):
         options = {"route": route, **engine_options}
@@ -472,7 +506,7 @@ def run_public(args):
             if getattr(args, name, None):
                 options[name] = getattr(args, name)
         summary = flow_engine.run(project, **options)
-        return 1 if summary.get("fail") else 2 if summary.get("not_measured") else 0
+        return finish(summary)
     table = flow_engine.read_json(flow_engine.TABLE)
     selected = flow_engine.select_steps(table, route,
         flow_engine.design_features(project, route, table), None, None)
@@ -499,7 +533,7 @@ def run_public(args):
         options["to_name"] = last
     summary = flow_engine.run(project, **options)
 
-    return 1 if summary.get("fail") else 2 if summary.get("not_measured") else 0
+    return finish(summary)
 
 
 if __name__ == "__main__":

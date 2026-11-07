@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 672
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 1 (of 672)
+- **Total programs (excluding helpers / shims):** 676
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 1 (of 676)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 0 |
-| `any` | 671 |
+| `any` | 675 |
 
 ## Alphabetical listing
 
@@ -280,6 +280,10 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow_pdn_current` | any | — | flow_pdn_current |
 | `flow_phase_attribution` | any | — | Describe Router decisions, RTL authorship, and native tool results. |
 | `flow_power` | any | — | Call the existing power-intent tools without initializing the physical chain. |
+| `flow_ppa_comparison` | any | — | Per-field arithmetic ported from _ppa/benchmark.py:score. |
+| `flow_ppa_objective` | any | — | Native PPA comparison, porting _ppa/benchmark.py:score arithmetic. |
+| `flow_ppa_spool` | any | — | Self-contained native trials in the caller's existing job-folder spool. |
+| `flow_ppa_variants` | any | — | Bounded native candidates for public exploration, reusing the PPA kernels. |
 | `flow_safety` | any | — | Invoke the existing diagnostic injection producer and read its measurements. |
 | `flow_security` | any | — | Run supplied security property decks through the existing native formal adapter. |
 | `flow_spare_cells` | any | — | flow_spare_cells |
@@ -724,7 +728,7 @@ _(no programs in this group)_
 
 _(no programs in this group)_
 
-### `any` (671 programs)
+### `any` (675 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `accumulate_synth` — deterministic SOLVER for the CVDP sequential ACCUMULATOR / running-op family:
@@ -980,6 +984,10 @@ _(no programs in this group)_
 - `flow_pdn_current` — flow_pdn_current
 - `flow_phase_attribution` — Describe Router decisions, RTL authorship, and native tool results.
 - `flow_power` — Call the existing power-intent tools without initializing the physical chain.
+- `flow_ppa_comparison` — Per-field arithmetic ported from _ppa/benchmark.py:score.
+- `flow_ppa_objective` — Native PPA comparison, porting _ppa/benchmark.py:score arithmetic.
+- `flow_ppa_spool` — Self-contained native trials in the caller's existing job-folder spool.
+- `flow_ppa_variants` — Bounded native candidates for public exploration, reusing the PPA kernels.
 - `flow_safety` — Invoke the existing diagnostic injection producer and read its measurements.
 - `flow_security` — Run supplied security property decks through the existing native formal adapter.
 - `flow_spare_cells` — flow_spare_cells
