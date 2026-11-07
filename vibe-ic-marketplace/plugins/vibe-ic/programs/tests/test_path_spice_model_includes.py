@@ -63,3 +63,16 @@ def test_native_multiline_subcircuit_ports_and_calls_are_folded_together(tmp_pat
     assert '.subckt pad A Y VDD VSS' in text
     assert ' Xdevice Y A VSS VDD native_fet w=1 l=0.5' in text
     assert pst.device_names(text) == {'native_fet'}
+
+
+def test_nested_calls_keep_the_folded_child_terminal_order(tmp_path):
+    source = put(tmp_path / 'pads.spice',
+                 '.subckt wrapper A Y VDD VSS\n'
+                 'Xnested A Y VDD VSS VSS child\n.ends\n'
+                 '.subckt child A Y VP VSSA VSS\n'
+                 'Xfet Y A VSSA VSS native_fet w=1 l=0.5\n.ends\n')
+    result = pst.fold_subckts([source], {'VDD': 3.3, 'VSS': 0, 'VP': 3.3, 'VSSA': 0},
+                              'VDD', 'VSS', tmp_path / 'folded.spice')
+    text = Path(result['path']).read_text()
+    assert '.subckt child A Y VSS VDD' in text
+    assert 'Xnested A Y VSS VDD child' in text
