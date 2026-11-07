@@ -314,13 +314,14 @@ def _native_top_ports(project: Path, *, rtl: Optional[List[Path]] = None,
                       top: Optional[str] = None) -> Tuple[Optional[str], List[dict], Optional[str]]:
     """Read the authored interface with Yosys when prose supplied no port names."""
     from _cdc_netlist import yosys_script
-    from flow_config import resolve_rtl_inputs
+    from flow_config import resolve_rtl_inputs, design_parameters
 
     try:
         if rtl is None or top is None:
-            files, top = resolve_rtl_inputs(project)
+            files, top, parameters = resolve_rtl_inputs(project)
         else:
             files = rtl
+            parameters = design_parameters(project)
     except (FileNotFoundError, ValueError) as error:
         return None, [], str(error)
     directory = project / "reports/phase2/professional_interface"
@@ -329,7 +330,7 @@ def _native_top_ports(project: Path, *, rtl: Optional[List[Path]] = None,
     output.unlink(missing_ok=True)
     try:
         result = subprocess.run(["yosys", "-Q", "-T", "-p",
-                                 yosys_script(files, top, output)], cwd=project,
+                                 yosys_script(files, top, output, parameters=parameters)], cwd=project,
                                 capture_output=True, text=True, check=False)
     except OSError as error:
         return None, [], str(error)

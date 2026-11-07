@@ -9,7 +9,7 @@ def execute(project, directory, tool):
 
     commands = Commands(directory)
     try:
-        files, top = inputs(project, tool)
+        files, top, parameters = inputs(project, tool)
     except FileNotFoundError as exc:
         return commands.result(detail=str(exc))
     root = project / "phase2/stage1/sim_full_stack"
@@ -20,6 +20,8 @@ def execute(project, directory, tool):
     files, includes = simulation_sources(project, files, top, benches)
 
     def dispatch(argv, run_dir, container, name, timeout):
+        from flow_config import parameterized_command
+        argv = parameterized_command(argv, parameters)
         process = commands.run(argv, cwd=run_dir)
         if process is None:
             raise FileNotFoundError(name)

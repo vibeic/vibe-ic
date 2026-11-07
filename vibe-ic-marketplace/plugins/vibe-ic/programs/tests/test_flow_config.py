@@ -303,7 +303,7 @@ def test_open_l9_top_is_recorded_from_single_authored_rtl_top(project):
     l9_path.write_text(json.dumps(l9))
 
     try:
-        files, top = resolve_rtl_inputs(project)
+        files, top, _ = resolve_rtl_inputs(project)
     except FileNotFoundError as exc:
         files, top = [], str(exc)
 
@@ -706,7 +706,7 @@ def test_root_module_precedes_nested_copy_and_needed_nested_module_survives(proj
     (nested / "unit.v").write_text("module unit; endmodule\n")
     leaf = nested / "leaf.v"
     leaf.write_text("module leaf; endmodule\n")
-    files, top = resolve_rtl_inputs(project)
+    files, top, _ = resolve_rtl_inputs(project)
     assert top == "unit"
     assert files == [rtl / "unit.v", leaf]
     assert not (project / "work").exists()
@@ -720,7 +720,7 @@ def test_resolve_rtl_inputs_treats_null_optional_ldoc_fields_as_absent(project):
     (project / "input").mkdir()
     (project / "input/phase1_prompt.md").write_text("- Top module: `unit`.\n")
 
-    files, top = resolve_rtl_inputs(project)
+    files, top, _ = resolve_rtl_inputs(project)
 
     assert files == [project / "phase2/stage1/rtl/unit.v"]
     assert top == "unit"
@@ -732,7 +732,7 @@ def test_nested_file_with_overlapping_and_unique_modules_is_not_silently_dropped
     nested.mkdir()
     mixed = nested / "mixed.v"
     mixed.write_text("module unit; endmodule\nmodule leaf; endmodule\n")
-    files, _ = resolve_rtl_inputs(project)
+    files, _, _ = resolve_rtl_inputs(project)
     assert mixed in files
 
 
@@ -742,7 +742,7 @@ def test_shared_input_resolver_uses_authored_top_without_config_side_effects(pro
     (project / "input").mkdir()
     (project / "input/phase1_prompt.md").write_text(
         "- Top module: `not_the_authored_top`.\n")
-    files, top = resolve_rtl_inputs(project)
+    files, top, _ = resolve_rtl_inputs(project)
     assert top == "unit"
     assert files == [project / "phase2/stage1/rtl/unit.v"]
     assert json.loads(l9_path.read_text())["top_module_source"]["step"] == "RTL authoring"

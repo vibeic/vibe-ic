@@ -24,7 +24,9 @@ def eqy_script(top: str, rtl: list[Path], netlist: Path, liberty: str,
                liberty_files: Optional[list[Path]] = None,
                model_verilog: Optional[list[Path]] = None,
                timeout: Optional[int] = None,
-               group_all: bool = True) -> str:
+               group_all: bool = True, parameters=None) -> str:
+    from flow_config import native_parameters, parameter_args
+    parameters = native_parameters(synthesis or {}) if parameters is None else parameters
     from lec_run import (fsm_encfile_beside_netlist, fsm_signal_names,
                          _equiv_splitnets)
     encoding = fsm_encfile_beside_netlist(str(netlist))
@@ -45,7 +47,11 @@ def eqy_script(top: str, rtl: list[Path], netlist: Path, liberty: str,
         includes = " ".join('-I ' + str(p) for p in sorted({p.parent for p in rtl}))
         frontend = (f"read_slang --single-unit --top {top}"
                     if synthesis.get('USE_SLANG') else 'read_verilog -sv')
+        if synthesis.get('USE_SLANG'):
+            frontend += " " + " ".join(parameter_args(parameters, "slang"))
         read = f"{frontend} {defines} {includes} {gold}"
+    if parameters and not (synthesis or {}).get("USE_SLANG"):
+        read += "\n" + f"hierarchy -top {top} " + " ".join(parameter_args(parameters, "yosys"))
     libraries = [f"read_liberty -ignore_miss_func {liberty}"] if liberty_files is None else [
         f"read_liberty -ignore_miss_func{' -nooverwrite' if model_verilog else ''} {path}"
         for path in liberty_files]

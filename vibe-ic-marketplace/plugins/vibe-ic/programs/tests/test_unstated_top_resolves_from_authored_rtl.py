@@ -60,7 +60,7 @@ def test_authored_top_replaces_unstated_strategy_and_keeps_input_absence(authore
     l9.update(top_module=None, top_module_extraction_strategy="top_undeclared",
               no_top_module_in_input=True)
     path.write_text(json.dumps(l9))
-    files, top = resolve_rtl_inputs(project)
+    files, top, _ = resolve_rtl_inputs(project)
     assert top == "chip_top"
     assert files == [project / "phase2/stage1/rtl/chip_top.v"]
     resolved = json.loads(path.read_text())
@@ -77,7 +77,7 @@ def test_fresh_consumers_use_authored_top(authored, consumer, monkeypatch):
     # Each consumer starts without another consumer having resolved the field.
     if consumer == "native_inputs":
         from flow_native_adapters import inputs
-        _, top = inputs(project, {})
+        _, top, _ = inputs(project, {})
     elif consumer == "professional_interface":
         from professional_tb_gen import _native_top_ports
         top, ports, reason = _native_top_ports(project)

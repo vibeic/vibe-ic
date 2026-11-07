@@ -70,13 +70,13 @@ class Commands:
 
 
 def inputs(project, tool):
-    from flow_config import resolve_rtl_inputs
+    from flow_config import RTLInputs, resolve_rtl_inputs, design_parameters
     files = [Path(p) if Path(p).is_absolute() else project / p for p in tool.get("rtl", [])]
     top = tool.get("top")
     if files and top:
-        return files, top
-    produced, declared = resolve_rtl_inputs(project)
-    return files or produced, top or declared
+        return RTLInputs(files, top, design_parameters(project))
+    produced, declared, parameters = resolve_rtl_inputs(project)
+    return RTLInputs(files or produced, top or declared, parameters)
 
 
 def cdc(project, directory, tool, commands, *, state=None, config=None):
@@ -85,7 +85,7 @@ def cdc(project, directory, tool, commands, *, state=None, config=None):
     config = config or {}
     implemented = tool.get("adapter") == "implemented_cdc"
     native_top = (config or {}).get("DESIGN_NAME") if implemented else None
-    files, top = ([], native_top) if native_top else inputs(project, tool)
+    files, top, parameters = ([], native_top, {}) if native_top else inputs(project, tool)
     if not top or (not implemented and not files):
         return commands.result(detail="Produced RTL and the declared top module are required.")
     raw, graph = directory / "graph_raw.json", directory / "graph.json"
@@ -169,7 +169,7 @@ def cdc(project, directory, tool, commands, *, state=None, config=None):
             "read_verilog -sv " + _word(netlist), "hierarchy -check -top " + top,
             "flatten", "proc", "opt_clean", "write_json " + _word(raw), ""]))
     else:
-        script.write_text(native.yosys_script(files, top, raw) + "\n")
+        script.write_text(native.yosys_script(files, top, raw, parameters=parameters) + "\n")
     built = commands.run(["yosys", "-s", script])
     if built is None or built.returncode or not raw.is_file():
         return commands.result(reports=[script], detail="Native CDC elaboration did not produce its graph.")
@@ -282,16 +282,20 @@ def simulation_sources(project, files, top, benches):
             list(dict.fromkeys(path.parent for path in [*benches, *selected])))
 
 
-def cocotb_run(directory, tb, files, top, commands, simulator, include_dirs, *, waves=False):
+def cocotb_run(directory, tb, files, top, commands, simulator, include_dirs, *, waves=False, parameters=None):
     import verilator_coverage_measure as coverage
     directory.mkdir()
     makefile = directory / "simulation.mk"
     flags = "" if waves else " ".join(coverage.COVERAGE_INSTRUMENTATION_FLAGS)
+    from flow_config import parameter_args
+    bound = shlex.join(parameter_args(parameters or {},
+        "verilator" if simulator == "verilator" else "iverilog", top)).replace("$", "$$")
     includes = " ".join(str(path.resolve()) for path in include_dirs)
     makefile.write_text(
         f"SIM = {simulator}\nTOPLEVEL_LANG = verilog\n"
         f"VERILOG_SOURCES = {' '.join(str(f.resolve()) for f in files)}\n"
         f"TOPLEVEL = {top}\nMODULE = {tb.stem}\nVERILOG_INCLUDE_DIRS = {includes}\n"
+        f"COMPILE_ARGS += {bound}\n"
         + (f"COMPILE_ARGS += --timing {flags} -Wno-fatal -Wno-lint\n" if simulator == "verilator" else "")
         + ("COMPILE_ARGS += --assert\nVERILATOR_TRACE = 1\nSIM_ARGS += --trace-file "
            + shlex.quote(str(directory.resolve() / "activity.vcd")) + "\n"
@@ -307,7 +311,7 @@ def simulation(project, directory, tool, commands):
     import verilator_coverage_measure as coverage
     from _sim_results_bridge import parse_junit
     from sdf_gate_sim import parse_l10_case_stdout, parse_sim_stdout
-    files, top = inputs(project, tool)
+    files, top, parameters = inputs(project, tool)
     if files:
         from testbench_gen import emit_unit_tbs
         scenarios = {}
@@ -354,6 +358,8 @@ def simulation(project, directory, tool, commands):
 
     def invoke(argv, cwd):
         nonlocal coverage_run
+        from flow_config import parameterized_command
+        argv = parameterized_command(argv, parameters)
         if argv[0] == "verilator":
             argv = [argv[0], *["-I" + str(path) for path in include_dirs
                               if "-I" + str(path) not in argv], *argv[1:]]
@@ -373,13 +379,13 @@ def simulation(project, directory, tool, commands):
         if tb.suffix == ".py":
             if not top or not shutil.which("cocotb-config"):
                 return commands.result(reports=reports, detail="Cocotb and the declared top are required.")
-            functional = cocotb_run(run / "functional", tb, files, top, commands, "icarus", include_dirs)
+            functional = cocotb_run(run / "functional", tb, files, top, commands, "icarus", include_dirs, parameters=parameters)
             report = run / "functional/results.xml"
             summary = parse_junit(report)
             elaborated = (run / "functional/build/sim.vvp").is_file()
             if summary and summary["tests"] > 0 and not summary["skipped"]:
                 failures = summary["failures"] + summary["errors"]
-            completed = cocotb_run(run / "coverage", tb, files, top, commands, "verilator", include_dirs)
+            completed = cocotb_run(run / "coverage", tb, files, top, commands, "verilator", include_dirs, parameters=parameters)
             fallback = parse_junit(run / "coverage/results.xml")
             if not elaborated and fallback and fallback["tests"] > 0:
                 simulator, functional = "Verilator", completed
@@ -395,7 +401,9 @@ def simulation(project, directory, tool, commands):
                 dats.append(data)
         else:
             executable = run / "functional.vvp"
+            from flow_config import parameter_args
             compiled = commands.run(["iverilog", "-g2012", "-s", coverage._tb_top_module(tb),
+                *parameter_args(parameters, "iverilog", coverage._tb_top_module(tb)),
                 "-o", executable, *["-I" + str(path) for path in include_dirs], *files, tb])
             elaborated = compiled is not None and compiled.returncode == 0
             functional = (commands.run(["vvp", executable], cwd=tb.parent)
@@ -473,6 +481,9 @@ def formal(project, directory, tool, commands):
     from formal_harness_gen import _resolve_top
 
     authored = {}
+    from flow_config import design_parameters
+    from formal_property_run import bind_sby_parameters
+    parameters = design_parameters(project)
     declared_top = _resolve_top([], tool.get("top"), project)
     configured = tool.get("properties", [])
     paths = [Path(p) if Path(p).is_absolute() else project / p for p in configured]
@@ -481,7 +492,7 @@ def formal(project, directory, tool, commands):
     if not paths:
         from formal_harness_gen import generate
         from formal_property_run import emit_invariant_sby, parse_harness_pragmas
-        files, top = inputs(project, tool)
+        files, top, parameters = inputs(project, tool)
         authored = generate(project=project, top=top, rtl=files)
         report = directory / "formal_authoring.json"
         report.write_text(json.dumps(authored, indent=2) + "\n")
@@ -584,10 +595,12 @@ def formal(project, directory, tool, commands):
         _ensure_expert_observers_bound(source, source.parent,
                                       harness_text=model_text)
         native_source = source
-        body = source.read_text()
+        body = bind_sby_parameters(source.read_text(), parameters)
         if "$global_clock" in model_text and not re.search(r"(?m)^(?:\w+:[ \t]*)?multiclock[ \t]+", body):
+            body = body.replace("[options]\n", "[options]\nmulticlock on\n", 1)
+        if body != source.read_text():
             native_source = directory / f"native_input_{index + 1}.sby"
-            native_source.write_text(body.replace("[options]\n", "[options]\nmulticlock on\n", 1))
+            native_source.write_text(body)
             reports.append(native_source)
         listing = commands.run(["sby", "--dumptasks", native_source], cwd=source.parent)
         if listing is None:

@@ -22,7 +22,7 @@ def test_system_row_runs_native_icarus(tmp_path, monkeypatch, code, output, expe
     bench = tmp_path / "phase2/stage1/sim_full_stack/tb_system.v"
     bench.parent.mkdir(parents=True)
     bench.write_text("module tb_system; core dut(); endmodule\n")
-    monkeypatch.setattr(adapters, "inputs", lambda *args: ([rtl], "core"))
+    monkeypatch.setattr(adapters, "inputs", lambda *args: ([rtl], "core", {}))
     monkeypatch.setattr(adapters, "simulation_sources", lambda *args: ([rtl], []))
     calls = []
 
