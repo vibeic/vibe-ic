@@ -1086,7 +1086,8 @@ def test_chip_eqy_proves_fsm_behavior_across_native_state_encodings(tmp_path, en
 
 @pytest.mark.parametrize("different", [False, True])
 @pytest.mark.parametrize("gated_clock", [False, True])
-def test_chip_eqy_keeps_gold_constraints_on_internal_cut_inputs(tmp_path, different, gated_clock):
+@pytest.mark.parametrize("qualifier", ["and", "mux"])
+def test_chip_eqy_keeps_gold_constraints_on_internal_cut_inputs(tmp_path, different, gated_clock, qualifier):
     if not shutil.which("eqy"):
         pytest.skip("Native EQY is required")
     reset_docs(tmp_path)
@@ -1094,8 +1095,9 @@ def test_chip_eqy_keeps_gold_constraints_on_internal_cut_inputs(tmp_path, differ
     wrapper = ("module unit(input clk,rst_n,data,output result);wire ic,ir,id,oq;\n"
         "INPAD pc(.PAD(clk),.Y(ic));INPAD pr(.PAD(rst_n),.Y(ir));\n"
         "INPAD pd(.PAD(data),.Y(id));\nOUTPAD po(.A(oq),.PAD(result));\n")
+    expression = "rst_n & data" if qualifier == "and" else "rst_n ? data : 1'b0"
     gold.write_text(wrapper + "core u_core(ic,ir,id,oq);endmodule\n"
-        "module core(input clk,rst_n,data,output reg tail);reg q;wire qualifier=rst_n & data;\n"
+        f"module core(input clk,rst_n,data,output reg tail);reg q;wire qualifier={expression};\n"
         + ("wire gclk=clk & (rst_n | data);\n" if gated_clock else "")
         + f"always @(posedge {'gclk' if gated_clock else 'clk'}) if(!rst_n) q<=0;else q<=qualifier;\n"
         + f"always @(posedge {'gclk' if gated_clock else 'clk'}) tail<=q;endmodule\n")
