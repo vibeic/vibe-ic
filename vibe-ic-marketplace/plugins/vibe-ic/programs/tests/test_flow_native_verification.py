@@ -1097,13 +1097,14 @@ def test_chip_eqy_keeps_gold_constraints_on_internal_cut_inputs(tmp_path, differ
         "INPAD pd(.PAD(data),.Y(id));\nOUTPAD po(.A(oq),.PAD(result));\n")
     expression = "rst_n & data" if qualifier == "and" else "rst_n ? data : 1'b0"
     gold.write_text(wrapper + "core u_core(ic,ir,id,oq);endmodule\n"
-        f"module core(input clk,rst_n,data,output reg tail);reg q;wire qualifier={expression};\n"
+        f"module core(input clk,rst_n,data,output result);reg q,tail;wire qualifier={expression};\n"
         + ("wire gclk=clk & (rst_n | data);\n" if gated_clock else "")
         + f"always @(posedge {'gclk' if gated_clock else 'clk'}) if(!rst_n) q<=0;else q<=qualifier;\n"
-        + f"always @(posedge {'gclk' if gated_clock else 'clk'}) tail<=q;endmodule\n")
+        + f"always @(posedge {'gclk' if gated_clock else 'clk'}) tail<=q;\n"
+        + "assign result=tail^qualifier;endmodule\n")
     clock = "\\u_core.gclk " if gated_clock else "ic"
     gate.write_text(wrapper + "wire \\u_core.qualifier ;reg \\u_core.q ,\\u_core.tail ;\n"
-        "assign \\u_core.qualifier =ir & id;assign oq=\\u_core.tail ;\n"
+        "assign \\u_core.qualifier =ir & id;assign oq=\\u_core.tail ^\\u_core.qualifier ;\n"
         + ("wire \\u_core.gclk ;assign \\u_core.gclk =ic & (ir | id);\n" if gated_clock else "")
         + f"always @(posedge {clock}) \\u_core.q <={'~' if different else ''}\\u_core.qualifier ;\n"
         + f"always @(posedge {clock}) \\u_core.tail <=\\u_core.q ;endmodule\n")
