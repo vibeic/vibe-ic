@@ -1137,9 +1137,7 @@
           "line": 471
         },
         "unit": "count",
-        "when": "ic",
-        "enabled_by": "KLAYOUT_DENSITY_RUNSET",
-        "enabled_default": true
+        "when": "ic"
       }
     ],
     "seal_ring_and_die_identification": [
@@ -1382,6 +1380,7 @@
         "steps": [
           "KLayout.Filler",
           "KLayout.Density",
+          "VibeIC.MagicDensity",
           "VibeIC.DensityTopUp"
         ],
         "imports": [

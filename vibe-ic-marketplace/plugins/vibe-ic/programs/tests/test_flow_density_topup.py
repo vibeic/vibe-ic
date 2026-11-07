@@ -23,8 +23,8 @@ REPORT = "Stepped area density results (total tiles = 1):\nFOM Density: 0.400\n"
 
 @pytest.fixture
 def driver(tmp_path):
-    helpers = tmp_path / "helpers"
-    helpers.mkdir()
+    helpers = tmp_path / "native/libs.tech/magic"
+    helpers.mkdir(parents=True)
     (helpers / "generate_fill.py").write_text(
         "import gzip, pathlib, sys\n"
         "assert len(sys.argv) == 3 and sys.argv[2] == '-dist'\n"
@@ -39,7 +39,7 @@ def driver(tmp_path):
     work.mkdir()
 
     class Driver:
-        config = {"MAGICRC": str(helpers / "native.magicrc"), "DESIGN_NAME": "unit",
+        config = {"MAGICRC": str(tmp_path / "pad-extraction.magicrc"), "DESIGN_NAME": "unit",
                   "PDK": "native", "PDK_ROOT": str(tmp_path), "KLAYOUT_DENSITY_RUNSET": None}
         step_dir = str(work)
         calls = []
@@ -63,16 +63,19 @@ def driver(tmp_path):
             else:
                 result = subprocess.run(command, env=env, capture_output=True, text=True, **kwargs)
                 Path(log_to).write_text(result.stdout + result.stderr)
-                result.check_returncode()
+                if kwargs.get("check", True):
+                    result.check_returncode()
+                return {"returncode": result.returncode}
 
-    def check_report(report):
+    def check_report(report, exit_code=0):
         (helpers / "check_density.py").write_text(
             "import pathlib, sys\n"
             "assert len(sys.argv) == 2\n"
             "source = pathlib.Path(sys.argv[1])\n"
             "assert source.name == 'unit.gds' and not source.is_absolute()\n"
-            "assert not source.is_symlink() and source.read_bytes() == b'layoutpattern'\n"
-            f"print({report!r})\n")
+            "assert source.read_bytes() == (b'layout' if source.is_symlink() else b'layoutpattern')\n"
+            f"print({report!r})\n"
+            f"sys.exit({exit_code})\n")
 
     check_report(REPORT + "Done!\n")
     state = State({DesignFormat.GDS: NativePath(str(source))}, metrics={density.METRIC: 0})
@@ -104,13 +107,13 @@ def test_magic_clean_report_produces_magic_zero(driver):
     assert metrics == {"magic__density_error__count": 0}
 
 
-@pytest.mark.parametrize("missing", ["MAGICRC", "check_density.py"])
+@pytest.mark.parametrize("missing", ["PDK_ROOT", "check_density.py"])
 def test_no_density_backend_remains_unmeasured(driver, missing):
     step, state, _ = driver
-    if missing == "MAGICRC":
-        step.config = {**step.config, "MAGICRC": None}
+    if missing == "PDK_ROOT":
+        step.config = {**step.config, "PDK_ROOT": None}
     else:
-        (Path(step.config["MAGICRC"]).parent / missing).unlink()
+        (Path(step.config["PDK_ROOT"]) / step.config["PDK"] / "libs.tech/magic" / missing).unlink()
     with pytest.raises(StepException, match="no configured native density"):
         density.DensityTopUp.run_magic(step, state)
 
@@ -172,7 +175,7 @@ def test_native_positive_without_fill_engine_preserves_original_failure(driver, 
 def test_native_positive_without_deck_or_helpers_still_fails(driver):
     step, state, _ = driver
     state = State(state, metrics={density.METRIC: 2})
-    step.config = {**step.config, "MAGICRC": None}
+    step.config = {**step.config, "PDK_ROOT": None}
     with pytest.raises(StepError, match="density violations remain") as failure:
         density.DensityTopUp.run(step, state)
     assert not isinstance(failure.value, StepException)
@@ -220,10 +223,65 @@ def test_density_recipe_measures_actual_backend_and_dfm_observes_it(tmp_path, ba
     assert observations[0]["values"] == metrics
 
 
-def test_native_density_check_applies_only_to_configured_native_deck():
+def test_native_density_check_applies_to_ic_without_a_configured_deck():
     row = next(row for row in engine.read_json(engine.TABLE)["steps"]
                if row["name"] == "metal_density_fill")
-    assert engine.measure(row["checks"], {}, {"KLAYOUT_DENSITY_RUNSET": None}, {"ic": True}) == []
+    assert "enabled_by" not in row["checks"][0]
+    assert "enabled_default" not in row["checks"][0]
+    assert engine.measure(row["checks"], {}, {"KLAYOUT_DENSITY_RUNSET": None}, {"ic": True})[0]["status"] == "NOT_MEASURED"
     assert engine.measure(row["checks"], {}, {}, {"ic": True})[0]["status"] == "NOT_MEASURED"
     measured = engine.measure(row["checks"], {}, {"KLAYOUT_DENSITY_RUNSET": "native.drc"}, {"ic": True})
     assert measured[0]["status"] == "NOT_MEASURED"
+
+
+def test_magic_measurement_checks_current_gds_despite_carried_klayout_zero(driver):
+    step, state, report = driver
+    report(REPORT + "***Error: native conductor rule\nDone!\n")
+    views, metrics = density.MagicDensity.run(step, state)
+    assert views == {} and metrics == {density.MAGIC_METRIC: 1}
+    assert state.metrics[density.METRIC] == 0
+    assert len(step.calls) == 1
+    assert (Path(step.step_dir) / "density.log").is_file()
+
+
+def test_magic_measurement_preserves_configured_klayout_producer(driver):
+    step, state, _ = driver
+    step.config = {**step.config, "KLAYOUT_DENSITY_RUNSET": "native.drc", "PDK_ROOT": None}
+    assert density.MagicDensity.run(step, state) == ({}, {})
+    assert step.calls == []
+
+
+def test_magic_measurement_missing_native_helper_is_unmeasured(driver):
+    step, state, _ = driver
+    step.config = {**step.config, "PDK_ROOT": None}
+    with pytest.raises(StepException, match="no configured native density"):
+        density.MagicDensity.run(step, state)
+    assert step.calls == []
+
+
+def test_magic_measurement_failed_native_process_is_unmeasured(driver):
+    step, state, report = driver
+    report(REPORT + "Done!\n", exit_code=1)
+    with pytest.raises(StepException, match="incomplete or unmeasured"):
+        density.MagicDensity.run(step, state)
+
+
+@pytest.mark.parametrize("count", [0, 2])
+def test_topup_uses_fresh_magic_count_without_klayout_runset(driver, count):
+    step, state, _ = driver
+    state = State(state, metrics={density.METRIC: 9, density.MAGIC_METRIC: count})
+    views, metrics = density.DensityTopUp.run(step, state)
+    if count == 0:
+        assert (views, metrics) == ({}, {})
+        assert step.calls == []
+    else:
+        assert metrics == {density.MAGIC_METRIC: 0}
+        assert len(step.calls) == 3
+
+
+def test_configured_klayout_producer_missing_count_cannot_use_magic_count(driver):
+    step, state, _ = driver
+    state = State(state, metrics={density.MAGIC_METRIC: 0})
+    step.config = {**step.config, "KLAYOUT_DENSITY_RUNSET": "native.drc"}
+    with pytest.raises(StepException, match="has not produced its native count"):
+        density.DensityTopUp.run(step, state)

@@ -4134,6 +4134,7 @@
               "steps": [
                 "KLayout.Filler",
                 "KLayout.Density",
+                "VibeIC.MagicDensity",
                 "VibeIC.DensityTopUp"
               ],
               "imports": [
@@ -4164,9 +4165,7 @@
             "line": 471
           },
           "unit": "count",
-          "when": "ic",
-          "enabled_by": "KLAYOUT_DENSITY_RUNSET",
-          "enabled_default": true
+          "when": "ic"
         }
       ],
       "legacy_id": {
