@@ -433,9 +433,9 @@ def test_prepare_writes_usable_chip_inputs_and_preserves_pdn(inputs):
     assert ".A(_core_port_3)" in wrapper
     assert result["FALLBACK_SDC"] == result["PNR_SDC_FILE"] == result["SIGNOFF_SDC_FILE"]
     sdc = Path(result["PNR_SDC_FILE"]).read_text()
-    assert "-period 24" in sdc
-    assert "set_input_delay 4.8" in sdc
-    assert "set_output_delay 4.8" in sdc
+    assert "-period [sta::time_sta_ui [expr {24 * 1e-9}]]" in sdc
+    assert "set_input_delay [sta::time_sta_ui [expr {4.8 * 1e-9}]]" in sdc
+    assert "set_output_delay [sta::time_sta_ui [expr {4.8 * 1e-9}]]" in sdc
     assert "all_inputs" not in sdc and "all_outputs" not in sdc
     assert r"data\[5\]" in sdc
     report = json.loads((project / "work/flow/chip/preparation.json").read_text())
@@ -504,8 +504,8 @@ def test_bidirectional_pad_terminal_does_not_change_the_logical_input_budget(inp
     report = json.loads((project / "work/flow/chip/preparation.json").read_text())
     assert next(port for port in report["ports"] if port["name"] == "data")["direction"] == "input"
     sdc = Path(result["PNR_SDC_FILE"]).read_text()
-    assert "set_input_delay 4.8" in sdc and r"data\[5\]" in sdc
-    assert "set_output_delay 4.8" in sdc
+    assert "set_input_delay [sta::time_sta_ui [expr {4.8 * 1e-9}]]" in sdc and r"data\[5\]" in sdc
+    assert "set_output_delay [sta::time_sta_ui [expr {4.8 * 1e-9}]]" in sdc
 
 
 def test_native_bidirectional_receivers_pass_the_normal_verilator_step(tmp_path, native_inputs):
@@ -839,12 +839,12 @@ def test_native_timing_environment_and_driving_cells_reach_sdc(inputs):
     text = Path(result["PNR_SDC_FILE"]).read_text()
     assert "set_timing_derate -late 1.05" in text
     assert "set_timing_derate -early 0.949999" in text
-    assert "set_clock_uncertainty 0.25" in text
-    assert "set_clock_transition 0.15" in text
-    assert "set_max_transition 3 [current_design]" in text
-    assert "set_max_capacitance 0.2 $_chip_core_pins" in text
-    assert "set_max_capacitance 0.2 [current_design]" not in text
-    assert "set_load 0.01" in text
+    assert "set_clock_uncertainty [sta::time_sta_ui [expr {0.25 * 1e-9}]]" in text
+    assert "set_clock_transition [sta::time_sta_ui [expr {0.15 * 1e-9}]]" in text
+    assert "set_max_transition [sta::time_sta_ui [expr {3 * 1e-9}]] [current_design]" in text
+    assert "set_max_capacitance [sta::capacitance_sta_ui [expr {0.2 * 1e-12}]] $_chip_core_pins" in text
+    assert "set_max_capacitance [sta::capacitance_sta_ui [expr {0.2 * 1e-12}]] [current_design]" not in text
+    assert "set_load [sta::capacitance_sta_ui [expr {10 * 1e-15}]]" in text
     assert "set_driving_cell -lib_cell data_driver -pin Y" in text
     assert "set_driving_cell -lib_cell clock_driver -pin Z" in text
     assert "_chip_pad_max" not in text and "_chip_pad_min" not in text
@@ -949,6 +949,7 @@ def test_pad_table_coverage_does_not_supply_external_edges(inputs, tmp_path, dec
     result = chip.prepare(project, config)
     script = tmp_path / "read.sdc.tcl"
     script.write_text('''namespace eval sta {
+proc time_sta_ui seconds {expr {$seconds * 1e9}}
 proc top_instance {} {return INSTANCE}
 proc find_pin {name} {return PIN}
 proc pin_sim_logic_value {pin} {return X}
@@ -972,8 +973,11 @@ proc get_libs args {
     completed = subprocess.run([*command, str(script)], capture_output=True, text=True, check=True)
     assert "DRIVER -lib_cell data_driver -pin Y PORTS" in completed.stdout
     assert "DRIVER -lib_cell clock_driver -pin Z PORTS" in completed.stdout
-    assert ([line for line in completed.stdout.splitlines() if line.startswith("EDGE ")]
-            == ([f"EDGE {declared} PORTS"] if declared else []))
+    edges = [line.split() for line in completed.stdout.splitlines() if line.startswith("EDGE ")]
+    assert len(edges) == int(declared is not None)
+    if declared:
+        assert edges[0][2] == "PORTS"
+        assert float(edges[0][1]) == pytest.approx(float(declared))
 
 
 def test_undeclared_edge_does_not_require_pad_characterization_coverage(inputs):
@@ -984,7 +988,10 @@ def test_undeclared_edge_does_not_require_pad_characterization_coverage(inputs):
 
 
 @pytest.mark.parametrize("clock_driver", [None, "clock_driver/Z"])
-def test_native_sta_consumes_resolved_clock_and_data_drivers(inputs, tmp_path, clock_driver):
+@pytest.mark.parametrize("time_unit,cap_unit,scale", [("ns", "pf", 1), ("ps", "ff", 1000)])
+def test_native_sta_consumes_resolved_clock_and_data_drivers(inputs, tmp_path, clock_driver,
+                                                            time_unit, cap_unit, scale):
+    import re
     import shutil
     import subprocess
 
@@ -997,25 +1004,25 @@ def test_native_sta_consumes_resolved_clock_and_data_drivers(inputs, tmp_path, c
     models = []
     for master, pin in (("data_driver", "Y"), ("clock_driver", "Z")):
         models.append(f'''cell ({master}) {{
-          pin (A) {{ direction : input; capacitance : 0.01; }}
+          pin (A) {{ direction : input; capacitance : {0.01 * scale}; }}
           pin ({pin}) {{ direction : output; function : "A";
             timing () {{ related_pin : "A"; timing_sense : positive_unate;
-              cell_rise (scalar) {{ values ("0.1"); }}
-              cell_fall (scalar) {{ values ("0.1"); }}
-              rise_transition (scalar) {{ values ("0.1"); }}
-              fall_transition (scalar) {{ values ("0.1"); }}
+              cell_rise (scalar) {{ values ("{0.1 * scale}"); }}
+              cell_fall (scalar) {{ values ("{0.1 * scale}"); }}
+              rise_transition (scalar) {{ values ("{0.1 * scale}"); }}
+              fall_transition (scalar) {{ values ("{0.1 * scale}"); }}
             }}
           }}
         }}''')
     library = _write(tmp_path / "drivers.lib", '''library (drivers) {
-      delay_model : table_lookup; time_unit : "1ns";
-      capacitive_load_unit (1, pf);
+      delay_model : table_lookup; time_unit : "1TIME_UNIT";
+      capacitive_load_unit (1, CAP_UNIT);
       input_threshold_pct_rise : 50; input_threshold_pct_fall : 50;
       output_threshold_pct_rise : 50; output_threshold_pct_fall : 50;
       slew_lower_threshold_pct_rise : 20; slew_lower_threshold_pct_fall : 20;
       slew_upper_threshold_pct_rise : 80; slew_upper_threshold_pct_fall : 80;
       nom_process : 1; nom_voltage : 1.8; nom_temperature : 25;
-    ''' + "\n".join(models) + "\n}\n")
+    '''.replace("TIME_UNIT", time_unit).replace("CAP_UNIT", cap_unit) + "\n".join(models) + "\n}\n")
     design = _write(tmp_path / "netlist.v", "module logic(input clk, reset, input [5:2] data, "
                     "output result); assign result=reset; endmodule\n")
     sdc = _write(tmp_path / "inputs.sdc", chip._sdc(project, {**native, **config}, ports))
@@ -1024,6 +1031,7 @@ def test_native_sta_consumes_resolved_clock_and_data_drivers(inputs, tmp_path, c
 read_verilog {{{design}}}
 link_design logic
 read_sdc {{{sdc}}}
+puts "TIME_SCALE [sta::unit_scale time]"
 write_sdc {{{output}}}
 exit
 ''')
@@ -1035,7 +1043,9 @@ exit
     assert any("-lib_cell data_driver" in line and "reset" in line for line in drivers), written
     selected = "clock_driver" if clock_driver else "data_driver"
     assert any(f"-lib_cell {selected}" in line and "clk" in line for line in drivers), written
-    assert "set_clock_transition" in written and "0.15" in written
+    time_scale = float(re.search(r"TIME_SCALE (\S+)", completed.stdout)[1])
+    transition = float(re.search(r"^set_clock_transition ([\d.eE+-]+)", written, re.M)[1])
+    assert transition * time_scale == pytest.approx(.15e-9, rel=1e-6, abs=1e-18)
     assert "set_input_transition" not in written
 
 
@@ -1142,8 +1152,8 @@ def test_undeclared_io_delay_uses_resolved_native_default(inputs, missing_docume
     native["IO_DELAY_CONSTRAINT"] = 30
     result = chip.prepare(project, config)
     text = Path(result["PNR_SDC_FILE"]).read_text()
-    assert "set_input_delay 7.2" in text
-    assert "set_output_delay 7.2" in text
+    assert "set_input_delay [sta::time_sta_ui [expr {7.2 * 1e-9}]]" in text
+    assert "set_output_delay [sta::time_sta_ui [expr {7.2 * 1e-9}]]" in text
 
 
 def test_existing_sdc_keeps_clock_names_exceptions_and_budgets(inputs):
@@ -1170,8 +1180,8 @@ def test_multiple_clock_delays_are_additive(inputs):
                      "indexed": False, "msb": 0, "lsb": 0}]
     text = chip._sdc(project, config, ports)
     assert "-clock core_clock_0 -add_delay" not in text
-    assert "set_input_delay 4.8 -clock core_clock_1 -add_delay" in text
-    assert "set_output_delay 4.8 -clock core_clock_1 -add_delay" in text
+    assert "set_input_delay [sta::time_sta_ui [expr {4.8 * 1e-9}]] -clock core_clock_1 -add_delay" in text
+    assert "set_output_delay [sta::time_sta_ui [expr {4.8 * 1e-9}]] -clock core_clock_1 -add_delay" in text
 
 
 @pytest.mark.parametrize("existing_sdc", [False, True])
@@ -1319,7 +1329,7 @@ def test_escaped_core_identifiers_have_legal_verilog_names(inputs):
 @pytest.mark.parametrize("period_field", ["period_ns", "freq_mhz"])
 @pytest.mark.parametrize("clock_count", [1, 2])
 def test_each_primary_clock_keeps_its_declared_period_and_io_budget(inputs, override, period_field, clock_count):
-    from sdc_constraints import create_clocks_in_text
+    import re
 
     project, config, _, ports, _ = inputs
     config["CLOCK_PORT"] = ["clk", "other_clock"][:clock_count]
@@ -1337,12 +1347,13 @@ def test_each_primary_clock_keeps_its_declared_period_and_io_budget(inputs, over
         document.setdefault("fields", {})["clock_target"] = {"period_ns": override}
         path.write_text(json.dumps(document))
     text = chip._sdc(project, config, ports)
-    periods = [clock["period_ns"] for clock in create_clocks_in_text(text)]
+    periods = [float(value) for value in re.findall(
+        r"create_clock -name \S+ -period \[sta::time_sta_ui \[expr \{([\d.eE+-]+) \* 1e-9\}\]\]", text)]
     assert periods == ([override or 20] if clock_count == 1 else [20, 50])
     budget = ((override or 20) if clock_count == 1 else 50) * 0.2
     clock = f"core_clock_{clock_count - 1}" + (" -add_delay" if clock_count == 2 else "")
-    assert f"set_input_delay {budget:g} -clock {clock}" in text
-    assert f"set_output_delay {budget:g} -clock {clock}" in text
+    assert f"set_input_delay [sta::time_sta_ui [expr {{{budget:g} * 1e-9}}]] -clock {clock}" in text
+    assert f"set_output_delay [sta::time_sta_ui [expr {{{budget:g} * 1e-9}}]] -clock {clock}" in text
 
 
 @pytest.mark.parametrize("core_overlap", [False, True])

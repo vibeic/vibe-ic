@@ -13,14 +13,14 @@ and the contribution guides for extending it.
 | | |
 |---|---|
 | Plugins in this marketplace | **1** — [`plugins/vibe-ic`](plugins/vibe-ic/) |
-| Plugin version | **1.40.10** |
+| Plugin version | **1.40.14** |
 | Deterministic programs | **782** top level (`plugins/vibe-ic/programs/*.py`), of which **672** are catalogued in [`INDEX.md`](plugins/vibe-ic/programs/INDEX.md) |
 | Skills | **60** (`plugins/vibe-ic/skills/*/SKILL.md`, each with a `compliance.yaml`) |
 | Slash commands | **7** (`plugins/vibe-ic/commands/*.md`) |
 | Agents | **9** (`plugins/vibe-ic/agents/*.md`) |
 | MCP-EDA tools | **56** (48 EDA + 7 lab-device + 1 health) |
 | Executable flow | [`flow/steps.json`](plugins/vibe-ic/flow/steps.json), including conditional IC/IP, analog and hardware paths |
-| Test files | **2914** under `plugins/vibe-ic/programs/tests/` + **49** under `plugins/vibe-ic/mcp-eda/test/` (`test_*.py`, any depth) |
+| Test files | **2917** under `plugins/vibe-ic/programs/tests/` + **49** under `plugins/vibe-ic/mcp-eda/test/` (`test_*.py`, any depth) |
 | License | Apache-2.0 |
 
 Every count above is generated, not typed: `python3 plugins/vibe-ic/programs/gen_program_inventory.py` writes [`PROGRAM_INVENTORY.json`](plugins/vibe-ic/programs/PROGRAM_INVENTORY.json), and `--check` fails when a stated count drifts from the tree. Several of these populations are simultaneously true and count different things — the artefact carries a `definition` for each, so quote the key, not a bare number.
@@ -406,7 +406,7 @@ vibe-ic-marketplace/
 ├── templates/partner-plugin-skeleton/
 ├── community/backlogs/
 └── plugins/
-    └── vibe-ic/                         ← the single plugin (v1.40.10)
+    └── vibe-ic/                         ← the single plugin (v1.40.14)
         ├── .claude-plugin/plugin.json
         ├── flow/
         │   ├── steps.json, native_limits.json ← executable rows and original limits
@@ -419,11 +419,11 @@ vibe-ic-marketplace/
         │       ├── ic_expert_L1..L9.md  ← prose lessons per layer
         │       └── manifests/L1_manifest.json  ← 40-fact Q-bank (PoC)
         ├── skills/                      ← 70 skills, each + compliance.yaml
-        ├── programs/                    ← 3830 *.py at any depth (782 top level)
+        ├── programs/                    ← 3833 *.py at any depth (782 top level)
         │   ├── vibe_ic_one_shot_runner.py ← public entry
         │   ├── flow_engine.py, flow_native_adapters.py
         │   ├── pdk_registry.json, ic_class_registry.json
-        │   └── tests/                   ← 2914 test files
+        │   └── tests/                   ← 2917 test files
         ├── mcp-eda/                     ← bundled MCP server, 56 tools
         ├── ip-catalog/                  ← reusable open-source IP index
         └── hooks/
