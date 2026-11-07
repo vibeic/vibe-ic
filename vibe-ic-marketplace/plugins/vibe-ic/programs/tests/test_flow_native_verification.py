@@ -2260,6 +2260,7 @@ def test_python_suite_without_clock_setting_is_not_native_clock_replay(tmp_path)
     ("decoy", 25, "pass", "NOT_MEASURED"),
     ("split_class", 25, "pass", "NOT_MEASURED"),
     ("second_clock", 25, "pass", "NOT_MEASURED"),
+    ("shadow", 25, "pass", "NOT_MEASURED"),
 ])
 def test_manual_cocotb_driver_uses_its_declared_sdc_clock(tmp_path, style, period, outcome, expected):
     if not all(shutil.which(name) for name in ("iverilog", "vvp", "cocotb-config")):
@@ -2278,13 +2279,14 @@ def test_manual_cocotb_driver_uses_its_declared_sdc_clock(tmp_path, style, perio
     delay = "3" if style in {"decoy", "split_class"} else "HALF_NS"
     unrelated = ("class Unrelated:\n    async def wait(self):\n"
                  "        await Timer(HALF_NS, unit='ns')\n") if style == "split_class" else ""
+    local = "        HALF_NS=3\n" if style == "shadow" else ""
     expected_ps = round((period if style == "manual" else 6) * 1000)
     action = 'pytest.skip("unfilled reference")' if outcome == "skip" else "assert int(dut.y.value)==0"
     bench = project / "phase2/stage1/sim/tb_unit.py"
     bench.write_text("import cocotb\nimport pytest\nfrom cocotb.triggers import Timer\n"
         "from cocotb.utils import get_sim_time\nHALF_NS=3\n" + unrelated
         + "class PinDriver:\n    def __init__(self, dut):\n        self.dut=dut\n"
-        "    async def cycle(self):\n        self.dut.clk.value=0\n"
+        "    async def cycle(self):\n" + local + "        self.dut.clk.value=0\n"
         f"        await Timer({delay}, unit='ns')\n        self.dut.clk.value=1\n"
         f"        await Timer({delay}-0.5, unit='ns')\n        await Timer(0.5, unit='ns')\n"
         "        self.dut.clk.value=0\n"
