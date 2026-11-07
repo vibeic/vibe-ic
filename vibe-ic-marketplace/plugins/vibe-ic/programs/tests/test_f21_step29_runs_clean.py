@@ -129,7 +129,7 @@ def test_without_the_chip_top_record_nothing_is_bound_by_name(tmp_path):
         sgs.bind_dut_module(same_names, 'core', 'dut', ROUTED)
 
 
-@pytest.mark.parametrize('change', ['none', 'other_core', 'wrong_chip', 'missing_pad'])
+@pytest.mark.parametrize('change', ['none', 'other_core', 'wrong_chip', 'missing_pad', 'stale_legacy'])
 def test_native_preparation_traces_existing_core_bench(tmp_path, change):
     project = _project(tmp_path, record=False)
     write(project / 'phase2/stage1/rtl/core.v',
@@ -143,7 +143,10 @@ def test_native_preparation_traces_existing_core_bench(tmp_path, change):
     if change == 'missing_pad':
         pads.pop('u_pad_clk')
     put(project / 'work/flow/chip/preparation.json', {'pads': pads})
-    if change != 'none':
+    if change == 'stale_legacy':
+        put(project / sgs.CHIP_TOP_RECORD_REL,
+            {**RECORD, 'chip_top_module': 'obsolete_chip', 'core_module': 'obsolete_core'})
+    if change not in {'none', 'stale_legacy'}:
         with pytest.raises(ValueError):
             sgs.declared_dut_binding(project, 'another_core' if change == 'other_core' else 'core', ROUTED)
     else:
@@ -152,7 +155,7 @@ def test_native_preparation_traces_existing_core_bench(tmp_path, change):
         bound, _ = sgs.bind_dut_module(TB, 'core', 'dut', ROUTED, declared)
         assert 'chip_top dut (.clk(clk), .x(x), .p(p));' in bound
         assert declared['port_map'] == {'clk_i': 'clk', 'x_i': 'x', 'p_o': 'p'}
-    assert not (project / sgs.CHIP_TOP_RECORD_REL).exists()
+    assert (project / sgs.CHIP_TOP_RECORD_REL).exists() == (change == 'stale_legacy')
 
 
 @pytest.mark.parametrize('edit,code', [
