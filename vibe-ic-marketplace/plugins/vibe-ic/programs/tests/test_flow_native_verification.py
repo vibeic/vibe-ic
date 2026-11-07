@@ -1426,6 +1426,21 @@ def test_gls_names_missing_native_inputs(tmp_path):
     assert not result["ran"] and "State netlist" in result["detail"]
 
 
+@pytest.mark.parametrize("corner", ["unknown_tt_025C_1v80", "typical", "default"])
+def test_gls_refuses_unknown_sdf_corner_prefix(tmp_path, corner):
+    if not all(shutil.which(tool) for tool in ("iverilog", "vvp")):
+        pytest.skip("Native Icarus is required")
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config = gls_fixture(project)
+    state["sdf"] = {corner: next(iter(state["sdf"].values()))}
+    result = gls(project, directory, {"corners": "all"}, Commands(directory), state=state, config=config)
+    row = result["native_steps"][0]
+    assert row["status"] == "NOT_MEASURED", result
+    assert not row["ran"] and corner in row["detail"], row
+    assert "gls_failures" not in result["metrics"], result
+
+
 @pytest.mark.parametrize("corner,delay", [("min_ff_025C_1v80", 1),
                                         ("nom_tt_025C_1v80", 2),
                                         ("max_ss_025C_1v80", 3)])
