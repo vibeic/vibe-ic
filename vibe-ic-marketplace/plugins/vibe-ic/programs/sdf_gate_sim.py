@@ -2144,6 +2144,36 @@ def declared_sdc_clocks(sdc: Path, sdf_texts: List[str]) -> Dict[str, object]:
                          for port, period in clocks.items()}}
 
 
+def manual_cocotb_clock(bench: Path, periods: Dict[str, str]) -> Optional[str]:
+    """Find one manual pin driver using the suite's HALF_NS setting in ns."""
+    import ast
+
+    if len(periods) != 1:
+        return None
+    port = next(iter(periods))
+    try:
+        tree = ast.parse(bench.read_text())
+    except SyntaxError:
+        return None
+    drivers = []
+    for cls in (node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)):
+        nodes = list(ast.walk(cls))
+        writes = any(isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Store)
+                     and node.attr == "value" and isinstance(node.value, ast.Attribute)
+                     and node.value.attr == port for node in nodes)
+        waits = any(isinstance(node, ast.Call)
+                    and ((isinstance(node.func, ast.Name) and node.func.id == "Timer")
+                         or (isinstance(node.func, ast.Attribute) and node.func.attr == "Timer"))
+                    and node.args and isinstance(node.args[0], ast.Name)
+                    and node.args[0].id == "HALF_NS"
+                    and any(option.arg in {"unit", "units"}
+                            and isinstance(option.value, ast.Constant) and option.value.value == "ns"
+                            for option in node.keywords) for node in nodes)
+        if writes and waits:
+            drivers.append(cls)
+    return port if len(drivers) == 1 else None
+
+
 def bind_bench_clock(tb_text: str, dut_instance: str, declared: Dict[str, object]
                      ) -> Tuple[str, Dict[str, object]]:
     """Re-time the bench's free-running clock to the declared SDC period.
