@@ -167,7 +167,7 @@ def cdc(project, directory, tool, commands, *, state=None, config=None):
               + " -ignore_miss_func -ignore_miss_dir " + _word(path) for path in liberty],
             *models,
             "read_verilog -sv " + _word(netlist), "hierarchy -check -top " + top,
-            "flatten", "proc", "opt_clean", "write_json " + _word(raw), ""]))
+            "proc", "abc -g simple", "flatten", "opt_clean", "write_json " + _word(raw), ""]))
     else:
         script.write_text(native.yosys_script(files, top, raw, parameters=parameters) + "\n")
     built = commands.run(["yosys", "-s", script])

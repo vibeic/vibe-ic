@@ -1078,9 +1078,9 @@ class _LookupSnapshot:
                     and len(c.get("A", [])) == len(c.get("B", [])) == 1:
                 operands = [(c[pin][0], level, recv) for pin in ("A", "B")]
                 union = level == int(kind in {"$and", "$logic_and", "$_AND_"})
-            elif kind in {"$xor", "$_XOR_", "$ne"} and level == 1 \
+            elif kind in {"$xor", "$_XOR_", "$xnor", "$_XNOR_", "$ne", "$eq"} \
                     and len(c.get("A", [])) == len(c.get("B", [])) == 1:
-                operands = [(c[pin][0], 1, recv) for pin in ("A", "B")]
+                operands = [(c[pin][0], value, recv) for pin in ("A", "B") for value in (0, 1)]
             if not operands or key in pending and not ready:
                 self._qualifier_origins[key] = set()
                 continue
