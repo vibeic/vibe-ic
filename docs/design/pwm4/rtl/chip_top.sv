@@ -115,10 +115,13 @@ module chip_top (
     genvar ch;
     generate
         for (ch = 0; ch < 4; ch = ch + 1) begin : gen_pwm_outputs
-            always_comb begin
-                pwm_out[ch] = active_enable[ch] &&
-                              (active_period[ch] != 16'd0) &&
-                              (pwm_count[ch] < active_duty[ch]);
+            always_ff @(posedge clk or negedge rst_n) begin
+                if (!rst_n)
+                    pwm_out[ch] <= 1'b0;
+                else
+                    pwm_out[ch] <= active_enable[ch] &&
+                                   (active_period[ch] != 16'd0) &&
+                                   (pwm_count[ch] < active_duty[ch]);
             end
         end
     endgenerate
