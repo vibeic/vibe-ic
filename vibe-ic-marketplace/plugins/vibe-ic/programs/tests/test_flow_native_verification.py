@@ -1140,6 +1140,42 @@ def test_pad_boundary_removes_logical_package_outputs_and_keeps_core_outputs(tmp
         assert not any(cell["type"] in {"INPAD", "OUTPAD"} for cell in module["cells"].values())
 
 
+def test_pad_free_eqy_reads_native_internal_cells_on_both_sides(tmp_path):
+    if not shutil.which("yosys"):
+        pytest.skip("Native Yosys is required")
+    from flow_native_verification import eqy_pad_views
+    from librelane_eqy import eqy_script
+
+    model = tmp_path / "pads.v"
+    model.write_text("(* blackbox *) module INPAD(input [1:0] PAD,output [1:0] Y); endmodule\n"
+                     "(* blackbox *) module OUTPAD(input [1:0] A,output [1:0] PAD); endmodule\n")
+    body = ("module unit(input [1:0] a,b,s,output [1:0] y);\nwire [1:0] ia,ib,isel,oy;\n"
+            "INPAD pa(a,ia); INPAD pb(b,ib); INPAD ps(s,isel); OUTPAD po(oy,y);\n"
+            r"\$bwmux #(.WIDTH(2)) choose (.A(ia),.B(ib),.S(isel),.Y(oy));" "\nendmodule\n")
+    gold, gate = tmp_path / "gold.v", tmp_path / "gate.v"
+    gold.write_text(body)
+    gate.write_text(body)
+    original = gold.read_bytes(), gate.read_bytes()
+    script = eqy_script("unit", [gold], gate, "", liberty_files=[], group_all=False).replace(
+        "read_verilog -formal -sv ", "read_verilog -formal -sv -icells ", 1)
+    commands = Commands(tmp_path)
+    prepared, count, _, detail = eqy_pad_views(tmp_path, "unit", script,
+        {"liberty": [], "types": {"INPAD", "OUTPAD"}, "defines": [], "include_dirs": []},
+        [model], commands, None)
+    assert prepared is not None and count == 0, detail
+    assert "$bwmux" in (tmp_path / "core/gold.v").read_text()
+    for side in ("gold", "gate"):
+        read = prepared.split(f"[{side}]", 1)[1].split("[", 1)[0]
+        output = tmp_path / (side + ".json")
+        completed = commands.run(["yosys", "-Q", "-T", "-p",
+            read + f"\nhierarchy -check -top unit\nwrite_json {output}\n"])
+        assert completed.returncode == 0, completed.stdout
+        cell = json.loads(output.read_text())["modules"]["unit"]["cells"]["choose"]
+        assert cell["type"] == "$bwmux"
+        assert cell["port_directions"] == {"A": "input", "B": "input", "S": "input", "Y": "output"}
+    assert (gold.read_bytes(), gate.read_bytes()) == original
+
+
 
 @pytest.mark.parametrize("different", [False, True])
 def test_power_pad_boundary_keeps_paired_interfaces_consistent(tmp_path, different):

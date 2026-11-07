@@ -696,15 +696,8 @@ def _sdc(project: Path, config: dict, ports: list[dict]) -> str:
     outputs = [bit for bit, value in directions.items() if value == "output"]
     if outputs and config.get("OUTPUT_CAP_LOAD") is not None:
         lines.append(f"set_load [sta::capacitance_sta_ui [expr {{{float(config['OUTPUT_CAP_LOAD']):g} * 1e-15}}]] {collection(outputs)}")
-    # Use the same resolved drivers as LibreLane's base.sdc, including its
-    # clock-driver fallback. Liberty table coverage is not an external edge.
-    for clock_inputs in (False, True):
-        names = [bit for bit, value in directions.items()
-                 if value == "input" and (bit in clocks) == clock_inputs]
-        driver = (config.get("SYNTH_CLK_DRIVING_CELL") if clock_inputs else None) or config.get("SYNTH_DRIVING_CELL")
-        if names and driver:
-            master, pin = str(driver).rsplit("/", 1)
-            lines.append(f"set_driving_cell -lib_cell {_tcl_word(master)} -pin {_tcl_word(pin)} {collection(names)}")
+    # Core driving cells model block interfaces, not an off-chip bond-pad driver.
+    # Without a documented edge, leave the native STA input defaults in place.
     from sdc_environment import _design_input_transition
     declared_edge = _design_input_transition(project)
     if declared_edge:

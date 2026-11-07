@@ -730,6 +730,11 @@ def finish_step(project, row, tool, native, config, features, *, elapsed,
         from flow_native_adapters import declared_electrical_checks
         checks = [*checks, *declared_electrical_checks(project)]
     observed = measure(checks, native.metrics, config, features, project)
+    if features.get("ic") and any(
+            item.get("name", "").startswith("OpenROAD.STA") for item in native.native_steps):
+        from sdc_environment import _design_input_transition
+        if _design_input_transition(project) is None:
+            native.detail += " Off-chip input edge is undeclared in L9."
     elapsed += time.perf_counter() - finishing
     status = evaluate(native, observed)
     if (kind == "native_report" and not observed
