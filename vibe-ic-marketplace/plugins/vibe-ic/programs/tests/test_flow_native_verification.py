@@ -1255,6 +1255,34 @@ def test_native_lef_completes_pad_ports_without_losing_supplied_ports(tmp_path, 
         assert "MODE" in module["parameter_default_values"]
 
 
+@pytest.mark.parametrize("change", ["none", "top", "core", "signal", "constant", "input", "output", "declared"])
+def test_chip_eqy_allows_only_isolated_undeclared_pad_inout_networks(tmp_path, change):
+    if not all(shutil.which(name) for name in ("yosys", "eqy")):
+        pytest.skip("Native Yosys and EQY are required")
+    gold, gate, model, liberty = [tmp_path / name for name in ("gold.v", "gate.v", "pads.v", "cells.lib")]
+    model.write_text("(* blackbox *) module PADLINK(input A,output Y,inout PWR,"
+                     "inout [1:0] BUS,input CTRL,output OBS); endmodule\n")
+    liberty.write_text("library(neutral) {}\n")
+    body = ("module unit(input a,output y,monitor); wire z,rail,other; wire [1:0] bus;\n"
+            "PADLINK one(.A(a),.Y(z){one});\nPADLINK two(.A(z),.Y(y){two});\n"
+            "assign monitor=z^a{logic}; endmodule\n")
+    gold.write_text(body.format(one=",.PWR(rail)" if change == "declared" else "",
+                               two=",.PWR(other)" if change == "declared" else "", logic=""))
+    rail = {"top": "a", "signal": "z", "constant": "1'b0"}.get(change, "rail")
+    extra = {"input": ",.CTRL(rail)", "output": ",.OBS(rail)"}.get(change, "")
+    gate.write_text(body.format(one=f",.PWR({rail}),.BUS(bus){extra}",
+                               two=f",.PWR({rail}),.BUS(bus)",
+                               logic="^rail" if change == "core" else ""))
+    config = {"DESIGN_NAME": "unit", "VERILOG_FILES": [str(gold)], "DEFAULT_CORNER": "typical",
+              "LIB": {"typical": [str(liberty)]}, "PAD_VERILOG_MODELS": [str(model)]}
+    result = eqy(tmp_path, tmp_path, {}, Commands(tmp_path), state={"nl": str(gate)}, config=config)
+    rows = {row["name"]: row["status"] for row in result.get("native_steps", [])}
+    assert rows["Yosys.Wrapper"] == ("PASS" if change == "none" else "FAIL"), result
+    if change == "none":
+        assert rows["Yosys.EQY.Core"] == "PASS", result
+        assert result["metrics"]["final_lec_unproved"] == 0, result
+
+
 @pytest.mark.parametrize("native_exit", [17, -11])
 def test_eqy_pad_preparation_preserves_the_native_process_exit(tmp_path, monkeypatch, native_exit):
     import sys
