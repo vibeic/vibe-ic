@@ -354,15 +354,15 @@ def test_3344_failed_normalization_cannot_reuse_admission(tmp_path, monkeypatch)
     calls = []
 
     def native_then_refuse(argv, **kwargs):
-        calls.append(argv)
-        if len(calls) == 2:
+        if "-p" in argv and argv[argv.index("-p") + 1].startswith("read_json "):
+            calls.append(argv)
             return subprocess.CompletedProcess(argv, 17, '', 'neutral normalization failure')
         return original_run(argv, **kwargs)
 
     monkeypatch.setattr(cdc.subprocess, 'run', native_then_refuse)
     with pytest.raises(cdc.Refusal, match='CDC_NETLIST_BUILD_FAILED'):
         cdc.build(tmp_path, [source], 'neutral_reset_top')
-    assert len(calls) == 2
+    assert len(calls) == 1
     assert not (tmp_path / cdc.NETLIST_REL).exists()
     assert 'neutral normalization failure' in (tmp_path / cdc.NETLIST_NORMALIZE_LOG_REL).read_text()
 

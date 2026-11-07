@@ -10,11 +10,29 @@ from flow_engine import ToolResult, evaluate
 from programs.tests._hostpaths import require_repo
 
 
+def capture_environment(directory, settings):
+    from librelane.common import TclUtils
+    from librelane.steps.tclstep import TclStep
+
+    values = {"DESIGN_NAME": "unit", "CLOCK_PERIOD": "10.0", "IO_DELAY_CONSTRAINT": "20.0",
+              "TIME_DERATING_CONSTRAINT": "0.0", "MAX_FANOUT_CONSTRAINT": "4",
+              "CLOCK_UNCERTAINTY_CONSTRAINT": "0.1", "CLOCK_TRANSITION_CONSTRAINT": "0.15",
+              "OUTPUT_CAP_LOAD": "1.0", "SYNTH_DRIVING_CELL": "plain/Y", **settings}
+    path = directory / "_env.tcl"
+    path.write_text("\n".join(TclUtils.join(["unset", "-nocomplain", f"::env({key})"]
+                    if value is None else ["set", f"::env({key})", TclStep.value_to_tcl(value)])
+                    for key, value in values.items()) + "\n")
+    return path
+
+
 @pytest.fixture
 def activity_case(tmp_path):
     library = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic", "programs", "tests",
                            "fixtures", "m2_placed", "input", "pdk", "liberty", "neutral.lib")
-    netlist = tmp_path / "netlist.v"
+    native = tmp_path / "native"
+    native.mkdir()
+    capture_environment(native, {})
+    netlist = native / "netlist.v"
     netlist.write_text("module unit(a, y); input a; output y;\n"
                        "plain buffer0(.A(a), .Y(y)); endmodule\n")
     model = tmp_path / "cells.v"
@@ -166,6 +184,7 @@ def test_native_cocotb_core_scenario_annotates_the_wrapper(activity_case, scoped
     mapped=project/"chip.v"
     mapped.write_text(core_netlist.read_text()+wrapper)
     state["nl"],config["DESIGN_NAME"]=str(mapped),"package_unit"
+    capture_environment(mapped.parent, {"DESIGN_NAME": "package_unit"})
     if scoped_sdc:
         Path(config["SIGNOFF_SDC_FILE"]).write_text(
             'current_design package_unit\ncreate_clock -name reference -period 10\n'
@@ -195,7 +214,7 @@ def test_native_cocotb_core_scenario_annotates_the_wrapper(activity_case, scoped
 
 @pytest.mark.parametrize("wrapped", [False, True])
 @pytest.mark.parametrize("complete", [False, True])
-def test_native_base_sdc_uses_each_linked_designs_captured_configuration(activity_case, wrapped, complete):
+def test_native_base_sdc_uses_each_linked_designs_captured_environment(activity_case, wrapped, complete):
     native_tools()
     from librelane.common import get_script_dir
 
@@ -207,6 +226,8 @@ def test_native_base_sdc_uses_each_linked_designs_captured_configuration(activit
         "OUTPUT_CAP_LOAD": 1, "SYNTH_DRIVING_CELL": "plain/Y", "TIME_DERATING_CONSTRAINT": 0}
     if complete:
         settings["CLOCK_PERIOD"] = 24
+    capture_environment(Path(state["nl"]).parent, {**settings, "CLOCK_PERIOD": "24.0" if complete else None,
+        "IO_DELAY_CONSTRAINT": "20.0", "ONLY_CORE_CAPTURE": "1"})
     if wrapped:
         chip = project / "work/flow/chip"
         chip.mkdir(parents=True)
@@ -219,13 +240,16 @@ def test_native_base_sdc_uses_each_linked_designs_captured_configuration(activit
         mapped = project / "chip.v"
         mapped.write_text(Path(state["nl"]).read_text() + wrapper)
         state["nl"], config["DESIGN_NAME"], config["CLOCK_PERIOD"] = str(mapped), "package_unit", 30
+        capture_environment(mapped.parent, {"DESIGN_NAME": "package_unit", "CLOCK_PERIOD": "30.0"})
         Path(config["SIGNOFF_SDC_FILE"]).write_text(
             'current_design package_unit\n'
             'if {$::env(DESIGN_NAME) ne "package_unit" || $::env(CLOCK_PERIOD) != 30} {error "wrong chip configuration"}\n'
+            'if {[info exists ::env(ONLY_CORE_CAPTURE)]} {error "core environment leaked"}\n'
             'create_clock -name reference -period $::env(CLOCK_PERIOD)\n')
     else:
         config.pop("SIGNOFF_SDC_FILE")
         config.update(settings)
+        config["CLOCK_PERIOD"] = 99
     result = run_case(activity_case)
     assert evaluate(ToolResult(**result), []) == ("PASS" if complete else "FAIL"), result
     if complete:
@@ -237,6 +261,40 @@ def test_native_base_sdc_uses_each_linked_designs_captured_configuration(activit
     else:
         assert result["metrics"] == {}
         assert 'can\'t read "::env(CLOCK_PERIOD)"' in (project / "result/power.rpt").read_text()
+
+
+@pytest.mark.parametrize("capture", ["producer", "sta", "stale_sta"])
+def test_native_captured_environment_uses_the_native_deprecated_sdc_reader(activity_case, capture):
+    native_tools()
+    project, state, config, tool = activity_case
+    environment = Path(state["nl"]).with_name("_env.tcl")
+    if capture != "producer":
+        step = project / "steps/timing/openroad_staprepnr"
+        (step / "nominal").mkdir(parents=True)
+        (step / "config.json").write_text(json.dumps({"DESIGN_NAME": "unit",
+            "PNR_SDC_FILE": config["SIGNOFF_SDC_FILE"],
+            "meta": {"step": "OpenROAD.STAPrePNR"}}))
+        (step / "state_in.json").write_text(json.dumps(state))
+        sta_environment = capture_environment(step / "nominal",
+            {"SYNTH_DRIVING_CELL": "absent/Z"} if capture == "stale_sta" else {})
+        if capture == "sta":
+            environment.unlink()
+            environment = sta_environment
+    # This derived pin does not exist in config.json or the captured environment.
+    config["SYNTH_DRIVING_CELL"] = "absent/Z"
+    Path(config["SIGNOFF_SDC_FILE"]).write_text(
+        'puts "NATIVE_DRIVING_PIN $::env(SYNTH_DRIVING_CELL_PIN)"\n'
+        'set_driving_cell -lib_cell $::env(SYNTH_DRIVING_CELL) '
+        '-pin $::env(SYNTH_DRIVING_CELL_PIN) [all_inputs]\n'
+        'create_clock -name reference -period $::env(CLOCK_PERIOD)\n'
+        'set_load 0.1 [all_outputs]\n')
+    original = environment.read_bytes()
+    result = run_case(activity_case)
+    assert evaluate(ToolResult(**result), []) == "PASS", result
+    assert "NATIVE_DRIVING_PIN Y" in (project / "result/power.rpt").read_text()
+    assert str(environment) in (project / "result/power.tcl").read_text()
+    assert environment.read_bytes() == original
+    assert result["metrics"]["activity__annotated_pin_count"] > 0
 
 
 @pytest.mark.parametrize("instance", ["compute_stage", "signal_core"])
@@ -283,6 +341,7 @@ def test_native_core_scenario_annotates_the_wrapper_core(activity_case, monkeypa
             f"plain \\{instance}/buffer1 (.A(\\{instance}/a [1]), .Y(\\{instance}/y [1])); endmodule\n")
             if flattened else core_netlist.read_text() + wrapper)
     state["nl"], config["DESIGN_NAME"] = str(mapped), "package_unit"
+    capture_environment(mapped.parent, {"DESIGN_NAME": "package_unit"})
     original = bench.read_bytes()
     run = Commands.run
     def probe(self, argv, cwd=None):
@@ -308,7 +367,7 @@ def test_native_core_scenario_annotates_the_wrapper_core(activity_case, monkeypa
     assert missing["metrics"] == {}
 
 
-@pytest.mark.parametrize("missing", ["netlist", "library", "scenario", "models", "sdc"])
+@pytest.mark.parametrize("missing", ["netlist", "library", "scenario", "models", "sdc", "environment"])
 def test_missing_activity_inputs_are_not_measured(activity_case, missing):
     project, state, config, tool = activity_case
     if missing == "netlist":
@@ -319,8 +378,10 @@ def test_missing_activity_inputs_are_not_measured(activity_case, missing):
         tool["testbenches"] = []
     elif missing == "models":
         config["CELL_VERILOG_MODELS"] = [str(project / "absent.v")]
-    else:
+    elif missing == "sdc":
         config["SIGNOFF_SDC_FILE"] = str(project / "absent.sdc")
+    else:
+        Path(state["nl"]).with_name("_env.tcl").unlink()
     result = run_case(activity_case)
     assert evaluate(ToolResult(**result), []) == "NOT_MEASURED", result
     assert result["metrics"] == {}
