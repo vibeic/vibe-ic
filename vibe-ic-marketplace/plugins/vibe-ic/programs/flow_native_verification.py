@@ -142,7 +142,7 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
     for side, source in (("gold", gold.replace("[gold]", "")), ("gate", gate)):
         path = directory / f"{side}_pads.ys"
         path.write_text("\n".join(reads) + "\n" + source + "\n" + power_ports + "\n"
-            + f"hierarchy -check -top {top}\nproc\nflatten\n"
+            + f"hierarchy -check -top {top}\nproc\nflatten\nclean\n"
             + f"write_json {_word(directory / (side + '.before-normalization.json'))}\n"
             + f"select -set terminals {top}/i:* {top}/o:* %u\n"
             + "\n".join(f"expose -evert {top}/t:{master}"
@@ -219,6 +219,23 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
             if completed is None or completed.returncode:
                 return None, None, reports, "Pad-free core elaboration did not complete."
 
+    gold = views["gold"]
+    driven = {bit for cell in gold["cells"].values() if cell["type"] not in pads["types"]
+              for pin, bits in cell["connections"].items()
+              if cell["port_directions"].get(pin) == "output" for bit in bits}
+    fixed = {bit for port in gold["ports"].values() for bit in port["bits"]}
+    fixed.update(bit for cell in gold["cells"].values() if cell["type"] in pads["types"]
+                 for pin, bits in cell["connections"].items()
+                 if cell["port_directions"].get(pin) != "input" for bit in bits)
+    core_ports = {side: json.loads((core / f"{side}.json").read_text())["modules"][top]["ports"]
+                  for side in views}
+    proved_inputs = {f"pad:{name}:{pin}:{index}" for name, cell in gold["cells"].items()
+        if cell["type"] in pads["types"] for pin, bits in cell["connections"].items()
+        if cell["port_directions"].get(pin) == "input"
+        and all(ports.get(f"{name}.{pin}", {}).get("direction") == "output"
+                for ports in core_ports.values())
+        for index, bit in enumerate(bits) if type(bit) is int and bit in driven and bit not in fixed}
+
     def wrapper(module):
         instances = {name: cell for name, cell in module["cells"].items()
                      if cell["type"] in pads["types"]}
@@ -242,6 +259,8 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
                 if pin in isolated[name]:
                     continue
                 for index, bit in enumerate(bits):
+                    if f"pad:{name}:{pin}:{index}" in proved_inputs:
+                        continue
                     nets.setdefault(bit, []).append(f"pad:{name}:{pin}:{index}")
         return {"instances": {name: {"type": cell["type"], "parameters": cell["parameters"],
                                   "port_directions": {pin: direction for pin, direction in cell["port_directions"].items()
@@ -256,8 +275,9 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
     differences = [key for key in signatures["gold"] if signatures["gold"][key] != signatures["gate"][key]]
     report = directory / "wrapper.json"
     report.write_text(json.dumps({"views": signatures, "differences": differences, "isolated_inout_ports": isolated,
+        "core_proved_inputs": sorted(proved_inputs),
         "scope": "Pad instances, types and terminal connectivity, excluding isolated inout networks absent from gold. "
-                 "Core-side behavior is proved by pad-free EQY."},
+                 "Core-driven pad inputs remain outputs of pad-free EQY, which proves their values and aliases."},
         indent=2) + "\n")
     reports.append(report)
     if boundary:

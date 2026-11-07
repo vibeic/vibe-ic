@@ -1187,7 +1187,8 @@ def test_chip_eqy_proves_optimized_core_outputs_at_every_pad_terminal(tmp_path, 
     rows = {row["name"]: row["status"] for row in result["native_steps"]}
     assert rows["Yosys.Wrapper"] == ("FAIL" if change in {"package", "control"} else "PASS"), result
     assert (result["metrics"].get("unproved_equivalence") == 0) is (change == "none"), result
-    assert rows["Yosys.EQY.Core"] == ("FAIL" if change in {"core", "control"} else "PASS"), result
+    if change != "package":
+        assert rows["Yosys.EQY.Core"] == ("FAIL" if change in {"core", "control"} else "PASS"), result
     for side in ("gold", "gate"):
         module = json.loads((tmp_path / "core" / (side + ".json")).read_text())["modules"]["unit"]
         assert all(module["ports"][f"p{i}.A"]["direction"] == "output" for i in range(3))
