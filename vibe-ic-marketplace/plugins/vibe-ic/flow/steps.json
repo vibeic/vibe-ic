@@ -4134,6 +4134,7 @@
               "steps": [
                 "KLayout.Filler",
                 "KLayout.Density",
+                "VibeIC.MagicDensity",
                 "VibeIC.DensityTopUp"
               ],
               "imports": [

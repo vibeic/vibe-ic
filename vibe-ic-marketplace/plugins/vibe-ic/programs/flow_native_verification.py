@@ -213,7 +213,7 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
                              and module["ports"].get(f"{instance}.{pin}", {}).get("direction") == "input")
             rebound.append((ports[0] if len(ports) == 1 else name, sense))
         boundary = tuple(rebound)
-    prepared = (f"[gold]\nread_verilog -formal -sv {_word(core / 'gold.v')}\n"
+    prepared = (f"[gold]\nread_verilog -formal -sv -icells {_word(core / 'gold.v')}\n"
                 f"[gate]\nread_verilog -formal -sv -icells {_word(core / 'gate.v')}\n"
                 "[script]" + preparation.replace(str(directory) + "/", str(core) + "/"))
     aliases = []

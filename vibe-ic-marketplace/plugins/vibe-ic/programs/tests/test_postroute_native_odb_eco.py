@@ -50,8 +50,8 @@ proc vic_drc_count {path} { return 0 }
 proc log_cmd {cmd args} {
     if {$cmd ne "detailed_route"} { error "unexpected command" }
     if {[$::net getWire] ne "NULL"} { error "old wire was not removed" }
-    if {[lindex $args [expr {[lsearch $args -nets]+1}]] ne "changed"} {
-        error "scope widened"
+    if {[lsearch -exact $args -nets] >= 0} {
+        error "native detailed router must be able to repair neighboring geometry"
     }
     if {$::restore_wire} { odb::dbWire_create $::net }
     set path [lindex $args [expr {[lsearch $args -output_drc]+1}]]
