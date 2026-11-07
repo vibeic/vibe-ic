@@ -218,6 +218,15 @@ class Execution:
         return self
 
     def publish(self, destination=None):
+        original = sys.exc_info()[1]
+        try:
+            return self._publish(destination)
+        except Exception as error:
+            if original is not None:
+                raise original from error
+            raise
+
+    def _publish(self, destination=None):
         if self.published is not None:
             return self.published
         self.publication_failed = True
@@ -242,7 +251,7 @@ class Execution:
             return None
         if destination is not None:
             destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(self.run, destination)
+            shutil.copytree(self.run, destination, dirs_exist_ok=True)
             self.mapping = {str(self.run): str(destination), str(self.run.resolve()): str(destination),
                             **{old: new.replace(str(self.run), str(destination)) for old, new in preserved.items()}}
             self.published = destination
@@ -274,7 +283,7 @@ class Execution:
 
     def __exit__(self, *exc):
         try:
-            if self.destination is not None or self.keep:
+            if not self.publication_failed and (self.destination is not None or self.keep):
                 self.publish()
         finally:
             try:
