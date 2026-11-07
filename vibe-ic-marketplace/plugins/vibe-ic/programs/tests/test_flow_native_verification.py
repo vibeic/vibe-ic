@@ -1452,6 +1452,39 @@ def test_native_gls_annotations_and_function(tmp_path, different, annotated, exp
     assert not (directory / "result.json").exists()
 
 
+@pytest.mark.parametrize("different", [False, True])
+def test_gls_reuses_existing_bench_through_native_chip_preparation(tmp_path, different):
+    if not shutil.which("iverilog") or not shutil.which("vvp"):
+        pytest.skip("Native Icarus is required")
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config = gls_fixture(project, different=different)
+    bench = project / "phase2/stage1/sim/tb_unit.v"
+    bench.write_text(bench.read_text().replace("unit dut(a,y)", "core_unit dut(.a(a),.y(y))"))
+    original = bench.read_bytes()
+    rtl = project / "phase2/stage1/rtl/core.v"
+    rtl.parent.mkdir()
+    rtl.write_text("module core_unit(input a,output y); assign y=a; endmodule\n")
+    docs = project / "phase1/generated_docs"
+    docs.mkdir(parents=True)
+    (docs / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({"top_module": "core_unit"}))
+    chip = project / "work/flow/chip"
+    chip.mkdir(parents=True)
+    (chip / "config.json").write_text(json.dumps({"DESIGN_NAME": "unit"}))
+    (chip / "preparation.json").write_text(json.dumps({"pads": {}}))
+    (chip / "wrapper.v").write_text(
+        "module unit(input a,output y); core_unit u_core(.a(a),.y(y)); endmodule\n")
+    result = gls(project, directory, {}, Commands(directory), state=state, config=config)
+    row, = result["native_steps"]
+    assert row["status"] == ("FAIL" if different else "PASS"), result
+    assert result["metrics"]["gls_failures"] == int(different), result
+    assert row["dut_binding"]["from"] == "core_unit"
+    assert bench.read_bytes() == original
+    emitted = (directory / "corner_1/annotated_tb.v").read_text()
+    assert "unit dut(.a(a),.y(y))" in emitted
+    assert "if(y!==1)" in emitted
+
+
 def test_gls_names_missing_native_inputs(tmp_path):
     result = gls(tmp_path, tmp_path, {}, Commands(tmp_path), state={}, config={})
     assert not result["ran"] and "State netlist" in result["detail"]
