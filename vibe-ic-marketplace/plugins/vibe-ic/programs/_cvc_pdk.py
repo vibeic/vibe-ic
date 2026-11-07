@@ -358,11 +358,13 @@ def power_setup(text, config, netlist=None):
             value = original.get(name)
         if value is None:
             raise ValueError(f"No PDK Liberty voltage or CVC power declaration for {name}")
+        name = "/" + name if "/" + name in domains else name
         result.insert(0, f"{name} power {value}")
     for name in grounds:
         value = voltages.get(name, original.get(name, original.get(grounds[0])))
         if value is None:
             raise ValueError(f"No PDK Liberty voltage or CVC power declaration for {name}")
+        name = "/" + name if "/" + name in domains else name
         result.insert(0, f"{name} power {value}")
     for name, value in domains.items():
         existing = next((line.split()[2] for line in result

@@ -397,3 +397,18 @@ def test_native_cvc_resolves_transitive_companion_spice_from_selected_cdl(tmp_pa
     assert assembled.count(".subckt interface ") == 1
     assert assembled.count(".subckt physical_link ") == 1
     assert "x0 vgnd vpwr interface" in assembled
+
+
+@pytest.mark.parametrize("pad_voltage", [1.8, 3.3])
+def test_internal_core_supplies_share_the_native_cvc_domain_declaration(tmp_path, pad_voltage):
+    config, cdl = pad_domain_fixture(tmp_path, supply_voltage=pad_voltage)
+    cdl = cdl.replace(".subckt package bond A CORE RETURN", ".subckt package bond A")
+    cdl = cdl.replace("Xpad ring_g bond sleeping ring_p", "Xpad RETURN bond sleeping CORE")
+    if pad_voltage != 1.8:
+        with pytest.raises(ValueError, match="Conflicting active PDK Liberty voltages for /CORE"):
+            power_setup("CORE power 1.8\nRETURN power 0\n", config, cdl)
+    else:
+        result = power_setup("CORE power 1.8\nRETURN power 0\n", config, cdl)
+        assert result.splitlines().count("/CORE power 1.8") == 1
+        assert result.splitlines().count("/RETURN power 0.0") == 1
+        assert not any(line.startswith(("CORE power ", "RETURN power ")) for line in result.splitlines())
