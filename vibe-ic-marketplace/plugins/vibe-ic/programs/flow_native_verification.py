@@ -222,24 +222,42 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
     def wrapper(module):
         instances = {name: cell for name, cell in module["cells"].items()
                      if cell["type"] in pads["types"]}
+        declared = {name: views["gold"]["cells"].get(name, {}).get("connections", {})
+                    for name in instances}
+        protected = {bit for port in module["ports"].values() for bit in port["bits"]}
+        protected.update(bit for cell in module["cells"].values() if cell["type"] not in pads["types"]
+                         for bits in cell["connections"].values() for bit in bits)
+        protected.update(bit for name, cell in instances.items() for pin, bits in cell["connections"].items()
+                         if pin in declared[name] or cell["port_directions"].get(pin) != "inout" for bit in bits)
+        isolated = {name: sorted(pin for pin, bits in cell["connections"].items()
+                    if pin not in declared[name] and cell["port_directions"].get(pin) == "inout"
+                    and bits and all(type(bit) is int and bit not in protected for bit in bits))
+                    for name, cell in instances.items()}
         nets = {}
         for name, port in module["ports"].items():
             for index, bit in enumerate(port["bits"]):
                 nets.setdefault(bit, []).append(f"port:{name}:{index}")
         for name, cell in instances.items():
             for pin, bits in cell["connections"].items():
+                if pin in isolated[name]:
+                    continue
                 for index, bit in enumerate(bits):
                     nets.setdefault(bit, []).append(f"pad:{name}:{pin}:{index}")
-        return {"instances": {name: {key: cell[key] for key in ("type", "parameters", "port_directions")}
+        return {"instances": {name: {"type": cell["type"], "parameters": cell["parameters"],
+                                  "port_directions": {pin: direction for pin, direction in cell["port_directions"].items()
+                                                      if pin not in isolated[name]}}
                               for name, cell in instances.items()},
                 "connections": sorted(sorted(labels + (["constant:" + bit] if isinstance(bit, str) else []))
-                                      for bit, labels in nets.items())}
+                                      for bit, labels in nets.items())}, {name: pins for name, pins in isolated.items() if pins}
 
-    signatures = {side: wrapper(module) for side, module in views.items()}
+    signatures, isolated = {}, {}
+    for side, module in views.items():
+        signatures[side], isolated[side] = wrapper(module)
     differences = [key for key in signatures["gold"] if signatures["gold"][key] != signatures["gate"][key]]
     report = directory / "wrapper.json"
-    report.write_text(json.dumps({"views": signatures, "differences": differences,
-        "scope": "Pad instances, types and terminal connectivity. Core-side behavior is proved by pad-free EQY."},
+    report.write_text(json.dumps({"views": signatures, "differences": differences, "isolated_inout_ports": isolated,
+        "scope": "Pad instances, types and terminal connectivity, excluding isolated inout networks absent from gold. "
+                 "Core-side behavior is proved by pad-free EQY."},
         indent=2) + "\n")
     reports.append(report)
     if boundary:
