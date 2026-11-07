@@ -126,6 +126,9 @@ def yosys_script(files: List[Path], top: Optional[str], out: Path,
                  sv: bool = True, *, parameters=None) -> str:
     from flow_config import parameter_args
     parameters = parameters or {}
+    if parameters and not top:
+        raise Refusal("CDC_NETLIST_TOP_UNRESOLVED",
+                      "Parameter overrides require the shared resolver's top module.")
     if _uses_slang(files, sv):
         files = _read_order(files, sv)
         if any(any(c.isspace() or c in ';"\\' for c in str(f)) for f in files):
@@ -326,8 +329,11 @@ def build(project: Path, rtl_files: List[Path], top: Optional[str],
     raw_tmp = raw.with_suffix(".json.tmp")
     raw_tmp.unlink(missing_ok=True)
     files = _read_order([Path(f).resolve() for f in rtl_files])
-    from flow_config import design_parameters
-    script = yosys_script(files, top, raw_tmp, parameters=design_parameters(project))
+    from flow_config import design_parameters, resolve_rtl_inputs
+    parameters = design_parameters(project)
+    if parameters and top is None:
+        top = resolve_rtl_inputs(project).top
+    script = yosys_script(files, top, raw_tmp, parameters=parameters)
     local_yosys = shutil.which("yosys")
     if local_yosys:
         import synth_frontend as _sf

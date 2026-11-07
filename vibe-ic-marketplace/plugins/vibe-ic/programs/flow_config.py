@@ -145,7 +145,7 @@ def _load(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text()) if path.is_file() else {}
 
 
-def _authored_rtl_top(rtl: list[Path], parameters=None) -> str:
+def _authored_rtl_top(rtl: list[Path]) -> str:
     """Return the unique root selected by native Yosys hierarchy analysis."""
     with tempfile.TemporaryDirectory(prefix="flow-authored-top-",
                                      dir=os.environ.get("TMPDIR") or None) as raw:
@@ -155,8 +155,7 @@ def _authored_rtl_top(rtl: list[Path], parameters=None) -> str:
             include = " ".join("-I" + shlex.quote(str(parent)) for parent in
                                {path.parent, *(p.parent for p in rtl)})
             reads.append("read_verilog -sv " + include + " " + shlex.quote(str(path)))
-        script = "; ".join([*reads, " ".join(["hierarchy", "-auto-top",
-                             *parameter_args(parameters or {}, "yosys")]), "proc",
+        script = "; ".join([*reads, "hierarchy -auto-top", "proc",
                              "write_json " + shlex.quote(str(output))])
         try:
             completed = subprocess.run(["yosys", "-Q", "-T", "-p", script],
@@ -373,7 +372,7 @@ def _resolve_rtl_inputs(project: Path, sources: dict) -> RTLInputs:
                             for path in rtl))
     parameters = design_parameters(project)
     if not top:
-        top = _authored_rtl_top(rtl, parameters)
+        top = _authored_rtl_top(rtl)
         _record_authored_top(l9_path, l9, top)
         sources["DESIGN_NAME"] = "phase2/stage1/rtl (RTL authoring step)"
     if not top or top not in modules:

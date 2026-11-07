@@ -101,15 +101,13 @@ def test_parent_binding_reaches_native_cdc_and_interface(child, slang):
     body = json.loads((directory / "graph_raw.json").read_text())["modules"][top]
     assert len(body["ports"]["a"]["bits"]) == len(body["ports"]["z"]["bits"]) == 9
     if not slang:
-        from _cdc_netlist import yosys_script
+        from _cdc_netlist import build
         from flow_config import resolve_rtl_inputs
         selected = resolve_rtl_inputs(project)
-        output = directory / "auto_top.json"
-        process = native.Commands(directory).run(["yosys", "-Q", "-T", "-p",
-            yosys_script(selected.files, None, output, parameters=selected.parameters)])
-        assert process.returncode == 0
+        output = build(project, selected.files, None)
         auto = json.loads(output.read_text())["modules"][top]
         assert len(auto["ports"]["a"]["bits"]) == 9
+
 
 
 def test_parent_binding_reaches_native_sby_harness(child):
