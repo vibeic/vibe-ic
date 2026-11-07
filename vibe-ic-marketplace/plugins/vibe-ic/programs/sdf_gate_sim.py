@@ -2158,6 +2158,10 @@ def manual_cocotb_clock(bench: Path, periods: Dict[str, str]) -> Optional[str]:
     drivers = []
     for cls in (node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)):
         nodes = list(ast.walk(cls))
+        if any((isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
+                and node.id == "HALF_NS") or (isinstance(node, ast.arg) and node.arg == "HALF_NS")
+               for node in nodes):
+            continue
         writes = any(isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Store)
                      and node.attr == "value" and isinstance(node.value, ast.Attribute)
                      and node.value.attr == port for node in nodes)
