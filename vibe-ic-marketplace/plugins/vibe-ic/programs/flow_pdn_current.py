@@ -126,20 +126,25 @@ def coherent_geometry(config, widths, tech, parallel_length_um=0, explicit=()):
     return result
 
 
-def current_settings(project, config, parallel_length_um=0):
+def current_settings(project, config, parallel_length_um=0, *, metrics=None):
     from flow_config import _load, _settings
     declared = {**_load(project / "plugin_output/declaration.json"),
                 **_load(project / "work/flow/native_overrides.json")}
     if declared.get("PDN_CFG") is not None:
         return {}
-    power = project / "steps/pre_layout_timing/result.json"
-    if not power.is_file():
-        return {}
+    pre_layout = metrics is None
+    if pre_layout:
+        power = project / "steps/pre_layout_timing/result.json"
+        if not power.is_file():
+            return {}
+        metrics = json.loads(power.read_text()).get("native_metrics", {})
     config = dict(config)
     for supply in ("VDD", "GND"):
         if config.get(f"{supply}_NETS") is None:
             config[f"{supply}_NETS"] = [config[f"{supply}_PIN"]]
-    current, samples = estimated_current(config, json.loads(power.read_text()).get("native_metrics", {}))
+    current, samples = estimated_current(config, metrics)
+    if not pre_layout and current is None:
+        return {}
     lefs = matching(config["TECH_LEFS"], config["DEFAULT_CORNER"])
     if len(lefs) != 1:
         raise ValueError("PDN sizing needs one native technology LEF for the default corner")
@@ -160,8 +165,11 @@ def current_settings(project, config, parallel_length_um=0):
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps({"estimated_current_a": current, "corners": samples,
         "requested_widths_um": widths, "settings": settings, "parallel_length_um": parallel_length_um,
-        "model": "Every conductor is sized for the full pre-layout estimated supply current. "
-                 "This estimate omits routed loading and physical clock-tree changes. "
-                 "Widths and native spacing/pitch/offset geometry are resolved before floorplan; "
+        "model": ("Every conductor is sized for the full pre-layout estimated supply current. "
+                  "This estimate omits routed loading and physical clock-tree changes. "
+                  "Widths and native spacing/pitch/offset geometry are resolved before floorplan; "
+                  if pre_layout else
+                  "Every conductor is sized for the full estimated supply current from the supplied native power. "
+                  "Widths and native spacing/pitch/offset geometry are resolved before ordinary routing; ") +
                  "native connectivity, DRC and final EM determine adequacy."}, indent=2) + "\n")
     return settings
