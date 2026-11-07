@@ -561,12 +561,13 @@ def gls_signal_netlist(directory, netlist, text, used, closure, config, commands
                 source = path.read_text()
                 roles.update(parse_lef_pin_roles(source))
                 classes.update(parse_lef_macro_classes(source))
-    for name in closure["blackboxed"]:
+    physical_candidates = set()
+    for name in used:
         pins = roles.get(name)
         if (classes.get(name) in {"CORE SPACER", "CORE WELLTAP"} and pins
                 and all(direction == "INOUT" and use in {"POWER", "GROUND"}
                         for direction, use in pins.values())):
-            removed.add(name)
+            physical_candidates.add(name)
     for instance in native._INSTANCE_STMT_RE.finditer(text):
         connections.setdefault(instance[1], set()).update(
             pin for pin, _ in native._CONN_RE.findall(instance[3]))
@@ -575,6 +576,18 @@ def gls_signal_netlist(directory, netlist, text, used, closure, config, commands
         bridges = parse_verilog_rail_bridges(code)
         for module in native._MODULE_BODY_RE.finditer(code):
             name = module[2]
+            if name in physical_candidates:
+                prototype = re.sub(
+                    r"(?m)^\s*`(?:(?:ifdef|ifndef|elsif)\s+\w+|else|endif)\s*$", "", module[3])
+                allowed = set(roles[name]) | {"input", "output", "inout", "wire", "tri"}
+                if set(re.findall(r"[A-Za-z_$][\w$]*", prototype)) - allowed:
+                    continue
+                header, separator, body = prototype.partition(";")
+                if (separator and re.fullmatch(r"\s*(?:\([\w\s,$]*\))?\s*", header)
+                        and re.fullmatch(
+                            r"(?:\s*(?:input|output|inout|wire|tri)\s+[\w\s,$]+;)*\s*", body)):
+                    removed.add(name)
+                    continue
             if name not in bridges or name not in used or name not in roles:
                 continue
             if "`" in code[:module.end()]:
