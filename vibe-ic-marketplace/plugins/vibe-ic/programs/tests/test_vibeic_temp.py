@@ -368,7 +368,9 @@ def test_publish_completes_an_existing_partial_destination(root, tmp_path):
 
 
 @pytest.mark.parametrize("failure_type", [RuntimeError, KeyboardInterrupt, SystemExit])
-def test_original_failure_survives_failed_publication(root, tmp_path, monkeypatch, failure_type):
+@pytest.mark.parametrize("through_runner", [False, True])
+def test_original_failure_survives_failed_publication(
+        root, tmp_path, monkeypatch, failure_type, through_runner):
     import errno
     import flow_engine as engine
 
@@ -388,7 +390,11 @@ def test_original_failure_survives_failed_publication(root, tmp_path, monkeypatc
     monkeypatch.setattr(engine, "_run", native)
     monkeypatch.setattr(temp.shutil, "copytree", copy)
     with pytest.raises(failure_type) as caught:
-        engine.run(tmp_path / "project")
+        if through_runner:
+            engine.run(tmp_path / "project")
+        else:
+            with temp.execution("neutral", "native-error", destination=tmp_path / "project"):
+                native()
     assert caught.value is original
     assert caught.value.__cause__ is publication
     assert (paths[0] / "native.log").read_text() == "original tool diagnostic\n"
