@@ -631,74 +631,103 @@ def gls(project, directory, tool, commands, *, state, config):
     stub_file = directory / "physical_cells.v"
     stub_file.write_text("\n".join(f"module {name} (); endmodule" for name in stubs) + "\n")
     rows, reports = [], [stub_file, *projection_reports]
-    for corner, sdf in sdfs.items():
+    from concurrent.futures import ThreadPoolExecutor, Future
+    from threading import Lock
+
+    parent_commands, compiled, compile_lock = commands, {}, Lock()
+
+    def compile_once(key, build):
+        with compile_lock:
+            future = compiled.get(key)
+            owner = future is None
+            if owner:
+                future = compiled[key] = Future()
+        if owner:
+            try:
+                future.set_result(build())
+            except BaseException as exc:
+                future.set_exception(exc)
+                raise
+        return future.result()
+
+    def prepare_case(corner, sdf, bench, index):
         mtm_spec = {"min": "MINIMUM", "max": "MAXIMUM"}.get(str(corner).split("_")[0], "TYPICAL")
-        for bench in benches:
-            work = directory / ("corner_" + str(len(rows) + 1))
-            work.mkdir(parents=True, exist_ok=True)
-            row = {"corner": corner, "testbench": str(bench), "status": "NOT_MEASURED",
-                   "ran": False, "exit_code": None}
-            clock_unmeasured = False
-            models = [str(signal_netlist), *closure["files"], str(stub_file)]
-            flags = shlex.split(native._IVERILOG_FLAGS)
-            for parent in dict.fromkeys([str(bench.parent), *(str(Path(p).parent) for p in models)]):
-                flags.extend(["-I", parent])
-            if bench.suffix == ".py":
-                from _specrtl_common import parse_rtl_ports
-                _, ports = parse_rtl_ports(text, top)
-                if not ports or any(type(port.width) is not int or port.width < 1 for port in ports):
-                    row["detail"] = "The native netlist's top port dimensions are unavailable for the cocotb shim."
-                    rows.append(row)
-                    continue
-                shim = work / "annotation.v"
-                declarations = []
-                for port in ports:
-                    kind = {"input": "reg", "output": "wire", "inout": "tri"}[port.direction]
-                    width = f"[{port.width - 1}:0] " if port.width > 1 else ""
-                    declarations.append(f"{kind} {width}{port.name};")
-                connections = ",".join(f".{port.name}({port.name})" for port in ports)
-                wrapper = ("module flow_sdf_tb;\n" + "\n".join(declarations)
-                           + f"\n{top} dut({connections});\nendmodule\n")
-                shim.write_text(native.inject_sdf_annotation(wrapper, "flow_sdf_tb", "dut", str(sdf),
-                                                            mtm_spec=mtm_spec))
-                makefile = work / "simulation.mk"
-                sources = " ".join(shlex.quote(path).replace("$", "$$") for path in [*models, str(shim)])
-                compile_flags = " ".join(shlex.quote(flag).replace("$", "$$") for flag in flags)
-                module = shlex.quote(bench.stem).replace("$", "$$")
-                if sdc:
-                    try:
-                        clocks = native.declared_sdc_clocks(Path(sdc), [Path(sdf).read_text()])
-                    except (OSError, ValueError) as exc:
-                        row["detail"] = str(exc)
-                        rows.append(row)
-                        continue
-                    if clocks["clocks_s"]:
-                        periods = {name: format(Decimal(str(value)) / Decimal("1e-9"), "f")
-                                   for name, value in clocks["clocks_s"].items()}
-                        entry = work / "flow_clocked_suite.py"
-                        entry.write_text("from decimal import Decimal\nfrom importlib import import_module\n"
-                            f"suite = import_module({bench.stem!r})\nperiods = {periods!r}\n"
-                            "clock = getattr(suite, 'CLK', None)\n"
-                            "if (clock in periods and hasattr(suite, 'HALF_NS')\n"
-                            "        and callable(getattr(suite, '_start_clock', None))):\n"
-                            "    suite.HALF_NS = Decimal(periods[clock]) / 2\n"
-                            "    print(f'COCOTB_CLOCK_NS {clock}={periods[clock]}', flush=True)\n"
-                            "else:\n    clock = None\n"
-                            "if set(periods) != ({clock} if clock else set()):\n"
-                            "    print('COCOTB_CLOCK_UNBOUND: suite has no supported clock setting', flush=True)\n"
-                            "globals().update({name: value for name, value in vars(suite).items()\n"
-                            "                  if not name.startswith('__')})\n")
-                        module = entry.stem
-                        row["clock"] = clocks
-                        reports.append(entry)
-                makefile.write_text("SIM = icarus\nTOPLEVEL_LANG = verilog\n"
-                    f"VERILOG_SOURCES = {sources}\nCOCOTB_TOPLEVEL = flow_sdf_tb\n"
-                    f"COCOTB_TEST_MODULES = {module}\n"
-                    f"COMPILE_ARGS += {compile_flags}\n"
-                    "COCOTB_PLUSARGS += -sdf-info\nSIM_BUILD = build\nCOCOTB_RESULTS_FILE = results.xml\n"
-                    f"export PYTHONPATH := {str(work).replace('$', '$$')}:{str(bench.parent).replace('$', '$$')}:$(PYTHONPATH)\n"
-                    "include $(shell cocotb-config --makefiles)/Makefile.sim\n")
-                completed = commands.run(["make", "-f", makefile, "-j8"], cwd=work)
+        work = directory / ("corner_" + str(index + 1))
+        work.mkdir(parents=True, exist_ok=True)
+        row = {"corner": corner, "testbench": str(bench), "status": "NOT_MEASURED",
+               "ran": False, "exit_code": None}
+        commands = type(parent_commands)(work)
+        reports = []
+        clock_unmeasured = False
+        models = [str(signal_netlist), *closure["files"], str(stub_file)]
+        flags = shlex.split(native._IVERILOG_FLAGS)
+        for parent in dict.fromkeys([str(bench.parent), *(str(Path(p).parent) for p in models)]):
+            flags.extend(["-I", parent])
+        if bench.suffix == ".py":
+            from _specrtl_common import parse_rtl_ports
+            _, ports = parse_rtl_ports(text, top)
+            if not ports or any(type(port.width) is not int or port.width < 1 for port in ports):
+                row["detail"] = "The native netlist's top port dimensions are unavailable for the cocotb shim."
+                return lambda: (row, reports, commands)
+            shim = work / "annotation.v"
+            declarations = []
+            for port in ports:
+                kind = {"input": "reg", "output": "wire", "inout": "tri"}[port.direction]
+                width = f"[{port.width - 1}:0] " if port.width > 1 else ""
+                declarations.append(f"{kind} {width}{port.name};")
+            connections = ",".join(f".{port.name}({port.name})" for port in ports)
+            wrapper = ("module flow_sdf_tb;\n" + "\n".join(declarations)
+                       + f"\n{top} dut({connections});\nendmodule\n")
+            shim.write_text(native.inject_sdf_annotation(wrapper, "flow_sdf_tb", "dut", str(sdf),
+                                                        runtime=True))
+            makefile = work / "simulation.mk"
+            sources = " ".join(shlex.quote(path).replace("$", "$$") for path in [*models, str(shim)])
+            compile_flags = " ".join(shlex.quote(flag).replace("$", "$$") for flag in flags)
+            module = shlex.quote(bench.stem).replace("$", "$$")
+            if sdc:
+                try:
+                    clocks = native.declared_sdc_clocks(Path(sdc), [Path(sdf).read_text()])
+                except (OSError, ValueError) as exc:
+                    row["detail"] = str(exc)
+                    return lambda: (row, reports, commands)
+                if clocks["clocks_s"]:
+                    periods = {name: format(Decimal(str(value)) / Decimal("1e-9"), "f")
+                               for name, value in clocks["clocks_s"].items()}
+                    entry = work / "flow_clocked_suite.py"
+                    entry.write_text("from decimal import Decimal\nfrom importlib import import_module\n"
+                        f"suite = import_module({bench.stem!r})\nperiods = {periods!r}\n"
+                        "clock = getattr(suite, 'CLK', None)\n"
+                        "if (clock in periods and hasattr(suite, 'HALF_NS')\n"
+                        "        and callable(getattr(suite, '_start_clock', None))):\n"
+                        "    suite.HALF_NS = Decimal(periods[clock]) / 2\n"
+                        "    print(f'COCOTB_CLOCK_NS {clock}={periods[clock]}', flush=True)\n"
+                        "else:\n    clock = None\n"
+                        "if set(periods) != ({clock} if clock else set()):\n"
+                        "    print('COCOTB_CLOCK_UNBOUND: suite has no supported clock setting', flush=True)\n"
+                        "globals().update({name: value for name, value in vars(suite).items()\n"
+                        "                  if not name.startswith('__')})\n")
+                    module = entry.stem
+                    row["clock"] = clocks
+                    reports.append(entry)
+            makefile.write_text("SIM = icarus\nTOPLEVEL_LANG = verilog\n"
+                f"VERILOG_SOURCES = {sources}\nCOCOTB_TOPLEVEL = flow_sdf_tb\n"
+                f"COCOTB_TEST_MODULES = {module}\n"
+                f"COMPILE_ARGS += {compile_flags}\n"
+                "COCOTB_PLUSARGS += -sdf-info "
+                + shlex.quote(f"+FLOW_SDF={sdf}").replace("$", "$$")
+                + f" +FLOW_SDF_MTM={mtm_spec}\nSIM_BUILD = build\nCOCOTB_RESULTS_FILE = results.xml\n"
+                f"export PYTHONPATH := {str(work).replace('$', '$$')}:{str(bench.parent).replace('$', '$$')}:$(PYTHONPATH)\n"
+                "include $(shell cocotb-config --makefiles)/Makefile.sim\n")
+            def simulate():
+                def build_python():
+                    built = commands.run(["make", "-f", makefile, "-j8", "build/sim.vvp"], cwd=work)
+                    return built, work / "build/sim.vvp", shim
+                built, binary, compiled_shim = compile_once(
+                    ("python", shim.read_text(), tuple(flags), tuple(models)), build_python)
+                makefile.write_text(makefile.read_text().replace(str(shim), str(compiled_shim)).replace(
+                    "SIM_BUILD = build", "SIM_BUILD = " + str(binary.parent)))
+                completed = (commands.run(["make", "-f", makefile, "-j8"], cwd=work)
+                             if built is not None and not built.returncode else built)
                 clock_unmeasured = (completed is not None and "COCOTB_CLOCK_UNBOUND:" in
                                     completed.stdout + completed.stderr)
                 summary = parse_junit(work / "results.xml")
@@ -707,131 +736,139 @@ def gls(project, directory, tool, commands, *, state, config):
                 passed = functional["passed"] if functional else None
                 total = functional["tests"] if functional else None
                 reports.extend([shim, makefile, work / "results.xml"])
-            else:
-                import arith_oracle_tb_gen as arithmetic
-                tb_text = native.strip_comments(bench.read_text())
-                module = native._TB_MODULE_RE.search(tb_text)
-                plan = arithmetic._scenario_header(bench)
-                manifest = bench.parent / "arith_oracle_manifest.json"
-                sample = json.loads(manifest.read_text()) if manifest.is_file() else {}
-                generated = (sample.get("topology") == "serial_parallel"
-                             and project / sample.get("tb", "") == bench)
-                try:
-                    if module and not (plan or generated) and not native._tb_dut_instance(tb_text, top):
-                        from testbench_gen import (
-                            _DELIVERED_RE, _is_authored_tb, delivered_case_oracle, emit_unit_tbs,
-                        )
-                        if (not _is_authored_tb(bench) and not _DELIVERED_RE.search(bench.read_text())
-                                and delivered_case_oracle(project, bench.stem) is None):
-                            from _specrtl_common import parse_rtl_ports
-                            _, ports = parse_rtl_ports(text, top)
-                            if not ports or any(type(port.width) is not int or port.width < 1 for port in ports):
-                                raise ValueError("The native top port dimensions are unavailable for the case producer.")
-                            surface = [(port.direction, f"[{port.width - 1}:0]" if port.width > 1 else "", port.name)
-                                       for port in ports]
-                            producer = {}
-                            output = work / "generated_tb"
-                            count = emit_unit_tbs(project, top=top, report=producer, out_dir=output,
-                                scaffold=False, case_stated=True, case_ids=[bench.stem], dut_ports=surface)
-                            rebound = output / (bench.stem + ".v")
-                            if (count != 1 or not rebound.is_file()
-                                    or producer.get("known_answer_vector_unbound")):
-                                raise ValueError("The native chip-port case producer could not ground the declared case: "
-                                                 + json.dumps(producer))
-                            tb_text = native.strip_comments(rebound.read_text())
-                            module = native._TB_MODULE_RE.search(tb_text)
-                            row["generated_testbench"] = str(rebound)
-                            reports.append(rebound)
-                    if module and (plan or generated):
+                return completed, clock_unmeasured, failures, passed, total
+        else:
+            import arith_oracle_tb_gen as arithmetic
+            tb_text = native.strip_comments(bench.read_text())
+            module = native._TB_MODULE_RE.search(tb_text)
+            plan = arithmetic._scenario_header(bench)
+            manifest = bench.parent / "arith_oracle_manifest.json"
+            sample = json.loads(manifest.read_text()) if manifest.is_file() else {}
+            generated = (sample.get("topology") == "serial_parallel"
+                         and project / sample.get("tb", "") == bench)
+            try:
+                if module and not (plan or generated) and not native._tb_dut_instance(tb_text, top):
+                    from testbench_gen import (
+                        _DELIVERED_RE, _is_authored_tb, delivered_case_oracle, emit_unit_tbs,
+                    )
+                    if (not _is_authored_tb(bench) and not _DELIVERED_RE.search(bench.read_text())
+                            and delivered_case_oracle(project, bench.stem) is None):
                         from _specrtl_common import parse_rtl_ports
                         _, ports = parse_rtl_ports(text, top)
-                        inout_ports = {port.name for port in ports if port.direction == "inout"}
-                        if not sdc:
-                            raise ValueError("The generated arithmetic bench needs the native timing SDC.")
+                        if not ports or any(type(port.width) is not int or port.width < 1 for port in ports):
+                            raise ValueError("The native top port dimensions are unavailable for the case producer.")
+                        surface = [(port.direction, f"[{port.width - 1}:0]" if port.width > 1 else "", port.name)
+                                   for port in ports]
+                        producer = {}
+                        output = work / "generated_tb"
+                        count = emit_unit_tbs(project, top=top, report=producer, out_dir=output,
+                            scaffold=False, case_stated=True, case_ids=[bench.stem], dut_ports=surface)
+                        rebound = output / (bench.stem + ".v")
+                        if (count != 1 or not rebound.is_file()
+                                or producer.get("known_answer_vector_unbound")):
+                            raise ValueError("The native chip-port case producer could not ground the declared case: "
+                                             + json.dumps(producer))
+                        tb_text = native.strip_comments(rebound.read_text())
+                        module = native._TB_MODULE_RE.search(tb_text)
+                        row["generated_testbench"] = str(rebound)
+                        reports.append(rebound)
+                if module and (plan or generated):
+                    from _specrtl_common import parse_rtl_ports
+                    _, ports = parse_rtl_ports(text, top)
+                    inout_ports = {port.name for port in ports if port.direction == "inout"}
+                    if not sdc:
+                        raise ValueError("The generated arithmetic bench needs the native timing SDC.")
+                    if plan:
+                        spec = plan["spec"]
+                    else:
+                        from professional_tb_gen import _detect_ic_class
+                        spec, why = arithmetic.extract_serial_arith_spec(project, _detect_ic_class(project))
+                        if spec is None:
+                            raise ValueError(why)
+                    logical_top = spec["top"]
+                    binding = ({"dut_module": top, "rebound": top != logical_top, "port_map": {}}
+                               if not (project / native.CHIP_TOP_RECORD_REL).is_file()
+                               else native.declared_dut_binding(project, logical_top, text))
+                    clocks = native.declared_sdc_clocks(Path(sdc), [Path(sdf).read_text()])
+                    clock = binding["port_map"].get(spec["clk"], spec["clk"]) if binding.get("port_map") else spec["clk"]
+                    period = clocks["clocks_s"][clock] / 1e-9
+                    folder = Path(sdf).parent.parent
+                    if plan and (project / native.CHIP_TOP_RECORD_REL).is_file() and binding["rebound"]:
+                        _, observation = native._bound_arithmetic_case(project,
+                            {"path": bench, "text": tb_text, "module": module[1]}, logical_top,
+                            binding, closure["files"], netlist=Path(netlist), sdc=Path(sdc),
+                            sdfs=native_sdfs, sta_step_dir=folder, existing_plan=plan)
+                        plan["observation"] = observation
+                    else:
+                        timed_plan = plan or {"spec": spec, "observation": {"clock_period_ns": period}}
+                        deadline = native._postlayout_output_deadline(project, timed_plan, binding,
+                            Path(netlist), Path(sdc), native_sdfs, sta_step_dir=folder)
+                        observation = {**timed_plan["observation"], "top": top,
+                            "sample_offset_ns": deadline["sample_offset_ns"], "postlayout_deadline": deadline}
                         if plan:
-                            spec = plan["spec"]
-                        else:
-                            from professional_tb_gen import _detect_ic_class
-                            spec, why = arithmetic.extract_serial_arith_spec(project, _detect_ic_class(project))
-                            if spec is None:
-                                raise ValueError(why)
-                        logical_top = spec["top"]
-                        binding = ({"dut_module": top, "rebound": top != logical_top, "port_map": {}}
-                                   if not (project / native.CHIP_TOP_RECORD_REL).is_file()
-                                   else native.declared_dut_binding(project, logical_top, text))
-                        clocks = native.declared_sdc_clocks(Path(sdc), [Path(sdf).read_text()])
-                        clock = binding["port_map"].get(spec["clk"], spec["clk"]) if binding.get("port_map") else spec["clk"]
-                        period = clocks["clocks_s"][clock] / 1e-9
-                        folder = Path(sdf).parent.parent
-                        if plan and (project / native.CHIP_TOP_RECORD_REL).is_file() and binding["rebound"]:
-                            _, observation = native._bound_arithmetic_case(project,
-                                {"path": bench, "text": tb_text, "module": module[1]}, logical_top,
-                                binding, closure["files"], netlist=Path(netlist), sdc=Path(sdc),
-                                sdfs=native_sdfs, sta_step_dir=folder, existing_plan=plan)
                             plan["observation"] = observation
-                        else:
-                            timed_plan = plan or {"spec": spec, "observation": {"clock_period_ns": period}}
-                            deadline = native._postlayout_output_deadline(project, timed_plan, binding,
-                                Path(netlist), Path(sdc), native_sdfs, sta_step_dir=folder)
-                            observation = {**timed_plan["observation"], "top": top,
-                                "sample_offset_ns": deadline["sample_offset_ns"], "postlayout_deadline": deadline}
-                            if plan:
-                                plan["observation"] = observation
-                                if plan.get("reset_observation") and top != logical_top:
-                                    sources = [Path(p) if Path(p).is_absolute() else project / p
-                                               for p in config.get("VERILOG_FILES") or []]
-                                    cores = [name for source in sources
-                                             for name, (master, _) in native._instances(
-                                                 native.strip_comments(source.read_text())).items()
-                                             if master == logical_top]
-                                    if len(cores) != 1:
-                                        raise ValueError("The arithmetic reset observer needs the declared core instance.")
-                                    observation["reset_state_targets"] = arithmetic.mapped_reset_state_targets(
-                                        plan, text, cores[0])
-                        port_map = binding.get("port_map") or {}
-                        spec = json.loads(json.dumps(spec))
-                        for key in ("parallel", "serial_in", "serial_out", "clk", "rst"):
-                            spec[key] = port_map.get(spec[key], spec[key])
-                        for port in spec["ports"]:
-                            port["name"] = port_map.get(port["name"], port["name"])
-                        if plan:
-                            plan["spec"] = spec
-                            tb_text = arithmetic.emit_arithmetic_scenario_module(module[1], plan,
-                                dut_module=top, inout_ports=inout_ports)
-                        else:
-                            tb_text = arithmetic.emit_serial_oracle_module(module[1], spec,
-                                arithmetic.select_operand_pairs(spec, "mixed"), dut_module=top,
-                                clock_period_ns=period, sample_offset_ns=observation["sample_offset_ns"],
-                                inout_ports=inout_ports)
-                        row["observation"] = observation
-                    instance = native._tb_dut_instance(tb_text, top)
-                    if sdc and instance and not (plan or generated):
-                        clocks = native.declared_sdc_clocks(Path(sdc), [Path(sdf).read_text()])
-                        tb_text, row["clock"] = native.bind_bench_clock(tb_text, instance, clocks)
-                except (OSError, ValueError, KeyError) as exc:
-                    row["detail"] = str(exc)
-                    rows.append(row)
-                    continue
-                if not module or not instance:
-                    row["detail"] = "The testbench does not instantiate the native netlist top."
-                    rows.append(row)
-                    continue
-                injected = work / "annotated_tb.v"
-                injected.write_text(native.inject_sdf_annotation(tb_text, module[1], instance, str(sdf),
-                                                                mtm_spec=mtm_spec))
-                built = commands.run(["iverilog", *flags, "-s", module[1], "-o", work / "sim.vvp",
-                                      injected, *models], cwd=work)
+                            if plan.get("reset_observation") and top != logical_top:
+                                sources = [Path(p) if Path(p).is_absolute() else project / p
+                                           for p in config.get("VERILOG_FILES") or []]
+                                cores = [name for source in sources
+                                         for name, (master, _) in native._instances(
+                                             native.strip_comments(source.read_text())).items()
+                                         if master == logical_top]
+                                if len(cores) != 1:
+                                    raise ValueError("The arithmetic reset observer needs the declared core instance.")
+                                observation["reset_state_targets"] = arithmetic.mapped_reset_state_targets(
+                                    plan, text, cores[0])
+                    port_map = binding.get("port_map") or {}
+                    spec = json.loads(json.dumps(spec))
+                    for key in ("parallel", "serial_in", "serial_out", "clk", "rst"):
+                        spec[key] = port_map.get(spec[key], spec[key])
+                    for port in spec["ports"]:
+                        port["name"] = port_map.get(port["name"], port["name"])
+                    if plan:
+                        plan["spec"] = spec
+                        tb_text = arithmetic.emit_arithmetic_scenario_module(module[1], plan,
+                            dut_module=top, inout_ports=inout_ports)
+                    else:
+                        tb_text = arithmetic.emit_serial_oracle_module(module[1], spec,
+                            arithmetic.select_operand_pairs(spec, "mixed"), dut_module=top,
+                            clock_period_ns=period, sample_offset_ns=observation["sample_offset_ns"],
+                            inout_ports=inout_ports)
+                    row["observation"] = observation
+                instance = native._tb_dut_instance(tb_text, top)
+                if sdc and instance and not (plan or generated):
+                    clocks = native.declared_sdc_clocks(Path(sdc), [Path(sdf).read_text()])
+                    tb_text, row["clock"] = native.bind_bench_clock(tb_text, instance, clocks)
+            except (OSError, ValueError, KeyError) as exc:
+                row["detail"] = str(exc)
+                return lambda: (row, reports, commands)
+            if not module or not instance:
+                row["detail"] = "The testbench does not instantiate the native netlist top."
+                return lambda: (row, reports, commands)
+            injected = work / "annotated_tb.v"
+            injected.write_text(native.inject_sdf_annotation(tb_text, module[1], instance, str(sdf),
+                                                            runtime=True))
+            def simulate():
+                def build_hdl():
+                    binary = work / "sim.vvp"
+                    built = commands.run(["iverilog", *flags, "-s", module[1], "-o", binary,
+                                          injected, *models], cwd=work)
+                    return built, binary
+                built, binary = compile_once(
+                    ("hdl", injected.read_text(), tuple(flags), tuple(models)), build_hdl)
                 reports.append(injected)
-                completed = (commands.run(["vvp", work / "sim.vvp", "-sdf-info"], cwd=work)
+                completed = (commands.run(["vvp", binary, "-sdf-info", f"+FLOW_SDF={sdf}",
+                                          f"+FLOW_SDF_MTM={mtm_spec}"], cwd=work)
                              if built is not None and not built.returncode else built)
                 transcript = completed.stdout + completed.stderr if completed is not None else ""
                 functional = native.parse_l10_case_stdout(transcript)
                 passed, total = functional["passed"], functional["total"]
                 failures = total - passed if functional["verdict"] else None
+                return completed, False, failures, passed, total
+        def execute_case():
+            completed, clock_unmeasured, failures, passed, total = simulate()
             if completed is None:
                 row["detail"] = "The native Icarus or cocotb executable is unavailable."
-                rows.append(row)
-                continue
+                return row, reports, commands
             transcript = completed.stdout + completed.stderr
             applied = len(native._SDF_APPLIED_RE.findall(transcript))
             errors = len(native._SDF_ERROR_RE.findall(transcript))
@@ -845,7 +882,16 @@ def gls(project, directory, tool, commands, *, state, config):
             row.update(ran=True, exit_code=completed.returncode, status=status, tests=total,
                        passed=passed, failures=failures, sdf_delays_applied=applied, sdf_errors=errors,
                        detail=detail + "Icarus does not implement SDF timing checks; setup/hold remain STA checks.")
+            return row, reports, commands
+        return execute_case
+    tasks = [prepare_case(corner, sdf, bench, index) for index, (corner, sdf, bench) in enumerate(
+        (corner, sdf, bench) for corner, sdf in sdfs.items() for bench in benches)]
+    with ThreadPoolExecutor(max_workers=min(8, len(tasks))) as pool:
+        for row, case_reports, case_commands in pool.map(lambda task: task(), tasks):
             rows.append(row)
+            reports.extend(case_reports)
+            commands.records.extend(case_commands.records)
+            commands.seconds += case_commands.seconds
     summary = directory / "gls.json"
     summary.write_text(json.dumps({"runs": rows, "cell_models": closure,
         "physical_only_types_omitted": physical,
