@@ -201,3 +201,42 @@ if __name__ == "__main__":
     arguments = parser.parse_args()
     result = native_run(arguments.project.resolve(), arguments.programs.resolve())
     print(json.dumps({key: value for key, value in result.items() if key != "steps"}, indent=2))
+
+
+def test_synthesis_replaces_preflight_header_when_top_changes(tmp_path):
+    pytest.importorskip("librelane")
+    import flow_engine as engine
+    from flow_config import create_native_flow, native_defaults
+    from librelane.common import Toolbox
+    from librelane.state import State, DesignFormat
+    from librelane.steps import Step
+
+    core = tmp_path / "core.v"
+    core.write_text("module core(input clk, output reg q); "
+                    "always @(posedge clk) q <= ~q; endmodule\n")
+    wrapper = tmp_path / "wrapper.v"
+    wrapper.write_text("module chip(input clk, output q); core u_core(clk, q); endmodule\n")
+    config = {"DESIGN_NAME": "core", "PDK": "sky130A", "VERILOG_FILES": [str(core)],
+              "CLOCK_PORT": "clk", "CLOCK_PERIOD": 20}
+    owner = create_native_flow("Classic", config, design_dir=str(tmp_path),
+                               pdk_root=os.environ["PDK_ROOT"])
+    toolbox = Toolbox(str(tmp_path / "tool_tmp"))
+    initial = Step.factory.get("Yosys.JsonHeader")(owner.config, State()).start(
+        toolbox=toolbox, step_dir=str(tmp_path / "preflight"))
+    old_header = initial[DesignFormat.JSON_HEADER]
+    assert "core" in json.loads(Path(old_header).read_text())["modules"]
+
+    config.update(DESIGN_NAME="chip", VERILOG_FILES=[str(core), str(wrapper)])
+    chain = engine.NativeChain(tmp_path, {"delivery_target": "ip_hardmacro"})
+    chain.owner = create_native_flow("Classic", config, design_dir=str(tmp_path),
+                                     pdk_root=os.environ["PDK_ROOT"])
+    chain.owner.config = native_defaults(chain.owner.config)
+    chain.config = chain.owner.config.to_raw_dict()
+    chain.toolbox, chain.state = toolbox, initial
+    table = json.loads((Path(engine.__file__).resolve().parents[1] / "flow/steps.json").read_text())
+    tool = next(row["tool"] for row in table["steps"] if row["name"] == "synthesis")
+    result = chain.execute(tmp_path / "synthesis", tool)
+    assert all(row["ran"] and row["exit_code"] == 0 for row in result.native_steps), result
+    header = chain.state[DesignFormat.JSON_HEADER]
+    assert "chip" in json.loads(Path(header).read_text())["modules"]
+    assert header != old_header
