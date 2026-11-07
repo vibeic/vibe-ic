@@ -1085,7 +1085,8 @@ def test_chip_eqy_proves_fsm_behavior_across_native_state_encodings(tmp_path, en
 
 
 @pytest.mark.parametrize("different", [False, True])
-def test_chip_eqy_keeps_gold_constraints_on_internal_cut_inputs(tmp_path, different):
+@pytest.mark.parametrize("gated_clock", [False, True])
+def test_chip_eqy_keeps_gold_constraints_on_internal_cut_inputs(tmp_path, different, gated_clock):
     if not shutil.which("eqy"):
         pytest.skip("Native EQY is required")
     reset_docs(tmp_path)
@@ -1094,11 +1095,16 @@ def test_chip_eqy_keeps_gold_constraints_on_internal_cut_inputs(tmp_path, differ
         "INPAD pc(.PAD(clk),.Y(ic));INPAD pr(.PAD(rst_n),.Y(ir));\n"
         "INPAD pd(.PAD(data),.Y(id));\nOUTPAD po(.A(oq),.PAD(result));\n")
     gold.write_text(wrapper + "core u_core(ic,ir,id,oq);endmodule\n"
-        "module core(input clk,rst_n,data,output reg q);wire qualifier=rst_n & data;\n"
-        "always @(posedge clk) if(!rst_n) q<=0;else q<=qualifier;endmodule\n")
-    gate.write_text(wrapper + "wire \\u_core.qualifier ;reg \\u_core.q ;\n"
-        "assign \\u_core.qualifier =ir & id;assign oq=\\u_core.q ;\n"
-        f"always @(posedge ic) \\u_core.q <={'~' if different else ''}\\u_core.qualifier ;endmodule\n")
+        "module core(input clk,rst_n,data,output reg tail);reg q;wire qualifier=rst_n & data;\n"
+        + ("wire gclk=clk & (rst_n | data);\n" if gated_clock else "")
+        + f"always @(posedge {'gclk' if gated_clock else 'clk'}) if(!rst_n) q<=0;else q<=qualifier;\n"
+        + f"always @(posedge {'gclk' if gated_clock else 'clk'}) tail<=q;endmodule\n")
+    clock = "\\u_core.gclk " if gated_clock else "ic"
+    gate.write_text(wrapper + "wire \\u_core.qualifier ;reg \\u_core.q ,\\u_core.tail ;\n"
+        "assign \\u_core.qualifier =ir & id;assign oq=\\u_core.tail ;\n"
+        + ("wire \\u_core.gclk ;assign \\u_core.gclk =ic & (ir | id);\n" if gated_clock else "")
+        + f"always @(posedge {clock}) \\u_core.q <={'~' if different else ''}\\u_core.qualifier ;\n"
+        + f"always @(posedge {clock}) \\u_core.tail <=\\u_core.q ;endmodule\n")
     cells.write_text("library(neutral) {}\n")
     pads.write_text("(* blackbox *) module INPAD(inout PAD,output Y);endmodule\n"
                    "(* blackbox *) module OUTPAD(input A,inout PAD);endmodule\n")
@@ -1109,6 +1115,14 @@ def test_chip_eqy_keeps_gold_constraints_on_internal_cut_inputs(tmp_path, differ
     assert rows["Yosys.Wrapper"] == "PASS", result
     assert rows["Yosys.EQY.Core"] == ("FAIL" if different else "PASS"), result
     assert "u_core.qualifier" in (tmp_path/"scratch/matched.ids").read_text()
+    partitions = [json.loads(path.read_text())["partition"]
+                  for path in (tmp_path/"scratch/partitions").glob("*.json")]
+    tail = next(part for part in partitions if "u_core.tail" in part["outbits"])
+    assert "u_core.q" in tail["inbits"], tail
+    assert "u_core.q" not in tail["crossbits"], tail
+    if gated_clock:
+        assert "u_core.gclk" in tail["inbits"], tail
+        assert "u_core.gclk" not in tail["crossbits"], tail
 
 
 @pytest.mark.parametrize("direct_output", [False, True])
@@ -1410,6 +1424,94 @@ def test_native_gls_annotations_and_function(tmp_path, different, annotated, exp
 def test_gls_names_missing_native_inputs(tmp_path):
     result = gls(tmp_path, tmp_path, {}, Commands(tmp_path), state={}, config={})
     assert not result["ran"] and "State netlist" in result["detail"]
+
+
+@pytest.mark.parametrize("corner,delay", [("min_ff_025C_1v80", 1),
+                                        ("nom_tt_025C_1v80", 2),
+                                        ("max_ss_025C_1v80", 3)])
+@pytest.mark.parametrize("cocotb", [False, True])
+def test_gls_annotates_the_native_delay_field_for_each_rc_corner(tmp_path, corner, delay, cocotb):
+    if not all(shutil.which(tool) for tool in ("iverilog", "vvp")):
+        pytest.skip("Native Icarus is required")
+    if cocotb and not shutil.which("cocotb-config"):
+        pytest.skip("Native cocotb is required")
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config = gls_fixture(project, cocotb=cocotb)
+    sdf = Path(state["sdf"]["typical"])
+    sdf.write_text(sdf.read_text().replace("(1:1:1)", "(1:2:3)"))
+    state["sdf"] = {corner: str(sdf)}
+    config["DEFAULT_CORNER"] = corner
+    bench = next((project / "phase2/stage1/sim").iterdir())
+    if cocotb:
+        bench.write_text("import cocotb\nfrom cocotb.triggers import Timer,RisingEdge\n"
+            "from cocotb.utils import get_sim_time\n@cocotb.test()\nasync def delay_field(dut):\n"
+            "    dut.a.value=0\n    await Timer(10,unit='ns')\n"
+            "    start=get_sim_time(unit='ns')\n    dut.a.value=1\n"
+            "    await RisingEdge(dut.y)\n"
+            f"    assert abs(float(get_sim_time(unit='ns')-start)-{delay + .5}) < .001\n")
+    else:
+        bench.write_text("`timescale 1ns/1ps\nmodule tb_unit;\nreg a=0;wire y;realtime start;\n"
+            "unit dut(a,y);initial begin #10;start=$realtime;a=1;@(posedge y);\n"
+            f"if ($realtime-start != {delay + .5}) begin $display(\"ORACLE_TB_DONE pass=0/1\");$fatal;end\n"
+            "$display(\"ORACLE_TB_DONE pass=1/1\");$finish;end\nendmodule\n")
+    result = gls(project, directory, {}, Commands(directory), state=state, config=config)
+    assert result["native_steps"][0]["status"] == "PASS", result
+
+
+def test_gls_compiles_one_cocotb_model_for_all_45_independent_replays(tmp_path):
+    if not all(shutil.which(tool) for tool in ("iverilog", "vvp", "cocotb-config")):
+        pytest.skip("Native Icarus and cocotb are required")
+    import re
+    import xml.etree.ElementTree as ET
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config = gls_fixture(project, cocotb=True)
+    benches = []
+    for index in range(5):
+        bench = project / f"phase2/stage1/sim/tb_case_{index}.py"
+        bench.write_text("import cocotb\nfrom cocotb.triggers import Timer\n"
+            f"@cocotb.test()\nasync def case_{index}(dut):\n"
+            f"    dut.a.value=0\n    await Timer({5 + index},unit='ns')\n"
+            "    assert int(dut.y.value)==0\n    dut.a.value=1\n"
+            "    await Timer(5,unit='ns')\n    assert int(dut.y.value)==1\n")
+        benches.append(str(bench))
+    sdf = state["sdf"]["typical"]
+    state["sdf"] = {f"{rc}_{pvt}": sdf for rc in ("min", "nom", "max") for pvt in ("ff", "tt", "ss")}
+    commands = Commands(directory)
+    result = gls(project, directory, {"corners": "all", "testbenches": benches}, commands,
+                 state=state, config=config)
+    assert len(result["native_steps"]) == 45 and all(
+        row["status"] == "PASS" for row in result["native_steps"]), result
+    assert result["metrics"]["sdf_annotation_errors"] == result["metrics"]["gls_failures"] == 0
+    for index in range(45):
+        names = [row.attrib["name"] for row in ET.parse(directory / f"corner_{index + 1}/results.xml").iter("testcase")]
+        assert names == [f"case_{index % 5}"], names
+    compiles = sum(len(re.findall(r"(?m)^(?:\S*/)?iverilog -o ", Path(record["log"]).read_text()))
+                   for record in commands.records)
+    assert compiles == 1, f"Native Icarus compiled {compiles} times for 45 replays"
+
+
+@pytest.mark.parametrize("different", [False, True])
+def test_gls_reuses_each_hdl_binary_and_keeps_all_corner_failures(tmp_path, different):
+    if not all(shutil.which(tool) for tool in ("iverilog", "vvp")):
+        pytest.skip("Native Icarus is required")
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config = gls_fixture(project)
+    original = project / "phase2/stage1/sim/tb_unit.v"
+    second = original.with_name("tb_second.v")
+    second.write_text(original.read_text().replace("module tb_unit", "module tb_second").replace(
+        "if(y!==1)", "if(y!==0)" if different else "if(y!==1)"))
+    sdf = state["sdf"]["typical"]
+    state["sdf"] = {rc: sdf for rc in ("min_ff", "nom_tt", "max_ss")}
+    commands = Commands(directory)
+    result = gls(project, directory, {"corners": "all", "testbenches": [str(original), str(second)]},
+                 commands, state=state, config=config)
+    assert [row["status"] for row in result["native_steps"]] == ["PASS", "FAIL" if different else "PASS"] * 3
+    assert result["metrics"]["gls_failures"] == 3 * different
+    assert sum(record["command"][0] == "vvp" for record in commands.records) == 6
+    assert sum(record["command"][0] == "iverilog" for record in commands.records) == 2
 
 
 def declared_vector_chip_fixture(project, *, different=False):

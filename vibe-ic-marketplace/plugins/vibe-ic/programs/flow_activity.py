@@ -36,10 +36,10 @@ def _native_environment(project, netlist, sdc, top, corner):
     if producer.is_file():
         return producer
     captures = []
-    for metadata in (project / "steps").glob("*/*/config.json"):
+    for metadata in [*(project / "steps").glob("*/*/config.json"),
+                     *netlist.parent.parent.glob("*/config.json")]:
         native_config = json.loads(metadata.read_text())
-        if (native_config.get("DESIGN_NAME") != top
-                or not native_config.get("meta", {}).get("step", "").startswith("OpenROAD.STA")):
+        if native_config.get("DESIGN_NAME") != top:
             continue
         state = metadata.with_name("state_in.json")
         if not state.is_file():
