@@ -867,6 +867,10 @@ def gls(project, directory, tool, commands, *, state, config):
                             clock_period_ns=period, sample_offset_ns=observation["sample_offset_ns"],
                             inout_ports=inout_ports)
                     row["observation"] = observation
+                tb_text, memory_files = native.bind_memory_files(
+                    tb_text, Path(row.get("generated_testbench", bench)))
+                if memory_files:
+                    row["memory_files"] = memory_files
                 instance = native._tb_dut_instance(tb_text, top)
                 if sdc and instance and not (plan or generated):
                     clocks = native.declared_sdc_clocks(Path(sdc), [Path(sdf).read_text()])

@@ -1493,6 +1493,33 @@ def test_gls_reuses_existing_bench_through_native_chip_preparation(tmp_path, dif
     assert "if(y!==1)" in emitted
 
 
+@pytest.mark.parametrize("wrong_image", [False, True])
+def test_gls_resolves_memory_images_beside_the_original_bench(tmp_path, wrong_image):
+    if not shutil.which("iverilog") or not shutil.which("vvp"):
+        pytest.skip("Native Icarus is required")
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config = gls_fixture(project)
+    bench = project / "phase2/stage1/sim/tb_unit.v"
+    image = bench.parent / "data/firmware.mem"
+    image.parent.mkdir()
+    image.write_text("00\n" if wrong_image else "01\n")
+    bench.write_text('`timescale 1ns/1ps\nmodule tb_unit;\nreg a; wire y; reg [7:0] memory[0:0];\n'
+        'unit dut(a,y);\ninitial begin $readmemh("data/firmware.mem",memory);\n'
+        'a=memory[0][0]; #5;\n'
+        'if(y!==1) begin $display("ORACLE_TB_DONE pass=0/1"); $fatal(1,"wrong image"); end\n'
+        '$display("ORACLE_TB_DONE pass=1/1"); $finish; end\nendmodule\n')
+    originals = {path: path.read_bytes() for path in [bench, image]}
+    result = gls(project, directory, {}, Commands(directory), state=state, config=config)
+    log = (directory / "corner_1/command_2.log").read_text()
+    assert "Unable to open" not in log, log
+    row, = result["native_steps"]
+    assert row["status"] == ("FAIL" if wrong_image else "PASS"), result
+    assert row["memory_files"] == {"data/firmware.mem": str(image.resolve())}
+    assert result["metrics"]["gls_failures"] == int(wrong_image), result
+    assert {path: path.read_bytes() for path in originals} == originals
+
+
 def test_gls_names_missing_native_inputs(tmp_path):
     result = gls(tmp_path, tmp_path, {}, Commands(tmp_path), state={}, config={})
     assert not result["ran"] and "State netlist" in result["detail"]
