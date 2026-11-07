@@ -734,6 +734,10 @@ def prepare(project: Path, core_config: dict[str, Any], on_tool_run=None) -> dic
     sdc.write_text(_sdc(project, {**native, **core_config}, ports)
                    + _pad_sdc(chosen, library))
     result = dict(core_config)
+    pad_spice = list(dict.fromkeys([*(native.get("PAD_SPICE_MODELS") or []),
+                                   *(native.get("PAD_CDLS") or [])]))
+    if pad_spice:
+        result["PAD_SPICE_MODELS"] = pad_spice
     result.update(pdn_settings)
     from flow_clock_geometry import clock_settings
     result.update(clock_settings(native))
