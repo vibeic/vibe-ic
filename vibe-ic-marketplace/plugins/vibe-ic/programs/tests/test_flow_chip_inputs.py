@@ -847,8 +847,7 @@ def test_native_timing_environment_and_driving_cells_reach_sdc(inputs):
     assert "set_max_capacitance [sta::capacitance_sta_ui [expr {0.2 * 1e-12}]] $_chip_core_pins" in text
     assert "set_max_capacitance [sta::capacitance_sta_ui [expr {0.2 * 1e-12}]] [current_design]" not in text
     assert "set_load [sta::capacitance_sta_ui [expr {10 * 1e-15}]]" in text
-    assert "set_driving_cell -lib_cell data_driver -pin Y" in text
-    assert "set_driving_cell -lib_cell clock_driver -pin Z" in text
+    assert "set_driving_cell" not in text
     assert "_chip_pad_max" not in text and "_chip_pad_min" not in text
 
 
@@ -973,8 +972,7 @@ proc get_libs args {
 }
 ''' + f"set ::linked fast_view\nsource {{{result['PNR_SDC_FILE']}}}\n")
     completed = subprocess.run([*command, str(script)], capture_output=True, text=True, check=True)
-    assert "DRIVER -lib_cell data_driver -pin Y PORTS" in completed.stdout
-    assert "DRIVER -lib_cell clock_driver -pin Z PORTS" in completed.stdout
+    assert "DRIVER " not in completed.stdout
     edges = [line.split() for line in completed.stdout.splitlines() if line.startswith("EDGE ")]
     assert len(edges) == int(declared is not None)
     if declared:
@@ -991,8 +989,9 @@ def test_undeclared_edge_does_not_require_pad_characterization_coverage(inputs):
 
 @pytest.mark.parametrize("clock_driver", [None, "clock_driver/Z"])
 @pytest.mark.parametrize("time_unit,cap_unit,scale", [("ns", "pf", 1), ("ps", "ff", 1000)])
-def test_native_sta_consumes_resolved_clock_and_data_drivers(inputs, tmp_path, clock_driver,
-                                                            time_unit, cap_unit, scale):
+@pytest.mark.parametrize("declared_edge", [None, .23])
+def test_native_chip_sta_uses_default_or_declared_edge(inputs, tmp_path, clock_driver,
+                                                      time_unit, cap_unit, scale, declared_edge):
     import re
     import shutil
     import subprocess
@@ -1001,12 +1000,15 @@ def test_native_sta_consumes_resolved_clock_and_data_drivers(inputs, tmp_path, c
     if sta is None:
         pytest.skip("Native OpenSTA required for input-driver checks")
     project, config, native, ports, _ = inputs
+    if declared_edge is not None:
+        _write(project / "input/docs/L9_edges.md", f"| set_input_transition | {declared_edge} |\n")
     native.update(SYNTH_DRIVING_CELL="data_driver/Y", SYNTH_CLK_DRIVING_CELL=clock_driver,
                   CLOCK_TRANSITION_CONSTRAINT=0.15)
     models = []
-    for master, pin in (("data_driver", "Y"), ("clock_driver", "Z")):
+    for master, pin in (("data_driver", "Y"), ("clock_driver", "Z"), ("pad_receiver", "Y")):
+        cap = 3.12 if master == "pad_receiver" else .01
         models.append(f'''cell ({master}) {{
-          pin (A) {{ direction : input; capacitance : {0.01 * scale}; }}
+          pin (A) {{ direction : input; capacitance : {cap * scale}; }}
           pin ({pin}) {{ direction : output; function : "A";
             timing () {{ related_pin : "A"; timing_sense : positive_unate;
               cell_rise (scalar) {{ values ("{0.1 * scale}"); }}
@@ -1026,7 +1028,7 @@ def test_native_sta_consumes_resolved_clock_and_data_drivers(inputs, tmp_path, c
       nom_process : 1; nom_voltage : 1.8; nom_temperature : 25;
     '''.replace("TIME_UNIT", time_unit).replace("CAP_UNIT", cap_unit) + "\n".join(models) + "\n}\n")
     design = _write(tmp_path / "netlist.v", "module logic(input clk, reset, input [5:2] data, "
-                    "output result); assign result=reset; endmodule\n")
+                    "output result); pad_receiver pad_in(.A(reset), .Y(result)); endmodule\n")
     sdc = _write(tmp_path / "inputs.sdc", chip._sdc(project, {**native, **config}, ports))
     output = tmp_path / "native.sdc"
     script = _write(tmp_path / "inputs.tcl", f'''read_liberty {{{library}}}
@@ -1034,6 +1036,7 @@ read_verilog {{{design}}}
 link_design logic
 read_sdc {{{sdc}}}
 puts "TIME_SCALE [sta::unit_scale time]"
+report_checks -from [get_ports reset] -to [get_ports result] -fields slew
 write_sdc {{{output}}}
 exit
 ''')
@@ -1042,13 +1045,15 @@ exit
     assert "Error" not in completed.stdout + completed.stderr
     written = output.read_text()
     drivers = [line for line in written.splitlines() if line.startswith("set_driving_cell ")]
-    assert any("-lib_cell data_driver" in line and "reset" in line for line in drivers), written
-    selected = "clock_driver" if clock_driver else "data_driver"
-    assert any(f"-lib_cell {selected}" in line and "clk" in line for line in drivers), written
+    assert drivers == [], written
     time_scale = float(re.search(r"TIME_SCALE (\S+)", completed.stdout)[1])
     transition = float(re.search(r"^set_clock_transition ([\d.eE+-]+)", written, re.M)[1])
     assert transition * time_scale == pytest.approx(.15e-9, rel=1e-6, abs=1e-18)
-    assert "set_input_transition" not in written
+    assert ("set_input_transition" in written) == (declared_edge is not None)
+    slew = re.search(r"(?m)^\s*([\d.eE+-]+)\s+[\d.eE+-]+\s+[\d.eE+-]+\s+[v^] reset \(in\)",
+                     completed.stdout)
+    assert slew is not None, completed.stdout
+    assert float(slew[1]) * time_scale == pytest.approx((declared_edge or 0) * 1e-9, rel=1e-6, abs=1e-18)
 
 
 def test_bus_order_offset_and_single_index_are_preserved():
