@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 676
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 1 (of 676)
+- **Total programs (excluding helpers / shims):** 677
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 1 (of 677)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 0 |
-| `any` | 675 |
+| `any` | 676 |
 
 ## Alphabetical listing
 
@@ -278,6 +278,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow_native_timing` | any | — | Read OpenSTA's existing reports for the native flow selector. |
 | `flow_native_verification` | any | — | flow_native_verification |
 | `flow_pdn_current` | any | — | flow_pdn_current |
+| `flow_pdn_rebuild` | any | — | flow_pdn_rebuild |
 | `flow_phase_attribution` | any | — | Describe Router decisions, RTL authorship, and native tool results. |
 | `flow_power` | any | — | Call the existing power-intent tools without initializing the physical chain. |
 | `flow_ppa_comparison` | any | — | Per-field arithmetic ported from _ppa/benchmark.py:score. |
@@ -728,7 +729,7 @@ _(no programs in this group)_
 
 _(no programs in this group)_
 
-### `any` (675 programs)
+### `any` (676 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `accumulate_synth` — deterministic SOLVER for the CVDP sequential ACCUMULATOR / running-op family:
@@ -982,6 +983,7 @@ _(no programs in this group)_
 - `flow_native_timing` — Read OpenSTA's existing reports for the native flow selector.
 - `flow_native_verification` — flow_native_verification
 - `flow_pdn_current` — flow_pdn_current
+- `flow_pdn_rebuild` — flow_pdn_rebuild
 - `flow_phase_attribution` — Describe Router decisions, RTL authorship, and native tool results.
 - `flow_power` — Call the existing power-intent tools without initializing the physical chain.
 - `flow_ppa_comparison` — Per-field arithmetic ported from _ppa/benchmark.py:score.

@@ -2719,6 +2719,7 @@
       "when": "digital_physical",
       "tool": {
         "kind": "librelane",
+        "resize_pdn": true,
         "steps": [
           "OpenROAD.GlobalRouting",
           "OpenROAD.CheckAntennas",

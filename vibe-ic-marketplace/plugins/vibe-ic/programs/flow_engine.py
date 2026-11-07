@@ -324,7 +324,7 @@ class NativeChain:
         self.config = self.owner.config.to_raw_dict()
         self.state = State()
 
-    def prepare(self, *, floorplan=False, directory=None):
+    def prepare(self, *, floorplan=False, resize_pdn=False, directory=None):
         try:
             self.initialize()
             if floorplan:
@@ -342,6 +342,11 @@ class NativeChain:
                         raise FileNotFoundError("OpenROAD left no current-netlist area")
                     settings.update(sized_floorplan(self.project, self.config, settings, float(area)))
                 self.owner.config = self.owner.config.copy(**_native_pdn_numbers(settings))
+                self.config = self.owner.config.to_raw_dict()
+            if resize_pdn:
+                from flow_pdn_rebuild import resize
+                self.owner.config, self.state = resize(self.project, self.owner.config, self.state,
+                    self.toolbox, directory / "pdn_current", self.observe_preparation)
                 self.config = self.owner.config.to_raw_dict()
         except Exception as exc:
             if not isinstance(exc, (ImportError, FileNotFoundError, ValueError)) and not self.preparation_runs:
@@ -378,6 +383,7 @@ class NativeChain:
 
     def execute(self, directory: Path, tool: dict) -> ToolResult:
         error = self.prepare(floorplan="OpenROAD.Floorplan" in tool.get("steps", []),
+                             resize_pdn=tool.get("resize_pdn", False),
                              directory=directory)
         result = self.preparation_result()
         if error is not None:
