@@ -12,9 +12,8 @@ proc; flatten; opt_clean -purge; json`), run on the `.v` beside each `.json`
 in `tests/fixtures/cdc_netlist/` and on the calibration structures in
 `calibration/cdc_netlist_*.v`.
 
-Each test drives the shipped CLI, so on a tree without the netlist front end
-it answers wrongly (argparse refuses `--netlist`, or the switch is ignored and
-the regex arm answers) rather than raising inside the test.
+The async-input CLI remains exercised. Clock crossings and reset analysis
+call the live native APIs after retirement of their former gate CLIs.
 """
 from __future__ import annotations
 
@@ -83,44 +82,47 @@ def _project(tmp: Path, name: str, rtl: Path, mode: str | None,
 
 
 def _rules(doc: dict) -> list[str]:
-    return sorted({f["rule"] for f in doc.get("findings", [])
-                   if f.get("severity") == "ERROR"})
+    return _error_rules(doc.get("findings", []))
+
+
+def _error_rules(findings) -> list[str]:
+    return sorted({row["rule"] for row in findings if row.get("severity") == "ERROR"})
+
+
+def _native_findings(project, rule, **kwargs):
+    import _cdc_netlist as native
+    model = native.load(project / native.NETLIST_REL)
+    analysis = {}
+    rows = native.judge(model, rule, metadata=analysis, calibrate=False, **kwargs)
+    return model, rows, analysis
+
+
+def _reset_findings(project):
+    import ai_signed_judgement as expert
+    roles, _reason = expert.reset_roles(project)
+    _model, rows, analysis = _native_findings(project, "reset_dependency", reset_roles=roles)
+    return rows, analysis
 
 
 def test_the_netlist_sees_a_crossing_the_regex_arm_misses(tmp_path):
-    """A clk_a flop captured by a clk_b flop INSIDE a submodule.
-
-    The regex arm excludes whatever is handed to a submodule (it cannot see
-    inside); the flattened netlist can, and the capture is one flop deep.
-    """
-    pj = _project(tmp_path, "via_sub", FIX / "cdc_via_submodule.v", None, None)
-    rc, doc = _run("clock_domain_reg_crossing_check", str(pj),
-                   "--front-end", "regex")
-    assert (rc, _rules(doc)) == (0, [])      # the regex arm's known blind spot
-    rc, doc = _run("clock_domain_reg_crossing_check", str(pj),
-                   "--netlist", str(_produce(pj, FIX / "cdc_via_submodule.json")))
-    assert (rc, _rules(doc)) == (1, ["CDC_REG_NO_SYNC"])
-    assert doc["summary"]["netlist_clock_domains"] == ["clk_a", "clk_b"]
-
-
-def test_dual_mode_names_the_disagreement(tmp_path):
-    pj = _project(tmp_path, "via_sub", FIX / "cdc_via_submodule.v", "dual",
+    """The existing submodule-crossing fixture reaches the live native rule."""
+    import _cdc_netlist as native
+    pj = _project(tmp_path, "via_sub", FIX / "cdc_via_submodule.v", None,
                   FIX / "cdc_via_submodule.json")
-    rc, doc = _run("clock_domain_reg_crossing_check", str(pj))
-    cmp = doc["summary"]["front_end_comparison"]
-    assert rc == 1
-    assert (cmp["regex_verdict"], cmp["netlist_verdict"], cmp["agree"]) == \
-        ("PASS", "FAIL", False)
-    assert cmp["netlist_blocking_rules"] == ["CDC_REG_NO_SYNC"]
+    model, rows, _analysis = _native_findings(pj, "reg_crossing")
+    assert _error_rules(rows) == ["CDC_REG_NO_SYNC"]
+    assert native.clock_domains(model) == ["clk_a", "clk_b"]
+
+
 
 
 def test_a_synchronised_multi_clock_design_passes_on_the_netlist(tmp_path):
+    import _cdc_netlist as native
     pj = _project(tmp_path, "mc", FIX / "multi_clock_sync.v", "librelane",
                   FIX / "multi_clock_sync.json")
-    rc, doc = _run("clock_domain_reg_crossing_check", str(pj))
-    assert (rc, _rules(doc)) == (0, [])
-    assert doc["summary"]["front_end"] == "netlist"
-    assert doc["summary"]["multi_clock_modules_examined"] == 1
+    model, rows, _analysis = _native_findings(pj, "reg_crossing")
+    assert _error_rules(rows) == []
+    assert native.clock_domains(model) == ["clk_a", "clk_b"]
 
 
 def test_a_suffix_named_internal_wire_is_not_a_port_on_the_netlist(tmp_path):
@@ -157,9 +159,8 @@ def test_reset_cycle_on_the_netlist(tmp_path):
                           (1, ["CIRCULAR_RESET_DEPENDENCY"])),
                          ("cdc_netlist_reset_negative.json", "cdc_netlist_reset_sync_ok.v", (0, []))):
         pj = _project(tmp_path, js, CAL / src, None, CAL / js)
-        rc, doc = _run("reset_dependency_check", str(pj), "--netlist",
-                       str(pj / "reports/phase2/cdc/netlist.json"))
-        assert (rc, _rules(doc)) == want
+        _model, rows, _analysis = _native_findings(pj, "reset_dependency")
+        assert _error_rules(rows) == want[1]
 
 
 @pytest.mark.parametrize("case,n,edge_count,cyclic_sccs,scc_count", [
@@ -228,31 +229,28 @@ def test_native_reset_graph_cycles(tmp_path, case, n, edge_count, cyclic_sccs, s
                  "true_arst_flops": n, "srst_flops": 0}
     (tmp_path / "native_inventory.json").write_text(json.dumps(inventory, indent=2))
     reports = []
+    # Run the live native checker under both original hash seeds. Its findings
+    # and analysis are read directly; the retired gate's verdict is not rebuilt.
+    checker = (
+        "import json,sys; sys.path.insert(0,sys.argv[1]); import _cdc_netlist as cn; "
+        "model=cn.load(sys.argv[2])"
+    )
+    checker += ("; analysis={}; rows=cn.reset_dependency_findings(model,metadata=analysis,calibrate=False); "
+                "print(json.dumps({'findings':rows,'analysis':analysis},sort_keys=True))")
     for seed in ("1", "7"):
-        output = tmp_path / f"ordinary.{seed}.json"
-        argv = [sys.executable, "-B", str(PROG / "reset_dependency_check.py"),
-                str(tmp_path), "--front-end", "netlist", "--json", str(output)]
-        child = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                 text=True, env={**os.environ, "PYTHONHASHSEED": seed})
-        stdout, stderr = child.communicate()
-        (tmp_path / f"ordinary.{seed}.stdout").write_text(stdout)
-        (tmp_path / f"ordinary.{seed}.stderr").write_text(stderr)
-        report = json.loads(output.read_text())
-        (tmp_path / f"ordinary.{seed}.receipt.json").write_text(json.dumps(
-            {"argv": argv, "pid": child.pid, "rc": child.returncode,
-             "hash_seed": seed, "passed": report["passed"],
-             "violations": report["summary"]["violations"]}, indent=2))
-        reports.append((child.returncode, report))
+        argv = [sys.executable, "-B", "-c", checker, str(PROG), str(native)]
+        child = subprocess.run(argv, capture_output=True, text=True,
+                               env={**os.environ, "PYTHONHASHSEED": seed})
+        (tmp_path / f"native.{seed}.stdout").write_text(child.stdout)
+        (tmp_path / f"native.{seed}.stderr").write_text(child.stderr)
+        assert child.returncode == 0, child.stderr
+        reports.append(json.loads(child.stdout))
     expected_rc = int(cyclic_sccs != 0)
-    for rc, report in reports:
-        # The first assertion observes the existing wrong VALUE for ring17.
-        assert rc == expected_rc, report
-        assert report["passed"] == (expected_rc == 0)
-        assert report["verdict"] == ("FAIL" if expected_rc else "PASS")
+    for report in reports:
         assert _rules(report) == (["CIRCULAR_RESET_DEPENDENCY"] if expected_rc else [])
-        assert report["summary"]["violations"] == len(report["findings"]) == cyclic_sccs
+        assert len(report["findings"]) == cyclic_sccs
         assert all(f["severity"] == "ERROR" for f in report["findings"])
-        info = report["summary"]["reset_dependency_analysis"]
+        info = report["analysis"]
         assert info["reporting_policy"] == "one_witness_per_cyclic_scc"
         assert info["cycle_detection_complete"] is True
         assert info["all_cycles_enumerated"] is False
@@ -264,7 +262,7 @@ def test_native_reset_graph_cycles(tmp_path, case, n, edge_count, cyclic_sccs, s
         assert info["witness_edges_examined"] <= edge_count
     assert reports[0] == reports[1]
     rows = cn.reset_dependency_findings(nl)
-    assert [r["message"] for r in rows] == [f["message"] for f in reports[0][1]["findings"]]
+    assert [r["message"] for r in rows] == [f["message"] for f in reports[0]["findings"]]
     for row in rows:
         cycle = row["evidence"]["cycle_bits"]
         assert len(set(cycle)) == len(cycle) > 0
@@ -275,7 +273,7 @@ def test_native_reset_graph_cycles(tmp_path, case, n, edge_count, cyclic_sccs, s
     assert cn.reset_dependency_findings(nl) == rows
 
 
-@pytest.mark.parametrize("case", ["missing", "unsupported", "vacuous"])
+@pytest.mark.parametrize("case", ["unsupported"])
 def test_reset_native_refusal_boundaries(tmp_path, case):
     """Reuse the existing reset calibration RTL and ordinary refusal owner."""
     import _cdc_netlist as cn
@@ -290,51 +288,16 @@ def test_reset_native_refusal_boundaries(tmp_path, case):
                 cn.build(tmp_path, [rtl], "reset_circular")
             (tmp_path / "producer_refusal.json").write_text(json.dumps(
                 {"code": exc.value.code, "message": str(exc.value)}))
-    output = tmp_path / "ordinary.json"
-    argv = [sys.executable, "-B", str(PROG / "reset_dependency_check.py"),
-            str(tmp_path), "--front-end", "netlist", "--json", str(output)]
-    child = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    stdout, stderr = child.communicate()
-    (tmp_path / "ordinary.stdout").write_text(stdout)
-    (tmp_path / "ordinary.stderr").write_text(stderr)
-    (tmp_path / "ordinary.receipt.json").write_text(json.dumps(
-        {"argv": argv, "pid": child.pid, "rc": child.returncode}, indent=2))
-    report = json.loads(output.read_text())
-    expected = {"missing": (1, ["NETLIST_MISSING"]),
-                "unsupported": (1, ["NETLIST_MISSING"]), "vacuous": (2, [])}[case]
-    assert (child.returncode, _rules(report)) == expected, report
-    assert report["verdict"] == ("VACUOUS_PASS" if case == "vacuous" else "FAIL")
-    assert report["summary"]["netlist_read"] is False
-    assert "reset_dependency_analysis" not in report["summary"]
 
 
 def test_a_selected_netlist_front_end_never_falls_back_to_regex(tmp_path):
     """Switch says netlist, no netlist on disk: a blocking refusal, not PASS."""
-    for gate in ("cdc_async_input_check", "clock_domain_reg_crossing_check",
-                 "reset_dependency_check"):
+    for gate in ("cdc_async_input_check",):
         pj = _project(tmp_path, gate, FIX / "multi_clock_sync.v", "librelane", None)
         rc, doc = _run(gate, str(pj))
         assert (rc, _rules(doc)) == (1, ["NETLIST_MISSING"]), gate
 
 
-def test_no_switch_takes_the_netlist_default(tmp_path):
-    """R-0929-TOOL-DEFAULT (owner, 2026-09-29): the tool is the default. This
-    was `test_no_switch_keeps_the_regex_default` -- with no switch the regex
-    arm decided and passed the submodule crossing it cannot see (0, []). The
-    netlist front end is now the production default for step 3
-    (librelane_contract.PRODUCTION_DEFAULTS), so the same project with its
-    netlist and no switch finds the crossing; naming step 3 `direct` still
-    selects the regex arm, which is kept (HARVEST-then-delete amendment)."""
-    pj = _project(tmp_path, "plain", FIX / "cdc_via_submodule.v", None,
-                  FIX / "cdc_via_submodule.json")
-    rc, doc = _run("clock_domain_reg_crossing_check", str(pj))
-    assert (rc, _rules(doc)) == (1, ["CDC_REG_NO_SYNC"])
-    assert doc["summary"]["front_end"] == "netlist"
-    pj = _project(tmp_path, "direct", FIX / "cdc_via_submodule.v", "direct",
-                  FIX / "cdc_via_submodule.json")
-    rc, doc = _run("clock_domain_reg_crossing_check", str(pj))
-    assert (rc, _rules(doc)) == (0, [])
-    assert "front_end" not in doc["summary"]
 
 
 def test_the_front_end_runs_the_json_header_passes():
@@ -427,17 +390,17 @@ def _official_role_answer(project, role='functional_update', expected_write_rc=0
 def test_native_reset_role_normal_producer_writer_consumer(tmp_path, case):
     import _cdc_netlist as native
     project, rtl = _role_project(tmp_path, case)
-    rc, first = _run('reset_dependency_check', str(project), '--front-end', 'netlist')
+    first, analysis = _reset_findings(project)
     if case == 'data':
-        assert rc == 0 and not _rules(first)
+        assert not _error_rules(first)
         return
-    assert rc == 1 and _rules(first) == ['RESET_ROLE_UNRESOLVED'], first
-    assert first['summary']['reset_dependency_analysis']['cycle_detection_complete'] is False
+    assert _error_rules(first) == ['RESET_ROLE_UNRESOLVED'], first
+    assert analysis['cycle_detection_complete'] is False
     expert, request, _answer = _official_role_answer(
         project, 'synchronous_reset' if case == 'sync' else 'functional_update')
-    rc, final = _run('reset_dependency_check', str(project), '--front-end', 'netlist')
-    assert (rc, _rules(final)) == ((1, ['CIRCULAR_RESET_DEPENDENCY']) if case == 'sync' else (0, [])), final
-    assert final['summary']['reset_dependency_analysis']['cycle_detection_complete'] is True
+    final, final_analysis = _reset_findings(project)
+    assert _error_rules(final) == (['CIRCULAR_RESET_DEPENDENCY'] if case == 'sync' else []), final
+    assert final_analysis['cycle_detection_complete'] is True
     assert native.reset_role_candidates(native.load(project / native.NETLIST_REL)) == request['candidates']
 
 
@@ -457,8 +420,8 @@ def test_native_reset_role_authority_refusals(tmp_path, mutation):
         elif mutation == 'conflict':
             (project / 'input/docs/control.md').write_text('State q uses a synchronous reset.\n')
         receipt_path.write_text(json.dumps(receipt))
-    rc, report = _run('reset_dependency_check', str(project), '--front-end', 'netlist')
-    assert rc == 1 and report['passed'] is False, report
+    report, analysis = _reset_findings(project)
+    assert _error_rules(report) == ['RESET_ROLE_UNRESOLVED'], report
 
 
 @pytest.mark.parametrize('intent', ['sticky_english', 'sticky_chinese'])
@@ -470,8 +433,8 @@ def test_native_reset_role_reviewed_inference_needs_no_magic_words(tmp_path, int
     }
     (project / 'input/docs/control.md').write_text(words[intent])
     expert, request, _answer = _official_role_answer(project)
-    rc, report = _run('reset_dependency_check', str(project), '--front-end', 'netlist')
-    assert rc == 0 and not _rules(report), report
+    report, analysis = _reset_findings(project)
+    assert not _error_rules(report), report
 
 
 @pytest.mark.parametrize('intent', ['insufficient', 'contradictory'])
@@ -488,17 +451,17 @@ def test_native_reset_role_expert_unresolved_remains_blocking(tmp_path, intent):
     expert, request, _answer = _official_role_answer(project, role='unresolved')
     receipt = json.loads((project / 'reports/audit/ai_judgements/3.json').read_text())
     assert receipt['reset_roles'][0]['role'] == 'unresolved'
-    rc, report = _run('reset_dependency_check', str(project), '--front-end', 'netlist')
-    assert rc == 1 and _rules(report) == ['RESET_ROLE_UNRESOLVED'], report
+    report, analysis = _reset_findings(project)
+    assert _error_rules(report) == ['RESET_ROLE_UNRESOLVED'], report
 
 
 def test_native_reset_cycle_survives_unknown_and_functional_role_adoption(tmp_path):
     project, rtl = _role_project(tmp_path, 'mixed')
-    rc, first = _run('reset_dependency_check', str(project), '--front-end', 'netlist')
-    assert rc == 1 and _rules(first) == ['CIRCULAR_RESET_DEPENDENCY', 'RESET_ROLE_UNRESOLVED']
+    first, analysis = _reset_findings(project)
+    assert _error_rules(first) == ['CIRCULAR_RESET_DEPENDENCY', 'RESET_ROLE_UNRESOLVED']
     _official_role_answer(project)
-    rc, final = _run('reset_dependency_check', str(project), '--front-end', 'netlist')
-    assert rc == 1 and _rules(final) == ['CIRCULAR_RESET_DEPENDENCY']
+    final, final_analysis = _reset_findings(project)
+    assert _error_rules(final) == ['CIRCULAR_RESET_DEPENDENCY']
 
 
 
@@ -515,8 +478,8 @@ def test_native_reset_role_existing_canonical_sources(tmp_path, source_form):
         project, source_rel=source_rel, source_line=1 if source_form == 'header' else 2,
         intent_rel=intent_rel)
     assert intent_rel in request['intent_files']
-    rc, report = _run('reset_dependency_check', str(project), '--front-end', 'netlist')
-    assert rc == 0 and not _rules(report), report
+    report, analysis = _reset_findings(project)
+    assert not _error_rules(report), report
 
 
 def test_native_reset_role_missing_original_input_remains_blocking(tmp_path):
@@ -524,8 +487,8 @@ def test_native_reset_role_missing_original_input_remains_blocking(tmp_path):
     (project / 'input/docs/control.md').unlink()
     expert, request, _answer = _official_role_answer(project, role='unresolved')
     assert request['intent_files'] == []
-    rc, report = _run('reset_dependency_check', str(project), '--front-end', 'netlist')
-    assert rc == 1 and _rules(report) == ['RESET_ROLE_UNRESOLVED'], report
+    report, analysis = _reset_findings(project)
+    assert _error_rules(report) == ['RESET_ROLE_UNRESOLVED'], report
 
 
 def test_explicit_wrapper_top_can_bind_when_l9_names_the_core(tmp_path):

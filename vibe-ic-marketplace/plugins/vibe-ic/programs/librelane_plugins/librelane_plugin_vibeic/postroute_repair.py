@@ -18,10 +18,10 @@ and `OpenROAD.RCX`, on the routed ODB:
    cell connected to its declared supply (`global_connect` with the rules the
    database carries plus `VIBEIC_PRR_PG_RULES_TCL`), and an ECO route: only
    the nets touching a created, resized or moved cell lose their wires and
-   are routed again (`detailed_route -nets`);
+   are routed again, with ordinary `detailed_route` free to repair neighbors;
 4. antenna residue: when the ECO route added antenna-violating nets,
-   OpenROAD's `repair_antennas` (the PDK's DIODE_CELL) and a scoped route of
-   the new diodes' nets only;
+   OpenROAD's `repair_antennas` (the PDK's DIODE_CELL) and native detailed
+   routing of the resulting connections;
 5. re-verify: the ECO route's DRC count, `check_antennas`, and the
    before/after census on the same parasitics.
 
@@ -279,8 +279,7 @@ class PostRouteRepair(ResizerStep):
             Variable(
                 "VIBEIC_PRR_ECO_EXPANSIONS",
                 int,
-                "How many times a refused ECO route (the fork's DRT-0712: the "
-                "scoped route added a whole-design violation) may take up the "
+                "How many times an ECO route with remaining DRC may take up the "
                 "nets that share a violation with a routed net and route "
                 "again.",
                 default=2,
@@ -290,7 +289,7 @@ class PostRouteRepair(ResizerStep):
                 bool,
                 "When the ECO route added antenna-violating nets, run "
                 "OpenROAD's repair_antennas with the PDK's DIODE_CELL and "
-                "route only the new diodes' nets again (scoped, guarded).",
+                "route the resulting connections, requiring zero whole-design DRC.",
                 default=True,
             ),
             Variable(

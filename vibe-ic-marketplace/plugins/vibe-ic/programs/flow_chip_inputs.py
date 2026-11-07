@@ -606,6 +606,41 @@ def _pad_sdc(chosen: dict, library: dict) -> str:
     return "\n".join(lines) + "\n" if lines else ""
 
 
+def _electrical_sdc(config: dict) -> list[str]:
+    lines = []
+    for key, command in (("MAX_FANOUT_CONSTRAINT", "set_max_fanout"),
+                         ("MAX_TRANSITION_CONSTRAINT", "set_max_transition")):
+        if config.get(key) is not None:
+            value = f"{float(config[key]):g}"
+            if key == "MAX_TRANSITION_CONSTRAINT":
+                value = f"[sta::time_sta_ui [expr {{{value} * 1e-9}}]]"
+            lines.append(f"{command} {value} [current_design]")
+    if config.get("MAX_CAPACITANCE_CONSTRAINT") is not None:
+        lines.extend((
+            "set _chip_bond_nets [dict create]",
+            "foreach _chip_port [get_ports *] {",
+            "  set _chip_net [[[sta::get_port_pin $_chip_port] term] net]",
+            '  if {$_chip_net ne "NULL" && $_chip_net ne ""} {',
+            "    set _chip_net [$_chip_net highest_connected_net]",
+            "    dict set _chip_bond_nets [get_full_name $_chip_net] 1",
+            "  }",
+            "}",
+            "set _chip_core_pins [list]",
+            "foreach _chip_pin [get_pins -hierarchical *] {",
+            "  foreach _chip_net [get_nets -of_objects $_chip_pin] {",
+            '    if {$_chip_net eq "NULL" || $_chip_net eq ""} {continue}',
+            "    set _chip_net [$_chip_net highest_connected_net]",
+            "    if {![dict exists $_chip_bond_nets [get_full_name $_chip_net]]} {",
+            "      lappend _chip_core_pins $_chip_pin",
+            "    }",
+            "  }",
+            "}",
+            "if {[llength $_chip_core_pins]} {",
+            f"  set_max_capacitance [sta::capacitance_sta_ui [expr {{{float(config['MAX_CAPACITANCE_CONSTRAINT']):g} * 1e-12}}]] $_chip_core_pins",
+            "}"))
+    return lines
+
+
 def _sdc(project: Path, config: dict, ports: list[dict]) -> str:
     directions = {bit: port["direction"] for port in ports for bit in _bits(port)}
     def collection(names):
@@ -638,54 +673,28 @@ def _sdc(project: Path, config: dict, ports: list[dict]) -> str:
     periods = _clock_periods(project, config)
     if any(clock not in directions or directions[clock] != "input" for clock in clocks):
         raise ValueError("CLOCK_PORT must name an elaborated core input")
-    lines = ["set_units -time ns"]
+    lines = []
     for index, clock in enumerate(clocks):
         period = float(periods.get(clock) or _required(config, "CLOCK_PERIOD"))
         budget = period * float(delay) / 100
-        lines.append(f"create_clock -name core_clock_{index} -period {period:g} {collection([clock])}")
+        lines.append(f"create_clock -name core_clock_{index} -period [sta::time_sta_ui [expr {{{period:g} * 1e-9}}]] {collection([clock])}")
         for key, command in (("CLOCK_UNCERTAINTY_CONSTRAINT", "set_clock_uncertainty"),
                              ("CLOCK_TRANSITION_CONSTRAINT", "set_clock_transition")):
             if config.get(key) is not None:
-                lines.append(f"{command} {float(config[key]):g} [get_clocks core_clock_{index}]")
+                lines.append(f"{command} [sta::time_sta_ui [expr {{{float(config[key]):g} * 1e-9}}]] [get_clocks core_clock_{index}]")
         for direction, command in (("input", "set_input_delay"), ("output", "set_output_delay")):
             names = [bit for bit, value in directions.items() if value == direction and bit not in clocks]
             if names:
                 additive = " -add_delay" if index else ""
-                lines.append(f"{command} {budget:g} -clock core_clock_{index}{additive} {collection(names)}")
-    for key, command in (("MAX_FANOUT_CONSTRAINT", "set_max_fanout"),
-                         ("MAX_TRANSITION_CONSTRAINT", "set_max_transition")):
-        if config.get(key) is not None:
-            lines.append(f"{command} {float(config[key]):g} [current_design]")
-    if config.get("MAX_CAPACITANCE_CONSTRAINT") is not None:
-        lines.extend((
-            "set _chip_bond_nets [dict create]",
-            "foreach _chip_port [get_ports *] {",
-            "  set _chip_net [[[sta::get_port_pin $_chip_port] term] net]",
-            '  if {$_chip_net ne "NULL" && $_chip_net ne ""} {',
-            "    set _chip_net [$_chip_net highest_connected_net]",
-            "    dict set _chip_bond_nets [get_full_name $_chip_net] 1",
-            "  }",
-            "}",
-            "set _chip_core_pins [list]",
-            "foreach _chip_pin [get_pins -hierarchical *] {",
-            "  foreach _chip_net [get_nets -of_objects $_chip_pin] {",
-            '    if {$_chip_net eq "NULL" || $_chip_net eq ""} {continue}',
-            "    set _chip_net [$_chip_net highest_connected_net]",
-            "    if {![dict exists $_chip_bond_nets [get_full_name $_chip_net]]} {",
-            "      lappend _chip_core_pins $_chip_pin",
-            "    }",
-            "  }",
-            "}",
-            "if {[llength $_chip_core_pins]} {",
-            f"  set_max_capacitance {float(config['MAX_CAPACITANCE_CONSTRAINT']):g} $_chip_core_pins",
-            "}"))
+                lines.append(f"{command} [sta::time_sta_ui [expr {{{budget:g} * 1e-9}}]] -clock core_clock_{index}{additive} {collection(names)}")
+    lines.extend(_electrical_sdc(config))
     if config.get("TIME_DERATING_CONSTRAINT") is not None:
         fraction = float(config["TIME_DERATING_CONSTRAINT"]) / 100
         lines.extend((f"set_timing_derate -early {1 - fraction:.17g}",
                       f"set_timing_derate -late {1 + fraction:.17g}"))
     outputs = [bit for bit, value in directions.items() if value == "output"]
     if outputs and config.get("OUTPUT_CAP_LOAD") is not None:
-        lines.append(f"set_load {float(config['OUTPUT_CAP_LOAD']) / 1000:g} {collection(outputs)}")
+        lines.append(f"set_load [sta::capacitance_sta_ui [expr {{{float(config['OUTPUT_CAP_LOAD']):g} * 1e-15}}]] {collection(outputs)}")
     # Use the same resolved drivers as LibreLane's base.sdc, including its
     # clock-driver fallback. Liberty table coverage is not an external edge.
     for clock_inputs in (False, True):
@@ -700,7 +709,7 @@ def _sdc(project: Path, config: dict, ports: list[dict]) -> str:
     if declared_edge:
         inputs = [bit for bit, value in directions.items() if value == "input"]
         if inputs:
-            lines.append(f"set_input_transition {declared_edge[0]} {collection(inputs)}")
+            lines.append(f"set_input_transition [sta::time_sta_ui [expr {{{declared_edge[0]} * 1e-9}}]] {collection(inputs)}")
     return "\n".join(lines) + "\n"
 
 
