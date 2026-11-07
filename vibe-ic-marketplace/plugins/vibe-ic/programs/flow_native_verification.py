@@ -714,6 +714,7 @@ def gls(project, directory, tool, commands, *, state, config):
                 if clocks["clocks_s"]:
                     periods = {name: format(Decimal(str(value)) / Decimal("1e-9"), "f")
                                for name, value in clocks["clocks_s"].items()}
+                    manual_clock = native.manual_cocotb_clock(bench, periods)
                     entry = work / "flow_clocked_suite.py"
                     entry.write_text("from decimal import Decimal\nfrom importlib import import_module\n"
                         f"suite = import_module({bench.stem!r})\nperiods = {periods!r}\n"
@@ -721,6 +722,10 @@ def gls(project, directory, tool, commands, *, state, config):
                         "if (clock in periods and hasattr(suite, 'HALF_NS')\n"
                         "        and callable(getattr(suite, '_start_clock', None))):\n"
                         "    suite.HALF_NS = Decimal(periods[clock]) / 2\n"
+                        "    print(f'COCOTB_CLOCK_NS {clock}={periods[clock]}', flush=True)\n"
+                        f"elif {manual_clock!r} is not None and hasattr(suite, 'HALF_NS'):\n"
+                        f"    clock = {manual_clock!r}\n"
+                        "    suite.HALF_NS = float(Decimal(periods[clock]) / 2)\n"
                         "    print(f'COCOTB_CLOCK_NS {clock}={periods[clock]}', flush=True)\n"
                         "else:\n    clock = None\n"
                         "if set(periods) != ({clock} if clock else set()):\n"

@@ -2249,3 +2249,60 @@ def test_python_suite_without_clock_setting_is_not_native_clock_replay(tmp_path)
     assert result["native_steps"][0]["status"] == "NOT_MEASURED", result
     assert "no supported setting" in result["native_steps"][0]["detail"]
     assert "gls_failures" not in result["metrics"], result
+
+
+@pytest.mark.parametrize("style,period,outcome,expected", [
+    ("manual", 25, "pass", "PASS"),
+    ("manual", 24.002, "pass", "PASS"),
+    ("manual", 2000000000.002, "pass", "PASS"),
+    ("manual", 25, "fail", "FAIL"),
+    ("manual", 25, "skip", "NOT_MEASURED"),
+    ("decoy", 25, "pass", "NOT_MEASURED"),
+    ("split_class", 25, "pass", "NOT_MEASURED"),
+    ("second_clock", 25, "pass", "NOT_MEASURED"),
+    ("shadow", 25, "pass", "NOT_MEASURED"),
+])
+def test_manual_cocotb_driver_uses_its_declared_sdc_clock(tmp_path, style, period, outcome, expected):
+    if not all(shutil.which(name) for name in ("iverilog", "vvp", "cocotb-config")):
+        pytest.skip("Native Icarus and cocotb are required")
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config = gls_fixture(project, different=outcome == "fail", cocotb=True)
+    netlist = Path(state["nl"])
+    clocks = "input clk, input spare_clk, " if style == "second_clock" else "input clk, "
+    netlist.write_text(netlist.read_text().replace("input a", clocks + "input a"))
+    sdc = project / "clock.sdc"
+    sdc.write_text(f"create_clock -period {period} [get_ports clk]\n"
+                  + (f"create_clock -period {period * 2} [get_ports spare_clk]\n"
+                     if style == "second_clock" else ""))
+    state["sdc"] = str(sdc)
+    delay = "3" if style in {"decoy", "split_class"} else "HALF_NS"
+    unrelated = ("class Unrelated:\n    async def wait(self):\n"
+                 "        await Timer(HALF_NS, unit='ns')\n") if style == "split_class" else ""
+    local = "        HALF_NS=3\n" if style == "shadow" else ""
+    expected_ps = round((period if style == "manual" else 6) * 1000)
+    action = 'pytest.skip("unfilled reference")' if outcome == "skip" else "assert int(dut.y.value)==0"
+    bench = project / "phase2/stage1/sim/tb_unit.py"
+    bench.write_text("import cocotb\nimport pytest\nfrom cocotb.triggers import Timer\n"
+        "from cocotb.utils import get_sim_time\nHALF_NS=3\n" + unrelated
+        + "class PinDriver:\n    def __init__(self, dut):\n        self.dut=dut\n"
+        "    async def cycle(self):\n" + local + "        self.dut.clk.value=0\n"
+        f"        await Timer({delay}, unit='ns')\n        self.dut.clk.value=1\n"
+        f"        await Timer({delay}-0.5, unit='ns')\n        await Timer(0.5, unit='ns')\n"
+        "        self.dut.clk.value=0\n"
+        "@cocotb.test()\nasync def reference(dut):\n    dut.a.value=0\n"
+        "    driver=PinDriver(dut)\n    first=get_sim_time(unit='ps')\n"
+        "    await driver.cycle()\n    measured=get_sim_time(unit='ps')-first\n"
+        "    print(f'MANUAL_CLOCK_PS={measured}', flush=True)\n"
+        f"    assert measured=={expected_ps}\n    {action}\n")
+    original = bench.read_bytes()
+    result = gls(project, directory, {}, Commands(directory), state=state, config=config)
+    logs = "\n".join(Path(path).read_text(errors="replace") for path in result["reports"]
+                     if str(path).endswith(".log"))
+    assert f"MANUAL_CLOCK_PS={expected_ps}.0" in logs, logs
+    assert result["native_steps"][0]["status"] == expected, result
+    assert bench.read_bytes() == original
+    if style == "manual":
+        assert "COCOTB_CLOCK_UNBOUND:" not in logs
+    else:
+        assert "COCOTB_CLOCK_UNBOUND:" in logs
