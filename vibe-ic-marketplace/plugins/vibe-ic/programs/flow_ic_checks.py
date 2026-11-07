@@ -54,7 +54,7 @@ class SignalIntegrity(Step):
             raise StepException("NOT_MEASURED: SI corner Liberty has no nominal supply voltage")
         root = Path(self.step_dir).resolve()
         result = si_mcf_sta.run(Path(self.config["DESIGN_DIR"]),
-            spef=str(spefs[0]), netlist=str(state_in[DesignFormat.NETLIST]),
+            spef=str(spefs[0]), netlist=str(state_in.get(DesignFormat.POWERED_NETLIST) or state_in[DesignFormat.NETLIST]),
             sdc=str(state_in[DesignFormat.SDC]), liberty=str(libraries[0]),
             top=self.config["DESIGN_NAME"], macro_libs=list(map(str, libraries[1:])),
             vdd_v=float(voltage), out_json=root / "si_mcf_sta.json", work_dir=root / "native")
