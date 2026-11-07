@@ -1901,6 +1901,42 @@ def test_gls_accepts_native_physical_cell_models(tmp_path, connected):
     assert result["native_steps"][0]["status"] == "PASS", result
 
 
+@pytest.mark.parametrize("kind,different", [
+    ("spacer", False), ("tap", False), ("spacer", True),
+    ("logic", False), ("signal", False), ("directed", False), ("unknown", False),
+])
+def test_gls_projects_empty_physical_library_cells(tmp_path, kind, different):
+    if not all(shutil.which(name) for name in ("yosys", "iverilog", "vvp")):
+        pytest.skip("Native Yosys and Icarus are required")
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config = gls_fixture(project, different=different)
+    model = Path(config["CELL_VERILOG_MODELS"][0])
+    model.write_text(model.read_text() + "module utility(inout rail);\n"
+                     + ("assign rail=1'b0;\n" if kind == "logic" else "") + "endmodule\n")
+    lef = project / "physical.lef"
+    klass = "CORE WELLTAP" if kind == "tap" else "CORE" if kind == "unknown" else "CORE SPACER"
+    direction, use = ("OUTPUT" if kind == "directed" else "INOUT"), ("SIGNAL" if kind == "signal" else "POWER")
+    lef.write_text(f"MACRO utility\n CLASS {klass} ;\n PIN rail\n"
+                   f"  DIRECTION {direction} ;\n  USE {use} ;\n END rail\nEND utility\n")
+    config["CELL_LEFS"] = [str(lef)]
+    netlist = Path(state["nl"])
+    netlist.write_text(netlist.read_text().replace("endmodule", "wire supply;\n"
+        + "\n".join(f"utility physical_{index}(.rail(supply));" for index in range(1000))
+        + "\nendmodule\n"))
+    sdf = Path(state["sdf"]["nom_tt"])
+    originals = {path: path.read_bytes() for path in [netlist, sdf]}
+    result = gls(project, directory, {}, Commands(directory), state=state, config=config)
+    assert result["native_steps"][0]["status"] == ("FAIL" if different else "PASS"), result
+    assert result["metrics"]["sdf_annotation_errors"] == 0
+    assert result["metrics"]["sdf_delays_applied"] > 0
+    omitted = json.loads((directory / "gls.json").read_text())["physical_only_types_omitted"]
+    assert omitted == (["utility"] if kind in {"spacer", "tap"} else [])
+    assert {path: path.read_bytes() for path in originals} == originals
+    if omitted:
+        assert "physical_0" not in (directory / "signal_netlist.v").read_text()
+
+
 @pytest.mark.parametrize("kind,different,expected", [
     ("passive", False, "PASS"), ("passive", True, "FAIL"),
     ("logic", False, "FAIL"), ("state", False, "FAIL"),
