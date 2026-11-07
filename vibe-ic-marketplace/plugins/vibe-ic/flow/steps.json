@@ -2804,13 +2804,31 @@
       "tool": {
         "kind": "librelane",
         "imports": [
-          "librelane_plugins.librelane_plugin_vibeic.postroute_repair"
+          "librelane_plugins.librelane_plugin_vibeic.postroute_sizing"
         ],
         "steps": [
-          "Vibeic.PostRouteRepair",
+          "Vibeic.RCXBeforeRepair",
+          "Vibeic.PostRouteSizing",
+          "OpenROAD.DetailedPlacement",
+          "OpenROAD.GlobalRouting",
+          "OpenROAD.DetailedRouting",
+          "OpenROAD.FillInsertion",
           "OpenROAD.RCX",
           "OpenROAD.STAPostPNR"
-        ]
+        ],
+        "skip_when_unchanged": {
+          "metric": "vibeic__postroute__changed",
+          "steps": [
+            "OpenROAD.DetailedPlacement",
+            "OpenROAD.GlobalRouting",
+            "OpenROAD.RepairDesignPostGRT",
+            "OpenROAD.ResizerTimingPostGRT",
+            "OpenROAD.DetailedRouting",
+            "OpenROAD.FillInsertion",
+            "OpenROAD.RCX"
+          ]
+        },
+        "restore_input_on_failure": true
       },
       "checks": [],
       "legacy_id": {

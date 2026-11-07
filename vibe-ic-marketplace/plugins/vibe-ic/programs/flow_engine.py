@@ -300,7 +300,6 @@ class NativeChain:
         self.preparation_runs: list[dict] = []
         self.preparation_accounted = 0
         self.initialization_error: Exception | None = None
-        self.synthesis_fixed = False
 
     def observe_preparation(self, run):
         self.preparation_runs.append(run)
@@ -318,7 +317,6 @@ class NativeChain:
         config = build_config(self.project, route="ic" if kind == "Chip" else "ip",
                               **({"pdk": self.pdk} if self.pdk else {}),
                               **({"on_tool_run": self.observe_preparation} if kind == "Chip" else {}))
-        self.synthesis_fixed = "SYNTH_STRATEGY" in config
         os.environ["_OPENLANE_MAX_CORES"] = "8"
         self.owner = Flow.factory.get(kind)(config, design_dir=str(self.project),
                                             pdk_root=os.environ.get("PDK_ROOT"))
@@ -327,16 +325,9 @@ class NativeChain:
         self.config = self.owner.config.to_raw_dict()
         self.state = State()
 
-    def prepare(self, *, floorplan=False, synthesis=False, directory=None):
+    def prepare(self, *, floorplan=False, directory=None):
         try:
             self.initialize()
-            if synthesis and not self.synthesis_fixed:
-                from flow_config import explore_synthesis
-                strategy = explore_synthesis(self.owner.config, self.state,
-                    directory / "synthesis_exploration", self.observe_preparation)
-                if strategy is not None:
-                    self.owner.config = self.owner.config.copy(SYNTH_STRATEGY=strategy)
-                    self.config = self.owner.config.to_raw_dict()
             if floorplan:
                 from flow_pdn_current import current_settings
                 from flow_config import _native_pdn_numbers
@@ -388,14 +379,21 @@ class NativeChain:
 
     def execute(self, directory: Path, tool: dict) -> ToolResult:
         error = self.prepare(floorplan="OpenROAD.Floorplan" in tool.get("steps", []),
-                             synthesis="Yosys.Synthesis" in tool.get("steps", []), directory=directory)
+                             directory=directory)
         result = self.preparation_result()
         if error is not None:
             return result
+        state_in = self.state
         from librelane.steps import Step, StepError, StepException
         for module in tool.get("imports", []):
             importlib.import_module(module)
         for name in tool.get("steps", []):
+            unchanged = tool.get("skip_when_unchanged", {})
+            if (name in unchanged.get("steps", [])
+                    and result.metrics.get(unchanged.get("metric")) == 0):
+                result.native_steps.append({"name": name, "ran": False, "exit_code": None,
+                                            "native_no_change": True})
+                continue
             step_class = Step.factory.get(name)
             if step_class is None:
                 result.detail += f" Native step unavailable: {name}."
@@ -418,7 +416,8 @@ class NativeChain:
             step = ObservedStep(self.owner.config, self.state)
             metric_name = getattr(step, "metric_name", None)
             if (metric_name and any((not item["ran"] or item.get("exit_code"))
-                    and not item.get("native_config_disabled") for item in result.native_steps)
+                    and not (item.get("native_config_disabled") or item.get("native_no_change"))
+                    for item in result.native_steps)
                     and not any(key == metric_name or key.startswith(metric_name + "__corner:")
                                 for key in result.metrics)):
                 result.native_steps.append({"name": name, "ran": False, "exit_code": None,
@@ -469,6 +468,11 @@ class NativeChain:
                                         "tool_seconds": elapsed, "detail": detail,
                                         "reports": str(destination)})
             result.detail += detail
+        if tool.get("restore_input_on_failure") and any(
+                (not call["ran"] or call.get("exit_code"))
+                and not (call.get("native_config_disabled") or call.get("native_no_change"))
+                for call in result.native_steps):
+            self.state = state_in
         result.reports = [str(path) for path in directory.rglob("*") if path.is_file()]
         (directory / "state_out.json").write_text(self.state.dumps())
         return result
@@ -672,7 +676,8 @@ def evaluate(tool: ToolResult, measurements: list) -> str:
     if any(item["status"] == "FAIL" for item in measurements):
         return "FAIL"
     if any((not item["ran"] or item.get("status") == "NOT_MEASURED")
-           and not item.get("native_config_disabled") for item in tool.native_steps):
+           and not (item.get("native_config_disabled") or item.get("native_no_change"))
+           for item in tool.native_steps):
         return "NOT_MEASURED"
     if any(item["status"] == "NOT_MEASURED" for item in measurements):
         return "NOT_MEASURED"

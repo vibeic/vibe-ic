@@ -25,6 +25,32 @@ def capture_environment(directory, settings):
     return path
 
 
+@pytest.mark.parametrize("mismatch", [None, "top", "netlist", "sdc"])
+def test_core_netlist_uses_its_native_consumer_environment(tmp_path, mismatch):
+    project = tmp_path / "project"
+    native = project / "reports/native/core"
+    synthesis, area = native / "yosys_synthesis", native / "openroad_area"
+    synthesis.mkdir(parents=True)
+    area.mkdir()
+    netlist = synthesis / "core.nl.v"
+    netlist.write_text("module core; endmodule\n")
+    sdc = project / "core.sdc"
+    sdc.write_text("create_clock -name core -period 10\n")
+    (area / "config.json").write_text(json.dumps({
+        "DESIGN_NAME": "other" if mismatch == "top" else "core",
+        "FALLBACK_SDC": str(project / "other.sdc" if mismatch == "sdc" else sdc),
+        "meta": {"step": "OpenROAD.Floorplan"},
+    }))
+    (area / "state_in.json").write_text(json.dumps({
+        "nl": str(synthesis / "other.nl.v" if mismatch == "netlist" else netlist),
+    }))
+    environment = area / "_env.tcl"
+    environment.write_text("set ::env(CLOCK_PERIOD) 10\n")
+
+    assert flow_activity._native_environment(project, netlist, sdc, "core", "nominal") == (
+        environment if mismatch is None else None)
+
+
 @pytest.fixture
 def activity_case(tmp_path):
     library = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic", "programs", "tests",
