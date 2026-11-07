@@ -1457,3 +1457,93 @@ END DESIGN
             toolbox=toolbox, step_dir=str(tmp_path / "drc-prepared"))
         assert full.metrics["magic__drc_error__count"] > 0
         assert unchanged.metrics["magic__drc_error__count"] == full.metrics["magic__drc_error__count"]
+
+
+@pytest.mark.parametrize("connected", [True, False])
+def test_native_extraction_reads_ring_connector_conductivity(inputs, tmp_path, monkeypatch, connected):
+    import re
+    import shutil
+    import subprocess
+    from librelane.common import Path as NativePath, Toolbox
+    from librelane.flows import Flow
+    from librelane.state import DesignFormat, State
+    from librelane.steps import Step
+
+    root = os.environ.get("PDK_ROOT")
+    rc = Path(root or "/missing") / "sky130A/libs.tech/magic/sky130A.magicrc"
+    if not shutil.which("magic") or not rc.is_file():
+        pytest.skip("native Magic and installed PDK required")
+    project, config, native, _, _ = inputs
+    lef = _write(tmp_path / "bridge.lef", """VERSION 5.8 ;
+MACRO neutral_bridge
+ CLASS PAD SPACER ;
+ SIZE 3 BY 1 ;
+ PIN L
+  DIRECTION INOUT ;
+  USE POWER ;
+  PORT
+   LAYER met1 ;
+   RECT 0 0 0.5 1 ;
+  END
+ END L
+ PIN R
+  DIRECTION INOUT ;
+  USE POWER ;
+  PORT
+   LAYER met1 ;
+   RECT 2.5 0 3 1 ;
+  END
+ END R
+END neutral_bridge
+END LIBRARY
+""")
+    native["PAD_LEFS"].append(str(lef))
+    native["MAGICRC"] = str(rc)
+    original_ring = chip._ring
+
+    def ring(*args):
+        chosen, ordered, *rest = original_ring(*args)
+        chosen["u_bridge"] = {"master": "neutral_bridge", "port": "neutral_bridge",
+            "terminal": "", "direction": "inout", "is_ring_connector": True,
+            "rail_bridges": [["L", "R"]], "supply_connections": {"L": "VDD", "R": "VDD"}}
+        ordered["W"].append("u_bridge")
+        return chosen, ordered, *rest
+
+    monkeypatch.setattr(chip, "_ring", ring)
+    prepared = chip.prepare(project, config)
+    layout = tmp_path / "layout"
+    layout.mkdir()
+    wire = ("box 0 0 3um 1um\npaint metal1\n" if connected else
+            "box 0 0 0.5um 1um\npaint metal1\nbox 2.5um 0 3um 1um\npaint metal1\n")
+    script = _write(layout / "generate.tcl", "drc off\nload neutral_bridge -silent\n" + wire + """box 0 0 0.5um 1um
+label L center metal1
+port make 1
+box 2.5um 0 3um 1um
+label R center metal1
+port make 2
+load neutral_chip -silent
+box 0 0 0 0
+getcell neutral_bridge
+gds write fixture.gds
+quit -noprompt
+""")
+    run = subprocess.run(["magic", "-dnull", "-noconsole", "-rcfile", str(rc), str(script)],
+                         cwd=layout, capture_output=True, text=True)
+    assert run.returncode == 0, run.stdout + run.stderr
+    definition = _write(tmp_path / "fixture.def", "VERSION 5.8 ;\nDESIGN neutral_chip ;\n"
+        "UNITS DISTANCE MICRONS 1000 ;\nDIEAREA ( 0 0 ) ( 10000 10000 ) ;\nEND DESIGN\n")
+    rtl = _write(tmp_path / "neutral_chip.v", "module neutral_chip; endmodule\n")
+    owner = Flow.factory.get("Classic")({"DESIGN_NAME": "neutral_chip", "PDK": "sky130A",
+        "VERILOG_FILES": [str(rtl)], "CLOCK_PORT": None, "CLOCK_PERIOD": 10,
+        "MAGIC_EXT_USE_GDS": True, "MAGICRC": prepared["MAGICRC"]},
+        design_dir=str(tmp_path), pdk_root=root)
+    state = State({DesignFormat.GDS: NativePath(str(layout / "fixture.gds")),
+                   DesignFormat.DEF: NativePath(str(definition))})
+    extraction = tmp_path / "extract"
+    Step.factory.get("Magic.SpiceExtraction")(
+        owner.config.copy(PAD_LEFS=[NativePath(str(lef))]), state_in=state).start(
+            toolbox=Toolbox(str(tmp_path / "tools")), step_dir=str(extraction))
+    text = (extraction / "extraction/neutral_bridge.ext").read_text()
+    equivalent = bool(re.search(r'^equiv "(?:R|L)" "(?:L|R)"$', text, re.M))
+    assert equivalent is connected, text
+    assert "\nabstract\n" not in text, text
