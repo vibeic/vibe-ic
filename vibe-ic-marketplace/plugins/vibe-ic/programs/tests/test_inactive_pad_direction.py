@@ -112,6 +112,7 @@ def test_real_native_controls_and_document_declarations_both_required(tmp_path, 
 
 @pytest.mark.parametrize("missing,remaining", [
     ("none", 0), ("protocol", 2), ("delegation", 2), ("wrong_top", 2), ("control_rx", 1),
+    ("undeclared_top", 0), ("undeclared_top_missing_choice", 2), ("undeclared_top_bad_name", 2),
 ])
 def test_selected_interface_direction_keeps_both_sources(tmp_path, missing, remaining):
     if not shutil.which("sta"):
@@ -128,12 +129,17 @@ def test_selected_interface_direction_keeps_both_sources(tmp_path, missing, rema
            "| o_memory_we | output | 1 | write enable (typical) |\n")
     if missing == "delegation":
         doc = doc.replace("illustrative", "fixed").replace("(typical)", "")
+    if missing.startswith("undeclared_top"):
+        (tmp_path / "input/docs/interface.md").unlink()
+        doc = doc.replace("Top module: `unit`.\n", "# Delegated memory interface\n")
     (tmp_path / "input/docs/L3_interface.md").write_text(doc)
     docs = {p.name: p.read_text() for p in (tmp_path / "input/docs").iterdir()}
     phase1.gen_l1_datasheet(tmp_path, docs)
     phase1.gen_l9_integration_spec(tmp_path, docs, {})
     l9 = tmp_path / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
     original_l9 = l9.read_bytes()
+    if missing.startswith("undeclared_top"):
+        assert json.loads(original_l9)["top_module"] is None
     choice = {"top_module": "unit", "memory_interface_protocol": "separate_address",
               "memory_interface": {"read_address": "read_pointer", "write_address": "write_pointer",
                                    "write_data": "payload_o", "read_data": "payload_i",
@@ -142,6 +148,10 @@ def test_selected_interface_direction_keeps_both_sources(tmp_path, missing, rema
         del choice["memory_interface_protocol"]
     elif missing == "wrong_top":
         choice["top_module"] = "another_unit"
+    elif missing == "undeclared_top_missing_choice":
+        del choice["top_module"]
+    elif missing == "undeclared_top_bad_name":
+        choice["top_module"] = "not a module identifier"
     declaration = tmp_path / "plugin_output/declaration.json"
     declaration.parent.mkdir()
     declaration.write_text(json.dumps(choice))

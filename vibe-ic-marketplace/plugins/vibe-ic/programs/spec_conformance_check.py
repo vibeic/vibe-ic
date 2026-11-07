@@ -2002,7 +2002,7 @@ def _declared_spellings(project: Optional[Path]) -> set:
     return out
 
 
-def _selected_interface_ports(project: Path, ports: List[Port], top: str,
+def _selected_interface_ports(project: Path, ports: List[Port], top: Optional[str],
                               *, port_sources: Optional[dict] = None) -> List[Port]:
     """Use declared names and document widths for delegated port roles.
 
@@ -2015,7 +2015,10 @@ def _selected_interface_ports(project: Path, ports: List[Port], top: str,
         choice = json.loads((project / "plugin_output/declaration.json").read_text())
     except (OSError, ValueError):
         return ports
-    if not isinstance(choice, dict) or choice.get("top_module") != top:
+    selected_top = choice.get("top_module") if isinstance(choice, dict) else None
+    if (not isinstance(selected_top, str)
+            or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", selected_top)
+            or (top is not None and selected_top != top)):
         return ports
     for key, selected in choice.items():
         if not key.endswith("_interface") or not isinstance(selected, dict):
