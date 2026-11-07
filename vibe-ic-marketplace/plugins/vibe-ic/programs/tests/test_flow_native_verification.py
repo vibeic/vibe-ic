@@ -1201,6 +1201,68 @@ def test_power_pad_boundary_keeps_paired_interfaces_consistent(tmp_path, differe
     assert interfaces[0]["VDD!"] == "output"
 
 
+@pytest.mark.parametrize("modeled", [False, True])
+@pytest.mark.parametrize("change", ["none", "core", "connection"])
+def test_native_lef_completes_pad_ports_without_losing_supplied_ports(tmp_path, modeled, change):
+    if not all(shutil.which(name) for name in ("yosys", "eqy")):
+        pytest.skip("Native Yosys and EQY are required")
+    gold, gate, liberty, model, lef = [tmp_path / name for name in
+        ("gold.v", "gate.v", "cells.lib", "pads.v", "pads.lef")]
+    model.write_text("(* blackbox *) module PADLINK #(parameter MODE=7)(inout PWR,output SENSE); endmodule\n")
+    pins = [("PWR", "INOUT", "POWER"), ("GND_Q", "INOUT", "GROUND"),
+            ("ANALOG_BUS", "INOUT", "SIGNAL"), ("BUS[4]", "INOUT", "SIGNAL"),
+            ("BUS[5]", "INOUT", "SIGNAL")]
+    if not modeled:
+        pins.append(("SENSE", "OUTPUT", "SIGNAL"))
+    lef.write_text('VERSION 5.8 ;\nBUSBITCHARS "[]" ;\nMACRO PADLINK\n CLASS PAD ;\n'
+        + ''.join(f' PIN {pin}\n  DIRECTION {direction} ;\n  USE {use} ;\n END {pin}\n'
+                  for pin, direction, use in pins) + 'END PADLINK\n')
+    body = ("module unit(input a,output y,inout pwr,gnd,analog,b0,b1); wire sense;\n"
+            "PADLINK link(.PWR(pwr),.GND_Q(gnd),.ANALOG_BUS(analog),.BUS({b1,b0}),.SENSE(sense));\n"
+            "assign y=a^sense; endmodule\n")
+    gold.write_text(body)
+    gate.write_text(body.replace("a^sense", "~a^sense") if change == "core" else
+                    body.replace("{b1,b0}", "{b0,b1}") if change == "connection" else body)
+    liberty.write_text("library(neutral) {}\n")
+    config = {"DESIGN_NAME": "unit", "VERILOG_FILES": [str(gold)], "DEFAULT_CORNER": "typical",
+              "LIB": {"typical": [str(liberty)]}, "PAD_LEFS": [str(lef)],
+              "PAD_VERILOG_MODELS": [str(model)] if modeled else []}
+    result = eqy(tmp_path, tmp_path, {}, Commands(tmp_path), state={"nl": str(gate)}, config=config)
+    rows = {row["name"]: row["status"] for row in result.get("native_steps", [])}
+    assert rows["Yosys.EQY.Core"] == ("FAIL" if change != "none" else "PASS"), result
+    assert rows["Yosys.Wrapper"] == ("FAIL" if change == "connection" else "PASS"), result
+    module = json.loads((tmp_path / "pad_interfaces.json").read_text())["modules"]["PADLINK"]
+    assert module["ports"]["BUS"]["offset"] == 4
+    assert len(module["ports"]["BUS"]["bits"]) == 2
+    assert module["ports"]["GND_Q"]["direction"] == "inout"
+    assert module["ports"]["ANALOG_BUS"]["direction"] == "inout"
+    assert module["ports"]["SENSE"]["direction"] == "output"
+    if modeled:
+        assert "MODE" in module["parameter_default_values"]
+
+
+@pytest.mark.parametrize("native_exit", [17, -11])
+def test_eqy_pad_preparation_preserves_the_native_process_exit(tmp_path, monkeypatch, native_exit):
+    import sys
+
+    gold, gate, liberty, model = [tmp_path / name for name in ("gold.v", "gate.v", "cells.lib", "pads.v")]
+    gold.write_text("module unit(input a,output y); PADLINK link(a,y); endmodule\n")
+    gate.write_text(gold.read_text())
+    model.write_text("(* blackbox *) module PADLINK(input A,output Y); endmodule\n")
+    liberty.write_text("library(neutral) {}\n")
+    config = {"DESIGN_NAME": "unit", "VERILOG_FILES": [str(gold)], "DEFAULT_CORNER": "typical",
+              "LIB": {"typical": [str(liberty)]}, "PAD_VERILOG_MODELS": [str(model)]}
+    commands = Commands(tmp_path)
+    run = commands.run
+    code = ("import os,signal; os.kill(os.getpid(),signal.SIGSEGV)" if native_exit < 0
+            else f"raise SystemExit({native_exit})")
+    monkeypatch.setattr(commands, "run", lambda argv: run([sys.executable, "-c", code]))
+    result = eqy(tmp_path, tmp_path, {}, commands, state={"nl": str(gate)}, config=config)
+    assert result["exit_code"] == native_exit
+    assert result["metrics"] == {}
+    assert not (tmp_path / "scratch").exists()
+
+
 def test_xor_reuses_native_state_number(tmp_path):
     state = SimpleNamespace(metrics={"design__xor_difference__count": 3})
     commands = Commands(tmp_path)
