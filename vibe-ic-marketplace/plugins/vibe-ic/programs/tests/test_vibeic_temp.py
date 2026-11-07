@@ -351,3 +351,45 @@ def test_later_step_reads_retained_project_reference_after_cleanup(root, tmp_pat
     result = run("consume")
     assert result["steps"][0]["status"] == "PASS"
     assert consumed == [json.loads(cache.read_text())["state_out"]]
+
+
+def test_publish_completes_an_existing_partial_destination(root, tmp_path):
+    destination = tmp_path / "project/native"
+    with temp.execution("neutral", "partial-publication") as work:
+        report = work.run / "netlist_equivalence/native/reports/result.json"
+        report.parent.mkdir(parents=True)
+        report.write_text(json.dumps({"status": "FAIL", "source": str(report)}))
+        partial = destination / report.relative_to(work.run)
+        partial.parent.mkdir(parents=True)
+        partial.write_text('{"status":')
+        assert work.publish(destination) == destination
+        assert json.loads(partial.read_text()) == {"status": "FAIL", "source": str(partial)}
+    assert not work.run.exists() and not work.tmp.exists()
+
+
+@pytest.mark.parametrize("failure_type", [RuntimeError, KeyboardInterrupt, SystemExit])
+def test_original_failure_survives_failed_publication(root, tmp_path, monkeypatch, failure_type):
+    import errno
+    import flow_engine as engine
+
+    original = failure_type("native EQY failure")
+    publication = OSError(errno.ENOSPC, "publication disk full")
+    paths = []
+
+    def native(*args, **kwargs):
+        run = temp.current_run()
+        paths.append(run)
+        (run / "native.log").write_text("original tool diagnostic\n")
+        raise original
+
+    def copy(*args, **kwargs):
+        raise publication
+
+    monkeypatch.setattr(engine, "_run", native)
+    monkeypatch.setattr(temp.shutil, "copytree", copy)
+    with pytest.raises(failure_type) as caught:
+        engine.run(tmp_path / "project")
+    assert caught.value is original
+    assert caught.value.__cause__ is publication
+    assert (paths[0] / "native.log").read_text() == "original tool diagnostic\n"
+    temp._remove(paths[0])
