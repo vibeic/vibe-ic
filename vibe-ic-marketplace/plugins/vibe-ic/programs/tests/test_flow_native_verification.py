@@ -1459,6 +1459,9 @@ def test_gls_reuses_existing_bench_through_native_chip_preparation(tmp_path, dif
     project, directory = tmp_path / "project", tmp_path / "run"
     directory.mkdir()
     state, config = gls_fixture(project, different=different)
+    netlist = Path(state["nl"])
+    netlist.write_text(netlist.read_text().replace(
+        "module unit(input a, output y);", "module unit(a,y);\ninout a; output y;"))
     bench = project / "phase2/stage1/sim/tb_unit.v"
     bench.write_text(bench.read_text().replace("unit dut(a,y)", "core_unit dut(.a(a),.y(y))"))
     original = bench.read_bytes()
@@ -1470,18 +1473,23 @@ def test_gls_reuses_existing_bench_through_native_chip_preparation(tmp_path, dif
     (docs / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({"top_module": "core_unit"}))
     chip = project / "work/flow/chip"
     chip.mkdir(parents=True)
-    (chip / "config.json").write_text(json.dumps({"DESIGN_NAME": "unit"}))
-    (chip / "preparation.json").write_text(json.dumps({"pads": {}}))
+    (chip / "config.json").write_text(json.dumps({"DESIGN_NAME": "unit", "VERILOG_FILES": [str(rtl)]}))
+    (chip / "preparation.json").write_text(json.dumps({"pads": {}, "ports": [
+        {"name": "a", "direction": "input", "width": 1},
+        {"name": "y", "direction": "output", "width": 1}]}))
     (chip / "wrapper.v").write_text(
-        "module unit(input a,output y); core_unit u_core(.a(a),.y(y)); endmodule\n")
+        "module unit(input a,output y);\ncore_unit u_core(.a(a),.y(y)); endmodule\n")
     result = gls(project, directory, {}, Commands(directory), state=state, config=config)
     row, = result["native_steps"]
     assert row["status"] == ("FAIL" if different else "PASS"), result
     assert result["metrics"]["gls_failures"] == int(different), result
     assert row["dut_binding"]["from"] == "core_unit"
+    assert row["sdf_delays_applied"] > 0 and row["sdf_errors"] == 0
+    assert row["failures"] == int(different)
     assert bench.read_bytes() == original
     emitted = (directory / "corner_1/annotated_tb.v").read_text()
-    assert "unit dut(.a(a),.y(y))" in emitted
+    assert "unit dut(.a(flow_input_0),.y(y))" in emitted
+    assert "assign flow_input_0 = a;" in emitted
     assert "if(y!==1)" in emitted
 
 

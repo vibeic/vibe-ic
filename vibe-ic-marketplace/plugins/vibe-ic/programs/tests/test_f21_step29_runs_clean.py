@@ -109,6 +109,7 @@ def _project(tmp_path, *, record=True):
 def test_the_dut_binds_through_the_declared_chip_top_pad_by_pad(tmp_path):
     project = _project(tmp_path)
     declared = sgs.declared_dut_binding(project, 'core', ROUTED)
+    assert sgs.declared_dut_binding(project, None, ROUTED) == declared
     assert declared['dut_module'] == 'chip_top' and declared['rebound']
     # core port -> its net in the declared Verilog -> the pad -> the chip port
     assert declared['port_map'] == {'clk_i': 'clk', 'x_i': 'x', 'p_o': 'p'}
@@ -136,7 +137,8 @@ def test_native_preparation_traces_existing_core_bench(tmp_path, change):
     put(project / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json', {'top_module': 'core'})
     write(project / 'work/flow/chip/wrapper.v', CHIP_TOP_IO)
     put(project / 'work/flow/chip/config.json',
-        {'DESIGN_NAME': 'other_chip' if change == 'wrong_chip' else 'chip_top'})
+        {'DESIGN_NAME': 'other_chip' if change == 'wrong_chip' else 'chip_top',
+         'VERILOG_FILES': [str(project / 'phase2/stage1/rtl/core.v')]})
     pads = dict(RECORD['pad_instances'])
     if change == 'missing_pad':
         pads.pop('u_pad_clk')
@@ -146,6 +148,7 @@ def test_native_preparation_traces_existing_core_bench(tmp_path, change):
             sgs.declared_dut_binding(project, 'another_core' if change == 'other_core' else 'core', ROUTED)
     else:
         declared = sgs.declared_dut_binding(project, 'core', ROUTED)
+        assert sgs.declared_dut_binding(project, None, ROUTED) == declared
         bound, _ = sgs.bind_dut_module(TB, 'core', 'dut', ROUTED, declared)
         assert 'chip_top dut (.clk(clk), .x(x), .p(p));' in bound
         assert declared['port_map'] == {'clk_i': 'clk', 'x_i': 'x', 'p_o': 'p'}
