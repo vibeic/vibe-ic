@@ -143,16 +143,33 @@ def fold_subckts(sources: Sequence[Path], voltages: Dict[str, float],
     lines: List[str] = []
     folded_cells = indented = dropped = 0
     defined: set = set()
+    source_statements = []
+    ports_by_cell = {}
     for source in sources:
-        inside = shadowed = False
         statements: List[List[str]] = []
         for raw in Path(source).read_text(errors='replace').splitlines():
             if raw.startswith('+') and statements:
                 statements[-1].append(raw)
             else:
                 statements.append([raw])
-        for statement in statements:
-            head = statement[0]
+        joined = [' '.join([statement[0], *(line[1:] for line in statement[1:])])
+                  for statement in statements]
+        source_statements.append(joined)
+        for head in joined:
+            header = _SUBCKT_RE.match(head)
+            if header:
+                ports = header.group(2).split()
+                kept = [i for i, pin in enumerate(ports) if pin not in fold]
+                names = {ports[i] for i in kept}
+                for i, pin in enumerate(ports):
+                    if pin in fold and fold[pin] not in names:
+                        kept.append(i)
+                        names.add(fold[pin])
+                ports_by_cell.setdefault(header.group(1).lower(), (ports, kept))
+    for statements in source_statements:
+        inside = shadowed = False
+        for head in statements:
+            statement = [head]
             m = _SUBCKT_RE.match(head)
             if shadowed:
                 # An earlier source already defines this cell: its first
@@ -184,6 +201,13 @@ def fold_subckts(sources: Sequence[Path], voltages: Dict[str, float],
                 lines += statement
                 continue
             tokens = [fold.get(t, t) for t in head.split()]
+            if kind == 'x':
+                model_index = next((i for i, token in enumerate(tokens[1:], 1)
+                                    if _PARAM_TOKEN.match(token)), len(tokens)) - 1
+                child = ports_by_cell.get(tokens[model_index].lower())
+                if child and model_index - 1 == len(child[0]):
+                    tokens = [tokens[0], *(tokens[i + 1] for i in child[1]),
+                              *tokens[model_index:]]
             words = [t for t in tokens[1:] + ' '.join(statement[1:]).replace('+', ' ').split()
                      if not _PARAM_TOKEN.match(t)]
             nodes = {'x': words[:-1], 'm': words[:4], 'd': words[:2],
@@ -1110,7 +1134,10 @@ def prepare_arm(project: Path, image: str, state_path: Path, corner: str, *,
         stale.unlink()
     (out_dir / 'reference_clocks.txt').unlink(missing_ok=True)
     cell_sources = [host(p) for p in (config.get('CELL_SPICE_MODELS') or [])]
-    spice_sources = cell_sources + [host(p) for p in (config.get('PAD_SPICE_MODELS') or [])]
+    spice_sources = cell_sources + [host(p) for name in ('PAD_SPICE_MODELS', 'PAD_CDLS')
+                                     for p in (config.get(name) or [])]
+    for cdl in config.get('PAD_CDLS') or []:
+        spice_sources.extend(sorted((host(cdl).parent.parent / 'spice').glob('*.spice')))
     import librelane_contract as lc
     local = lc._provider_for_image(image) is not None or lc._provider_route(project)
     execution_root = str(pdk_root) if local else str(Path(guest).parent)
