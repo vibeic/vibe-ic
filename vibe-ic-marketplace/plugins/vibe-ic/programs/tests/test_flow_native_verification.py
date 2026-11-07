@@ -1459,6 +1459,61 @@ def test_gls_annotates_the_native_delay_field_for_each_rc_corner(tmp_path, corne
     assert result["native_steps"][0]["status"] == "PASS", result
 
 
+def test_gls_compiles_one_cocotb_model_for_all_45_independent_replays(tmp_path):
+    if not all(shutil.which(tool) for tool in ("iverilog", "vvp", "cocotb-config")):
+        pytest.skip("Native Icarus and cocotb are required")
+    import re
+    import xml.etree.ElementTree as ET
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config = gls_fixture(project, cocotb=True)
+    benches = []
+    for index in range(5):
+        bench = project / f"phase2/stage1/sim/tb_case_{index}.py"
+        bench.write_text("import cocotb\nfrom cocotb.triggers import Timer\n"
+            f"@cocotb.test()\nasync def case_{index}(dut):\n"
+            f"    dut.a.value=0\n    await Timer({5 + index},unit='ns')\n"
+            "    assert int(dut.y.value)==0\n    dut.a.value=1\n"
+            "    await Timer(5,unit='ns')\n    assert int(dut.y.value)==1\n")
+        benches.append(str(bench))
+    sdf = state["sdf"]["typical"]
+    state["sdf"] = {f"{rc}_{pvt}": sdf for rc in ("min", "nom", "max") for pvt in ("ff", "tt", "ss")}
+    commands = Commands(directory)
+    result = gls(project, directory, {"corners": "all", "testbenches": benches}, commands,
+                 state=state, config=config)
+    assert len(result["native_steps"]) == 45 and all(
+        row["status"] == "PASS" for row in result["native_steps"]), result
+    assert result["metrics"]["sdf_annotation_errors"] == result["metrics"]["gls_failures"] == 0
+    for index in range(45):
+        names = [row.attrib["name"] for row in ET.parse(directory / f"corner_{index + 1}/results.xml").iter("testcase")]
+        assert names == [f"case_{index % 5}"], names
+    compiles = sum(len(re.findall(r"(?m)^(?:\S*/)?iverilog -o ", Path(record["log"]).read_text()))
+                   for record in commands.records)
+    assert compiles == 1, f"Native Icarus compiled {compiles} times for 45 replays"
+
+
+@pytest.mark.parametrize("different", [False, True])
+def test_gls_reuses_each_hdl_binary_and_keeps_all_corner_failures(tmp_path, different):
+    if not all(shutil.which(tool) for tool in ("iverilog", "vvp")):
+        pytest.skip("Native Icarus is required")
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config = gls_fixture(project)
+    original = project / "phase2/stage1/sim/tb_unit.v"
+    second = original.with_name("tb_second.v")
+    second.write_text(original.read_text().replace("module tb_unit", "module tb_second").replace(
+        "if(y!==1)", "if(y!==0)" if different else "if(y!==1)"))
+    sdf = state["sdf"]["typical"]
+    state["sdf"] = {rc: sdf for rc in ("min_ff", "nom_tt", "max_ss")}
+    commands = Commands(directory)
+    result = gls(project, directory, {"corners": "all", "testbenches": [str(original), str(second)]},
+                 commands, state=state, config=config)
+    assert [row["status"] for row in result["native_steps"]] == ["PASS", "FAIL" if different else "PASS"] * 3
+    assert result["metrics"]["gls_failures"] == 3 * different
+    assert sum(record["command"][0] == "vvp" for record in commands.records) == 6
+    assert sum(record["command"][0] == "iverilog" for record in commands.records) == 2
+
+
 def declared_vector_chip_fixture(project, *, different=False):
     from testbench_gen import emit_unit_tbs
 
