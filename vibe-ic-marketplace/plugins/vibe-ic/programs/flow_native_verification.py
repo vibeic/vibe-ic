@@ -549,16 +549,24 @@ def layout_step(directory, tool, commands, state, config, step_class, metric, ov
 
 def gls_signal_netlist(directory, netlist, text, used, closure, config, commands):
     import sdf_gate_sim as native
-    from _pad_ring import parse_lef_pin_roles, parse_verilog_rail_bridges
+    from _pad_ring import parse_lef_macro_classes, parse_lef_pin_roles, parse_verilog_rail_bridges
     from _specrtl_common import parse_rtl_ports
     from flow_chip_inputs import _paths
     from flow_native_adapters import _word
 
-    roles, connections, removed = {}, {}, set()
+    roles, classes, connections, removed = {}, {}, {}, set()
     for key in ("PAD_LEFS", "CELL_LEFS", "EXTRA_LEFS"):
         for path in _paths(config.get(key)):
             if path.is_file():
-                roles.update(parse_lef_pin_roles(path.read_text()))
+                source = path.read_text()
+                roles.update(parse_lef_pin_roles(source))
+                classes.update(parse_lef_macro_classes(source))
+    for name in closure["blackboxed"]:
+        pins = roles.get(name)
+        if (classes.get(name) in {"CORE SPACER", "CORE WELLTAP"} and pins
+                and all(direction == "INOUT" and use in {"POWER", "GROUND"}
+                        for direction, use in pins.values())):
+            removed.add(name)
     for instance in native._INSTANCE_STMT_RE.finditer(text):
         connections.setdefault(instance[1], set()).update(
             pin for pin, _ in native._CONN_RE.findall(instance[3]))
