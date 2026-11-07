@@ -314,7 +314,7 @@ def test_open_l9_top_is_recorded_from_single_authored_rtl_top(project):
     assert recorded["top_module_source"] == {
         "step": "RTL authoring",
         "artifact": "phase2/stage1/rtl",
-        "method": "yosys hierarchy -auto-top",
+        "method": "yosys hierarchy -check",
     }
 
 

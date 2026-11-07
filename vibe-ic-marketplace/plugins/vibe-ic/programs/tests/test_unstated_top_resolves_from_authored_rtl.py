@@ -68,7 +68,7 @@ def test_authored_top_replaces_unstated_strategy_and_keeps_input_absence(authore
     assert resolved["top_module"] == top
     assert resolved["top_module_extraction_strategy"] == "rtl_authoring_yosys_hierarchy"
     assert resolved["top_module_status"] == "resolved_from_rtl_authoring"
-    assert resolved["top_module_source"]["method"] == "yosys hierarchy -auto-top"
+    assert resolved["top_module_source"]["method"] == "yosys hierarchy -check"
     assert resolved["no_top_module_in_input"] is True
 
 
@@ -138,3 +138,14 @@ def test_explicit_plugin_declaration_wins_over_legacy_product(authored):
     declaration.write_text(json.dumps({"top_module": "declared_but_missing"}))
     with pytest.raises(FileNotFoundError, match="Declared top module declared_but_missing"):
         resolve_rtl_inputs(project)
+
+
+def test_parameterized_child_is_not_an_additional_root(authored):
+    project, _ = authored
+    (project / "phase2/stage1/rtl/chip_top.v").write_text(
+        "module leaf #(parameter W=1)(input [W-1:0] a, output [W-1:0] z);\n"
+        "assign z=a; endmodule\n"
+        "module chip_top(input [3:0] a, output [3:0] z);\n"
+        "leaf #(.W(4)) u(a,z); endmodule\n")
+    _, top, _ = resolve_rtl_inputs(project)
+    assert top == "chip_top"
