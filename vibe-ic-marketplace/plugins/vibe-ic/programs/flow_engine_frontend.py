@@ -110,7 +110,14 @@ def native_lint(project, top_name=None):
     files = list(silicon_rtl_selection(owner._pl.rtl_dir(project)))
     metrics, outputs, runs = {}, [], []
     status, detail, code = "NOT_MEASURED", "No RTL input for native lint.", None
-    top = owner._v661_resolve_dut_module(project, top_name or "", None) if files else None
+    top = None
+    if files:
+        detail = "Native lint cannot resolve the selected RTL top."
+        from flow_config import resolve_rtl_inputs
+        try:
+            files, top = resolve_rtl_inputs(project)
+        except FileNotFoundError as exc:
+            detail = str(exc)
     if files and top:
         support = [p for p in owner._pl.rtl_dir(project).rglob("*")
                    if p.is_file() and p.suffix.lower() in (".v", ".sv", ".vh", ".svh", ".h")]
@@ -170,8 +177,6 @@ def native_lint(project, top_name=None):
         status = ("FAIL" if any(item["status"] == "FAIL" for item in runs) else
                   "NOT_MEASURED" if any(item["status"] == "NOT_MEASURED" for item in runs) else "PASS")
         detail = "Installed Verilator, existing hygiene rules and ROM initialization checker."
-    elif files:
-        detail = "Native lint cannot resolve the selected RTL top."
     report_path = output / "native_lint.json"
     report = {"status": status, "metrics": metrics, "tools": runs,
               "detail": detail, "top": top, "files": list(map(str, files))}

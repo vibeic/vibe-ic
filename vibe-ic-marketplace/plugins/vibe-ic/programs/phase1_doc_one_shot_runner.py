@@ -52640,65 +52640,20 @@ def _v1_6_431_is_valid_hdl_wire(name) -> bool:
 def _v1_6_581_route_l1_fallback_top_module(
         l9: Dict[str, Any],
         promoted_from_l1: bool = False) -> bool:
-    """v1.6.581 — for #397 P3 ORGANIC. Route the
-    `l1_ic_name_fallback` top_module strategy: when this weak
-    last-resort path fires (no real `module <name>(...)`
-    declaration in input/docs/), clear the fabricated
-    `top_module_pins[]` superset-union list and stamp
-    `no_top_module_in_input=True` so downstream phase2 / phase3
-    consumers see the honest signal.
+    """Clear aggregate pins for an unstated top, preserving genuine L1 pins.
 
-    Operates on the `content` dict of `gen_l9_integration_spec`
-    in place. Returns True when the fallback was detected and
-    routed, False otherwise. Idempotent: a second invocation on
-    already-routed L9 is a no-op (pins already empty).
-
-    v1.6.581 follow-up — `promoted_from_l1` guard. The clear was
-    only ever meant for the *fabricated* superset-union pin list
-    (a glued aggregate of per-submodule interface tables). When
-    `top_module_pins` were promoted VERBATIM from a real
-    `L1.pin_table`, they are genuine extracted pins — clearing
-    them would discard real input. Skip the clear in that case;
-    only stamp the honest top-module flag still applies via the
-    normal no_top_module path, so we leave the (real) pins intact.
-
-    Chip-AGNOSTIC: pure provenance-based gate; no chip-class
-    string literal participates."""
+    The legacy strategy is accepted when reviewing previously generated docs.
+    """
     if not isinstance(l9, dict):
         return False
     strategy = l9.get("top_module_extraction_strategy") or ""
-    if strategy != "l1_ic_name_fallback":
+    if strategy not in {"l1_ic_name_fallback", TOP_MODULE_UNDECLARED_STRATEGY}:
         return False
-    # The fallback FIRED, so by construction no `module <name>(...)`
-    # declaration was found in the input — `top_module` is a
-    # Verilog-sanitised copy of `L1.ic_name`, not an extracted
-    # identifier. That fact is a property of the STRATEGY and is
-    # independent of where the PINS came from, so the honest flag is
-    # stamped here, BEFORE the pin-preservation early return below.
-    #
-    # Previously the `promoted_from_l1` guard returned before this
-    # line, on the stated assumption that "the honest top-module flag
-    # still applies via the normal no_top_module path". MEASURED: it
-    # does not. That path is
-    #     no_top_module_in_input = _flag_no_X_in_input(
-    #         top_module if not top_module_default_applied else None, …)
-    # and `_flag_no_X_in_input` returns False as soon as the value it
-    # is handed is non-empty. On this branch `top_module` is non-empty
-    # BY CONSTRUCTION, so the flag was pinned to False in exactly the
-    # case it exists to report. A design whose docs never name a top
-    # module then shipped `no_top_module_in_input: false` alongside
-    # `top_module_extraction_strategy: l1_ic_name_fallback` — the
-    # strategy stamp and the flag contradicting each other in the same
-    # record, with every downstream L9-vs-RTL consumer reading the flag.
-    # Chip-AGNOSTIC: provenance-based, no chip-class literal.
     l9["no_top_module_in_input"] = True
     # Real L1.pin_table promotion → pins are genuine, not a
     # fabricated superset-union. Do NOT clear them.
     if promoted_from_l1:
         return False
-    # Mark + clear. Keep `top_module` (= L1.ic_name) as the
-    # tentative label; downstream MUST check
-    # `no_top_module_in_input` before relying on top_module_pins.
     # Clear all three aliases consistently so any consumer that
     # reads `ports` / `top_ports` / `top_module_pins` sees the
     # cleared list.
@@ -52708,7 +52663,8 @@ def _v1_6_581_route_l1_fallback_top_module(
     l9["ports"] = empty_pin_list
     l9["top_module_pins_evidence"] = {
         "reason": "no_module_declaration_in_input_docs",
-        "fallback_source": "L1.ic_name",
+        "fallback_source": ("L1.ic_name" if strategy == "l1_ic_name_fallback"
+                            else TOP_MODULE_UNDECLARED_STRATEGY),
         "extraction_strategy_marker": "fallback_explicit_v1_6_581",
     }
     return True
@@ -54424,7 +54380,7 @@ def gen_l9_integration_spec(project: Path,
     # declarations; doc-only Phase 1 (doc-extraction) inputs always emitted the sentinel
     # `chip_top`. Now: when the rtl-scan returns empty, walk extracted
     # docs for module-header / heading / intro-prose anchors in priority
-    # order, then fall back to L1.ic_name, then finally to `chip_top`.
+    # order. Without a declared module, leave the name unstated.
     #
     # Chip-AGNOSTIC: each pattern is a structural English / Verilog token
     # rule; no chip-class literal.
@@ -54458,109 +54414,17 @@ def gen_l9_integration_spec(project: Path,
                 # here (and was gated on the evidence ALSO carrying a
                 # `top cell:` sign-off line) now runs once for every branch,
                 # after the cascade converges. See `_v2060_mirror_top_cell`.
+    # These document extractors declare a top independently of the product name.
     if top_module is None:
-        # Fall back to L1.ic_name — the chip's own identifier is a better
-        # honest answer than the canonical sentinel when no module-decl
-        # evidence exists in either RTL or docs.
-        _ic = ic_name if ic_name and ic_name != "UNKNOWN_IC" else None
-        # F2 fix (sha256_v2_e2e e2e finding): deny PDK / process / foundry
-        # identifiers from the l1_ic_name_fallback. Some L1 ic_name slots
-        # get populated by the PDK family the docs target (sky130, gf180,
-        # ihp130, etc.) when no real chip name is declared. Falling back
-        # to those names produces nonsense top_module values that cascade
-        # into FAIL across every downstream Phase 2 step that reads
-        # L9.top_module (yosys_synth, qsf_gen, reference_tb, ...).
-        # Force top_module=None instead so the runner's --top-name CLI
-        # override wins.
-        _PDK_DENY = {
-            "sky130", "sky130a", "sky130b",
-            "gf180", "gf180mcu", "gf180mcuc", "gf180mcud",
-            "ihp130", "ihp130bicmos",
-            "asap7", "asap7sc7p5t",
-            "freepdk45", "freepdk15",
-            "tsmc28", "tsmc16", "tsmc7",
-            "globalfoundries", "samsung", "umc",
-            # process / node identifiers
-            "180nm", "130nm", "65nm", "45nm", "28nm", "16nm", "7nm",
-        }
-        if _ic and str(_ic).lower() in _PDK_DENY:
-            _ic = None  # PDK name leaked into L1.ic_name; refuse it.
-        # v1.6.189 (#76 P1) — the L1.ic_name fallback is only an honest
-        # top_module answer when the chip's identifier actually appears
-        # in the source docs (or RTL). When `_ic_name_from_docs` settled
-        # on the bare project FOLDER name with no in-doc corroboration
-        # (the Tier-4.5 folder fallback), that string is a directory
-        # label, not a declared module — using it as top_module emits a
-        # fabricated name. Refuse it and fall through to the canonical
-        # `chip_top` sentinel instead. Chip-AGNOSTIC: structural in-doc
-        # substring corroboration only.
-        if _ic:
-            _ic_low = str(_ic).lower()
-            _ic_corroborated = any(
-                isinstance(_body, str) and _body
-                and _ic_low in _body.lower()
-                for _body in (extracted or {}).values()
-            )
-            if not _ic_corroborated:
-                _ic = None
-        if _ic:
-            # v1.6.364 — for #259 P3 ORGANIC. Per the Verilog
-            # LRM (IEEE-1364, identifiers are case-sensitive),
-            # preserve the canonical case from L1.ic_name
-            # (#257/#261 contract); only normalize non-identifier
-            # chars. The legacy `.lower()` here destroyed the
-            # case-frequency-recovered `FooBarTop` → `foobartop`
-            # mapping, since v1.6.362 closed the same regression
-            # for L1.ic_name (the upstream pre-processor that
-            # feeds this fallback).
-            cand = re.sub(r"[^A-Za-z0-9_]+", "_", str(_ic)).strip("_")
-            if cand and cand[0].isalpha() and len(cand) >= 2:
-                top_module = cand
-                top_module_extraction_strategy = "l1_ic_name_fallback"
-    # v1.6.398 — for #288 P3: doc_prose_top_cell strategy. When the
-    # selected strategy is `l1_ic_name_fallback` (a weak last-resort
-    # that hashes L1.ic_name into a Verilog-safe identifier), try to
-    # recover the foundry/PV-tool sign-off `top cell: NAME` from any
-    # __chip_root_*__ README / design-data / tapeout-status / signoff
-    # extracted-doc text. If non-None, override top_module and set the
-    # extraction strategy. Mirror into content tapeout_metadata so L1
-    # consumers see the same value. Chip-AGNOSTIC: structural regex
-    # only — no chip-class vocabulary participates in DETECTION.
-    if top_module_extraction_strategy == "l1_ic_name_fallback":
-        _v1_6_398_top_cell = _v1_6_398_extract_top_cell_from_design_data(
-            project)
-        if _v1_6_398_top_cell:
-            top_module = _v1_6_398_top_cell
-            top_module_extraction_strategy = (
-                "doc_prose_top_cell_v1_6_398"
-            )
-            # ORGANIC #2060 item 3 — mirrored once after the cascade, for
-            # every branch that publishes a declared top.
-    # v1.6.405 — for #294 P2: when v1.6.398 returned None too (or did
-    # not fire because we still have a weak `l1_ic_name_fallback`
-    # strategy), try prose-form `top module: NAME` / `main module is
-    # named NAME` across input/docs (any extension) + extracted_docs.
-    # This catches the 6/7 HDL ICs that v1.6.398's __chip_root_*__
-    # glob missed because the vendor placed the canonical name in
-    # narrative integration prose, not a tapeout sign-off line.
-    #
-    # v1.6.409 — for #294 R2: swap to v1.6.409 helper which (a)
-    # accepts RST double-backtick (``ident``) via {0,2} quote
-    # bracket and (b) filter filler-word captures
-    # ("named"/"called"/"listed") that previously corrupted
-    # output to RETROGRADE values. Strategy stamp updated to
-    # `doc_prose_top_module_v1_6_409`. v1.6.405 helpers kept for
-    # backward-compat with existing tests.
-    if top_module_extraction_strategy == "l1_ic_name_fallback":
-        _v1_6_405_top_module = _v1_6_409_extract_top_module_from_prose(
-            project)
-        if _v1_6_405_top_module:
-            top_module = _v1_6_405_top_module
-            top_module_extraction_strategy = (
-                "doc_prose_top_module_v1_6_409"
-            )
-            # ORGANIC #2060 item 3 — mirrored once after the cascade, for
-            # every branch that publishes a declared top.
+        top_cell = _v1_6_398_extract_top_cell_from_design_data(project)
+        if top_cell:
+            top_module = top_cell
+            top_module_extraction_strategy = "doc_prose_top_cell_v1_6_398"
+    if top_module is None:
+        prose_top = _v1_6_409_extract_top_module_from_prose(project)
+        if prose_top:
+            top_module = prose_top
+            top_module_extraction_strategy = "doc_prose_top_module_v1_6_409"
     # v1.6.189 (#76 P1) fell back to the canonical `chip_top` default here so
     # `L9.top_module` was NEVER null, because a null cascaded into
     # `foundry_handoff_package_check` via v1.6.174 (the bracket-variant matrix
@@ -55193,26 +55057,8 @@ def gen_l9_integration_spec(project: Path,
             content.get("top_ports") or [],
         )
 
-    # v1.6.581 — for #397 P3 ORGANIC. L9 top_module fallback
-    # masquerade fix. When `top_module_extraction_strategy` is
-    # `l1_ic_name_fallback` (the weak last-resort path that fires
-    # when no real `module <name>(...)` declaration is found in
-    # docs), the L9 emit historically populated `top_module_pins`
-    # with the SUPERSET UNION of every per-submodule interface
-    # table found in docs — masquerading as a real top whose pins
-    # are actually a glued aggregate of all submodules. Downstream
-    # Phase 2 RTL skeleton + Phase 3 STA / floorplan gates that
-    # assume `top_module_pins` describes exactly the top module
-    # then ingest a fabricated record.
-    #
-    # Fix: when the fallback fires, clear the fabricated pin list
-    # (set to []) and stamp `no_top_module_in_input=True` so
-    # downstream consumers see the honest signal and can either
-    # fail-closed OR AI-fill explicitly. The tentative
-    # `top_module = L1.ic_name` label is kept (the IC name is the
-    # closest human-readable handle) but the pins are NOT
-    # fabricated.
-    # Chip-AGNOSTIC.
+    # An unstated module must not acquire a union of unrelated module ports.
+    # Preserve pins taken directly from the design's own L1 pin table.
     _v1_6_581_route_l1_fallback_top_module(content, promoted_from_l1)
 
     # #czl9docs — LAST, so it anchors on the FINAL declared port list (the
