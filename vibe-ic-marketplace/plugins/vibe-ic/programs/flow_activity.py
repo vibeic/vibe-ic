@@ -31,24 +31,41 @@ def _word(value):
     return "{" + str(value).replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}") + "}"
 
 
-def _read_sdc(path, config):
-    from decimal import Decimal
-    from librelane.common import GenericDict, TclUtils
-    from librelane.config import universal_flow_config_variables
-    from librelane.steps.tclstep import TclStep
+def _native_environment(project, netlist, sdc, top, corner):
+    producer = netlist.with_name("_env.tcl")
+    if producer.is_file():
+        return producer
+    captures = []
+    for metadata in (project / "steps").glob("*/*/config.json"):
+        native_config = json.loads(metadata.read_text())
+        if (native_config.get("DESIGN_NAME") != top
+                or not native_config.get("meta", {}).get("step", "").startswith("OpenROAD.STA")):
+            continue
+        state = metadata.with_name("state_in.json")
+        if not state.is_file():
+            continue
+        native_state = json.loads(state.read_text())
+        constraints = (native_config.get("SIGNOFF_SDC_FILE") or native_config.get("PNR_SDC_FILE")
+                       or native_state.get("sdc") or native_config.get("FALLBACK_SDC"))
+        if (_paths(native_state.get("nl"), project, corner) != [netlist]
+                or _paths(constraints, project, corner) != [sdc]):
+            continue
+        captures.extend((metadata.parent / corner).glob("_env*.tcl"))
+        captures.extend(metadata.parent.glob("_env*.tcl"))
+    return max(captures, key=lambda path: path.stat().st_mtime_ns) if captures else None
 
-    # LibreLane's base SDC and supplied Tcl constraints read their configuration
-    # from the environment. Restore it for each linked design in this session.
-    config = config.copy()
-    captured = GenericDict({key: Decimal(str(value)) if type(value) is float else value
-                            for key, value in config.items()})
-    # JSON loses Decimal types; native Tcl arithmetic must keep fractional delays.
-    for variable in universal_flow_config_variables:
-        if type(config.get(variable.name)) in (int, float):
-            _, config[variable.name] = variable.compile(captured, [])
-    return [TclUtils.join(["unset", "-nocomplain", f"::env({key})"] if value is None else
-                          ["set", f"::env({key})", TclStep.value_to_tcl(value)])
-            for key, value in config.items()] + ["read_sdc " + _word(path)]
+
+def _read_sdc(path, environment):
+    from librelane.common import get_script_dir
+
+    # Use the same capture and native compatibility reader as the producing flow.
+    # In particular, the reader provides deprecated driving-cell pin variables.
+    return ["set activity_environment [array get ::env]",
+            "set ::env(_TCL_ENV_IN) " + _word(environment),
+            "set ::env(SCRIPTS_DIR) " + _word(get_script_dir()),
+            "source " + _word(Path(get_script_dir()) / "openroad/common/io.tcl"),
+            "set ::env(_SDC_IN) " + _word(path), "read_current_sdc",
+            "array unset ::env", "array set ::env $activity_environment", "unset activity_environment"]
 
 
 def _cocotb_activity(files, bench, top, directory, commands):
@@ -152,6 +169,13 @@ def execute(project, directory, tool, route, *, state=None, config=None):
             return result("NOT_MEASURED", "No native netlist for the functional scenario.")
         if core_scope and (len(simulation_sdc) != 1 or not simulation_sdc[0].is_file()):
             return result("NOT_MEASURED", "Core activity needs its native core SDC from the captured State/config.")
+        environment = _native_environment(project, netlist[0], sdc[0], top, corner)
+        core_environment = (_native_environment(project, simulation_netlist[0], simulation_sdc[0], simulation_top, corner)
+                            if core_scope else environment)
+        if environment is None or core_environment is None:
+            return result("NOT_MEASURED", "Activity needs the producing native step's captured _env.tcl "
+                          "for each linked design's SDC.")
+        model_reports.extend(dict.fromkeys([environment, core_environment]))
         python_scenario = benches[0].suffix == ".py"
         required = ("cocotb-config", "make", "sta") if python_scenario else ("iverilog", "vvp", "sta")
         absent = [name for name in required if not shutil.which(name)]
@@ -194,7 +218,7 @@ def execute(project, directory, tool, route, *, state=None, config=None):
         lines = [*("read_liberty " + _word(path) for path in libraries)]
         if core_scope:
             lines += ["read_verilog " + _word(simulation_netlist[0]), "link_design " + _word(simulation_top),
-                *_read_sdc(simulation_sdc[0], core_config),
+                *_read_sdc(simulation_sdc[0], core_environment),
                 "read_vcd -scope " + _word(activity["scope"]) + " " + _word(activity["vcd"]),
                 "set core_activity {}",
                 "foreach pin [get_pins -hierarchical *] {",
@@ -206,7 +230,7 @@ def execute(project, directory, tool, route, *, state=None, config=None):
                 "  }",
                 "}"]
         lines += ["read_verilog " + _word(netlist[0]), "link_design " + _word(top),
-                 *_read_sdc(sdc[0], config),
+                 *_read_sdc(sdc[0], environment),
                  *("read_spef " + _word(path) for path in spef)]
         if core_scope:
             lines += ["set core_scope " + _word(core_scope),
