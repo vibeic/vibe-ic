@@ -767,7 +767,19 @@ def gls(project, directory, tool, commands, *, state, config):
             sample = json.loads(manifest.read_text()) if manifest.is_file() else {}
             generated = (sample.get("topology") == "serial_parallel"
                          and project / sample.get("tb", "") == bench)
+            binding = None
             try:
+                if (module and not (plan or generated) and not native._tb_dut_instance(tb_text, top)
+                        and ((project / native.CHIP_TOP_RECORD_REL).is_file()
+                             or (project / "work/flow/chip/preparation.json").is_file())):
+                    binding = native.declared_dut_binding(project, None, text)
+                    logical_top = binding["from"]
+                    logical_instance = native._tb_dut_instance(tb_text, logical_top)
+                    if logical_instance:
+                        if binding["dut_module"] != top:
+                            raise ValueError("The declared chip binding disagrees with the native configured top.")
+                        tb_text, row["dut_binding"] = native.bind_dut_module(
+                            tb_text, logical_top, logical_instance, text, binding)
                 if module and not (plan or generated) and not native._tb_dut_instance(tb_text, top):
                     from testbench_gen import (
                         _DELIVERED_RE, _is_authored_tb, delivered_case_oracle, emit_unit_tbs,
@@ -859,6 +871,9 @@ def gls(project, directory, tool, commands, *, state, config):
                 if sdc and instance and not (plan or generated):
                     clocks = native.declared_sdc_clocks(Path(sdc), [Path(sdf).read_text()])
                     tb_text, row["clock"] = native.bind_bench_clock(tb_text, instance, clocks)
+                if instance and not (plan or generated) and binding and binding.get("input_ports"):
+                    tb_text, row["input_driver_bridges"] = native.bridge_inout_inputs(
+                        tb_text, top, instance, binding["input_ports"], signal_text)
             except (OSError, ValueError, KeyError) as exc:
                 row["detail"] = str(exc)
                 return lambda: (row, reports, commands)

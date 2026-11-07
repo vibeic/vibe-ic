@@ -1833,9 +1833,7 @@ def _netlist_top(text: str) -> Optional[Tuple[str, List[str]]]:
     return (tops[0], modules[tops[0]]) if len(tops) == 1 else None
 
 
-#: The chip-top producer's record (step 15.5ic, `io_pad_chip_top_gen`): which
-#: module the routed netlist's top IS, which core it wraps, and the Verilog it
-#: wrote, pad by pad. The only source a gate-level DUT binding is taken from.
+#: Legacy chip-top producer record; native preparation is under work/flow/chip.
 CHIP_TOP_RECORD_REL = "reports/phase3/io_pad_chip_top.json"
 
 _INSTANCE_STMT_RE = re.compile(
@@ -1862,9 +1860,13 @@ def _net_bit(expr: str) -> Optional[Tuple[str, Optional[int]]]:
     return m.group(1), (int(m.group(2)) if m.group(2) is not None else None)
 
 
-def declared_dut_binding(project: Path, top: str, netlist_text: str
+def declared_dut_binding(project: Path, top: Optional[str], netlist_text: str
                          ) -> Dict[str, object]:
-    """The module a case's DUT `top` is, in the netlist step 15 routed.
+    """Bind a case's core, or the producer's declared core when `top` is None.
+
+    Native wrappers use their config, preparation and written Verilog under
+    work/flow/chip. The core is the unique authored RTL master instantiated
+    there; unused modules in the RTL source set do not choose the adopted core.
 
     F21, MEASURED on spm x gf180mcuD (run23): every L10 case instantiates the
     core `spm`; the routed netlist defines only the padded `chip_top`, so the
@@ -1877,18 +1879,41 @@ def declared_dut_binding(project: Path, top: str, netlist_text: str
     the pad on that net, to the chip-top port on the pad's terminal. Any link
     that does not trace refuses (ValueError, named); a same-named port is not
     evidence of anything."""
-    if re.search(r"(?m)^\s*module\s+" + re.escape(top) + r"\b", netlist_text or ""):
+    if top and re.search(r"(?m)^\s*module\s+" + re.escape(top) + r"\b", netlist_text or ""):
         return {"dut_module": top, "rebound": False, "port_map": None,
                 "source": "the routed netlist defines the DUT's own module"}
     rec_path = project / CHIP_TOP_RECORD_REL
+    preparation = project / "work/flow/chip/preparation.json"
+    native_prepared = not rec_path.is_file() and preparation.is_file()
     try:
-        rec = json.loads(rec_path.read_text(errors="replace"))
-    except (OSError, ValueError) as exc:
+        if native_prepared:
+            from _design_module_set import module_names_in_text
+            rec_path = preparation
+            config = json.loads((preparation.parent / "config.json").read_text())
+            prepared = json.loads(preparation.read_text())
+            wrapper = preparation.parent / "wrapper.v"
+            modules = set()
+            for path in config["VERILOG_FILES"]:
+                path = Path(path) if Path(path).is_absolute() else project / path
+                modules.update(module_names_in_text(path.read_text()))
+            cores = {master for master, _ in _instances(strip_comments(wrapper.read_text())).values()
+                     if master in modules and master != config.get("DESIGN_NAME")}
+            if len(cores) != 1:
+                raise ValueError("The native chip wrapper does not identify one authored RTL core.")
+            rec = {"chip_top_module": config.get("DESIGN_NAME"),
+                   "core_module": cores.pop(),
+                   "chip_top_verilog": "work/flow/chip/wrapper.v",
+                   "pad_instances": prepared["pads"]}
+        else:
+            rec = json.loads(rec_path.read_text(errors="replace"))
+    except (OSError, ValueError, KeyError) as exc:
         raise ValueError(f"NO_DECLARED_CHIP_TOP: the routed netlist defines no "
                          f"`{top}` and the chip-top record {rec_path} cannot be "
                          f"read ({exc})")
     chip, core = rec.get("chip_top_module"), rec.get("core_module")
-    if rec.get("verdict") != "WROTE" or not chip or not rec.get("chip_top_verilog"):
+    if top is None:
+        top = core
+    if (not native_prepared and rec.get("verdict") != "WROTE") or not chip or not rec.get("chip_top_verilog"):
         raise ValueError(f"NO_DECLARED_CHIP_TOP: {rec_path} records no chip top "
                          f"(verdict {rec.get('verdict')!r})")
     if core != top:
@@ -1947,8 +1972,13 @@ def declared_dut_binding(project: Path, top: str, netlist_text: str
     if absent:
         raise ValueError(f"CHIP_PORT_NOT_ROUTED: {absent} are not ports of the "
                          f"routed `{chip}`")
-    return {"dut_module": chip, "rebound": True, "from": top,
-            "port_map": port_map, "source": str(rec_path)}
+    binding = {"dut_module": chip, "rebound": True, "from": top,
+               "port_map": port_map, "source": str(rec_path)}
+    if native_prepared:
+        binding["input_ports"] = {port_map[port["name"]]: port["width"]
+                                  for port in prepared.get("ports", [])
+                                  if port["direction"] == "input" and port["name"] in port_map}
+    return binding
 
 
 def bind_dut_module(tb_text: str, dut_module: str, dut_instance: str,
@@ -1982,6 +2012,45 @@ def bind_dut_module(tb_text: str, dut_module: str, dut_instance: str,
     return text, {"dut_module": declared["dut_module"], "rebound": True,
                   "from": dut_module, "source": declared.get("source"),
                   "ports": {p: port_map[p] for p in sorted(connected)}}
+
+
+def bridge_inout_inputs(tb_text: str, dut_module: str, dut_instance: str,
+                        inputs: Dict[str, int], netlist_text: str
+                        ) -> Tuple[str, Dict[str, str]]:
+    """Drive a physical inout pad from an existing functional input stimulus."""
+    from _specrtl_common import parse_rtl_ports
+
+    _, ports = parse_rtl_ports(netlist_text, dut_module)
+    physical = {port.name: port for port in ports if port.direction == "inout"}
+    instance = next((match for match in _INSTANCE_STMT_RE.finditer(tb_text)
+                     if match[1] == dut_module and match[2].lstrip("\\") == dut_instance), None)
+    if instance is None:
+        raise ValueError(f"No native DUT instance {dut_instance!r} for input pad bridging.")
+    connections = instance[3]
+    declarations, bridges = [], {}
+    for port, width in inputs.items():
+        if port not in physical:
+            continue
+        if type(width) is not int or width < 1 or physical[port].width != width:
+            raise ValueError(f"The native input pad width is unresolved or inconsistent for {port!r}.")
+        pattern = re.compile(r"(\.\s*" + re.escape(port) + r"\s*\()([^()]*)(\))")
+        connection = pattern.search(connections)
+        if connection is None:
+            continue
+        index = len(bridges)
+        wire = f"flow_input_{index}"
+        while re.search(r"\b" + wire + r"\b", tb_text) or wire in bridges.values():
+            index += 1
+            wire = f"flow_input_{index}"
+        dimensions = f"[{width - 1}:0] " if width > 1 else ""
+        declarations.append(f"wire {dimensions}{wire};\nassign {wire} = {connection[2].strip()};")
+        connections = pattern.sub(lambda match: match[1] + wire + match[3], connections, count=1)
+        bridges[port] = wire
+    if not bridges:
+        return tb_text, bridges
+    return (tb_text[:instance.start()] + "\n".join(declarations) + "\n"
+            + tb_text[instance.start():instance.start(3)] + connections
+            + tb_text[instance.end(3):]), bridges
 
 
 # ---------------------------------------------------------------------------
