@@ -2429,6 +2429,44 @@ def verilog_model_closure_of_texts(candidates: List[str], texts: Dict[str, str],
             "clashes": clashes}
 
 
+def library_cell_ports(directory: Path, libraries: List[Path], commands, *, models=(), cells=()):
+    """Read native Liberty pins, then supplied model pins for cells it omits."""
+    from flow_native_adapters import _word
+
+    script, report = directory / "library_ports.ys", directory / "library_ports.json"
+    script.write_text("\n".join("read_liberty -lib " + _word(path) for path in libraries)
+                      + "\nwrite_json " + _word(report) + "\n")
+    completed = commands.run(["yosys", "-s", script])
+    reports = [script, *([report] if report.is_file() else [])]
+    if completed is None or completed.returncode or not report.is_file():
+        return None, reports
+    modules = json.loads(report.read_text())["modules"]
+    missing = set(cells) - modules.keys()
+    if missing and models:
+        preprocessed = directory / "preprocessed_models.v"
+        completed = commands.run(["iverilog", "-g2012", "-E", "-o", preprocessed, *models])
+        reports += [preprocessed] if preprocessed.is_file() else []
+        if completed is None or completed.returncode or not preprocessed.is_file():
+            return None, reports
+        definitions = {}
+        for match in _MODULE_BODY_RE.finditer(strip_comments(preprocessed.read_text())):
+            if match[1] == "module" and match[2] in missing:
+                definitions.setdefault(match[2], match[0])
+        if definitions:
+            source = directory / "blackbox_models.v"
+            source.write_text("\n".join(definitions.values()) + "\n")
+            script, report = directory / "model_ports.ys", directory / "model_ports.json"
+            script.write_text("read_verilog -sv -lib -nosynthesis " + _word(source)
+                              + "\nwrite_json " + _word(report) + "\n")
+            completed = commands.run(["yosys", "-s", script])
+            reports += [source, script, *([report] if report.is_file() else [])]
+            if completed is None or completed.returncode or not report.is_file():
+                return None, reports
+            modules.update(json.loads(report.read_text())["modules"])
+    return {name: {pin: data["direction"] for pin, data in module["ports"].items()}
+            for name, module in modules.items() if isinstance(module.get("ports"), dict)}, reports
+
+
 def _postlayout_output_deadline(project: Path, plan: dict, declared: dict,
                                 netlist: Path, sdc: Path, sdfs: List[Path],
                                 *, sta_step_dir: Optional[Path] = None) -> dict:
