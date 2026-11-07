@@ -409,16 +409,18 @@ def test_eqy_publication_keeps_native_reports_and_witnesses_without_build_produc
     with temp.execution("neutral", "eqy-publication") as work:
         eqy = work.run / "netlist_equivalence/native/scratch"
         native = {"gold.ys", "gate.ys", "partition.ys", "logfile.txt", "partition.log",
-                  "matched.ids", "partition.ids", "strategies.mk"}
+                  "matched.ids", "partition.ids", "strategies.mk", "modules/top.json",
+                  "fragments/fragment.json", "partitions/p.json", "partitions/p.sv", "partitions/p.sby"}
         if status is not None:
             native |= {"partition.list", status, "strategies/p/sat/status"}
         for name in native:
             file = eqy / name
             file.parent.mkdir(parents=True, exist_ok=True)
-            file.write_text("p:\n" if name == "partition.list" else
+            file.write_text("unit p : result\n" if name == "partition.list" else
                             status if name == "strategies/p/sat/status" else "native tool report\n")
         sby = "strategies/p/pdr/p/"
         native |= {sby + "config.sby", sby + "logfile.txt", sby + "status",
+                   sby + "model/design.log", sby + "model/design.ys",
                    sby + "engine_0/logfile.txt", sby + "engine_0/trace.vcd",
                    sby + "engine_0/trace.yw", sby + "engine_0/trace_tb.v",
                    sby + "engine_0/trace.smtc"}
@@ -427,9 +429,9 @@ def test_eqy_publication_keeps_native_reports_and_witnesses_without_build_produc
             if not file.exists():
                 file.parent.mkdir(parents=True, exist_ok=True)
                 file.write_text("native witness or solver diagnostic\n")
-        generated = {"modules/top.il", "fragments/fragment.json", "partitions/p.il", "partitions/p.json",
+        generated = {"modules/top.il", "fragments/fragment.il", "partitions/p.il",
                      "gold.il", "gate.il", "gate_recoded.il", "combined.il",
-                     sby + "model/design_smt2.smt2", sby + "src/p.il"}
+                     sby + "model/design_smt2.smt2", sby + "model/design.json", sby + "src/p.il"}
         for name in generated:
             file = eqy / name
             file.parent.mkdir(parents=True, exist_ok=True)
@@ -442,6 +444,7 @@ def test_eqy_publication_keeps_native_reports_and_witnesses_without_build_produc
         view.write_bytes(b"native State output")
         reports = {name: (eqy / name).read_bytes() for name in native}
         before = eqy_partitions(eqy)[:3]
+        assert before[0] == (status or "NOT_MEASURED")
         work.publish(destination)
         published = destination / eqy.relative_to(work.run)
         assert eqy_partitions(published)[:3] == before
