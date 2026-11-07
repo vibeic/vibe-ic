@@ -251,7 +251,26 @@ class Execution:
             return None
         if destination is not None:
             destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(self.run, destination, dirs_exist_ok=True)
+            eqy_roots = set()
+
+            def ignore_models(directory, names):
+                directory, names = Path(directory), set(names)
+                if {"gold.ys", "gate.ys", "partition.ys"} <= names:
+                    eqy_roots.add(directory)
+                    return names & {"gold.il", "gate.il", "gate_recoded.il", "combined.il"}
+                if directory.parent in eqy_roots and directory.name in {"modules", "fragments", "partitions"}:
+                    return {name for name in names if Path(name).suffix == ".il"}
+                if ({"config.sby", "logfile.txt"} <= names
+                        and any(parent in eqy_roots for parent in directory.parents)):
+                    return names & {"src"}
+                if (directory.name == "model" and (directory.parent / "config.sby").is_file()
+                        and any(parent in eqy_roots for parent in directory.parents)):
+                    return {name for name in names if Path(name).suffix in
+                            {".il", ".json", ".smt2", ".aig", ".aag", ".btor", ".btor2",
+                             ".v", ".sv", ".blif", ".cnf"}}
+                return set()
+
+            shutil.copytree(self.run, destination, dirs_exist_ok=True, ignore=ignore_models)
             self.mapping = {str(self.run): str(destination), str(self.run.resolve()): str(destination),
                             **{old: new.replace(str(self.run), str(destination)) for old, new in preserved.items()}}
             self.published = destination
