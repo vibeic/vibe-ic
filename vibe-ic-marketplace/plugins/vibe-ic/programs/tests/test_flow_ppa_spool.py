@@ -29,6 +29,9 @@ def test_spool_driver_collects_after_dispatcher_consumed_the_outbox(tmp_path, mo
         return job
 
     def collect(job, directory, destination):
+        returned = directory / job / 'reports'
+        returned.mkdir(parents=True)
+        (returned / 'project.tar.gz').write_bytes(b'collected native project')
         return {'name': job.removeprefix('job-'), 'project': str(destination),
                 'overrides': {}, 'exit_code': 0, 'all_pass': True, 'state': 'COMPLETED',
                 'rows': [{'name': 'native_mapping', 'status': 'PASS'}], 'metrics': {},
@@ -47,6 +50,7 @@ def test_spool_driver_collects_after_dispatcher_consumed_the_outbox(tmp_path, mo
     assert report['selected'] == 'reference'
     assert published == ['reference', 'candidate']
     assert list(outbox.iterdir()) == []
+    assert list(results.iterdir()) == []
 
 
 @pytest.mark.parametrize("native_exit", [0, 2])

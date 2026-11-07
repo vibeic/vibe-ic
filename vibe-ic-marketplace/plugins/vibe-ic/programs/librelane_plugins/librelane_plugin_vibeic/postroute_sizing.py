@@ -1,6 +1,9 @@
 """Routed-parasitic sizing followed by the flow's ordinary native routing steps."""
+from decimal import Decimal
 from pathlib import Path
+from typing import Optional
 
+from librelane.config import Variable
 from librelane.state import DesignFormat
 from librelane.steps import Step
 from librelane.steps.openroad import RCX, ResizerStep
@@ -19,9 +22,7 @@ _SIZING_VARS = {
     "VIBEIC_PRR_SETUP_MAX_BUFFER_PCT", "VIBEIC_PRR_HOLD_MAX_BUFFER_PCT",
     "VIBEIC_PRR_SETUP_REPAIR_TNS_PCT", "VIBEIC_PRR_SETUP_SEQUENCE",
     "VIBEIC_PRR_MAX_WIRE_LENGTH", "VIBEIC_PRR_SLEW_MARGIN_PCT",
-    "VIBEIC_PRR_CAP_MARGIN_PCT", "VIBEIC_PRR_RECOVER_POWER_PCT",
-    "VIBEIC_PRR_MAX_UTIL_PCT", "VIBEIC_PRR_LIMIT_SIZING_AREA",
-    "VIBEIC_PRR_LIMIT_SIZING_LEAKAGE",
+    "VIBEIC_PRR_CAP_MARGIN_PCT",
 }
 
 
@@ -32,6 +33,29 @@ class PostRouteSizing(ResizerStep):
     inputs = [DesignFormat.ODB, DesignFormat.SPEF]
     config_vars = ResizerStep.config_vars + [
         var for var in PostRouteRepair.config_vars if var.name in _SIZING_VARS
+    ] + [
+        Variable(
+            "VIBEIC_PRR_RECOVER_POWER_PCT", Optional[Decimal],
+            "Native repair_timing -recover_power percentage, called separately "
+            "before ordinary setup/hold repair. Unset disables recovery; native "
+            "zero still attempts at least one endpoint.",
+            units="%",
+        ),
+        Variable(
+            "VIBEIC_PRR_MAX_UTIL_PCT", Optional[Decimal],
+            "Native repair_timing -max_utilization for each recovery/setup/hold call.",
+            units="%",
+        ),
+        Variable(
+            "VIBEIC_PRR_LIMIT_SIZING_AREA", Optional[Decimal],
+            "Native set_opt_config candidate/current cell-area ratio. "
+            "Unset inherits the native setting.",
+        ),
+        Variable(
+            "VIBEIC_PRR_LIMIT_SIZING_LEAKAGE", Optional[Decimal],
+            "Native set_opt_config candidate/current cell-leakage ratio. "
+            "Unset inherits the native setting.",
+        ),
     ]
 
     def get_script_path(self):

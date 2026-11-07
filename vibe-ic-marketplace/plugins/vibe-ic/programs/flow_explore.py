@@ -152,6 +152,7 @@ def explore(project, output, *, cpus=8, jobs=2, flow_args=(), ppa_level=None, sp
             report_path.write_text(json.dumps({"state": "REFERENCE_NOT_MEASURED", "ppa_level": level,
                 "executor": "spool", "variants": [reference]}, indent=2) + "\n")
             discard_job(outbox, reference_job)
+            discard_job(result_directory, reference_job)
             raise ValueError("The reference job produced no native public report; see its returned diagnostics")
     else:
         reference = run_variant(project, output, baseline, groups[0], flow_args, level)
@@ -184,6 +185,7 @@ def explore(project, output, *, cpus=8, jobs=2, flow_args=(), ppa_level=None, sp
             rows[index].update(state="QUEUED", spool_job=job)
             report_path.write_text(json.dumps(report, indent=2) + "\n")
         discard_job(outbox, reference_job)
+        discard_job(result_directory, reference_job)
         while pending_jobs:
             for index, job in list(pending_jobs.items()):
                 completed = collect(job, result_directory, output / rows[index]["name"])
@@ -192,6 +194,7 @@ def explore(project, output, *, cpus=8, jobs=2, flow_args=(), ppa_level=None, sp
                     del pending_jobs[index]
                     report_path.write_text(json.dumps(report, indent=2) + "\n")
                     discard_job(outbox, job)
+                    discard_job(result_directory, job)
             if pending_jobs:
                 time.sleep(1)
     else:

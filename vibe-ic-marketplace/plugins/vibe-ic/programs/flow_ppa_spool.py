@@ -69,13 +69,13 @@ def publish(project, outbox, variant, *, cpus, flow_args, level, image):
     return job
 
 
-def discard_job(outbox, job):
-    """Delete an author's used job even if its consumer already removed it."""
+def discard_job(directory, job):
+    """Delete consumed spool payloads even if they were already removed."""
     def on_error(function, path, error):
         if not isinstance(error[1], FileNotFoundError):
             raise error[1]
 
-    shutil.rmtree(Path(outbox) / job, onerror=on_error)
+    shutil.rmtree(Path(directory) / job, onerror=on_error)
 
 
 def worker(root):

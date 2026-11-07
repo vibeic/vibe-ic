@@ -170,18 +170,17 @@ def test_postroute_recovery_keeps_separate_setup_and_hold(tmp_path):
     if not shutil.which("tclsh"):
         pytest.skip("Tcl is required to execute the real post-route command construction")
     source = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic", "programs",
-                          "librelane_plugins", "librelane_plugin_vibeic", "postroute_repair.tcl").read_text()
-    # Run the actual repository actuator construction against command-recording
-    # native stubs, without starting a second EDA job during runtime measurement.
-    start = source.index("# ---- 4. repair")
-    end = source.index("# What repair_design left:", start)
+                          "librelane_plugins", "librelane_plugin_vibeic", "postroute_sizing.tcl").read_text()
+    start = source.index("set sizing_args")
+    end = source.index("set changed", start)
     script = '''
 proc append_if_exists_argument {variable key flag} {
     upvar 1 $variable args
     if {[info exists ::env($key)]} {lappend args $flag $::env($key)}
 }
 proc log_cmd {name args} {puts [list $name {*}$args]}
-proc vic_say {args} {}
+proc block {args} {return {}}
+set ::block block
 set ::env(VIBEIC_PRR_SETUP_SEQUENCE) default
 set ::env(VIBEIC_PRR_SETUP_MARGIN) 0
 set ::env(VIBEIC_PRR_HOLD_MARGIN) 0
@@ -213,10 +212,10 @@ def test_native_optional_recovery_variables_compile_without_eda(tmp_path):
     pytest.importorskip("librelane")
     from librelane.common import GenericDict
     from librelane.config import Config
-    from librelane_plugins.librelane_plugin_vibeic.postroute_repair import PostRouteRepair
+    from librelane_plugins.librelane_plugin_vibeic.postroute_sizing import PostRouteSizing
     from flow_config import native_defaults
 
-    variables = {var.name: var for var in PostRouteRepair.config_vars}
+    variables = {var.name: var for var in PostRouteSizing.config_vars}
     overrides = {"VIBEIC_PRR_RECOVER_POWER_PCT": "50", "VIBEIC_PRR_MAX_UTIL_PCT": "80",
                  "VIBEIC_PRR_LIMIT_SIZING_AREA": "1", "VIBEIC_PRR_LIMIT_SIZING_LEAKAGE": "1"}
     (tmp_path / "work/flow").mkdir(parents=True)
