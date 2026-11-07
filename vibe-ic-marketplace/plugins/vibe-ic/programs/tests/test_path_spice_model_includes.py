@@ -53,6 +53,19 @@ def test_include_cycles_do_not_supply_an_absent_device(tmp_path):
                        {'absent'}, None, tmp_path / 'out.sp')
 
 
+def test_library_closure_preludes_are_not_included_twice(tmp_path):
+    put(tmp_path / 'models.ngspice', '.lib ss\n.include "corners/ss.spice"\n.endl ss\n')
+    put(tmp_path / 'corners/ss.spice', '.include "../devices.ngspice"\n')
+    put(tmp_path / 'devices.ngspice', '.param native_scale=1\n'
+        '.subckt native_fet d g s b\n.ends\n')
+    put(tmp_path / 'design.ngspice', '.param independent_switch=0\n')
+    result = pst.model_file(tmp_path, '/pdk', 'ngspice', 'cells__ss.lib',
+                            {'native_fet'}, None, tmp_path / 'out.sp')
+    text = Path(result['path']).read_text()
+    assert '.include /pdk/devices.ngspice' not in text
+    assert '.include /pdk/design.ngspice' in text
+
+
 def test_native_multiline_subcircuit_ports_and_calls_are_folded_together(tmp_path):
     source = put(tmp_path / 'pads.cdl',
                  '.SUBCKT pad\n+ A Y VDD\n+ VSS VNW\n'
