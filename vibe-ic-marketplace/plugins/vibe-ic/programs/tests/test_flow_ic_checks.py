@@ -152,3 +152,55 @@ def test_ic_profile_keeps_published_engineering_tools_and_original_limits(tmp_pa
                   if predicate(check.get("when", "always"), ic)}
         assert limits.items() <= active.items()
         assert "final_perc_latchup_errors" not in active
+
+
+@pytest.mark.parametrize("powered", [False, True])
+@pytest.mark.parametrize("bad_user_port", [False, True])
+def test_si_reads_supply_bonds_with_its_native_sdc(tmp_path, monkeypatch, powered, bad_user_port):
+    import shutil
+    import subprocess
+    import path_spice_tool
+    import si_mcf_sta
+
+    sta = shutil.which("sta")
+    if sta is None:
+        pytest.skip("native OpenSTA required")
+    logical = tmp_path / "chip.nl.v"
+    logical.write_text("module chip(input clk, output result); assign result = clk; endmodule\n")
+    physical = tmp_path / "chip.pnl.v"
+    physical.write_text("module chip(input clk, output result, inout VDD_BOND); "
+                        "assign result = clk; endmodule\n")
+    sdc = tmp_path / "chip.sdc"
+    sdc.write_text("set_case_analysis 1 [get_ports " + ("VDD_BOND" if powered else "clk") + "]\n"
+                   + ("set_case_analysis 0 [get_ports missing_user_port]\n" if bad_user_port else ""))
+    state = timing_state(tmp_path)
+    state.update({DesignFormat.NETLIST: str(logical), DesignFormat.SDC: str(sdc)})
+    if powered:
+        state[DesignFormat.POWERED_NETLIST] = str(physical)
+
+    def native_input_probe(project, **kwargs):
+        script = tmp_path / "read.tcl"
+        script.write_text(f"read_verilog {{{kwargs['netlist']}}}\nlink_design chip\n"
+                          f"read_sdc {{{kwargs['sdc']}}}\nexit\n")
+        run = subprocess.run([sta, "-no_init", "-no_splash", "-exit", str(script)],
+                             capture_output=True, text=True)
+        output = run.stdout + run.stderr
+        assert run.returncode == 0, output
+        assert "VDD_BOND' not found" not in output, output
+        assert ("missing_user_port' not found" in output) == bad_user_port, output
+        return {"windows_rc": run.returncode, "nominal": {"sta_rc": run.returncode},
+                "corners": {"setup": {"sta_rc": run.returncode, "worst_slack_after_ns": -.25},
+                            "hold": {"sta_rc": run.returncode, "worst_slack_after_ns": .12}}}
+
+    class Config(dict):
+        def copy(self, **kwargs):
+            return {**self, **kwargs}
+
+    monkeypatch.setattr(path_spice_tool, "worst_setup_corner", lambda folder: "slow")
+    monkeypatch.setattr(si_mcf_sta, "run", native_input_probe)
+    step = SimpleNamespace(step_dir=str(tmp_path), config=Config(DESIGN_DIR=str(tmp_path),
+        DESIGN_NAME="chip", LIB=["cells.lib"]), toolbox=SimpleNamespace(
+            filter_views=lambda config, views: list(views), get_lib_voltage=lambda path: 1.8))
+    metrics = checks.SignalIntegrity.run(step, state)[1]
+    assert metrics["si_setup_slack_ns"] == -.25
+    assert metrics["si_hold_slack_ns"] == .12
