@@ -60,6 +60,16 @@ def test_real_hierarchical_cells_are_not_lowered_as_primitive_calls(tmp_path):
     assert "X0 d g s b hv w=8 l=.5" in result
 
 
+def test_calibre_model_tags_use_the_native_profile_without_changing_properties(tmp_path):
+    text = ".subckt top p n\nr0 p n $SUB=bulk $[POLY] $W=8e-7 $L=3.57e-5\nc0 p n $[moscap]\nr1 p n $[unknown]\n.ends\n"
+    models = "R poly R=l/w*350\nC moscap Vds=6\n"
+    result, actual_models = normalize_cdl(text, tmp_path, models)
+    assert "R0 p n poly $W=8e-7 $L=3.57e-5 $SUB=bulk" in result
+    assert "C0 p n moscap" in result
+    assert "R1 p n $[unknown]" in result
+    assert actual_models == models
+
+
 def test_power_uses_active_liberty_voltages_for_all_declared_rails(tmp_path):
     library = tmp_path / "cells.lib"
     library.write_text('library(cells) {\nnom_voltage : 1.8;\nvoltage_map(VDDIO, 3.3);\nvoltage_map(VSSIO, 0);\n}\n')
@@ -183,7 +193,7 @@ def test_native_cvc_resolves_transitive_companion_spice_from_selected_cdl(tmp_pa
         pytest.skip("native PDK and CVC required")
     cdl = tmp_path / "library/cdl/interface.cdl"
     cdl.parent.mkdir(parents=True)
-    cdl.write_text(".subckt interface N P\nXinner P N physical_link\n.ends\n")
+    cdl.write_text(".subckt interface N P\nxinner P N physical_link\n.ends\n")
     spice = tmp_path / "library/spice/implementation.spice"
     spice.parent.mkdir()
     spice.write_text(".subckt physical_link P N\nR0 P P sky130_fd_pr__res_generic_po l=1 w=1\n.ends\n")

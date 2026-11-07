@@ -10,7 +10,7 @@ from _analog_a8_extraction_wrapper import logical_lines
 from _pad_ring import parse_liberty_supply_view, parse_spice_subckts
 
 
-ASSIGN = re.compile(r"\b([A-Za-z_]\w*)\s*=\s*(\{[^}]*\}|'[^']*'|\"[^\"]*\"|[^\s]+)")
+ASSIGN = re.compile(r"\$?\b([A-Za-z_]\w*)\s*=\s*(\{[^}]*\}|'[^']*'|\"[^\"]*\"|[^\s]+)")
 KINDS = {"MN": "M", "MP": "M", "LDDN": "M", "LDDP": "M",
          "M": "M", "R": "R", "D": "D", "C": "C", "Q": "Q"}
 
@@ -155,13 +155,29 @@ def normalize_cdl(text, pdk, models):
                      re.findall(r"(?im)^[ \t]*\.subckt[ \t]+(\S+)", text)}
     lines = logical_lines(text)
     needed = set()
-    for line in lines:
+    for index, line in enumerate(lines):
         words = line.split()
         if not words or words[0][0].upper() not in {"X", "M", "R", "C", "D", "Q"}:
             continue
+        # CVC consumes CDL element designators; PDK SPICE can use lowercase.
+        line = line[0].upper() + line[1:]
+        # A Calibre bias terminal is metadata, and can precede the model tag.
+        # Keep its connection while placing it after the model/geometry fields.
+        bias = [word for word in line.split() if word.startswith("$SUB=")]
+        if bias:
+            line = " ".join([word for word in line.split() if not word.startswith("$SUB=")] + bias)
         head = ASSIGN.search(line)
         before = line[:head.start()] if head else line
-        name = before.split()[-1].casefold()
+        token = before.split()[-1]
+        name = token.casefold()
+        # Calibre wraps primitive model identifiers in $[...]. Bind to the
+        # identically named native CVC profile without changing its properties.
+        if name.startswith("$[") and name.endswith("]") and name[2:-1] in definitions:
+            start = len(before.rstrip()) - len(token)
+            native_name = definitions[name[2:-1]][1].split()[1]
+            line = line[:start] + native_name + line[start + len(token):]
+            name = name[2:-1]
+        lines[index] = line
         definition = definitions.get(name)
         geometry = definition is not None and (definition[0] == "M" or
                     re.search(r"\b[wl]\b", definition[1].split("R=", 1)[-1], re.I))
