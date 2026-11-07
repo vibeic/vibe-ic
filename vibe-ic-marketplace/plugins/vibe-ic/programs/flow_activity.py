@@ -90,7 +90,7 @@ def _cocotb_activity(files, bench, top, directory, commands):
 
 def execute(project, directory, tool, route, *, state=None, config=None):
     from flow_native_adapters import Commands, testbenches
-    from sdf_gate_sim import netlist_used_cells, verilog_model_closure
+    from sdf_gate_sim import library_cell_ports, netlist_used_cells, verilog_model_closure
     import sim_activity_dump
     from _ppa.power import parse_power_report
 
@@ -98,9 +98,10 @@ def execute(project, directory, tool, route, *, state=None, config=None):
     directory.mkdir(parents=True, exist_ok=True)
     config, state = config or {}, state or {}
     commands = Commands(directory)
+    model_reports = []
 
     def result(status, detail, metrics=None, reports=()):
-        value = commands.result(metrics, reports, detail)
+        value = commands.result(metrics, [*model_reports, *reports], detail)
         value["native_steps"] = [{"name": Path(row["command"][0]).name,
             "ran": True, "exit_code": row["exit_code"],
             "status": "FAIL" if row["exit_code"] else "PASS"}
@@ -159,8 +160,19 @@ def execute(project, directory, tool, route, *, state=None, config=None):
         if absent:
             return result("NOT_MEASURED", "Activity executables unavailable: " + ", ".join(absent))
         closure = verilog_model_closure(models, netlist_used_cells(simulation_netlist[0].read_text()))
-        if closure["unresolved"] or closure["blackboxed"] or closure["clashes"]:
+        if closure["unresolved"] or closure["clashes"]:
             return result("NOT_MEASURED", "Activity functional cell models are incomplete: " + str(closure))
+        if closure["blackboxed"]:
+            ports, model_reports = library_cell_ports(directory, libraries, commands,
+                models=[simulation_netlist[0], *closure["files"]], cells=closure["blackboxed"])
+            if ports is None:
+                return result("FAIL" if any(row["exit_code"] for row in commands.records) else "NOT_MEASURED",
+                              "Native Liberty reader did not produce functional pin directions.")
+            active = [name for name in closure["blackboxed"] if name not in ports
+                      or any(direction in {"output", "inout"} for direction in ports[name].values())]
+            if active:
+                return result("NOT_MEASURED", "Activity functional cell models are incomplete: "
+                              + str({**closure, "blackboxed": active}))
 
         def simulate(argv, cwd):
             completed = commands.run(argv, cwd=cwd)

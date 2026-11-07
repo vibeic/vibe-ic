@@ -56,6 +56,45 @@ def test_native_activity_dump_and_vector_power_read_the_state_netlist(activity_c
     assert "report_power" in (project / "result/power.tcl").read_text()
 
 
+@pytest.mark.parametrize("ports", ["empty", "input", "output", "inout", "model_empty",
+                                   "model_output", "model_inout", "library_error",
+                                   "model_conditional_input", "model_conditional_output"])
+def test_native_outputless_blackboxes_preserve_functional_activity(activity_case, ports):
+    native_tools()
+    assert shutil.which("yosys"), "Native Yosys is required"
+    project, state, config, tool = activity_case
+    direction = "input" if ports == "library_error" else ports.removeprefix("model_").removeprefix("conditional_")
+    declaration = "" if direction == "empty" else f"{direction} P"
+    model = Path(config["CELL_VERILOG_MODELS"][0])
+    body = f"module ballast({declaration}); endmodule\n"
+    if ports.startswith("model_conditional_"):
+        other = "output" if direction == "input" else "input"
+        body = f"`ifdef SYNTHESIS\nmodule ballast({other} P); endmodule\n`else\n{body}`endif\n"
+    model.write_text(model.read_text() + body)
+    connections = "" if direction == "empty" else ".P(a)" if direction == "input" else ".P(passive_signal)"
+    netlist = Path(state["nl"])
+    netlist.write_text(netlist.read_text().replace("endmodule",
+        f"\nwire passive_signal;\nballast passive({connections});\nendmodule"))
+    library = project / "cells.lib"
+    text = Path(config["LIB"]["nominal"][0]).read_text()
+    pin = "" if direction == "empty" else f"pin(P) {{ direction: {direction}; }}"
+    extra = "" if ports.startswith("model_") else f"cell(ballast) {{ {pin} }}"
+    library.write_text(text.rsplit("}", 1)[0] + extra + "}\n")
+    if ports == "library_error":
+        library.write_text("library(neutral) { malformed library\n")
+    config["LIB"] = {"nominal": [str(library)]}
+    before = netlist.read_bytes()
+    result = run_case(activity_case)
+    expected = ("FAIL" if ports == "library_error" else "PASS"
+                if ports in {"empty", "input", "model_empty", "model_conditional_input"} else "NOT_MEASURED")
+    assert evaluate(ToolResult(**result), []) == expected, result
+    assert netlist.read_bytes() == before
+    if expected == "PASS":
+        assert result["metrics"]["activity__annotated_pin_count"] > 0
+    else:
+        assert result["metrics"] == {}
+
+
 @pytest.mark.parametrize("backend", ["icarus", "verilator"])
 @pytest.mark.parametrize("scenario", ["pass", "failure", "assertion", "skipped", "no_trace"])
 def test_native_cocotb_activity_runs_hdl_and_reads_only_its_dump(activity_case, monkeypatch, backend, scenario):

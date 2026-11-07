@@ -18,12 +18,15 @@ def project(root, child_config=True, hardening=True):
     source = root / "input/design_src"
     source.mkdir(parents=True)
     (source / "tile.v").write_text("module compute_tile(input a, output z); assign z=a; endmodule\n")
+    (source / "wrapper.v").write_text("module neutral_wrapper(input a, output z); "
+        "compute_tile u_tile(.a(a), .z(z)); endmodule\n")
     definitions = {k: [str(source / f"views/tile.{ext}")] for k, ext in
                    [("gds", "gds"), ("lef", "lef"), ("nl", "v")]}
     definitions.update(lib={"*": [str(source / "views/tile.lib")]},
                        spef={"min_*": [str(source / "views/tile.min.spef")]},
                        instances={"u_tile": {"location": [48, 24], "orientation": "N"}})
     (source / "wrapper.json").write_text(json.dumps({"DESIGN_NAME": "neutral_wrapper",
+        "VERILOG_FILES": [str(source / "wrapper.v")],
         "MACROS": {"compute_tile": definitions}}))
     if child_config:
         (source / "child.json").write_text(json.dumps({"DESIGN_NAME": "compute_tile",
@@ -54,7 +57,11 @@ def test_child_native_production_and_failure_reach_macro_step(tmp_path, monkeypa
             views[kind] = {"*": [str(path)]} if kind in {"lib", "spef"} else [str(path)]
         (tmp_path / "work/flow/native_overrides.json").write_text(json.dumps({"MACROS": {"compute_tile": views}}))
 
+    native_run = adapters.Commands.run
+
     def public_run(commands, argv, **kwargs):
+        if argv[0] == "yosys":
+            return native_run(commands, argv, **kwargs)
         calls.append(list(map(str, argv)))
         child = Path(argv[2])
         assert (child / "input/rtl/tile.v").read_bytes() == (source / "tile.v").read_bytes()

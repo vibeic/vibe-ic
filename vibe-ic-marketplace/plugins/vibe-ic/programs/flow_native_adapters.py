@@ -82,6 +82,7 @@ def inputs(project, tool):
 def cdc(project, directory, tool, commands, *, state=None, config=None):
     import _cdc_netlist as native
     from cdc_async_input_check import is_probable_async_port
+    config = config or {}
     implemented = tool.get("adapter") == "implemented_cdc"
     native_top = (config or {}).get("DESIGN_NAME") if implemented else None
     files, top = ([], native_top) if native_top else inputs(project, tool)
@@ -181,7 +182,7 @@ def cdc(project, directory, tool, commands, *, state=None, config=None):
         netlist = native.load(graph, top)
     except native.Refusal as exc:
         return commands.result(reports=[raw, graph, script], detail=str(exc))
-    native._load_latched_clock_gates(netlist)
+    native._load_combinational_clock_gates(project, netlist, config)
     crossing, reset = {}, {}
     findings = native.judge(netlist, "reg_crossing", metadata=crossing, calibrate=False)
     findings += native.judge(netlist, "async_input", is_probable_async_port, calibrate=False)
@@ -1002,7 +1003,7 @@ def execute(project, directory, tool, route, *, state=None, config=None):
         import flow_native_verification
         return getattr(flow_native_verification, tool["adapter"])(
             project, work, tool, commands, state=state, config=config or {})
-    if tool.get("adapter") == "implemented_cdc":
+    if tool.get("adapter") in {"implemented_cdc", "cdc"}:
         return cdc(project, work, tool, commands, state=state, config=config or {})
     adapter = ADAPTERS.get(tool.get("adapter"))
     if adapter is None:
