@@ -1356,6 +1356,7 @@
       "tool": {
         "kind": "librelane",
         "steps": [
+          "Yosys.JsonHeader",
           "Yosys.Synthesis",
           "Checker.YosysUnmappedCells",
           "Checker.YosysSynthChecks",

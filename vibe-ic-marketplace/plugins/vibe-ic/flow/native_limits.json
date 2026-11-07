@@ -486,6 +486,7 @@
     },
     "synthesis": {
       "otherwise": [
+        "Yosys.JsonHeader",
         "Yosys.Synthesis",
         "Checker.YosysUnmappedCells",
         "Checker.YosysSynthChecks",
