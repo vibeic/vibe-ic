@@ -523,24 +523,13 @@ if {$::vic_changed == 0} {
 }
 
 # ---- 6. legalize, supply, reroute ------------------------------------------
-# Only the cells the repair created or resized are legalized; every other
-# instance is LOCKED for the call and restored (the Odb.InsertECOBuffers
-# pattern), so the router's placement is not re-legalized around them.
+# Let native legalization move neighboring movable cells to satisfy padding.
+# Their incident nets are included in the ECO route through vic_moved below.
 set ::vic_mine [dict create]
 foreach inst [concat $::vic_created $::vic_resized] { dict set ::vic_mine [$inst getName] 1 }
-set ::vic_locked [list]
-foreach inst [$::block getInsts] {
-    if {[dict exists $::vic_mine [$inst getName]]} { continue }
-    set status [$inst getPlacementStatus]
-    if {$status ni {LOCKED FIRM COVER}} {
-        lappend ::vic_locked [list $inst $status]
-        $inst setPlacementStatus LOCKED
-    }
-}
 source $::env(SCRIPTS_DIR)/openroad/common/dpl_cell_pad.tcl
 log_cmd detailed_placement \
     -max_displacement [subst { $::env(PL_MAX_DISPLACEMENT_X) $::env(PL_MAX_DISPLACEMENT_Y) }]
-foreach pair $::vic_locked { [lindex $pair 0] setPlacementStatus [lindex $pair 1] }
 # An illegal placement ends the step, named like its other candidate
 # refusals: the controller books this candidate refused, not crashed.
 if {[catch {check_placement -verbose} err]} {
@@ -579,8 +568,8 @@ foreach inst $::vic_created {
 }
 utl::metric_integer vibeic__prr__created__pg_unconnected $::vic_pg_open
 
-# ECO: the nets the repair touched lose their wires and are routed again;
-# every other net keeps the router's geometry.
+# Only nets touched by repair lose their wires here. The native detailed router
+# may also move neighboring signal geometry to make those connections legal.
 set ::vic_dirty [dict create]
 foreach inst [concat $::vic_created $::vic_resized $::vic_moved] {
     foreach it [$inst getITerms] {
@@ -621,9 +610,7 @@ proc vic_violation_neighbours {drc named} {
     return $found
 }
 
-# The scoped router can return success when its post-route verifier finds
-# violations that its routing loop did not see (DRT-0701/0711). Its exit code
-# alone is therefore not a clean-route verdict.
+# The native command's exit code does not establish zero DRC. Read its report.
 proc vic_drc_count {drc} {
     if {![file exists $drc]} { return -1 }
     set fh [open $drc]
@@ -635,19 +622,16 @@ proc vic_drc_count {drc} {
     return $count
 }
 
-# The fork's scoped route (`detailed_route -nets`) refuses a result with more
-# whole-design violations than it was given (DRT-0712). A refusal names the
-# violations; the nets that share one with a routed net join the set and the
-# set is routed again, at most VIBEIC_PRR_ECO_EXPANSIONS times. Every attempt
-# is measured by the same guard against ITS entry, and each entry is taken
-# after the set's wires are gone, so an attempt can only return a route no
-# worse than the one it was given. Returns 1 when a route was accepted.
+# Global routing updates the guides for the design. Use the ordinary native
+# detailed router, as LibreLane does, so neighboring wires are not frozen
+# against those guides. Every required wire and whole-design DRC must pass.
+# Failed attempts may take up DRC neighbors within the existing retry budget.
 proc vic_eco_route {varname tag} {
     upvar #0 $varname dirty
     if {[dict size $dirty] == 0} { return 1 }
     # Resizer and global_route may remove wires outside the nominal ECO set.
     # The step's input route and wires newly present after repair are both
-    # obligations for every scoped retry.
+    # obligations for every retry.
     set expected [dict merge $::vic_routed_before [vic_routed_nets]]
     set_thread_count $::env(DRT_THREADS)
     set limit [expr {[info exists ::env(VIBEIC_PRR_ECO_EXPANSIONS)]
@@ -670,11 +654,11 @@ proc vic_eco_route {varname tag} {
             }
         }
         if {$added} {
-            vic_say "$tag global_route took $added routed net(s) outside the ECO set; adding them to -nets"
+            vic_say "$tag global_route took $added routed net(s) outside the repair set; adding them"
         }
         set drc $::env(STEP_DIR)/${tag}.$attempt.drc
         set drt_args [list -droute_end_iter $::env(DRT_OPT_ITERS) -or_seed 42 -verbose 1 \
-                          -output_drc $drc -nets [dict keys $dirty]]
+                          -output_drc $drc]
         incr attempt
         incr ::vic_eco_attempts
         if {![catch {log_cmd detailed_route {*}$drt_args} err]} {
@@ -685,14 +669,14 @@ proc vic_eco_route {varname tag} {
                 }
             }
             if {[dict size $lost]} {
-                vic_say "$tag scoped route left [dict size $lost] required net(s) without wire: [dict keys $lost]"
+                vic_say "$tag detailed route left [dict size $lost] required net(s) without wire: [dict keys $lost]"
                 if {$attempt > $limit} { return 0 }
                 set dirty [dict merge $dirty $lost]
                 continue
             }
             set violations [vic_drc_count $drc]
             if {$violations != 0} {
-                vic_say "$tag scoped route verified $violations DRC violation(s); expanding or refusing"
+                vic_say "$tag detailed route verified $violations DRC violation(s); expanding or refusing"
                 set more [vic_violation_neighbours $drc $dirty]
                 if {$attempt > $limit || [dict size $more] == 0} { return 0 }
                 vic_say "$tag expands by [dict size $more] DRC neighbour net(s): [dict keys $more]"
@@ -715,7 +699,7 @@ set ::vic_eco_ok [vic_eco_route ::vic_dirty eco_route]
 utl::metric_integer vibeic__prr__eco_attempt__count $::vic_eco_attempts
 utl::metric_integer vibeic__prr__eco_net__final_count [dict size $::vic_dirty]
 if {!$::vic_eco_ok} {
-    puts stderr "VIBEIC_PRR_ECO_ROUTE_REFUSED: the scoped route added whole-design violations on every attempt ($::vic_eco_attempts); the candidate is not written"
+    puts stderr "VIBEIC_PRR_ECO_ROUTE_REFUSED: detailed routing did not close required wires and whole-design DRC ($::vic_eco_attempts attempts); the candidate is not written"
     exit 1
 }
 
@@ -726,7 +710,7 @@ if {!$::vic_eco_ok} {
 # A candidate that ADDED antenna violations gets OpenROAD's own
 # `repair_antennas` (the PDK's DIODE_CELL, as LibreLane's drt.tcl runs it);
 # only the new diodes are legalized, and only their nets are routed again,
-# by the same scoped, guarded route. The judge downstream still counts.
+# by the same native detailed router. The judge downstream still counts.
 set ::vic_ant_eco [check_antennas]
 set ::vic_diodes [list]
 set ::vic_ant_ripped [dict create]
@@ -798,7 +782,7 @@ if {$::vic_ant_eco > $::vic_ant_before && [info exists ::env(DIODE_CELL)]
         vic_say "antenna repair took the wire of [dict size $::vic_ant_ripped] net(s) it did not report: [dict keys $::vic_ant_ripped]"
     }
     if {![vic_eco_route ::vic_ant_dirty antenna_route]} {
-        puts stderr "VIBEIC_PRR_ECO_ROUTE_REFUSED: the antenna repair's scoped route added whole-design violations"
+        puts stderr "VIBEIC_PRR_ECO_ROUTE_REFUSED: the antenna repair's detailed route did not close whole-design DRC"
         exit 1
     }
 }
@@ -813,7 +797,7 @@ vic_say "antenna after eco=$::vic_ant_eco diodes=[llength $::vic_diodes]"
 # ANTENNA_5 on that net as its 5th load -- a diode's pin is a load -- and the
 # candidate shipped max_fanout 5 > 4. A net the antenna phase pushed over the
 # cap gets a bounded repair_design round here (its buffers legalized alone,
-# their nets routed by the same scoped, guarded ECO route). With a declared
+# their nets routed by the same native detailed router). With a declared
 # cap the first round also checks capacitance/slew that antenna repair may
 # create. Without a cap, run that round only for a measured cap/slew violator.
 # Re-verify below refuses whatever is still over.
@@ -885,7 +869,7 @@ while {($::vic_fo_rounds == 0 && ($::vic_fo_declared || $::vic_post_ant_drv_need
         }
     }
     if {![vic_eco_route ::vic_fo_dirty drv_route]} {
-        puts stderr "VIBEIC_PRR_ECO_ROUTE_REFUSED: the fanout repair's scoped route added whole-design violations"
+        puts stderr "VIBEIC_PRR_ECO_ROUTE_REFUSED: the fanout repair's detailed route did not close whole-design DRC"
         exit 1
     }
     set ::vic_fo_added [vic_fanout_added $::vic_fo_repaired [vic_fanout_over]]
@@ -894,9 +878,8 @@ utl::metric_integer vibeic__prr__fanout__rounds $::vic_fo_rounds
 
 
 # ---- 7. re-verify ------------------------------------------------------------
-# Router DRC: the fork's scoped route refuses a result with more whole-design
-# violations than it was given (DRT-0711/0712), which fails this step; the
-# count below is the ECO route's own report, recorded for the reader.
+# Every repair route above requires zero whole-design DRC. Record the accepted
+# native report count for the reader.
 set ::vic_drt 0
 if {[file exists $::env(STEP_DIR)/eco_route.drc]} {
     set fh [open $::env(STEP_DIR)/eco_route.drc]
