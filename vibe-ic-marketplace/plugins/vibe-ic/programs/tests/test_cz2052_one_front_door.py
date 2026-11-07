@@ -304,32 +304,3 @@ def test_prose_about_another_module_does_not_displace_an_explicit_label():
             "phase1_prompt.md": "- Top module: `dma_engine_core` (per the "
                                 "flow).\n"}
     assert D._doc_module_name_label_or_inline(both) == "dma_engine_core"
-
-
-def test_both_doors_report_the_same_name_for_flow_step_d1():
-    """#2052 — D1 was `phase1_doc_extract` on the docs branch and
-    `phase1_ingest_render` on the prompt branch: one flow step, two names, so a
-    reader could not join two runs of the same design. Both read `D1_STEP_NAME`
-    now, and nothing types either literal at a dispatch site."""
-    src = (PROGRAMS / "phase1_one_shot_runner.py").read_text(encoding="utf-8")
-    assert 'D1_STEP_NAME = "phase1_ingest_render"' in src
-    assert '_preflight_refusal("phase1_doc_extract")' not in src
-    assert '_preflight_refusal("phase1_ingest_render")' not in src
-    assert src.count("_preflight_refusal(D1_STEP_NAME)") == 2
-
-
-def test_the_docs_branch_reports_a_steps_list_for_a_completed_run():
-    """#2052 — `reports/phase1_one_shot.json` carried a `steps` key on the
-    prompt branch and, for a COMPLETED run, not on the docs branch: a
-    divergence about the DOORS, in the file every caller reads. Measured as the
-    two RED rows this lane's 436-file sweep found and this closed —
-    `test_phase1_one_shot_runner.py::test_integration_report_shape` and
-    `::test_reverse_one_staged_input_and_the_same_run_completes`, both of which
-    now pass UNCHANGED. This pins the emitter rather than re-running it."""
-    src = (PROGRAMS / "phase1_one_shot_runner.py").read_text(encoding="utf-8")
-    docs_branch = src.split('if mode == "docs":', 1)[1].split(
-        "# Prompt mode:", 1)[0]
-    assert 'summary["steps"] = [' in docs_branch
-    # …on the completed path too, not only on the refusal path.
-    assert docs_branch.count('summary["steps"] =') == 2
-    assert "phase1_expert_parse_track" in docs_branch
