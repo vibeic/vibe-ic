@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import fnmatch
 import gzip
+import json
 from pathlib import Path
 import re
 
 from _analog_a8_extraction_wrapper import logical_lines
-from _pad_ring import parse_liberty_supply_view, parse_spice_subckts
+from _pad_ring import (bond_fed_rails, parse_lef_pin_roles,
+                       parse_liberty_supply_view, parse_spice_subckts)
 
 
 ASSIGN = re.compile(r"\$?\b([A-Za-z_]\w*)\s*=\s*(\{[^}]*\}|'[^']*'|\"[^\"]*\"|[^\s]+)")
@@ -224,7 +226,98 @@ def normalize_cdl(text, pdk, models):
     return "\n".join(output) + "\n", models
 
 
-def power_setup(text, config):
+def pad_power_setup(netlist, config, views):
+    """Declare native primary pad supplies and documented logical inputs.
+
+    The PDK's power.awk only sees Verilog inputs, which omit physical supply
+    bonds in a chip netlist. Bind the extracted top's terminals to its native
+    pad subcircuits, then reuse the chip producer's PDK bond-to-rail discovery.
+    CVC requires power settings for internal as well as external power nets:
+    https://github.com/d-m-bailey/cvc/wiki/Power
+    Only Liberty primary supplies are fixed; non-primary supplies and
+    ordinary signals are not inferred from a voltage or a net name.
+    """
+    if not netlist or not config.get("PAD_LEFS"):
+        return {}, {}
+    top = re.search(r"(?ims)^[ \t]*\.subckt[ \t]+" + re.escape(config["DESIGN_NAME"])
+                    + r"[ \t]+([^\n]*)\n(.*?)^[ \t]*\.ends\b[^\n]*", netlist)
+    if top is None:
+        return {}, {}  # Native CVC diagnoses an absent top.
+    ports = set(top[1].split())
+    subckts = parse_spice_subckts(netlist[:top.start()] + netlist[top.end():])
+    roles = {}
+    for path in config["PAD_LEFS"]:
+        roles.update(parse_lef_pin_roles(Path(path).read_text()))
+    cells = {master: [(view, view["cells"][master]) for view in views
+                     if master in view["cells"]]
+             for master in roles}
+    prepared = (Path(config["DESIGN_DIR"]) / "work/flow/chip/preparation.json"
+                if config.get("DESIGN_DIR") else None)
+    pads = json.loads(prepared.read_text()).get("pads", {}) if prepared and prepared.is_file() else {}
+    configured = set((config.get("VDD_NETS") or [config.get("VDD_PIN")])
+                     + (config.get("GND_NETS") or [config.get("GND_PIN")]))
+    result, inputs = {}, {}
+
+    def declare(name, voltage):
+        if name in result and result[name] != voltage:
+            raise ValueError(f"Conflicting active PDK Liberty voltages for {name}")
+        result[name] = voltage
+
+    for match in re.finditer(r"(?m)^[ \t]*[Xx]\S+[^\n]*", top[2]):
+        words = match[0].split()
+        master = words[-1]
+        if master not in cells or master not in subckts:
+            continue
+        terminals = subckts[master][0]
+        if len(terminals) != len(words) - 2:
+            continue  # Keep a native terminal-count error visible.
+        nets = dict(zip(terminals, words[1:-1]))
+        declared = pads.get(words[0][1:], {})
+        for view, cell in cells[master]:
+            if view["nom_voltage"] is None:
+                continue
+            for pin, attrs in cell["pg_pins"].items():
+                if (pin in nets and attrs.get("pg_type") in {"primary_power", "primary_ground"}
+                        and attrs.get("voltage_name") in view["voltage_map"]):
+                    # CVC distinguishes a top port from a local top-cell net
+                    # by its leading hierarchy delimiter.
+                    name = nets[pin] if nets[pin] in ports else "/" + nets[pin]
+                    declare(name, view["voltage_map"][attrs["voltage_name"]])
+            for kind in ("pins", "pg_pins"):
+                for pin, attrs in cell[kind].items():
+                    use = roles[master].get(pin, (None, None))[1]
+                    name = nets.get(pin)
+                    if (kind == "pins" and attrs.get("is_pad") == "true" and name in ports
+                            and declared.get("direction") == "input"
+                            and declared.get("master") == master and declared.get("port") == name
+                            and declared.get("terminal") == pin):
+                        # Chip preparation owns the selected logical direction;
+                        # an inout bond is not automatically an external input.
+                        bounds = [cell["pg_pins"].get(attrs.get(key), {}).get("voltage_name")
+                                  for key in ("related_ground_pin", "related_power_pin")]
+                        if all(rail in view["voltage_map"] for rail in bounds):
+                            levels = tuple(view["voltage_map"][rail] for rail in bounds)
+                            if name in inputs and inputs[name] != levels:
+                                raise ValueError(f"Conflicting active PDK Liberty input levels for {name}")
+                            inputs[name] = levels
+                    if (attrs.get("is_pad") != "true" or nets.get(pin) not in ports
+                            or use not in {"POWER", "GROUND"}):
+                        continue
+                    if nets[pin] in configured:
+                        continue  # This bond already has the configured native supply definition.
+                    fed = [pin] if kind == "pg_pins" else bond_fed_rails(subckts, master, pin)[0]
+                    polarity = "primary_power" if use == "POWER" else "primary_ground"
+                    values = {view["voltage_map"][pg["voltage_name"]]
+                              for rail in fed
+                              if (pg := cell["pg_pins"].get(rail, {})).get("pg_type") == polarity
+                              and pg.get("voltage_name") in view["voltage_map"]}
+                    if len(values) != 1:
+                        raise ValueError(f"No unique PDK Liberty voltage for supply bond {master}/{pin}")
+                    declare(nets[pin], values.pop())
+    return result, inputs
+
+
+def power_setup(text, config, netlist=None):
     views = []
     for key in ("LIB", "PAD_LIBS", "EXTRA_LIBS"):
         libraries = config.get(key) or []
@@ -255,7 +348,8 @@ def power_setup(text, config):
     lines = text.splitlines()
     original = {words[0]: words[2] for line in lines
                 if len(words := line.split()) == 3 and words[1] == "power"}
-    rails = set(supplies + grounds)
+    domains, inputs = pad_power_setup(netlist, config, views)
+    rails = set(supplies + grounds) | domains.keys()
     result = [line for line in lines if not re.match(r"^\S+\s+power\s", line)
               and not (len(words := line.split()) > 1 and words[0] in rails and words[1] == "input")]
     for name in supplies:
@@ -270,6 +364,18 @@ def power_setup(text, config):
         if value is None:
             raise ValueError(f"No PDK Liberty voltage or CVC power declaration for {name}")
         result.insert(0, f"{name} power {value}")
+    for name, value in domains.items():
+        existing = next((line.split()[2] for line in result
+                         if line.split()[:2] == [name, "power"]), None)
+        if existing is not None and float(existing) != value:
+            raise ValueError(f"Conflicting active PDK Liberty voltages for {name}")
+        if existing is None:
+            result.insert(0, f"{name} power {value}")
+    for name, (low, high) in inputs.items():
+        # Replace only the native core-domain default, preserving explicit levels.
+        result = [line for line in result if line.split() != [name, "input", "std_input"]]
+        if not any(line.split()[:1] == [name] for line in result):
+            result.append(f"{name} input min@{low} max@{high}")
     return "\n".join(result) + "\n"
 
 

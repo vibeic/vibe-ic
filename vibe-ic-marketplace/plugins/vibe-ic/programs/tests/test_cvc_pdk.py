@@ -121,6 +121,181 @@ def test_uncharacterized_label_does_not_invent_an_unresolved_supply(tmp_path):
                          "VDD_NETS": ["VCORE", "VIO"], "GND_NETS": ["GND"]})
 
 
+def pad_domain_fixture(tmp_path, *, supply_voltage=3.3):
+    liberty = tmp_path / "pad.lib"
+    liberty.write_text(f'''library(pads) {{
+nom_voltage : 1.8;
+voltage_map(CORE, 1.8);
+voltage_map(IO, {supply_voltage});
+voltage_map(RETURN, 0);
+cell (supply_pad) {{
+  pg_pin (P) {{
+    pg_type : primary_power;
+    voltage_name : IO;
+  }}
+  pg_pin (G) {{
+    pg_type : primary_ground;
+    voltage_name : RETURN;
+  }}
+  pg_pin (SLEEP) {{
+    pg_type : internal_power;
+    voltage_name : IO;
+  }}
+  pin (BOND) {{
+    is_pad : true;
+    direction : inout;
+    related_power_pin : P;
+    related_ground_pin : G;
+  }}
+}}
+}}''')
+    lef = tmp_path / "pad.lef"
+    lef.write_text('''MACRO supply_pad
+ CLASS PAD POWER ;
+ PIN BOND
+  DIRECTION INOUT ;
+  USE POWER ;
+ END BOND
+ PIN P
+  DIRECTION INOUT ;
+  USE POWER ;
+ END P
+ PIN G
+  DIRECTION INOUT ;
+  USE GROUND ;
+ END G
+END supply_pad
+''')
+    # The native model's own resistor proves which supply the bond feeds.
+    cdl = (".subckt package bond A CORE RETURN\nXpad ring_g bond sleeping ring_p supply_pad\n.ends\n"
+           ".subckt supply_pad G BOND SLEEP P\nXbase BOND G P base\n.ends\n"
+           ".subckt base PAD RETURN SUPPLY\nRfeed PAD SUPPLY .1\n.ends\n")
+    config = {"DESIGN_NAME": "package", "PAD_LEFS": [str(lef)], "LIB": [str(liberty)],
+              "VDD_NETS": ["CORE"], "GND_NETS": ["RETURN"]}
+    return config, cdl
+
+
+def test_primary_pad_domains_and_external_bond_use_the_native_operating_view(tmp_path):
+    config, cdl = pad_domain_fixture(tmp_path)
+    result = power_setup("CORE power 1.8\nRETURN power 0\nA input std_input\n", config, cdl)
+    assert "bond power 3.3\n" in result
+    assert "/ring_p power 3.3\n" in result
+    assert "/ring_g power 0.0\n" in result
+    assert "sleeping power" not in result
+    assert "A input std_input" in result
+    assert "A power" not in result
+
+
+def test_an_internal_signal_connected_to_a_supply_bond_is_not_an_external_source(tmp_path):
+    config, cdl = pad_domain_fixture(tmp_path)
+    cdl = cdl.replace(".subckt package bond A CORE RETURN", ".subckt package A CORE RETURN")
+    result = power_setup("CORE power 1.8\nRETURN power 0\n", config, cdl)
+    assert "bond power" not in result
+    assert "ring_p power 3.3" in result  # Native primary supply, not an inferred signal.
+
+
+def test_unknown_bond_to_rail_connection_is_not_guessed_from_related_power_pin(tmp_path):
+    config, cdl = pad_domain_fixture(tmp_path)
+    cdl = cdl.replace("Rfeed PAD SUPPLY .1", "Dclamp PAD SUPPLY diode")
+    with pytest.raises(ValueError, match="No unique PDK Liberty voltage for supply bond"):
+        power_setup("CORE power 1.8\nRETURN power 0\n", config, cdl)
+
+
+def test_a_physical_net_binding_incompatible_pad_domains_is_not_overwritten(tmp_path):
+    config, cdl = pad_domain_fixture(tmp_path)
+    cdl = cdl.replace("ring_g bond sleeping ring_p", "shorted bond sleeping shorted")
+    with pytest.raises(ValueError, match="Conflicting active PDK Liberty voltages for /shorted"):
+        power_setup("CORE power 1.8\nRETURN power 0\n", config, cdl)
+
+
+def test_pad_primary_supply_cannot_override_the_configured_core_voltage(tmp_path):
+    config, cdl = pad_domain_fixture(tmp_path)
+    cdl = cdl.replace("sleeping ring_p", "sleeping CORE")
+    with pytest.raises(ValueError, match="Conflicting active PDK Liberty voltages for CORE"):
+        power_setup("CORE power 1.8\nRETURN power 0\n", config, cdl)
+
+
+def test_ip_power_recipe_is_unchanged_without_pad_views(tmp_path):
+    config, _ = pad_domain_fixture(tmp_path)
+    del config["PAD_LEFS"]
+    power = "CORE power 1.8\nRETURN power 0\n#define std_input min@RETURN max@CORE\nA input std_input\n"
+    result = power_setup(power, config, ".subckt package A CORE RETURN\n.ends\n")
+    assert result == "RETURN power 0.0\nCORE power 1.8\n#define std_input min@RETURN max@CORE\nA input std_input\n"
+
+
+def test_a_configured_supply_bond_does_not_need_a_second_pg_description(tmp_path):
+    config, cdl = pad_domain_fixture(tmp_path)
+    Path(config["LIB"][0]).write_text('''library(pads) {
+nom_voltage : 1.8;
+cell (supply_pad) {
+  pin (BOND) {
+    is_pad : true;
+    direction : inout;
+  }
+}
+}''')
+    cdl = cdl.replace(".subckt package bond A CORE RETURN", ".subckt package A CORE RETURN")
+    cdl = cdl.replace("ring_g bond sleeping ring_p", "ring_g CORE sleeping ring_p")
+    result = power_setup("CORE power 1.8\nRETURN power 0\n", config, cdl)
+    assert result == "RETURN power 0\nCORE power 1.8\n"
+
+
+@pytest.mark.parametrize("direction", ["input", "output", None])
+def test_inout_pad_input_levels_need_the_selected_logical_input_direction(tmp_path, direction):
+    config, cdl = pad_domain_fixture(tmp_path)
+    liberty = Path(config["LIB"][0])
+    text = liberty.read_text().replace("cell (supply_pad)", "cell (signal_pad)")
+    liberty.write_text(liberty.read_text() + "\n" + text)
+    lef = Path(config["PAD_LEFS"][0])
+    lef.write_text(lef.read_text() + "\n" + lef.read_text().replace("supply_pad", "signal_pad")
+                   .replace("CLASS PAD POWER", "CLASS PAD INPUT").replace("USE POWER", "USE SIGNAL"))
+    cdl = cdl.replace(".subckt package bond A CORE RETURN",
+                      ".subckt package bond A CORE RETURN\nXinput ring_g A sleeping ring_p signal_pad")
+    cdl += ".subckt signal_pad G BOND SLEEP P\n.ends\n"
+    config["DESIGN_DIR"] = str(tmp_path)
+    prepared = tmp_path / "work/flow/chip/preparation.json"
+    prepared.parent.mkdir(parents=True)
+    prepared.write_text(json.dumps({"pads": {"input": {
+        "port": "A", "master": "signal_pad", "terminal": "BOND", "direction": direction}}}))
+    result = power_setup("CORE power 1.8\nRETURN power 0\n", config, cdl)
+    assert ("A input min@0.0 max@3.3\n" in result) == (direction == "input")
+    explicit = power_setup("CORE power 1.8\nRETURN power 0\nA input min@0 max@1.2\n", config, cdl)
+    assert "A input min@0 max@1.2\n" in explicit
+    assert "A input min@0.0 max@3.3\n" not in explicit
+
+
+@pytest.mark.parametrize("conducting", [False, True])
+def test_native_cvc_binds_internal_primary_domains_and_keeps_a_real_short(tmp_path, conducting):
+    pytest.importorskip("librelane")
+    from librelane.state import DesignFormat
+    from flow_ic_checks import ElectricalRules
+
+    pdk_root = Path(os.environ.get("PDK_ROOT", "/nonexistent"))
+    pdk = pdk_root / "sky130A"
+    if not pdk.is_dir() or not shutil.which("cvc_rv"):
+        pytest.skip("native PDK and CVC required")
+    config, cdl = pad_domain_fixture(tmp_path)
+    gate = "ring/rail" if conducting else "RETURN"
+    cdl = cdl.replace("ring_p", "ring/rail")
+    cdl = cdl.replace("Rfeed PAD SUPPLY .1", "Rfeed PAD SUPPLY sky130_fd_pr__res_generic_m5 w=10 l=.1")
+    cdl = cdl.replace("Xpad ring_g", "Xpad RETURN")
+    cdl = cdl.replace(".subckt package bond A CORE RETURN",
+                      ".subckt package bond A CORE RETURN\n"
+                      f"Mshort ring/rail {gate} RETURN RETURN sky130_fd_pr__nfet_g5v0d10v5 w=1 l=.5")
+    source = tmp_path / "source.spice"
+    source.write_text(cdl)
+    netlist = tmp_path / "source.v"
+    netlist.write_text("module package(bond, A, CORE, RETURN);\ninput CORE;\ninput RETURN;\ninout bond;\ninput A;\nendmodule\n")
+    config.update(PDK_ROOT=str(pdk_root), PDK="sky130A", STD_CELL_LIBRARY="sky130_fd_sc_hd")
+    step = SimpleNamespace(step_dir=str(tmp_path), config=config)
+    _, metrics = ElectricalRules.run(step, {DesignFormat.SPICE: str(source), DesignFormat.NETLIST: str(netlist)})
+    report = json.loads((tmp_path / "cvc.json").read_text())
+    assert report["completed"] and report["counts"]["Model errors"] == 0, report
+    assert (metrics["cvc_electrical_errors"] > 0) == conducting, report
+    assert "/ring/rail power 3.3" in (tmp_path / "top.power").read_text()
+    assert "could not expand signal" not in (tmp_path / "report.rpt").read_text()
+
+
 @pytest.mark.parametrize("conducting", [False, True])
 @pytest.mark.parametrize("missing_cell", [False, True])
 def test_native_pdk_io_cell_and_default_resistor_complete_cvc_without_losing_a_leak(

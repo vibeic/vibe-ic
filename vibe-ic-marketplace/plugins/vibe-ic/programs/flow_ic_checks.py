@@ -132,7 +132,7 @@ class ElectricalRules(Step):
         supplies = completed(commands.run(["awk", "-v", f"vdd={power[0]}", "-v", f"gnd={ground[0]}",
             "-f", recipe / "power.awk", state_in[DesignFormat.NETLIST]]), "CVC power declaration")
         try:
-            (root / "top.power").write_text(power_setup(supplies.stdout, self.config))
+            (root / "top.power").write_text(power_setup(supplies.stdout, self.config, netlist))
         except ValueError as exc:
             raise StepException(f"NOT_MEASURED: PDK CVC power setup: {exc}") from exc
         top = self.config["DESIGN_NAME"]
