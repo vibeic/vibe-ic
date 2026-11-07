@@ -669,13 +669,16 @@ def gls(project, directory, tool, commands, *, state, config):
         return future.result()
 
     def prepare_case(corner, sdf, bench, index):
-        mtm_spec = {"min": "MINIMUM", "max": "MAXIMUM"}.get(str(corner).split("_")[0], "TYPICAL")
+        mtm_spec = {"min": "MINIMUM", "nom": "TYPICAL", "max": "MAXIMUM"}.get(str(corner).split("_")[0])
         work = directory / ("corner_" + str(index + 1))
         work.mkdir(parents=True, exist_ok=True)
         row = {"corner": corner, "testbench": str(bench), "status": "NOT_MEASURED",
                "ran": False, "exit_code": None}
         commands = type(parent_commands)(work)
         reports = []
+        if mtm_spec is None:
+            row["detail"] = f"Native SDF delay selection is unknown for corner {corner!r}."
+            return lambda: (row, reports, commands)
         clock_unmeasured = False
         models = [str(signal_netlist), *closure["files"], str(stub_file)]
         flags = shlex.split(native._IVERILOG_FLAGS)

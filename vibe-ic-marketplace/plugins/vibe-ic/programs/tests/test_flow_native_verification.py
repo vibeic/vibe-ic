@@ -1421,7 +1421,7 @@ def gls_fixture(project, *, different=False, annotated=True, cocotb=False):
             "$display(\"ORACLE_TB_DONE pass=1/1\"); $finish; end\nendmodule\n")
     class NativeState(dict):
         metrics = {}
-    state = NativeState(nl=str(netlist), sdf={"typical": str(sdf)})
+    state = NativeState(nl=str(netlist), sdf={"nom_tt": str(sdf)})
     config = {"DESIGN_NAME": "unit", "CELL_VERILOG_MODELS": [str(model)]}
     return state, config
 
@@ -1454,6 +1454,21 @@ def test_gls_names_missing_native_inputs(tmp_path):
     assert not result["ran"] and "State netlist" in result["detail"]
 
 
+@pytest.mark.parametrize("corner", ["unknown_tt_025C_1v80", "typical", "default"])
+def test_gls_refuses_unknown_sdf_corner_prefix(tmp_path, corner):
+    if not all(shutil.which(tool) for tool in ("iverilog", "vvp")):
+        pytest.skip("Native Icarus is required")
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config = gls_fixture(project)
+    state["sdf"] = {corner: next(iter(state["sdf"].values()))}
+    result = gls(project, directory, {"corners": "all"}, Commands(directory), state=state, config=config)
+    row = result["native_steps"][0]
+    assert row["status"] == "NOT_MEASURED", result
+    assert not row["ran"] and corner in row["detail"], row
+    assert "gls_failures" not in result["metrics"], result
+
+
 @pytest.mark.parametrize("corner,delay", [("min_ff_025C_1v80", 1),
                                         ("nom_tt_025C_1v80", 2),
                                         ("max_ss_025C_1v80", 3)])
@@ -1466,7 +1481,7 @@ def test_gls_annotates_the_native_delay_field_for_each_rc_corner(tmp_path, corne
     project, directory = tmp_path / "project", tmp_path / "run"
     directory.mkdir()
     state, config = gls_fixture(project, cocotb=cocotb)
-    sdf = Path(state["sdf"]["typical"])
+    sdf = Path(state["sdf"]["nom_tt"])
     sdf.write_text(sdf.read_text().replace("(1:1:1)", "(1:2:3)"))
     state["sdf"] = {corner: str(sdf)}
     config["DEFAULT_CORNER"] = corner
@@ -1504,7 +1519,7 @@ def test_gls_compiles_one_cocotb_model_for_all_45_independent_replays(tmp_path):
             "    assert int(dut.y.value)==0\n    dut.a.value=1\n"
             "    await Timer(5,unit='ns')\n    assert int(dut.y.value)==1\n")
         benches.append(str(bench))
-    sdf = state["sdf"]["typical"]
+    sdf = state["sdf"]["nom_tt"]
     state["sdf"] = {f"{rc}_{pvt}": sdf for rc in ("min", "nom", "max") for pvt in ("ff", "tt", "ss")}
     commands = Commands(directory)
     result = gls(project, directory, {"corners": "all", "testbenches": benches}, commands,
@@ -1531,7 +1546,7 @@ def test_gls_reuses_each_hdl_binary_and_keeps_all_corner_failures(tmp_path, diff
     second = original.with_name("tb_second.v")
     second.write_text(original.read_text().replace("module tb_unit", "module tb_second").replace(
         "if(y!==1)", "if(y!==0)" if different else "if(y!==1)"))
-    sdf = state["sdf"]["typical"]
+    sdf = state["sdf"]["nom_tt"]
     state["sdf"] = {rc: sdf for rc in ("min_ff", "nom_tt", "max_ss")}
     commands = Commands(directory)
     result = gls(project, directory, {"corners": "all", "testbenches": [str(original), str(second)]},
@@ -1570,7 +1585,7 @@ def declared_vector_chip_fixture(project, *, different=False):
         "always @(posedge delayed_clk) stored<=message;\n"
         + "\n".join(f"delay_cell gate{bit}(.a(stored[{bit}]),.y(digest[{bit}]));" for bit in range(8))
         + "\nendmodule\n")
-    Path(state["sdf"]["typical"]).write_text(
+    Path(state["sdf"]["nom_tt"]).write_text(
         '(DELAYFILE (SDFVERSION "3.0") (DESIGN "chip_unit") (DIVIDER /) (TIMESCALE 1ns)\n'
         '(CELL (CELLTYPE "chip_unit") (INSTANCE) (DELAY (ABSOLUTE '
         '(INTERCONNECT clk clock_input/a (0.5:0.5:0.5)))))\n'
@@ -1735,7 +1750,7 @@ def test_gls_regenerates_declared_register_bus_vectors(tmp_path, different):
         "else if(address>=32&&address<40) raw=32'ha5a5a5a5;end\n"
         + "\n".join(f"delay_cell gate{bit}(.a(raw[{bit}]),.y(read_data[{bit}]));" for bit in range(32))
         + "\nendmodule\n")
-    Path(state["sdf"]["typical"]).write_text(
+    Path(state["sdf"]["nom_tt"]).write_text(
         '(DELAYFILE (SDFVERSION "3.0") (DESIGN "chip_unit") (DIVIDER /) (TIMESCALE 1ns)\n'
         '(CELL (CELLTYPE "chip_unit") (INSTANCE) (DELAY (ABSOLUTE '
         '(INTERCONNECT clk clock_input/a (0.5:0.5:0.5)))))\n'
@@ -1763,9 +1778,9 @@ def test_gls_replays_every_state_corner(tmp_path):
     project, directory = tmp_path / "project", tmp_path / "run"
     directory.mkdir()
     state, config = gls_fixture(project)
-    state["sdf"]["second_corner"] = state["sdf"]["typical"]
+    state["sdf"]["max_tt"] = state["sdf"]["nom_tt"]
     result = gls(project, directory, {"corners": "all"}, Commands(directory), state=state, config=config)
-    assert [row["corner"] for row in result["native_steps"]] == ["typical", "second_corner"]
+    assert [row["corner"] for row in result["native_steps"]] == ["nom_tt", "max_tt"]
     assert all(row["status"] == "PASS" and row["tests"] == 1 for row in result["native_steps"])
     assert result["metrics"]["gls_failures"] == 0
 
@@ -1777,9 +1792,9 @@ def test_gls_default_matches_configured_single_corner(tmp_path):
     directory.mkdir()
     state, config = gls_fixture(project)
     state["sdf"]["unselected_corner"] = str(project / "absent.sdf")
-    config["DEFAULT_CORNER"] = "typical"
+    config["DEFAULT_CORNER"] = "nom_tt"
     result = gls(project, directory, {}, Commands(directory), state=state, config=config)
-    assert [row["corner"] for row in result["native_steps"]] == ["typical"]
+    assert [row["corner"] for row in result["native_steps"]] == ["nom_tt"]
     assert result["metrics"]["gls_failures"] == 0
     report = json.loads((directory / "gls.json").read_text())
     assert report["unmeasured_corners"] == ["unselected_corner"]
@@ -1874,11 +1889,11 @@ def test_gls_omits_only_passive_supply_connectors(tmp_path, kind, different, exp
     netlist.write_text(netlist.read_text().replace("endmodule", "wire v0,v1,g0,g1,aux0,aux1;\n"
         "connector rail(.p0(v0),.p1(v1),.g0(g0),.g1(g1),.aux0(aux0),.aux1(aux1));\nendmodule"))
     original = netlist.read_bytes()
-    original_sdf = Path(state["sdf"]["typical"]).read_bytes()
+    original_sdf = Path(state["sdf"]["nom_tt"]).read_bytes()
     result = gls(project, directory, {}, Commands(directory), state=state, config=config)
     assert result["native_steps"][0]["status"] == expected, result
     assert netlist.read_bytes() == original
-    assert Path(state["sdf"]["typical"]).read_bytes() == original_sdf
+    assert Path(state["sdf"]["nom_tt"]).read_bytes() == original_sdf
     if kind == "passive":
         summary = json.loads((directory / "gls.json").read_text())
         assert summary["physical_only_types_omitted"] == ["connector"]
@@ -1933,9 +1948,9 @@ def timed_arithmetic_fixture(project, *, physical=False, different=False, scenar
     source = project / "phase2/stage1/rtl/neutral_serial.v"
     core = source.read_text()
     native = project / "native"
-    corner = native / "typical"
+    corner = native / "nom_tt"
     corner.mkdir(parents=True)
-    netlist, model, sdc, sdf = [native / name for name in ("netlist.v", "models.v", "timing.sdc", "typical/timing.sdf")]
+    netlist, model, sdc, sdf = [native / name for name in ("netlist.v", "models.v", "timing.sdc", "nom_tt/timing.sdf")]
     model.write_text('`timescale 1ns/1ps\n'
         'module timing_cell(input a,output y); assign y=a; specify (a=>y)=(1,1); endspecify endmodule\n'
         'module input_cell(inout PAD,output Y); assign Y=PAD; specify (PAD=>Y)=(0,0); endspecify endmodule\n'
@@ -1958,7 +1973,7 @@ def timed_arithmetic_fixture(project, *, physical=False, different=False, scenar
         f'(CELL (CELLTYPE "{top}") (INSTANCE) (DELAY (ABSOLUTE\n{interconnect})))\n'
         f'(CELL (CELLTYPE "{cell}") (INSTANCE {instance}) '
         f'(DELAY (ABSOLUTE (IOPATH {arc} ({delay}:{delay}:{delay}) ({delay}:{delay}:{delay}))))))\n')
-    state = {"nl": str(netlist), "sdc": str(sdc), "sdf": {"typical": str(sdf)}}
+    state = {"nl": str(netlist), "sdc": str(sdc), "sdf": {"nom_tt": str(sdf)}}
     (native / "state_out.json").write_text(json.dumps(state))
     (corner / "max.rpt").write_text('Startpoint: state (rising edge-triggered flip-flop clocked by clock)\n'
         'Endpoint: p (output port clocked by clock)\nPath Group: clock\nPath Type: max\n'
@@ -2003,7 +2018,7 @@ def test_gls_arithmetic_preserves_native_failures(tmp_path, failure):
     state, config, bench = timed_arithmetic_fixture(project, scenario=True,
                                                    delay=22 if failure == "late_output" else 17)
     if failure == "sdf_error":
-        sdf = Path(state["sdf"]["typical"])
+        sdf = Path(state["sdf"]["nom_tt"])
         sdf.write_text(sdf.read_text().replace("IOPATH a y", "IOPATH missing y"))
     result = gls(project, directory, {"testbenches": [str(bench)]}, Commands(directory), state=state, config=config)
     assert result["native_steps"][0]["status"] == "FAIL", result
@@ -2116,7 +2131,7 @@ def test_generated_cocotb_chip_clock_uses_native_sdc(tmp_path, outcome, expected
     state, config = gls_fixture(project, cocotb=True)
     netlist = Path(state["nl"])
     netlist.write_text(netlist.read_text().replace("module unit(input a", "module neutral_chip(inout clk, input a"))
-    sdf = Path(state["sdf"]["typical"])
+    sdf = Path(state["sdf"]["nom_tt"])
     sdf.write_text(sdf.read_text().replace('"unit"', '"neutral_chip"'))
     config["DESIGN_NAME"] = "neutral_chip"
     sdc = project / "clock.sdc"

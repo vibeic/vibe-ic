@@ -42,9 +42,15 @@ def test_real_module_declaration_wins_over_product_label(tmp_path, declaration):
     assert l9["no_top_module_in_input"] is False
 
 
-@pytest.fixture
-def authored(tmp_path):
+@pytest.fixture(params=["unstated", "legacy_product"])
+def authored(tmp_path, request):
     path = emit(tmp_path)
+    if request.param == "legacy_product":
+        l9 = json.loads(path.read_text())
+        l9.update(top_module="PulseBox",
+                  top_module_extraction_strategy="l1_ic_name_fallback",
+                  top_module_status="derived_from_chip_name")
+        path.write_text(json.dumps(l9))
     rtl = tmp_path / "phase2/stage1/rtl"
     rtl.mkdir(parents=True)
     # A unique top authored after Phase 1, with a name unrelated to the product.
@@ -55,11 +61,6 @@ def authored(tmp_path):
 
 def test_authored_top_replaces_unstated_strategy_and_keeps_input_absence(authored):
     project, path = authored
-    # Exercise the resolver directly even on the baseline's honest null state.
-    l9 = json.loads(path.read_text())
-    l9.update(top_module=None, top_module_extraction_strategy="top_undeclared",
-              no_top_module_in_input=True)
-    path.write_text(json.dumps(l9))
     files, top, _ = resolve_rtl_inputs(project)
     assert top == "chip_top"
     assert files == [project / "phase2/stage1/rtl/chip_top.v"]
@@ -67,7 +68,7 @@ def test_authored_top_replaces_unstated_strategy_and_keeps_input_absence(authore
     assert resolved["top_module"] == top
     assert resolved["top_module_extraction_strategy"] == "rtl_authoring_yosys_hierarchy"
     assert resolved["top_module_status"] == "resolved_from_rtl_authoring"
-    assert resolved["top_module_source"]["method"] == "yosys hierarchy -auto-top"
+    assert resolved["top_module_source"]["method"] == "yosys hierarchy -check"
     assert resolved["no_top_module_in_input"] is True
 
 
@@ -118,3 +119,33 @@ def test_explicit_missing_module_is_not_silently_replaced(authored):
     path.write_text(json.dumps(l9))
     with pytest.raises(FileNotFoundError, match="Declared top module declared_but_missing"):
         resolve_rtl_inputs(project)
+
+
+def test_unstated_top_refuses_multiple_authored_roots(authored):
+    project, path = authored
+    (project / "phase2/stage1/rtl/other.v").write_text(
+        "module other(input wire a, output wire z); assign z=a; endmodule\n")
+    before = path.read_bytes()
+    with pytest.raises(FileNotFoundError, match="ambiguous candidate top modules: chip_top, other"):
+        resolve_rtl_inputs(project)
+    assert path.read_bytes() == before
+
+
+def test_explicit_plugin_declaration_wins_over_legacy_product(authored):
+    project, _ = authored
+    declaration = project / "plugin_output/declaration.json"
+    declaration.parent.mkdir()
+    declaration.write_text(json.dumps({"top_module": "declared_but_missing"}))
+    with pytest.raises(FileNotFoundError, match="Declared top module declared_but_missing"):
+        resolve_rtl_inputs(project)
+
+
+def test_parameterized_child_is_not_an_additional_root(authored):
+    project, _ = authored
+    (project / "phase2/stage1/rtl/chip_top.v").write_text(
+        "module leaf #(parameter W=1)(input [W-1:0] a, output [W-1:0] z);\n"
+        "assign z=a; endmodule\n"
+        "module chip_top(input [3:0] a, output [3:0] z);\n"
+        "leaf #(.W(4)) u(a,z); endmodule\n")
+    _, top, _ = resolve_rtl_inputs(project)
+    assert top == "chip_top"

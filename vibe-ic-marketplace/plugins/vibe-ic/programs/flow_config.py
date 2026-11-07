@@ -148,7 +148,7 @@ def _authored_rtl_top(rtl: list[Path]) -> str:
             include = " ".join("-I" + shlex.quote(str(parent)) for parent in
                                {path.parent, *(p.parent for p in rtl)})
             reads.append("read_verilog -sv " + include + " " + shlex.quote(str(path)))
-        script = "; ".join([*reads, "hierarchy -auto-top", "proc",
+        script = "; ".join([*reads, "hierarchy -check", "proc",
                              "write_json " + shlex.quote(str(output))])
         try:
             completed = subprocess.run(["yosys", "-Q", "-T", "-p", script],
@@ -166,6 +166,9 @@ def _authored_rtl_top(rtl: list[Path]) -> str:
         return marked[0]
     instantiated = {cell.get("type") for body in modules.values()
                     for cell in body.get("cells", {}).values()}
+    # Native parameter specializations retain the original module's hdlname.
+    instantiated |= {modules[name].get("attributes", {}).get("hdlname", name)
+                     for name in instantiated if name in modules}
     candidates = sorted(set(modules) - instantiated)
     if len(candidates) == 1:
         return candidates[0]
@@ -181,7 +184,7 @@ def _record_authored_top(l9_path: Path, l9: dict, top: str) -> None:
     l9["top_module_source"] = {
         "step": "RTL authoring",
         "artifact": "phase2/stage1/rtl",
-        "method": "yosys hierarchy -auto-top",
+        "method": "yosys hierarchy -check",
     }
     l9_path.parent.mkdir(parents=True, exist_ok=True)
     l9_path.write_text(json.dumps(l9, indent=2, ensure_ascii=False) + "\n")
@@ -366,8 +369,11 @@ def _resolve_rtl_inputs(project: Path, sources: dict) -> RTLInputs:
     l9 = _load(l9_path)
     l1 = _load(docs / "L1_DATASHEET.json")
     tapeout_metadata = l1.get("tapeout_metadata") or {}
+    l9_top = l9.get("top_module")
+    if l9.get("top_module_extraction_strategy") == "l1_ic_name_fallback":
+        l9_top = None
     top = (_load(project / "plugin_output/declaration.json").get("top_module")
-           or l9.get("top_module") or tapeout_metadata.get("top_cell"))
+           or l9_top or tapeout_metadata.get("top_cell"))
     modules = set().union(*(module_names_in_text(path.read_text(errors="replace"))
                             for path in rtl))
     parameters = design_parameters(project)
