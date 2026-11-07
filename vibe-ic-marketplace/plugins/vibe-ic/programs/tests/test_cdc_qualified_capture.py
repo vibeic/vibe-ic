@@ -105,3 +105,41 @@ def test_native_adapter_counts_qualified_payload_as_synchronised(tmp_path, adapt
     report = json.loads(next(Path(path) for path in result["reports"] if path.endswith("/cdc.json")).read_text())
     qualified = [row for row in report["crossings"]["crossings"] if row.get("qualification")]
     assert bool(qualified) == (unresolved == 0)
+
+
+@pytest.mark.parametrize("enabled_flop", [False, True])
+@pytest.mark.parametrize("case,unresolved", [
+    ("closing_edge", 0), ("one_stage", 1), ("parallel_enable", 1), ("wrong_hold", 1)])
+def test_implemented_capture_uses_native_liberty_load_functions(tmp_path, enabled_flop, case, unresolved):
+    if not shutil.which("yosys"):
+        pytest.skip("Native Yosys is required")
+    source = capture_source(case).replace("output reg [7:0] captured", "output [7:0] captured")
+    source = source.replace("captured<=0; ", "").replace("captured<=payload; ", "")
+    sample = "meta" if case == "one_stage" else "synchronised"
+    enable = f"({sample} != seen)" + (" || allow" if case == "parallel_enable" else "")
+    instances = f"wire capture_enable={enable};\n"
+    for bit in range(8):
+        if enabled_flop:
+            instances += (f"HOLDFF capture{bit}(.C(destination_clk),.R(reset_n),.E(capture_enable),"
+                          f".D(payload[{bit}]),.Q(captured[{bit}]));\n")
+        else:
+            instances += (f"wire next{bit};\n"
+                f"SELECT hold{bit}(.A(captured[{bit}]),.B(payload[{bit}]),.S(capture_enable),.Y(next{bit}));\n"
+                f"SAMPLE capture{bit}(.C(destination_clk),.R(reset_n),.D(next{bit}),.Q(captured[{bit}]));\n")
+    source = source.replace("endmodule", instances + "endmodule")
+    rtl = tmp_path / "mapped.v"
+    rtl.write_text(source)
+    library = tmp_path / "cells.lib"
+    cells = []
+    for name, state in [("HOLDFF", "(D & E) | (IQ & !E)"), ("SAMPLE", "D")]:
+        cells.append(f'cell({name}) {{ ff(IQ,IQN) {{ clocked_on:"C"; clear:"!R"; next_state:"{state}"; }} '
+            + ' '.join(f'pin({pin}){{direction:input;}}' for pin in ("C", "D", "R", "E")
+                       if pin != "E" or name == "HOLDFF")
+            + 'pin(Q){direction:output;function:"IQ";} }')
+    cells.append('cell(SELECT) { pin(A){direction:input;} pin(B){direction:input;} '
+        'pin(S){direction:input;} pin(Y){direction:output;function:"(A & !S) | (B & S)";} }')
+    library.write_text('library(neutral) { ' + ' '.join(cells) + ' }\n')
+    result = execute(tmp_path, tmp_path / "native", {"adapter": "implemented_cdc"}, {},
+        state={"nl": str(rtl)}, config={"DESIGN_NAME": "unit", "DEFAULT_CORNER": "nominal",
+                                       "LIB": {"nominal": [str(library)]}})
+    assert result["metrics"]["new_unexplained_crossings"] == unresolved, result
