@@ -10,9 +10,94 @@ from _analog_a8_extraction_wrapper import logical_lines
 from _pad_ring import parse_liberty_supply_view, parse_spice_subckts
 
 
-ASSIGN = re.compile(r"\b([A-Za-z_]\w*)\s*=\s*(\{[^}]*\}|'[^']*'|\"[^\"]*\"|[^\s]+)")
+ASSIGN = re.compile(r"\$?\b([A-Za-z_]\w*)\s*=\s*(\{[^}]*\}|'[^']*'|\"[^\"]*\"|[^\s]+)")
 KINDS = {"MN": "M", "MP": "M", "LDDN": "M", "LDDP": "M",
          "M": "M", "R": "R", "D": "D", "C": "C", "Q": "Q"}
+
+
+def assemble_cdl(text, config, pdk, models, source):
+    """Resolve referenced cells from the same native views as WriteCDL and LVS."""
+    cdls = config.get("CELL_CDLS") or [Path(pdk) / (
+        f"libs.ref/{config['STD_CELL_LIBRARY']}/cdl/{config['STD_CELL_LIBRARY']}.cdl")]
+    # Netgen.LVS lets SPICE_MODELS replace CELL_SPICE_MODELS, then adds extras/pads.
+    spices = config.get("SPICE_MODELS") or config.get("CELL_SPICE_MODELS") or []
+    paths = [*cdls, *(config.get("EXTRA_CDLS") or []), *(config.get("PAD_CDLS") or []),
+             *spices, *(config.get("EXTRA_SPICE_MODELS") or []),
+             *(config.get("PAD_SPICE_MODELS") or [])]
+    # PDK CDL wrappers may call cells in their library's companion SPICE view.
+    for cdl in [*cdls, *(config.get("EXTRA_CDLS") or []), *(config.get("PAD_CDLS") or [])]:
+        paths.extend(sorted((Path(cdl).parent.parent / "spice").glob("*.spice")))
+    headers = {}
+    active = None
+    # cdl.awk removes Magic's blackboxes. Keep their named terminal order for
+    # binding to the PDK view, which can omit electrically aliased terminals.
+    with Path(source).open() as stream:
+        for line in stream:
+            words = line.split()
+            if not words or words[0].startswith("*"):
+                continue
+            if words[0] == "+" and active is not None:
+                headers[active].extend(words[1:])
+                continue
+            active = words[1].casefold() if words[0].casefold() == ".subckt" else None
+            if active is not None:
+                headers[active] = words[2:]
+    circuits, bindings = {}, {}
+    block_pattern = r"(?ims)^[ \t]*\.subckt[ \t]+(\S+)[^\n]*\n.*?^[ \t]*\.ends\b[^\n]*"
+    for path in dict.fromkeys(map(str, paths)):
+        if path.endswith(".gz"):
+            with gzip.open(path, "rt") as stream:
+                library = stream.read()
+        else:
+            library = Path(path).read_text()
+        for block in re.finditer(block_pattern, library):
+            circuits.setdefault(block[1].casefold(), (block[0], path))
+
+    def references(source):
+        result = set()
+        for line in logical_lines(source):
+            if not line[:1].casefold() == "x":
+                continue
+            head = ASSIGN.search(line)
+            result.add((line[:head.start()] if head else line).split()[-1].casefold())
+        return result
+
+    defined = {name.casefold() for name in re.findall(r"(?im)^\s*\.subckt\s+(\S+)", text)}
+    defined.update(model_definitions(models))
+    pending = references(text) - defined
+    while pending:
+        name = min(pending)
+        pending.remove(name)
+        if name in defined or name not in circuits:
+            continue  # CVC reports a genuinely unresolved cell; never invent a model.
+        block, path = circuits[name]
+        text += f"\n* PDK subcircuit from {path}\n{block}\n"
+        defined.add(name)
+        target = logical_lines(block)[0].split()[2:]
+        if name in headers:
+            bindings[name] = (headers[name], target)
+        pending.update(references(block) - defined)
+    output = []
+    for line in logical_lines(text):
+        if line[:1].casefold() == "x":
+            head = ASSIGN.search(line)
+            words = (line[:head.start()] if head else line).split()
+            master = words[-1].casefold()
+            if master in bindings:
+                original, target = bindings[master]
+                nodes = [node for node in words[1:-1] if node != "/"]
+                named = dict(zip(original, nodes))
+                if (len(nodes) == len(original) == len(named)
+                        and all(pin in named for pin in target)):
+                    mapped = [named[pin] for pin in target]
+                    # A missing physical terminal may be omitted only when its
+                    # node already occurs on the native model's retained ports.
+                    if set(nodes) <= set(mapped):
+                        line = " ".join([words[0], *mapped, words[-1]])
+                        if head:
+                            line += " " + head.string[head.start():]
+        output.append(line)
+    return "\n".join(output) + "\n"
 
 
 def assignments(text):
@@ -70,13 +155,29 @@ def normalize_cdl(text, pdk, models):
                      re.findall(r"(?im)^[ \t]*\.subckt[ \t]+(\S+)", text)}
     lines = logical_lines(text)
     needed = set()
-    for line in lines:
+    for index, line in enumerate(lines):
         words = line.split()
         if not words or words[0][0].upper() not in {"X", "M", "R", "C", "D", "Q"}:
             continue
+        # CVC consumes CDL element designators; PDK SPICE can use lowercase.
+        line = line[0].upper() + line[1:]
+        # A Calibre bias terminal is metadata, and can precede the model tag.
+        # Keep its connection while placing it after the model/geometry fields.
+        bias = [word for word in line.split() if word.startswith("$SUB=")]
+        if bias:
+            line = " ".join([word for word in line.split() if not word.startswith("$SUB=")] + bias)
         head = ASSIGN.search(line)
         before = line[:head.start()] if head else line
-        name = before.split()[-1].casefold()
+        token = before.split()[-1]
+        name = token.casefold()
+        # Calibre wraps primitive model identifiers in $[...]. Bind to the
+        # identically named native CVC profile without changing its properties.
+        if name.startswith("$[") and name.endswith("]") and name[2:-1] in definitions:
+            start = len(before.rstrip()) - len(token)
+            native_name = definitions[name[2:-1]][1].split()[1]
+            line = line[:start] + native_name + line[start + len(token):]
+            name = name[2:-1]
+        lines[index] = line
         definition = definitions.get(name)
         geometry = definition is not None and (definition[0] == "M" or
                     re.search(r"\b[wl]\b", definition[1].split("R=", 1)[-1], re.I))
