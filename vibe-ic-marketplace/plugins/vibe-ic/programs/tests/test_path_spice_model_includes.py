@@ -51,3 +51,15 @@ def test_include_cycles_do_not_supply_an_absent_device(tmp_path):
     with pytest.raises(pst.Refusal, match='absent'):
         pst.model_file(tmp_path, '/pdk', 'ngspice', 'cells__ss.lib',
                        {'absent'}, None, tmp_path / 'out.sp')
+
+
+def test_native_multiline_subcircuit_ports_and_calls_are_folded_together(tmp_path):
+    source = put(tmp_path / 'pads.cdl',
+                 '.SUBCKT pad\n+ A Y VDD\n+ VSS VNW\n'
+                 'Xdevice Y A VSS\n+ VNW native_fet\n+ w=1 l=0.5\n.ENDS\n')
+    result = pst.fold_subckts([source], {'VDD': 3.3, 'VSS': 0, 'VNW': 3.3},
+                              'VDD', 'VSS', tmp_path / 'folded.spice')
+    text = Path(result['path']).read_text()
+    assert '.subckt pad A Y VDD VSS' in text
+    assert ' Xdevice Y A VSS VDD native_fet w=1 l=0.5' in text
+    assert pst.device_names(text) == {'native_fet'}
