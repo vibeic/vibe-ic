@@ -632,6 +632,7 @@ def gls(project, directory, tool, commands, *, state, config):
     stub_file.write_text("\n".join(f"module {name} (); endmodule" for name in stubs) + "\n")
     rows, reports = [], [stub_file, *projection_reports]
     for corner, sdf in sdfs.items():
+        mtm_spec = {"min": "MINIMUM", "max": "MAXIMUM"}.get(str(corner).split("_")[0], "TYPICAL")
         for bench in benches:
             work = directory / ("corner_" + str(len(rows) + 1))
             work.mkdir(parents=True, exist_ok=True)
@@ -658,7 +659,8 @@ def gls(project, directory, tool, commands, *, state, config):
                 connections = ",".join(f".{port.name}({port.name})" for port in ports)
                 wrapper = ("module flow_sdf_tb;\n" + "\n".join(declarations)
                            + f"\n{top} dut({connections});\nendmodule\n")
-                shim.write_text(native.inject_sdf_annotation(wrapper, "flow_sdf_tb", "dut", str(sdf)))
+                shim.write_text(native.inject_sdf_annotation(wrapper, "flow_sdf_tb", "dut", str(sdf),
+                                                            mtm_spec=mtm_spec))
                 makefile = work / "simulation.mk"
                 sources = " ".join(shlex.quote(path).replace("$", "$$") for path in [*models, str(shim)])
                 compile_flags = " ".join(shlex.quote(flag).replace("$", "$$") for flag in flags)
@@ -815,7 +817,8 @@ def gls(project, directory, tool, commands, *, state, config):
                     rows.append(row)
                     continue
                 injected = work / "annotated_tb.v"
-                injected.write_text(native.inject_sdf_annotation(tb_text, module[1], instance, str(sdf)))
+                injected.write_text(native.inject_sdf_annotation(tb_text, module[1], instance, str(sdf),
+                                                                mtm_spec=mtm_spec))
                 built = commands.run(["iverilog", *flags, "-s", module[1], "-o", work / "sim.vvp",
                                       injected, *models], cwd=work)
                 reports.append(injected)

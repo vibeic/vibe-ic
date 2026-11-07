@@ -707,12 +707,13 @@ def find_reusable_testbench(project: Path, top: str) -> Optional[Dict[str, objec
 
 
 def inject_sdf_annotation(tb_text: str, tb_module: str, dut_instance: str,
-                          sdf_path: str) -> str:
+                          sdf_path: str, *, mtm_spec: Optional[str] = None) -> str:
     """Inject one SDF annotation initial block into an existing testbench."""
     pat = re.compile(r"(?m)^(\s*module\s+" + re.escape(tb_module)
                      + r"\b[^;]*;)")
     statement = (f'\n  initial $sdf_annotate("{sdf_path}", '
-                 f'{dut_instance});  // Step 29 injected annotation')
+                 f'{dut_instance}' + (f',,,"{mtm_spec}"' if mtm_spec else '')
+                 + ');  // Step 29 injected annotation')
     out, count = pat.subn(r"\1" + statement, tb_text, count=1)
     if count != 1:
         raise ValueError(f"testbench module declaration not found: {tb_module}")
