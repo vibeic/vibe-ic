@@ -797,6 +797,9 @@ class _LookupSnapshot:
             Dict[int, List[Tuple[int, Flop, int, Optional[object]]]]] = None
         self._direct_consumers: Optional[
             Dict[object, List[Tuple[Flop, int]]]] = None
+        self._load_guards: Dict[Tuple[int, int], List[Tuple[object, int]]] = {}
+        self._synchronised_origins: Dict[object, Optional[object]] = {}
+        self._qualifier_origins: Dict[Tuple[object, int, str], Set[object]] = {}
         self._cone_inputs: Dict[str, Tuple[object, ...]] = {}
         self._cone_reach: Dict[frozenset, Dict[str, int]] = {}
         self._terminals = list(self.q_of) + [b for b in self.port_bits if b not in self.q_of]
@@ -985,6 +988,120 @@ class _LookupSnapshot:
                      and (d_index == index or flop.q[d_index] == bit))
             for flop, d_index in self._direct_consumers.get(bit, ()))
 
+    def load_guards(self, flop: Flop, index: int) -> List[Tuple[object, int]]:
+        """Necessary load conditions from native EN pins or Q-feedback muxes."""
+        key = id(flop), index
+        if key in self._load_guards:
+            return self._load_guards[key]
+        cell = self.nl.cells.get(flop.name, {})
+        enable = cell.get("connections", {}).get("EN", [])
+        guards = [(enable[0], _int(cell.get("parameters", {}).get("EN_POLARITY", 1)))] \
+            if len(enable) == 1 else []
+        bit, own, visited = flop.d[index], flop.q[index], set()
+        while bit in self.nl.drivers and bit not in visited:
+            visited.add(bit)
+            name, pin = self.nl.drivers[bit]
+            cell = self.nl.cells[name]
+            c = cell["connections"]
+            if cell["type"] in {"$buf", "$pos", "$_BUF_"}:
+                bit = c["A"][c[pin].index(bit)]
+                continue
+            if cell["type"] not in {"$mux", "$_MUX_"}:
+                break
+            pos = c["Y"].index(bit)
+            arms = c["A"][pos], c["B"][pos]
+            data = [arm for arm in arms if arm != own and not self.nl.is_const(arm)]
+            if len(data) != 1:
+                break
+            if own in arms:
+                guards.append((c["S"][0], int(arms[1] == data[0])))
+            bit = data[0]
+        self._load_guards[key] = guards
+        return guards
+
+    def synchronised_origin(self, bit):
+        """The source Q behind at least two same-edge destination samples."""
+        if bit in self._synchronised_origins:
+            return self._synchronised_origins[bit]
+        original, visited, stages = bit, set(), 0
+        first = self.q_of.get(bit)
+        domain = self.domain(first) if first else None
+        edge = self.sample_edges[id(first)] if first else None
+        while bit in self.q_of and bit not in visited:
+            visited.add(bit)
+            flop = self.q_of[bit]
+            if self.domain(flop) != domain:
+                break
+            if self.sample_edges[id(flop)] != edge:
+                bit = None
+                break
+            stages += 1
+            bit = self.direct_source(flop, flop.q.index(bit))
+        source = self.q_of.get(bit)
+        origin = bit if (stages >= 2 and source is not None and len(source.q) == 1
+                         and self.domain(source) != domain) else None
+        self._synchronised_origins[original] = origin
+        return origin
+
+    def qualifier_origins(self, bit, active: int, domain: str) -> Set[object]:
+        """Synchronised controls necessary for the scalar enable's active value."""
+        root = bit, active, domain
+        stack, pending = [(root, False)], set()
+        while stack:
+            key, ready = stack.pop()
+            if key in self._qualifier_origins:
+                continue
+            current, level, recv = key
+            flop = self.q_of.get(current)
+            origin = self.synchronised_origin(current) if flop and self.domain(flop) == recv else None
+            if origin is not None:
+                self._qualifier_origins[key] = {origin}
+                continue
+            driver = self.nl.drivers.get(current)
+            cell = self.nl.cells[driver[0]] if driver else {}
+            c, kind = cell.get("connections", {}), cell.get("type")
+            operands, union = [], False
+            if kind in {"$not", "$logic_not", "$_NOT_"} and len(c.get("A", [])) == 1:
+                operands = [(c["A"][0], 1 - level, recv)]
+            elif kind in {"$and", "$logic_and", "$_AND_", "$or", "$logic_or", "$_OR_"} \
+                    and len(c.get("A", [])) == len(c.get("B", [])) == 1:
+                operands = [(c[pin][0], level, recv) for pin in ("A", "B")]
+                union = level == int(kind in {"$and", "$logic_and", "$_AND_"})
+            elif kind in {"$xor", "$_XOR_", "$ne"} and level == 1 \
+                    and len(c.get("A", [])) == len(c.get("B", [])) == 1:
+                operands = [(c[pin][0], 1, recv) for pin in ("A", "B")]
+            if not operands or key in pending and not ready:
+                self._qualifier_origins[key] = set()
+                continue
+            if not ready:
+                pending.add(key)
+                stack.append((key, True))
+                stack.extend((item, False) for item in operands)
+                continue
+            values = [self._qualifier_origins.get(item, set()) for item in operands]
+            self._qualifier_origins[key] = set.union(*values) if union else set.intersection(*values)
+            pending.discard(key)
+        return self._qualifier_origins[root]
+
+    def qualified_capture(self, source: Flop, source_index: int, destination: Flop, index: int):
+        recv = self.domain(destination)
+        for guard, active in self.load_guards(destination, index):
+            for origin in sorted(self.qualifier_origins(guard, active, recv)):
+                control = self.q_of[origin]
+                same_domain = self.domain(control) == self.domain(source)
+                held_level = next((1 - level for bit, level in self.load_guards(source, source_index)
+                                   if bit == control.clk and level != control.clk_pol), None)
+                if not same_domain and held_level is None:
+                    continue
+                return {"qualifier_source_cell": control.name,
+                        "qualifier_source_domain": self.domain(control),
+                        "load_enable_bit": guard, "load_enable_active": active,
+                        "stable_data_condition": (
+                            f"{self.label(source)} must remain stable from completion launch through destination capture"),
+                        **({"source_hold_bit": control.clk, "source_hold_level": held_level}
+                           if held_level is not None else {})}
+        return None
+
 
 def _sync_stage2(nl: Netlist, stage1: Flop, index: int, domain: str,
                  lookup: Optional[_LookupSnapshot] = None) -> bool:
@@ -1027,49 +1144,48 @@ def reg_crossing_findings(nl: Netlist,
     population = [] if metadata is not None else None
     source_bits_examined = 0
     findings: List[dict] = []
-    per_pair: Dict[Tuple[str, str], List[Tuple[Flop, bool]]] = {}
+    per_pair: Dict[Tuple[str, str], List[Tuple[Flop, bool, bool]]] = {}
     for src in nl.flops:
         send = lookup.domain(src)
         synced_all: Dict[str, bool] = {}
+        qualified_all: Dict[str, bool] = {}
         for idx, bit in enumerate(src.q):
             source_bits_examined += 1
             for f, i, direct in _consumers(nl, bit, lookup, exclude_domain=send):
                 recv = lookup.domain(f)
                 if recv == send:
                     continue
-                ok = direct and _sync_stage2(nl, f, i, recv, lookup)
+                qualification = lookup.qualified_capture(src, idx, f, i)
+                ok = bool(qualification) or direct and _sync_stage2(nl, f, i, recv, lookup)
                 if population is not None:
                     population.append({
                         "source_cell": src.name, "source_q_index": idx, "source_q_bit": bit,
                         "destination_cell": f.name, "destination_d_index": i,
                         "destination_d_bit": f.d[i], "from_domain": send, "to_domain": recv,
-                        "direct": direct, "synchronised": ok})
+                        "direct": direct, "synchronised": ok,
+                        **({"qualification": qualification} if qualification else {})})
                 synced_all[recv] = synced_all.get(recv, True) and ok
+                qualified_all[recv] = qualified_all.get(recv, True) and bool(qualification)
         for recv, ok in synced_all.items():
-            per_pair.setdefault((send, recv), []).append((src, ok))
+            per_pair.setdefault((send, recv), []).append((src, ok, qualified_all[recv]))
     for (send, recv), rows in sorted(per_pair.items()):
-        control = any(ok for _f, ok in rows)
-        for src, ok in rows:
+        control = any(ok for _f, ok, _qualified in rows)
+        for src, ok, qualified in rows:
             width = len(src.q)
             label = lookup.label(src)
             ev = {"register": label, "width": width, "from_domain": send,
                   "to_domain": recv, "synchronised": ok,
                   "control_path_synchronised": control, "cell": src.name}
             if ok:
-                if width > 1 and "gray" not in label.lower():
+                if width > 1 and not qualified and "gray" not in label.lower():
                     findings.append(_finding(
                         "CDC_MULTIBIT_NO_GRAY", "WARN",
                         f"{width}-bit '{label}' crosses '{send}'->'{recv}' "
                         f"through per-bit synchronisers with no gray evidence",
                         **ev, gray_evidence=False))
                 continue
-            qualified = control and width > 1
             findings.append(_finding(
-                "CDC_UNSYNCED_DATA_QUALIFIED" if qualified else "CDC_REG_NO_SYNC",
-                "WARN" if qualified else "ERROR",
-                (f"{width}-bit '{label}' crosses '{send}'->'{recv}' "
-                 f"unsynchronised beside a synchronised control path")
-                if qualified else
+                "CDC_REG_NO_SYNC", "ERROR",
                 (f"'{label}' (clock '{send}') is read by clock '{recv}' "
                  f"with no 2-flop synchroniser"),
                 **ev))
