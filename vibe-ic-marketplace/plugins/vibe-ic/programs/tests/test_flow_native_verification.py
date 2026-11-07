@@ -1426,6 +1426,39 @@ def test_gls_names_missing_native_inputs(tmp_path):
     assert not result["ran"] and "State netlist" in result["detail"]
 
 
+@pytest.mark.parametrize("corner,delay", [("min_ff_025C_1v80", 1),
+                                        ("nom_tt_025C_1v80", 2),
+                                        ("max_ss_025C_1v80", 3)])
+@pytest.mark.parametrize("cocotb", [False, True])
+def test_gls_annotates_the_native_delay_field_for_each_rc_corner(tmp_path, corner, delay, cocotb):
+    if not all(shutil.which(tool) for tool in ("iverilog", "vvp")):
+        pytest.skip("Native Icarus is required")
+    if cocotb and not shutil.which("cocotb-config"):
+        pytest.skip("Native cocotb is required")
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config = gls_fixture(project, cocotb=cocotb)
+    sdf = Path(state["sdf"]["typical"])
+    sdf.write_text(sdf.read_text().replace("(1:1:1)", "(1:2:3)"))
+    state["sdf"] = {corner: str(sdf)}
+    config["DEFAULT_CORNER"] = corner
+    bench = next((project / "phase2/stage1/sim").iterdir())
+    if cocotb:
+        bench.write_text("import cocotb\nfrom cocotb.triggers import Timer,RisingEdge\n"
+            "from cocotb.utils import get_sim_time\n@cocotb.test()\nasync def delay_field(dut):\n"
+            "    dut.a.value=0\n    await Timer(10,unit='ns')\n"
+            "    start=get_sim_time(unit='ns')\n    dut.a.value=1\n"
+            "    await RisingEdge(dut.y)\n"
+            f"    assert abs(float(get_sim_time(unit='ns')-start)-{delay + .5}) < .001\n")
+    else:
+        bench.write_text("`timescale 1ns/1ps\nmodule tb_unit;\nreg a=0;wire y;realtime start;\n"
+            "unit dut(a,y);initial begin #10;start=$realtime;a=1;@(posedge y);\n"
+            f"if ($realtime-start != {delay + .5}) begin $display(\"ORACLE_TB_DONE pass=0/1\");$fatal;end\n"
+            "$display(\"ORACLE_TB_DONE pass=1/1\");$finish;end\nendmodule\n")
+    result = gls(project, directory, {}, Commands(directory), state=state, config=config)
+    assert result["native_steps"][0]["status"] == "PASS", result
+
+
 def declared_vector_chip_fixture(project, *, different=False):
     from testbench_gen import emit_unit_tbs
 
