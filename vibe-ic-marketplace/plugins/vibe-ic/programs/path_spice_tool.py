@@ -143,16 +143,33 @@ def fold_subckts(sources: Sequence[Path], voltages: Dict[str, float],
     lines: List[str] = []
     folded_cells = indented = dropped = 0
     defined: set = set()
+    source_statements = []
+    ports_by_cell = {}
     for source in sources:
-        inside = shadowed = False
         statements: List[List[str]] = []
         for raw in Path(source).read_text(errors='replace').splitlines():
             if raw.startswith('+') and statements:
                 statements[-1].append(raw)
             else:
                 statements.append([raw])
-        for statement in statements:
-            head = statement[0]
+        joined = [' '.join([statement[0], *(line[1:] for line in statement[1:])])
+                  for statement in statements]
+        source_statements.append(joined)
+        for head in joined:
+            header = _SUBCKT_RE.match(head)
+            if header:
+                ports = header.group(2).split()
+                kept = [i for i, pin in enumerate(ports) if pin not in fold]
+                names = {ports[i] for i in kept}
+                for i, pin in enumerate(ports):
+                    if pin in fold and fold[pin] not in names:
+                        kept.append(i)
+                        names.add(fold[pin])
+                ports_by_cell.setdefault(header.group(1).lower(), (ports, kept))
+    for statements in source_statements:
+        inside = shadowed = False
+        for head in statements:
+            statement = [head]
             m = _SUBCKT_RE.match(head)
             if shadowed:
                 # An earlier source already defines this cell: its first
@@ -184,6 +201,13 @@ def fold_subckts(sources: Sequence[Path], voltages: Dict[str, float],
                 lines += statement
                 continue
             tokens = [fold.get(t, t) for t in head.split()]
+            if kind == 'x':
+                model_index = next((i for i, token in enumerate(tokens[1:], 1)
+                                    if _PARAM_TOKEN.match(token)), len(tokens)) - 1
+                child = ports_by_cell.get(tokens[model_index].lower())
+                if child and model_index - 1 == len(child[0]):
+                    tokens = [tokens[0], *(tokens[i + 1] for i in child[1]),
+                              *tokens[model_index:]]
             words = [t for t in tokens[1:] + ' '.join(statement[1:]).replace('+', ' ').split()
                      if not _PARAM_TOKEN.match(t)]
             nodes = {'x': words[:-1], 'm': words[:4], 'd': words[:2],
@@ -236,54 +260,67 @@ def device_names(subckt_text: str) -> set:
 
 _LIB_OPEN_RE = re.compile(r"^\s*\.lib\s+([A-Za-z0-9_]+)\s*$", re.I)
 _LIB_REF_RE = re.compile(r"^\s*\.lib\s+['\"]?([^'\"\s]+)['\"]?\s+([A-Za-z0-9_]+)\s*$", re.I)
+_INCLUDE_RE = re.compile(r"^\s*\.inc(?:lude)?\s+['\"]?([^'\"\s]+)['\"]?\s*$", re.I)
 _DEF_RE = re.compile(r"^\s*\.(?:subckt|model)\s+(\S+)", re.I)
 
 
-def model_sections(tech_dir: Path, simulator: str) -> Dict[Tuple[str, str], set]:
+def model_sections(tech_dir: Path, simulator: str, *,
+                   dependencies: Optional[dict] = None) -> Dict[Tuple[str, str], set]:
     """{(file, section): every device name the section defines, following its
-    `.lib <file> <section>` references}. Files carrying the simulator's own
+    `.include` and `.lib <file> <section>` references}. Files carrying the simulator's own
     suffix are read when there are any (a PDK ships one tree per dialect)."""
     files = sorted(p for p in Path(tech_dir).glob('*') if p.is_file())
     own = [p for p in files if p.suffix.lstrip('.').lower() == simulator.lower()]
     files = own or files
-    direct: Dict[Tuple[str, str], set] = {}
-    refs: Dict[Tuple[str, str], List[Tuple[str, str]]] = {}
-    for path in files:
-        current = None
+    direct: Dict[Tuple[str, Optional[str]], set] = {}
+    refs: Dict[Tuple[str, Optional[str]], list] = {}
+    pending = list(files)
+    parsed = set()
+    while pending:
+        path = pending.pop()
+        if path in parsed:
+            continue
+        parsed.add(path)
+        current = (str(path), None)
+        direct.setdefault(current, set())
+        refs.setdefault(current, [])
         for line in path.read_text(errors='replace').splitlines():
             if line.lstrip().lower().startswith('.endl'):
-                current = None
+                current = (str(path), None)
                 continue
             opened = _LIB_OPEN_RE.match(line)
-            if opened and current is None:
+            if opened:
                 current = (str(path), opened.group(1))
                 direct.setdefault(current, set())
                 refs.setdefault(current, [])
                 continue
-            if current is None:
-                continue
             ref = _LIB_REF_RE.match(line)
-            if ref:
-                target = Path(tech_dir) / Path(ref.group(1)).name
-                target = target if target in files else path
-                refs[current].append((str(target), ref.group(2)))
+            include = _INCLUDE_RE.match(line)
+            if ref or include:
+                match = ref or include
+                target = Path(os.path.abspath(path.parent / match.group(1)))
+                refs[current].append((str(target), ref.group(2) if ref else None))
+                pending.append(target)
                 continue
             defined = _DEF_RE.match(line)
             if defined:
                 direct[current].add(defined.group(1).lower())
     closure: Dict[Tuple[str, str], set] = {}
 
-    def resolve(key: Tuple[str, str], seen: set) -> set:
-        if key in closure:
-            return closure[key]
-        out = set(direct.get(key, set()))
-        for ref in refs.get(key, []):
-            if ref not in seen:
-                out |= resolve(ref, seen | {ref})
-        closure[key] = out
-        return out
     for key in direct:
-        resolve(key, {key})
+        if key[1] is None or Path(key[0]) not in files:
+            continue
+        seen, pending_keys, defined = set(), [key], set()
+        while pending_keys:
+            referenced = pending_keys.pop()
+            if referenced in seen:
+                continue
+            seen.add(referenced)
+            defined |= direct.get(referenced, set())
+            pending_keys.extend(refs.get(referenced, []))
+        closure[key] = defined
+        if dependencies is not None:
+            dependencies[key] = {Path(path) for path, _section in seen}
     return closure
 
 
@@ -292,7 +329,8 @@ def model_file(tech_dir: Path, guest_dir: str, simulator: str, liberty: str,
     """The `-model_file` for one corner: the PDK's parameter preludes, then, for
     every device the cells call, the library section `select_model_section`
     picks for the corner's liberty among the sections that define it."""
-    sections = model_sections(tech_dir, simulator)
+    dependencies = {}
+    sections = model_sections(tech_dir, simulator, dependencies=dependencies)
     chosen: List[Tuple[str, str]] = []
     covered: set = set()
     for device in sorted(devices):
@@ -310,9 +348,15 @@ def model_file(tech_dir: Path, guest_dir: str, simulator: str, liberty: str,
                       f'{simulator}: no section under {tech_dir} defines {missing}')
     files = sorted(p for p in Path(tech_dir).glob('*') if p.is_file())
     own = [p for p in files if p.suffix.lstrip('.').lower() == simulator.lower()] or files
-    preludes = [p for p in own
-                if re.search(r'^\s*\.param\s', p.read_text(errors='replace'), re.M | re.I)
-                and not re.search(r'^\s*\.lib\s', p.read_text(errors='replace'), re.M | re.I)]
+    included = set().union(*(dependencies[section] for section in chosen))
+    preludes = []
+    for path in own:
+        if path in included:
+            continue
+        text = path.read_text(errors='replace')
+        if (re.search(r'^\s*\.param\s', text, re.M | re.I)
+                and not re.search(r'^\s*\.(?:lib|subckt|model)\s', text, re.M | re.I)):
+            preludes.append(path)
     guest = lambda p: f'{guest_dir}/{Path(p).name}'  # noqa: E731
     lines = [f'* vibe-ic step 30: device models for {liberty} ({simulator})']
     lines += [f'.include {guest(p)}' for p in preludes]
@@ -1100,7 +1144,10 @@ def prepare_arm(project: Path, image: str, state_path: Path, corner: str, *,
         stale.unlink()
     (out_dir / 'reference_clocks.txt').unlink(missing_ok=True)
     cell_sources = [host(p) for p in (config.get('CELL_SPICE_MODELS') or [])]
-    spice_sources = cell_sources + [host(p) for p in (config.get('PAD_SPICE_MODELS') or [])]
+    spice_sources = cell_sources + [host(p) for name in ('PAD_SPICE_MODELS', 'PAD_CDLS')
+                                     for p in (config.get(name) or [])]
+    for cdl in config.get('PAD_CDLS') or []:
+        spice_sources.extend(sorted((host(cdl).parent.parent / 'spice').glob('*.spice')))
     import librelane_contract as lc
     local = lc._provider_for_image(image) is not None or lc._provider_route(project)
     execution_root = str(pdk_root) if local else str(Path(guest).parent)
