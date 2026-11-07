@@ -1884,7 +1884,7 @@ def declared_dut_binding(project: Path, top: Optional[str], netlist_text: str
                 "source": "the routed netlist defines the DUT's own module"}
     rec_path = project / CHIP_TOP_RECORD_REL
     preparation = project / "work/flow/chip/preparation.json"
-    native_prepared = not rec_path.is_file() and preparation.is_file()
+    native_prepared = preparation.is_file()
     try:
         if native_prepared:
             from _design_module_set import module_names_in_text
@@ -2051,6 +2051,23 @@ def bridge_inout_inputs(tb_text: str, dut_module: str, dut_instance: str,
     return (tb_text[:instance.start()] + "\n".join(declarations) + "\n"
             + tb_text[instance.start():instance.start(3)] + connections
             + tb_text[instance.end(3):]), bridges
+
+
+def bind_memory_files(tb_text: str, bench: Path) -> Tuple[str, Dict[str, str]]:
+    """Keep existing source-relative memory images readable from a replay directory."""
+    bound = {}
+
+    def replace(match):
+        path = Path(match[2])
+        if path.is_absolute():
+            return match[0]
+        path = bench.parent / path
+        if not path.is_file():
+            return match[0]
+        bound[match[2]] = str(path.resolve())
+        return match[1] + json.dumps(str(path.resolve()), ensure_ascii=False)
+
+    return re.sub(r'(\$readmem[hb]\s*\(\s*)"([^"]+)"', replace, tb_text), bound
 
 
 # ---------------------------------------------------------------------------
