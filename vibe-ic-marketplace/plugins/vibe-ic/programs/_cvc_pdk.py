@@ -140,6 +140,10 @@ def power_setup(text, config):
             views.append(parse_liberty_supply_view(library_text))
     voltages = {}
     for view in views:
+        # Topology-only libraries can label supplies without characterizing
+        # an operating voltage. Their voltage_map is not a corner stimulus.
+        if view["nom_voltage"] is None:
+            continue
         for name, value in view["voltage_map"].items():
             if name in voltages and voltages[name] != value:
                 raise ValueError(f"Conflicting active PDK Liberty voltages for {name}")
