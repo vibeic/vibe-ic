@@ -155,8 +155,8 @@ def _authored_rtl_top(rtl: list[Path], parameters=None) -> str:
             include = " ".join("-I" + shlex.quote(str(parent)) for parent in
                                {path.parent, *(p.parent for p in rtl)})
             reads.append("read_verilog -sv " + include + " " + shlex.quote(str(path)))
-        script = "; ".join([*reads, "hierarchy -auto-top "
-                             + " ".join(parameter_args(parameters or {}, "yosys")), "proc",
+        script = "; ".join([*reads, " ".join(["hierarchy", "-auto-top",
+                             *parameter_args(parameters or {}, "yosys")]), "proc",
                              "write_json " + shlex.quote(str(output))])
         try:
             completed = subprocess.run(["yosys", "-Q", "-T", "-p", script],

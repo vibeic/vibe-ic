@@ -138,11 +138,11 @@ def yosys_script(files: List[Path], top: Optional[str], out: Path,
     passes = list(JSON_HEADER_PASSES)
     if top:
         passes = [p.format(top=top) for p in passes]
-        if not _uses_slang(files, sv):
-            passes[0] += " " + " ".join(parameter_args(parameters, "yosys"))
     else:
         passes = ["hierarchy -check -auto-top -nokeep_prints -nokeep_asserts"
                   ] + passes[2:]
+    if parameters and not _uses_slang(files, sv):
+        passes[0] += " " + " ".join(parameter_args(parameters, "yosys"))
     return "; ".join(reads + passes + [f"json -o {out}"])
 
 
