@@ -214,9 +214,46 @@ def test_implemented_cdc_does_not_stub_connected_unknown_storage(tmp_path, with_
     assert "unknown_storage" in logs and "not part of the design" in logs
 
 
+@pytest.mark.parametrize("implemented", [False, True])
+@pytest.mark.parametrize("kind", ["and", "or", "mux", "cascade", "fork", "unrelated",
+                                  "clock_mux", "clock_mux_gated", "clock_mux_fork", "declared_async"])
+def test_combinational_clock_gates_preserve_domains(tmp_path, implemented, kind):
+    if not shutil.which("yosys"):
+        pytest.skip("Native Yosys is required")
+    rtl, liberty = tmp_path/"unit.v", tmp_path/"cells.lib"
+    gate = {"and":"assign clocked=clk_i & enable;",
+            "or":"assign clocked=clk_i | enable;",
+            "mux":"assign clocked=enable ? clk_i : 1'b0;",
+            "cascade":"wire first=clk_i & enable;assign clocked=first | inhibit;",
+            "fork":"assign clocked=clk_i & enable;",
+            "unrelated":"assign clocked=other_i;",
+            "clock_mux":"assign clocked=enable ? clk_i : other_i;",
+            "clock_mux_gated":"wire selected=enable ? clk_i : other_i;assign clocked=selected & inhibit;",
+            "clock_mux_fork":"wire selected=enable ? clk_i : other_i;assign clocked=selected & inhibit;",
+            "declared_async":"assign clocked=clk_i & enable;"}[kind]
+    receive = "sibling" if kind in {"fork", "clock_mux_fork"} else "clk_i"
+    sibling = "selected" if kind == "clock_mux_fork" else "clk_i"
+    sibling_enable = "enable" if kind == "clock_mux_fork" else "inhibit"
+    rtl.write_text("module unit(input clk_i,other_i,enable,inhibit,d,output reg q,r);wire clocked;\n"
+        +gate+f"\nwire sibling={sibling} & {sibling_enable};\n"
+        "always @(posedge clocked)q<=d;\n"
+        f"always @(posedge {receive})r<=q;endmodule\n")
+    if kind=="declared_async":
+        docs=tmp_path/"phase1/generated_docs";docs.mkdir(parents=True)
+        (docs/"L8_TIMING_WAVEFORM.json").write_text(json.dumps({"clock_groups":[
+            {"name":"independent", "clocks":["clk_i","clocked"], "relationship":"asynchronous"}]}))
+    liberty.write_text("library(neutral) {}\n")
+    config={"DESIGN_NAME":"unit", "DEFAULT_CORNER":"typical", "LIB":{"typical":[str(liberty)]},
+            "CLOCK_PORT":["clk_i","other_i"] if kind.startswith("clock_mux") else "clk_i"}
+    result=execute(tmp_path,tmp_path/"output",{"adapter":"implemented_cdc" if implemented else "cdc",
+        "rtl":[str(rtl)],"top":"unit"},{},state={"nl":str(rtl)},config=config)
+    expected=int(kind in {"unrelated","clock_mux","clock_mux_gated","declared_async"})
+    assert result["metrics"].get("unresolved_crossings")==expected,result
+
+
 @pytest.mark.parametrize("kind,unresolved", [
-    ("alias", 0), ("latched", 0), ("opposite_phase", 1),
-    ("other_latch_clock", 1), ("raw_gate", 1), ("independent", 1),
+    ("alias", 0), ("latched", 0), ("opposite_phase", 0),
+    ("other_latch_clock", 0), ("raw_gate", 0), ("independent", 1),
 ])
 @pytest.mark.parametrize("suffix", [".v", ".sv"])
 def test_rtl_cdc_clock_ancestry_uses_native_latch_phase(tmp_path, kind, unresolved, suffix):
@@ -255,8 +292,8 @@ def test_rtl_cdc_clock_ancestry_uses_native_latch_phase(tmp_path, kind, unresolv
 
 
 @pytest.mark.parametrize("kind,unresolved", [
-    ("integrated", 0), ("opposite_phase", 1), ("other_latch_clock", 1),
-    ("raw_gate", 1), ("independent", 1), ("inverted_gate", 1),
+    ("integrated", 0), ("opposite_phase", 0), ("other_latch_clock", 0),
+    ("raw_gate", 0), ("independent", 1), ("inverted_gate", 0),
 ])
 @pytest.mark.parametrize("suffix", [".v", ".sv"])
 def test_implemented_cdc_clock_ancestry_uses_native_library_latch(tmp_path, kind, unresolved, suffix):

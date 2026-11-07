@@ -180,11 +180,13 @@ def _authored_rtl_top(rtl: list[Path]) -> str:
 def _record_authored_top(l9_path: Path, l9: dict, top: str) -> None:
     l9["top_module"] = top
     l9["top_module_status"] = "resolved_from_rtl_authoring"
+    l9["top_module_extraction_strategy"] = "rtl_authoring_yosys_hierarchy"
     l9["top_module_source"] = {
         "step": "RTL authoring",
         "artifact": "phase2/stage1/rtl",
         "method": "yosys hierarchy -auto-top",
     }
+    l9_path.parent.mkdir(parents=True, exist_ok=True)
     l9_path.write_text(json.dumps(l9, indent=2, ensure_ascii=False) + "\n")
 
 
@@ -381,7 +383,7 @@ def _resolve_rtl_inputs(project: Path, sources: dict) -> tuple[list[Path], str]:
 
 
 def resolve_rtl_inputs(project: Path | str) -> tuple[list[Path], str]:
-    """Pure source and declared-top selection shared by native tool callers."""
+    """Select produced RTL and resolve the top shared by native tool callers."""
     return _resolve_rtl_inputs(Path(project).resolve(), {})
 
 
